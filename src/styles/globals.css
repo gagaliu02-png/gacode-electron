@@ -1,0 +1,239 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   Local fonts — Inter Variable + JetBrains Mono,从 yinian-android 复制(.ttf)。
+
+   阶段 0 选项 A:直接用 .ttf(浏览器原生支持,免引入转换工具)。
+   文件位置:
+     - public/fonts/inter-variable.ttf
+     - public/fonts/jetbrains-mono-regular.ttf
+   ============================================================================ */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-variable.ttf") format("truetype-variations"),
+       url("/fonts/inter-variable.ttf") format("truetype");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-regular.ttf") format("truetype");
+}
+
+/* ============================================================================
+   GAGAOS Design Tokens — CSS variable mirror for gacode-electron.
+
+   一字不差同步 gacode-web 的 globals.css(verified 2026-10-17)。
+   所有 hex 值 extracted from gacode Android (ui/theme/Color.kt + Theme.kt).
+   Default theme = DARK (gagaOS 强制暗色, 跟 PWA theme_color=#000000 一致).
+
+   Token groups mirror tailwind.config.ts:
+     --brand-*        Brand Orange / Red / Yellow / Cyan / Green
+     --bg-*           background layers
+     --fg-*           foreground text layers
+     --border-*       divider / outline
+     --success/warning/danger  semantic colors
+
+   Dark mode = default (:root). `.light` class enables light tokens.
+   ============================================================================ */
+
+@layer base {
+  :root {
+    /* --- gagaOS brand --- */
+    --brand: #FF6B35;
+    --brand-hover: #ff8559;
+    --brand-active: #e55828;
+    --brand-on: #000000;
+    --brand-container: #4A1F0A;
+    --brand-on-container: #FFD7B8;
+    --brand-red: #c8102e;
+    --brand-red-dark: #E54a5e;
+    --brand-yellow: #ffc700;
+    --brand-cyan: #0dcaf0;
+    --brand-green: #198754;
+
+    /* --- background layers (Color.kt:20-23) --- */
+    --bg-base: #000000;       /* GagaSurface0 — 根背景 */
+    --bg-sunken: #0a0a0a;     /* GagaSurface1 — 卡片 */
+    --bg-elevated: #181818;   /* GagaSurface2 — popup / sheet */
+
+    /* --- foreground layers (Color.kt:25-27) --- */
+    --fg: #e5e7eb;            /* GagaTextHigh */
+    --fg-muted: #9ca3af;      /* GagaTextMid */
+    --fg-subtle: #6c757d;     /* GagaTextLow */
+
+    /* --- border / divider (Color.kt:24) --- */
+    --border-default: #363b41;        /* GagaDivider */
+    --border-strong: #44464D;         /* outlineVariant (Theme.kt:36) */
+
+    /* --- semantic --- */
+    --success: #198754;
+    --success-soft: #0f3a26;
+    --warning: #ffc700;
+    --warning-soft: #3d2e00;
+    --danger: #E54a5e;
+    --danger-soft: #7A0019;
+
+    /* --- font --- */
+    --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto,
+      "Noto Sans SC", "PingFang SC", sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+      Monaco, Consolas, monospace;
+
+    /* --- shadow / radius (Material 3) --- */
+    --radius: 0.5rem;        /* 8px — M3 shape md (Tailwind md) */
+    --shadow-1: 0 1px 2px 0 rgb(0 0 0 / 0.5), 0 1px 3px 0 rgb(0 0 0 / 0.4);
+    --shadow-2: 0 1px 3px 0 rgb(0 0 0 / 0.5), 0 4px 8px 0 rgb(0 0 0 / 0.4);
+    --shadow-3: 0 4px 6px 0 rgb(0 0 0 / 0.5), 0 8px 16px 0 rgb(0 0 0 / 0.4);
+    --shadow-4: 0 10px 15px 0 rgb(0 0 0 / 0.5), 0 16px 32px 0 rgb(0 0 0 / 0.4);
+    --brand-glow: 0 0 0 1px #FF6B35, 0 0 20px rgb(255 107 53 / 0.35);
+
+    /* --- shadcn semantic aliases (让现有 ui/button.tsx 等不动) --- */
+    --background: var(--bg-base);
+    --foreground: var(--fg);
+    --card: var(--bg-sunken);
+    --card-foreground: var(--fg);
+    --popover: var(--bg-elevated);
+    --popover-foreground: var(--fg);
+    --primary: var(--brand);
+    --primary-foreground: var(--brand-on);
+    --secondary: var(--bg-elevated);
+    --secondary-foreground: var(--fg);
+    --muted: var(--bg-elevated);
+    --muted-foreground: var(--fg-muted);
+    --accent: #1f1f1f;
+    --accent-foreground: var(--brand-on-container);
+    --destructive: var(--danger);
+    --destructive-foreground: #ffffff;
+    --input: var(--border-default);
+    --ring: var(--brand);
+  }
+
+  /* --- Light mode (LIGHT theme — Theme.kt:46-69 反转 surface/text, 留 Brand Orange 当强调) --- */
+  .light {
+    --bg-base: #fafafa;
+    --bg-sunken: #ffffff;
+    --bg-elevated: #f0f0f0;
+
+    --fg: #1a1a1a;
+    --fg-muted: #555555;
+    --fg-subtle: #888888;
+
+    --border-default: #cccccc;
+    --border-strong: #e0e0e0;
+
+    --brand-on: #ffffff;
+    --brand-container: #FFE0CC;
+    --brand-on-container: #4A1F0A;
+
+    --background: var(--bg-base);
+    --foreground: var(--fg);
+    --card: var(--bg-sunken);
+    --card-foreground: var(--fg);
+    --popover: var(--bg-sunken);
+    --popover-foreground: var(--fg);
+    --primary: var(--brand);
+    --primary-foreground: var(--brand-on);
+    --secondary: var(--bg-elevated);
+    --secondary-foreground: var(--fg);
+    --muted: var(--bg-elevated);
+    --muted-foreground: var(--fg-muted);
+    --accent: var(--bg-elevated);
+    --accent-foreground: var(--fg);
+    --input: var(--border-default);
+    --ring: var(--brand);
+  }
+
+  /* --- forced dark (default for gagaOS, Theme.kt 強制暗色) --- */
+  .dark {
+    /* same as :root above — gagaOS 强制暗色. 重复声明让 design tokens 显式. */
+    --bg-base: #000000;
+    --bg-sunken: #0a0a0a;
+    --bg-elevated: #181818;
+    --fg: #e5e7eb;
+    --fg-muted: #9ca3af;
+    --fg-subtle: #6c757d;
+    --border-default: #363b41;
+    --border-strong: #44464D;
+    --background: var(--bg-base);
+    --foreground: var(--fg);
+    --card: var(--bg-sunken);
+    --card-foreground: var(--fg);
+    --popover: var(--bg-elevated);
+    --popover-foreground: var(--fg);
+    --primary: var(--brand);
+    --primary-foreground: var(--brand-on);
+    --secondary: var(--bg-elevated);
+    --secondary-foreground: var(--fg);
+    --muted: var(--bg-elevated);
+    --muted-foreground: var(--fg-muted);
+    --accent: #1f1f1f;
+    --accent-foreground: var(--brand-on-container);
+    --input: var(--border-default);
+    --ring: var(--brand);
+  }
+
+  * {
+    border-color: var(--border-default);
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--bg-base);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* focus ring 默认 brand orange (跟 Android focus indicator 一致) */
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+
+  /* 滚动条 — gagaOS 风格 (细 / 偏暗) */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-strong);
+  }
+}
+
+@layer components {
+  /* gagaOS spinner / loading 脉冲 — 跟 Android spinner 视觉一致 */
+  .gagaos-spinner {
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid var(--border-default);
+    border-top-color: var(--brand);
+    border-radius: 9999px;
+    animation: gagaos-spin 0.6s linear infinite;
+  }
+
+  @keyframes gagaos-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+}

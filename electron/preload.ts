@@ -1,15 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import * as os from 'os';
+import * as path from 'path';
 import type { GacodeBridge } from '../shared/types';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const path = require('path');
 
 // 把 app.getVersion() 在 preload 阶段读出来,渲染层读不到 process
 let cachedAppVersion = 'unknown';
 try {
-  // CommonJS 下 require electron app
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { app } = require('electron');
   cachedAppVersion = app.getVersion();
 } catch (err) {
@@ -18,8 +14,7 @@ try {
     err,
   );
   try {
-    // 兜底:读 package.json(路径: dist/electron/preload.js → ../../package.json)
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // 兜底:读 package.json(路径: out/preload/index.js → ../../package.json)
     const pkg = require(path.join(__dirname, '..', '..', 'package.json'));
     cachedAppVersion = pkg.version || 'unknown';
   } catch (err2) {

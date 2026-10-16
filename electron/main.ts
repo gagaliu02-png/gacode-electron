@@ -1,5 +1,6 @@
 import { app, BrowserWindow, shell, Menu } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import { createTray } from './tray';
 import { createAppMenu } from './menu';
 import { registerNotificationIpc } from './notifications';
@@ -9,6 +10,28 @@ import { registerNotificationIpc } from './notifications';
 // const __dirname = path.dirname(__filename);
 
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
+
+// 阶段 0 验证用:Electron 启动并截一张 PNG,然后退出。
+// 用于 evidence 截图 — 走 webContents.capturePage() (正确捕获 GPU 内容),
+// PowerShell + PrintWindow 截不到 DirectComposition 渲染层。
+// 用法 (两种):
+//   1. CLI flag:  electron . --screenshot=PATH [--screenshot-delay=MS]
+//   2. 环境变量:    $env:GACODE_SCREENSHOT = 'PATH'; electron .
+//   (环境变量走 electron-vite dev 也能用,因为 pnpm/electron-vite 不会剥 env var)
+const screenshotArg = process.argv.find((a) => a.startsWith('--screenshot='));
+const screenshotDelayArg = process.argv.find((a) => a.startsWith('--screenshot-delay='));
+const screenshotPath = screenshotArg
+  ? screenshotArg.split('=')[1]
+  : process.env.GACODE_SCREENSHOT || null;
+const screenshotDelayEnv = process.env.GACODE_SCREENSHOT_DELAY
+  ? parseInt(process.env.GACODE_SCREENSHOT_DELAY, 10)
+  : null;
+const screenshotDelay = screenshotDelayArg
+  ? parseInt(screenshotDelayArg.split('=')[1], 10)
+  : (screenshotDelayEnv ?? 3000);
+if (screenshotPath) {
+  console.log(`[gacode-electron] Screenshot mode: ${screenshotPath} (delay=${screenshotDelay}ms)`);
+}
 
 // 应用用户模型 ID - PR3 打包时 Windows Toast 会按这个名字显示
 // PR1 暂未打包,先设上便于 dev 模式验证
@@ -33,7 +56,7 @@ function createWindow(): void {
     backgroundColor: '#000000',
     show: false, // 先不显示,等 ready-to-show 再 show,避免白屏闪一下
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false, // contextIsolation 已开,sandbox 可关(关掉减少跨平台打包问题)
@@ -41,13 +64,21 @@ function createWindow(): void {
     },
   });
 
-  // 加载 URL - dev 模式走本地 Next.js,prod 走生产
-  const url = isDev
-    ? 'http://localhost:3000/gacode/'
-    : 'https://www.gaga.sale/gacode/';
-
-  console.log(`[gacode-electron] Loading ${url} (dev=${isDev})`);
-  mainWindow.loadURL(url);
+  // 阶段 0: 加载本地 React 渲染产物(electron-vite build 输出在 out/renderer/index.html)
+  // dev 模式 electron-vite 自动起 vite dev server(端口 5173 默认),通过 ELECTRON_RENDERER_URL env 传入
+  // prod 模式加载 out/renderer/index.html
+  if (isDev && process.env.ELECTRON_RENDERER_URL) {
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
+    console.log(
+      `[gacode-electron] Loading dev renderer ${process.env.ELECTRON_RENDERER_URL} (dev=${isDev})`,
+    );
+  } else {
+    const indexHtml = path.join(__dirname, '../renderer/index.html');
+    mainWindow.loadFile(indexHtml);
+    console.log(
+      `[gacode-electron] Loading prod renderer ${indexHtml} (dev=${isDev})`,
+    );
+  }
 
   // 加载完成后再显示窗口,避免白屏闪烁
   mainWindow.once('ready-to-show', () => {
@@ -56,6 +87,7 @@ function createWindow(): void {
   });
 
   // 外部链接走系统默认浏览器,不挤在 Electron 窗口里
+  // 阶段 0 本地 React 渲染后,http(s) 链接场景少了,但留着以防内嵌 <a target="_blank"> 仍出现
   mainWindow.webContents.setWindowOpenHandler(({ url: openUrl }) => {
     if (openUrl.startsWith('http://') || openUrl.startsWith('https://')) {
       shell.openExternal(openUrl);
@@ -64,16 +96,16 @@ function createWindow(): void {
     return { action: 'allow' };
   });
 
-  // 阻止 webContents 内导航到非预期 URL(防意外跳出)
+  // 阶段 0:本地 React Router 走 file:// 协议,will-navigate 主要触发于 <a href> 跳转。
+  // 拦截策略:允许 http(s) 在系统浏览器打开(file:// 不需要拦,React Router 不触发 will-navigate)。
+  // 注意,这里不再 require localhost:3000 / www.gaga.sale,产品线已独立。
   mainWindow.webContents.on('will-navigate', (event, navUrl) => {
-    const allowedPrefixes = [
-      'http://localhost:3000',
-      'https://www.gaga.sale',
-    ];
-    if (!allowedPrefixes.some((prefix) => navUrl.startsWith(prefix))) {
-      console.warn(`[gacode-electron] Blocked navigation to ${navUrl}`);
+    if (navUrl.startsWith('http://') || navUrl.startsWith('https://')) {
       event.preventDefault();
+      shell.openExternal(navUrl);
+      console.log(`[gacode-electron] External link routed to system browser: ${navUrl}`);
     }
+    // file:// 放行(本地路由跳转)
   });
 
   // PR2:close 按钮 = 隐藏到托盘,不真退出。
@@ -111,6 +143,24 @@ app.whenReady().then(() => {
   createAppMenu(() => mainWindow);
   createTray(() => mainWindow);
   registerNotificationIpc();
+
+  // 阶段 0 验证用:截图后退出(只用于 CI / evidence)
+  if (screenshotPath && mainWindow) {
+    const win = mainWindow;
+    win.webContents.once('did-finish-load', () => {
+      setTimeout(async () => {
+        try {
+          const image = await win.webContents.capturePage();
+          fs.writeFileSync(screenshotPath, image.toPNG());
+          console.log(`[gacode-electron] Screenshot saved: ${screenshotPath}`);
+        } catch (err) {
+          console.error('[gacode-electron] capturePage failed', err);
+        } finally {
+          app.quit();
+        }
+      }, screenshotDelay);
+    });
+  }
 
   // macOS 兼容(虽然当前只 Win,但代码 ready)
   app.on('activate', () => {
