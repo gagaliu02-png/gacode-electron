@@ -8,13 +8,17 @@
     "build": "tsc",
     "dev": "tsc && electron .",
     "start": "electron .",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "dist": "pnpm build && electron-builder --win --x64",
+    "dist:nsis": "pnpm build && electron-builder --win nsis --x64",
+    "dist:portable": "pnpm build && electron-builder --win portable --x64"
   },
   "devDependencies": {
+    "@types/node": "^20.14.0",
     "electron": "^32.0.0",
     "electron-builder": "^25.0.0",
-    "typescript": "^5.5.0",
-    "@types/node": "^20.14.0",
-    "rimraf": "^5.0.0"
+    "png-to-ico": "^3.0.2",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.5.0"
   }
 }

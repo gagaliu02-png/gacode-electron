@@ -1,0 +1,53 @@
+# electron-builder 配置 - gacode PC 版
+#
+# 产物:
+#   - NSIS installer: Gacode-Setup-{version}.exe (双击装,可选盘位)
+#   - Portable: Gacode-{version}-portable.exe (免装双击即跑)
+#
+# 注意:
+#   - 不配 code signing(无证书),electron-builder 默认跳过 Win 签名
+#   - perMachine=false 装到 %LOCALAPPDATA%\Programs\Gacode\,不污染 Program Files
+#   - asar: true + compression: maximum 压缩 Electron 资源
+
+appId: com.gaga.gacode
+productName: Gacode
+copyright: Copyright © 2026 gaga
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - dist/**/*
+  - package.json
+  - '!**/*.map'
+
+asar: true
+compression: maximum
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: Gacode-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Gacode
+  uninstallDisplayName: Gacode
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  artifactName: Gacode-Setup-${version}.${ext}
+
+portable:
+  artifactName: Gacode-${version}-portable.${ext}
