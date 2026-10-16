@@ -29,8 +29,15 @@ const screenshotDelayEnv = process.env.GACODE_SCREENSHOT_DELAY
 const screenshotDelay = screenshotDelayArg
   ? parseInt(screenshotDelayArg.split('=')[1], 10)
   : (screenshotDelayEnv ?? 3000);
+// E2E 注入: $env:GACODE_E2E_USER = '<base64 json>' 把 user 直接喂给
+// 渲染层, 跳过 /auth/me, 用于已登录态截图(比如 App shell).
+// 跟 AuthProvider 的 e2e_user URL 参数一一对应.
+const e2eUserB64 = process.env.GACODE_E2E_USER || null;
 if (screenshotPath) {
   console.log(`[gacode-electron] Screenshot mode: ${screenshotPath} (delay=${screenshotDelay}ms)`);
+  if (e2eUserB64) {
+    console.log(`[gacode-electron] E2E user injected (${e2eUserB64.length} chars)`);
+  }
 }
 
 // 应用用户模型 ID - PR3 打包时 Windows Toast 会按这个名字显示
@@ -73,10 +80,18 @@ function createWindow(): void {
       `[gacode-electron] Loading dev renderer ${process.env.ELECTRON_RENDERER_URL} (dev=${isDev})`,
     );
   } else {
+    // 用 loadURL + file:// 显式 URL 而不是 loadFile — Windows 上 loadFile
+    // 对含 .. 的相对路径有时会重写到根, 导致 React 静态资源 404 + 渲染失败.
+    // 这里直接构造 file:// URL 锁住绝对路径.
     const indexHtml = path.join(__dirname, '../renderer/index.html');
-    mainWindow.loadFile(indexHtml);
+    let indexFileURL = require('url').pathToFileURL(path.resolve(indexHtml)).href;
+    // E2E 模式: 把 e2e_user 加到 URL search, AuthProvider 启动时识别
+    if (e2eUserB64) {
+      indexFileURL += `?e2e_user=${encodeURIComponent(e2eUserB64)}`;
+    }
+    mainWindow.loadURL(indexFileURL);
     console.log(
-      `[gacode-electron] Loading prod renderer ${indexHtml} (dev=${isDev})`,
+      `[gacode-electron] Loading prod renderer ${indexFileURL} (dev=${isDev})`,
     );
   }
 
@@ -147,12 +162,17 @@ app.whenReady().then(() => {
   // 阶段 0 验证用:截图后退出(只用于 CI / evidence)
   if (screenshotPath && mainWindow) {
     const win = mainWindow;
+    // 渲染层 console 转发到主进程 stdout, 方便调试 React / Vite 错误
+    win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+      const tag = level === 0 ? 'log' : level === 1 ? 'warn' : level === 2 ? 'error' : 'info';
+      console.log(`[renderer:${tag}] ${message} (${sourceId}:${line})`);
+    });
     win.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
         try {
           const image = await win.webContents.capturePage();
           fs.writeFileSync(screenshotPath, image.toPNG());
-          console.log(`[gacode-electron] Screenshot saved: ${screenshotPath}`);
+          console.log(`[gacode-electron] Screenshot saved: ${screenshotPath} (${image.getSize().width}x${image.getSize().height})`);
         } catch (err) {
           console.error('[gacode-electron] capturePage failed', err);
         } finally {
