@@ -16,9 +16,15 @@ import { Home } from "./routes/Home";
 import { ChatList } from "./routes/ChatList";
 import { ChatDetail } from "./routes/ChatDetail";
 import { Library } from "./routes/Library";
+import { LibraryDetail } from "./routes/LibraryDetail";
 import { Deliveries } from "./routes/Deliveries";
+import { DeliveryDetail } from "./routes/DeliveryDetail";
 import { Notifications } from "./routes/Notifications";
 import { Profile } from "./routes/Profile";
+import { ProfileEdit } from "./routes/ProfileEdit";
+import { ProfileChangePassword } from "./routes/ProfileChangePassword";
+import { ProfileApps } from "./routes/ProfileApps";
+import { Browser } from "./routes/Browser";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -109,6 +115,7 @@ export function App() {
                   </Protected>
                 }
               />
+              {/* 知识库 (列表 + 详情) — 阶段 3 接真数据 */}
               <Route
                 path="/library"
                 element={
@@ -118,6 +125,15 @@ export function App() {
                 }
               />
               <Route
+                path="/library/:id"
+                element={
+                  <Protected>
+                    <LibraryDetail />
+                  </Protected>
+                }
+              />
+              {/* 交付中心 (列表 + 详情) — 阶段 3 接真数据 */}
+              <Route
                 path="/deliveries"
                 element={
                   <Protected>
@@ -126,6 +142,15 @@ export function App() {
                 }
               />
               <Route
+                path="/deliveries/:id"
+                element={
+                  <Protected>
+                    <DeliveryDetail />
+                  </Protected>
+                }
+              />
+              {/* 通知 — 阶段 3 接真数据 + markRead */}
+              <Route
                 path="/notifications"
                 element={
                   <Protected>
@@ -133,11 +158,45 @@ export function App() {
                   </Protected>
                 }
               />
+              {/* 个人中心 — 阶段 3 接真数据 + 编辑/改密/我的应用 */}
               <Route
                 path="/profile"
                 element={
                   <Protected>
                     <Profile />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/profile/edit"
+                element={
+                  <Protected>
+                    <ProfileEdit />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/profile/change-password"
+                element={
+                  <Protected>
+                    <ProfileChangePassword />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/profile/apps"
+                element={
+                  <Protected>
+                    <ProfileApps />
+                  </Protected>
+                }
+              />
+              {/* 浏览器 (简化版) — 阶段 3 走系统默认浏览器; webview 留阶段 4 */}
+              <Route
+                path="/browser"
+                element={
+                  <Protected>
+                    <Browser />
                   </Protected>
                 }
               />

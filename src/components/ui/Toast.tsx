@@ -1,8 +1,8 @@
 /**
- * components/ui/Toast.tsx — 阶段 1 最小 toast
+ * components/ui/Toast.tsx — 阶段 1 最小 toast (阶段 3 加 warning 变体)
  *
  * 用 React Context + setTimeout 自动 dismiss, 不引 Radix Toast / sonner.
- * 顶部固定, 3 秒自动消失. variant: default | success | danger.
+ * 顶部固定, 3 秒自动消失. variant: default | success | danger | warning.
  *
  * 阶段 1 简化: 单一 toast 同时只显示一个 (新 push 替换旧的). 阶段 N 再升
  * 队列 (跟 gacode-web toast 一样, 居中 + 堆叠 + 半透遮罩).
@@ -19,7 +19,7 @@ import {
   type ReactNode,
 } from "react";
 
-export type ToastVariant = "default" | "success" | "danger";
+export type ToastVariant = "default" | "success" | "danger" | "warning";
 
 interface ToastItem {
   id: string;
@@ -93,12 +93,14 @@ const variantClass: Record<ToastVariant, string> = {
   default: "border-brand/50 bg-bg-elevated text-fg",
   success: "border-success/50 bg-bg-elevated text-fg",
   danger: "border-danger/50 bg-bg-elevated text-fg",
+  warning: "border-warning/50 bg-bg-elevated text-fg",
 };
 
 const variantDot: Record<ToastVariant, string> = {
   default: "bg-brand",
   success: "bg-success",
   danger: "bg-danger",
+  warning: "bg-warning",
 };
 
 function ToastView({ item }: { item: ToastItem }) {

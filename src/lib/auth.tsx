@@ -95,6 +95,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (decoded.accessToken) setAccessTokenState(decoded.accessToken);
           if (decoded.user) setUser(decoded.user);
           setLoading(false);
+          // 标记 e2e 模式 — api.ts 在 401 时不要清 auth, 避免截图时被踢回 /login
+          // (e2e token 不是 server 签发的合法 JWT, 一定会 401, 但我们想保留 demo user
+          // 用于截图/本地走查, 真实用户流不受影响)
+          if (typeof window !== "undefined") {
+            const w = window as unknown as { __GACODE_E2E__?: boolean };
+            w.__GACODE_E2E__ = true;
+            // e2e 路由跳转 — 既支持 URL ?e2e_route=/library, 也支持 base64 payload
+            // 内嵌 e2eRoute 字段. 后者绕开 main.ts 改动: 把 route 放进 JSON 里,
+            // 一次性 base64 化 (仅截图用, 真实用户流不会进这条路径)
+            const routeFromParam = params.get("e2e_route");
+            const routeFromPayload =
+              typeof decoded.e2eRoute === "string" ? decoded.e2eRoute : null;
+            const e2eRoute = routeFromParam || routeFromPayload;
+            if (e2eRoute && e2eRoute.startsWith("/")) {
+              // 延迟到下一个 microtask, 让 HashRouter 先挂载
+              Promise.resolve().then(() => {
+                if (window.location.hash !== `#${e2eRoute}`) {
+                  window.location.hash = e2eRoute;
+                }
+              });
+            }
+          }
           return;
         } catch (e) {
           console.warn("[gacode:auth] e2e_user bypass failed to decode", e);

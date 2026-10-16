@@ -110,6 +110,11 @@ export async function request<T>(
 
   // 401 → 自动 refresh + 重试 (单飞)
   if (res.status === 401 && !path.startsWith("/auth/")) {
+    // E2E 模式 (CI 截图 / 本地走查用): 不要清 auth, 让 demo user 保留.
+    // 真实用户流不受影响 (e2e_user 注入路径只在 CI / 走查时使用).
+    if (typeof window !== "undefined" && (window as unknown as { __GACODE_E2E__?: boolean }).__GACODE_E2E__) {
+      throw new Error("unauthorized (e2e bypass)");
+    }
     const refreshed = await tryRefresh();
     if (!refreshed) {
       // refresh 失败 → 清空 in-memory 状态 + 通知 UI 层 (App.tsx 的
@@ -386,4 +391,209 @@ export async function listNotifications(
     })),
     unreadCount: r.unreadCount ?? 0,
   };
+}
+
+// ─────────── Notifications: mark read ───────────
+// 端点 /notifications/:id/read (PATCH) + /notifications/read-all (PATCH) —
+// server 端走 notifications/notification.routes.js:140-176, 单条 + 批量都返 { ok: true }.
+// 客户端在 onSuccess 调 queryClient.invalidateQueries 把 unread 计数 / 列表刷新.
+
+export function markNotificationRead(id: string): Promise<{ ok: true }> {
+  return request<{ ok: true }>(`/notifications/${id}/read`, { method: "PATCH" });
+}
+
+export function markAllNotificationsRead(): Promise<{ ok: true }> {
+  return request<{ ok: true }>("/notifications/read-all", { method: "PATCH" });
+}
+
+// =========================================================================
+// 阶段 3 — Library / Deliveries / Profile
+//
+// 端点跟 unified-api yinian.routes.js + library.routes.js + profile.routes.js
+// 对齐, 命名风格跟 web 同步, 改时两边一起改.
+// =========================================================================
+
+// ─────────── Library ───────────
+// yinian_library_item shape (server 端): web LibraryItem = { id, type, title,
+// url?, tags?, createdAt }. type ∈ 'image' | 'doc' | 'link' (DB modality 映射).
+export interface LibraryItem {
+  id: string;
+  type: "image" | "doc" | "link" | "text";
+  title: string;
+  url?: string;
+  tags?: string[];
+  createdAt: string;
+}
+
+export async function listLibrary(params: {
+  type?: string;
+  tag?: string;
+  keyword?: string;
+  page?: number;
+  pageSize?: number;
+} = {}): Promise<{
+  items: LibraryItem[];
+  total?: number | null;
+  hasMore: boolean;
+  page?: number;
+  pageSize?: number;
+}> {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(
+      ([, v]) => v !== undefined && v !== "",
+    ) as [string, string][],
+  ).toString();
+  return request<{
+    items: LibraryItem[];
+    total?: number | null;
+    hasMore: boolean;
+    page?: number;
+    pageSize?: number;
+  }>(`/yinian/library${qs ? `?${qs}` : ""}`);
+}
+
+export function getLibraryItem(
+  id: string,
+  withContent = false,
+): Promise<LibraryItem> {
+  const qs = withContent ? "?withContent=true" : "";
+  return request<LibraryItem>(`/yinian/library/${id}${qs}`);
+}
+
+export function deleteLibraryItem(id: string): Promise<{ success: true }> {
+  return request<{ success: true }>(`/yinian/library/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export interface CreateLibraryItemInput {
+  type: "image" | "doc" | "link" | "text";
+  title: string;
+  url?: string;
+  tags?: string[];
+}
+
+export function createLibraryItem(
+  input: CreateLibraryItemInput,
+): Promise<LibraryItem> {
+  return request<LibraryItem>("/yinian/library", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+// ─────────── Deliveries ───────────
+// 端点跟 unified-api deliverables.routes.js 对齐. server 端 list DTO
+// 字段: id, sessionId, messageId, deliverableType, title, url, thumbnailUrl,
+// mimeType, sizeBytes, prompt, origin, createdAt.
+export interface Deliverable {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  deliverableType: "image" | "web" | "document";
+  title?: string;
+  url?: string;
+  thumbnailUrl?: string;
+  mimeType?: string;
+  sizeBytes?: number | string;
+  prompt?: string;
+  /** "ai_generated" | "user_uploaded" | null (legacy) — server 已硬过滤掉 user_uploaded */
+  origin?: string | null;
+  createdAt: string;
+  // 仅 detail 端点
+  description?: string;
+  userId?: string;
+  toolName?: string;
+  metadata?: unknown;
+  updatedAt?: string;
+}
+
+export interface DeliverableListResponse {
+  items: Deliverable[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export async function listDeliverables(params: {
+  type?: string;
+  page?: number;
+  pageSize?: number;
+  sessionId?: string;
+  keyword?: string;
+} = {}): Promise<DeliverableListResponse> {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(
+      ([, v]) => v !== undefined && v !== "",
+    ) as [string, string][],
+  ).toString();
+  return request<DeliverableListResponse>(
+    `/yinian/deliverables${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export function getDeliverable(id: string): Promise<Deliverable> {
+  return request<Deliverable>(`/yinian/deliverables/${id}`);
+}
+
+export function deleteDeliverable(
+  id: string,
+): Promise<{ id: string; deletedAt: string }> {
+  return request<{ id: string; deletedAt: string }>(
+    `/yinian/deliverables/${id}`,
+    { method: "DELETE" },
+  );
+}
+
+// ─────────── Profile ───────────
+// server 端 profile.routes.js: PUT /profile body { displayName?, gender?, bio? }
+// 至少传一个字段. 返回 profile row (id, username, displayName, gender, bio,
+// avatar, email, createdAt).
+export type Gender = "male" | "female" | "other" | "unspecified";
+
+export interface ProfileData {
+  id: string;
+  username: string;
+  displayName?: string;
+  gender?: Gender;
+  bio?: string;
+  avatar?: string;
+  email?: string;
+  createdAt?: string;
+}
+
+export function getProfile(): Promise<ProfileData> {
+  return request<ProfileData>("/gacode/profile");
+}
+
+export interface UpdateProfileInput {
+  displayName?: string | null;
+  gender?: Gender;
+  bio?: string | null;
+}
+
+export function updateProfile(input: UpdateProfileInput): Promise<ProfileData> {
+  return request<ProfileData>("/gacode/profile", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+// 头像上传 — 走 multipart (跟 web uploadAvatar 同形). server 端
+// profile.routes.js: POST /profile/avatar, 字段名 'avatar' 或 'file'. 返
+// { ok, data: { avatarUrl, size } }. 这里兼容 web 习惯: 返 { url } 给上层.
+export async function uploadAvatar(
+  file: File,
+): Promise<{ url: string } | { avatar: string }> {
+  const fd = new FormData();
+  fd.append("avatar", file);
+  const r = await request<{ avatarUrl?: string; avatar?: string; url?: string }>(
+    "/gacode/profile/avatar",
+    { method: "POST", body: fd },
+  );
+  // server 返 { avatarUrl }, web 端期望 { url }. 兼容两种命名.
+  const url = r.avatarUrl || r.avatar || r.url;
+  if (!url) throw new Error("头像上传响应缺少 url 字段");
+  return { url };
 }

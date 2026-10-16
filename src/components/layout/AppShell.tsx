@@ -36,10 +36,16 @@ function resolveTitle(pathname: string): string {
   if (pathname === "/") return "首页";
   if (pathname === "/chat") return "对话";
   if (pathname.startsWith("/chat/")) return "对话详情";
-  if (pathname.startsWith("/library")) return "知识库";
-  if (pathname.startsWith("/deliveries")) return "交付中心";
+  if (pathname === "/library") return "知识库";
+  if (pathname.startsWith("/library/")) return "知识库详情";
+  if (pathname === "/deliveries") return "交付中心";
+  if (pathname.startsWith("/deliveries/")) return "交付详情";
   if (pathname.startsWith("/notifications")) return "通知";
-  if (pathname.startsWith("/profile")) return "我的";
+  if (pathname === "/profile") return "我的";
+  if (pathname === "/profile/edit") return "编辑资料";
+  if (pathname === "/profile/change-password") return "修改密码";
+  if (pathname === "/profile/apps") return "我的应用";
+  if (pathname === "/browser") return "浏览器";
   return "Gacode";
 }
 
