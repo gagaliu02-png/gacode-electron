@@ -1,5 +1,6 @@
-import { contextBridge } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
 import * as os from 'os';
+import type { GacodeBridge } from '../shared/types';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const path = require('path');
@@ -12,7 +13,10 @@ try {
   const { app } = require('electron');
   cachedAppVersion = app.getVersion();
 } catch (err) {
-  console.warn('[gacode-electron] preload: failed to read app.getVersion(), fallback to package.json', err);
+  console.warn(
+    '[gacode-electron] preload: failed to read app.getVersion(), fallback to package.json',
+    err,
+  );
   try {
     // 兜底:读 package.json(路径: dist/electron/preload.js → ../../package.json)
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -23,15 +27,13 @@ try {
   }
 }
 
-export interface GacodeBridge {
-  appVersion: string;
-  platform: NodeJS.Platform;
-}
-
 // contextBridge:安全暴露给 window.gacode,渲染层只能读不能改
 contextBridge.exposeInMainWorld('gacode', {
   appVersion: cachedAppVersion,
   platform: os.platform(),
+  // PR2:原生通知桥 —— 渲染层 await window.gacode.notify(title, body)
+  notify: (title: string, body: string): Promise<boolean> =>
+    ipcRenderer.invoke('gacode:notify', { title, body }),
 } satisfies GacodeBridge);
 
 console.log('[gacode-electron] preload loaded');

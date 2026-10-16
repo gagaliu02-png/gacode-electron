@@ -2,6 +2,10 @@
 
 Gacode PC 版 - 基于 Electron 的 Windows 桌面客户端。
 
+> ⚠️ **环境要求**:`pnpm ≥ 12`(workspace `onlyBuiltDependencies: [electron]` 需要 pnpm 9+ 的脚本钩子授权,
+> PR2 起主进程模块化,Node 解析路径依赖 `package.json` `exports` 字段,要求 pnpm 12+)。
+> Node.js 20 LTS(electron 32 自带,无需本机装)。
+
 包内是 **Web 版套壳**:渲染层加载 https://www.gaga.sale/gacode/(生产)或 http://localhost:3000/gacode/(开发)。服务端代码、API、数据库全部在远端 gacode-web,本仓库只负责桌面壳。
 
 ## 仓库定位
