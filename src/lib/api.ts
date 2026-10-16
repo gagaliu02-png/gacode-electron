@@ -201,3 +201,189 @@ export const authApi = {
   logout: () =>
     request<{ ok: true }>("/auth/logout", { method: "POST" }),
 };
+
+// =========================================================================
+// 阶段 2 — Chat / Sessions / Notifications / 通知
+//
+// 端点跟 unified-api 对齐 (用 gacode-web/src/lib/api.ts:454-1042 cross-check,
+// 命名风格跟 web 同步, 改时两边一起改).
+//
+// 大整数 id 始终走字符串 (后端 JSON number 丢精度).
+// =========================================================================
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  pinned: boolean;
+  updatedAt: string;
+  createdAt: string;
+  hasNewMessage?: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  /** 服务端 metadata (image_urls / attached_file_ids / attached_files) — 自解析 */
+  imageUrls?: string[];
+  attachedFileIds?: string[];
+  attachedFileNames?: Array<{ fileId: string; name: string }>;
+  phasesJson?: string | null;
+}
+
+export interface NotificationItem {
+  id: string;
+  title: string;
+  body?: string;
+  type?: string;
+  read?: boolean;
+  createdAt: string;
+}
+
+// ─────────── Sessions ───────────
+
+export async function getChats(): Promise<{ chats: ChatSession[] }> {
+  const r = await request<{
+    items: Array<{
+      id: string;
+      title: string;
+      pinned: boolean;
+      updated_at: string;
+      created_at: string;
+      hasNewMessage?: boolean;
+    }>;
+    next_cursor: string | null;
+  }>("/yinian/sessions");
+  return {
+    chats: (r.items ?? []).map((s) => ({
+      id: String(s.id),
+      title: s.title,
+      pinned: !!s.pinned,
+      updatedAt: s.updated_at,
+      createdAt: s.created_at,
+      hasNewMessage: !!s.hasNewMessage,
+    })),
+  };
+}
+
+export interface CreateChatInput {
+  /** 可选: 客户端想塞的标题 (server 默认"新对话") */
+  title?: string;
+}
+
+export function createChat(input: CreateChatInput = {}): Promise<ChatSession> {
+  return request<ChatSession>("/yinian/sessions", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function renameChat(id: string, title: string): Promise<ChatSession> {
+  return request<ChatSession>(`/yinian/sessions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export function setSessionPin(id: string, pinned: boolean): Promise<ChatSession> {
+  return request<ChatSession>(`/yinian/sessions/${id}/pin`, {
+    method: "PATCH",
+    body: JSON.stringify({ pinned }),
+  });
+}
+
+export function deleteSession(id: string): Promise<{ ok: true }> {
+  return request<{ ok: true }>(`/yinian/sessions/${id}`, { method: "DELETE" });
+}
+
+/** 批量删除 — server 端 sessions-batch.routes.js (max 50) */
+export function deleteSessions(ids: string[]): Promise<{ ok: true; deletedCount: number }> {
+  return request<{ ok: true; deletedCount: number }>(
+    "/yinian/sessions/batch-delete",
+    { method: "POST", body: JSON.stringify({ ids }) },
+  );
+}
+
+// ─────────── History (messages) ───────────
+
+export async function getHistory(chatId: string): Promise<{
+  messages: ChatMessage[];
+  nextCursor: string | null;
+}> {
+  const r = await request<{
+    items: Array<{
+      id: string;
+      role: string;
+      content: string;
+      created_at: string;
+      metadata?: string | Record<string, unknown> | null;
+    }>;
+    next_cursor: string | null;
+  }>(`/yinian/sessions/${chatId}/messages`);
+  const messages: ChatMessage[] = (r.items ?? []).map((m) => {
+    let imageUrls: string[] | undefined;
+    let attachedFileIds: string[] | undefined;
+    let attachedFileNames: Array<{ fileId: string; name: string }> | undefined;
+    if (m.metadata) {
+      try {
+        const meta = typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata;
+        if (Array.isArray(meta?.image_urls)) imageUrls = meta.image_urls as string[];
+        if (Array.isArray(meta?.attached_file_ids))
+          attachedFileIds = meta.attached_file_ids as string[];
+        if (Array.isArray(meta?.attached_files)) {
+          attachedFileNames = (
+            meta.attached_files as Array<{ file_id?: unknown; filename?: unknown }>
+          )
+            .filter((f) => f && (f as { file_id?: unknown }).file_id)
+            .map((f) => ({
+              fileId: String((f as { file_id: unknown }).file_id),
+              name: String((f as { filename?: unknown }).filename || "附件"),
+            }));
+        }
+      } catch {
+        /* ignore malformed metadata */
+      }
+    }
+    return {
+      id: String(m.id),
+      role: m.role === "user" ? "user" : "assistant",
+      content: m.content,
+      createdAt: m.created_at,
+      imageUrls,
+      attachedFileIds,
+      attachedFileNames,
+    };
+  });
+  return { messages, nextCursor: r.next_cursor };
+}
+
+// ─────────── Notifications (top-level, 非 /yinian/*) ───────────
+
+export async function listNotifications(
+  unread: boolean,
+): Promise<{ notifications: NotificationItem[]; unreadCount: number }> {
+  const qs = unread ? "?unread=true" : "";
+  const r = await request<{
+    notifications: Array<{
+      id: string | number;
+      title: string;
+      body?: string;
+      type?: string;
+      isRead?: boolean;
+      createdAt: string;
+    }>;
+    unreadCount: number;
+  }>(`/notifications${qs}`);
+  return {
+    notifications: (r.notifications ?? []).map((n) => ({
+      id: String(n.id),
+      title: n.title,
+      body: n.body,
+      type: n.type,
+      read: n.isRead,
+      createdAt: n.createdAt,
+    })),
+    unreadCount: r.unreadCount ?? 0,
+  };
+}

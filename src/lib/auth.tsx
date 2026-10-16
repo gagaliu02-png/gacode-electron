@@ -28,6 +28,8 @@ import {
   type ReactNode,
 } from "react";
 import { authApi, registerAuthAccessors, type User } from "./api";
+import { registerCancelAuthAccessors } from "./cancel";
+import { registerUploadAuthAccessors } from "./upload";
 
 interface AuthContextValue {
   /** 当前 user (登录态) / null (未登录) */
@@ -58,10 +60,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // 把 setAccessToken / clear 注入到 api.ts, 让 401 refresh 路径也能更新内存 token
   useEffect(() => {
+    const snapshot = () => ({ token: accessToken });
     registerAuthAccessors(() => accessToken, () => {
       setAccessTokenState(null);
       setUser(null);
     });
+    // stage 2: 取消 / 上传 fetch 也需要内存 token, 通过同一份 accessor 注入。
+    // 结构上保证 accessToken 写在 AuthProvider 里, 其他模块只读不存。
+    registerCancelAuthAccessors(snapshot);
+    registerUploadAuthAccessors(snapshot);
     // 监听 refresh 成功事件 (lib/api.ts:tryRefresh dispatch)
     const onRefreshed = (e: Event) => {
       const detail = (e as CustomEvent<{ accessToken?: string }>).detail;

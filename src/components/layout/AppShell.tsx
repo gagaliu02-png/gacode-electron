@@ -1,50 +1,36 @@
 /**
- * components/layout/AppShell.tsx — 阶段 1 App shell
+ * components/layout/AppShell.tsx — 阶段 2 App shell + 真实数据
  *
- * 对齐 gacode-web `(main)/layout.tsx` + Drawer, 但 PC 形态:
- *   - 左侧 256px 持久 sidebar (不抽奖屉, lg+ 视图永久展开, 跟桌面客户端定位匹配)
- *   - 顶部 56px Header (← 返回 + 居中标题 + 右侧 slot)
- *   - 内容区 flex-1 滚动
+ * 阶段 1 这里有 HARD_PINNED_CHATS / HARD_RECENT_CHATS 假数据 + UNREAD_NOTIF_COUNT 0,
+ * 阶段 2 接 useChats (React Query getChats) + useNotifications (listNotifications).
  *
- * Sidebar 内容 (对齐 gacode-web Drawer.tsx 但去掉 transform 动画):
- *   - 顶部 TopBar: Cody icon + "gacode" + 🔔 通知按钮 (badge hardcode 0)
- *   - 菜单项: 对话 / 知识库 / 交付中心 (active 高亮)
- *   - 置顶 + 最近对话列表 (hardcode 3 条假数据, 阶段 2 接真 API)
- *   - 底部用户栏: 头像 + displayName + → /profile, 登出按钮
+ * 渲染:
+ *   256px sidebar
+ *     ├─ 顶 brand bar (gacode + 铃铛 + badge)
+ *     ├─ 主菜单 (对话 / 知识库 / 交付中心) — active 高亮
+ *     ├─ 置顶 (可折叠, 默认展开)
+ *     ├─ 最近 (默认前 5, "show more" 展开)
+ *     └─ 用户卡 + 注销
+ *   56px header (返回 + 居中标题 + 右 slot)  ← 父路由内容自己负责右 slot
+ *   flex-1 main: children (路由 outlet)
  *
- * 设计 token: 全部走 tailwind class (bg-bg-base / text-fg / border-border),
- * 不在组件级写新 token (跟 design-spec § 9 一致: inline style 仅给 SVG / canvas 用).
+ * 当前 chat 高亮: pathname `/chat/:id` 时匹配唯一 id, 仍按 /chat active 走;
+ *   在侧边 chat 列表里额外给当前 id 加 brand 左侧高亮.
  */
 
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useLocation, useNavigate, type To } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../lib/auth";
 import { useToast } from "../ui/Toast";
+import { getChats, listNotifications, type ChatSession } from "../../lib/api";
 
-const SIDEBAR_WIDTH = "w-64"; // 256px — 跟 gacode-web drawer w-80 (320) 略窄, 适配桌面
+const SIDEBAR_WIDTH = "w-64";
+const RECENT_DEFAULT_LIMIT = 5;
 
-// =========================================================================
-// 阶段 1 假数据 — 阶段 2 接 /chats + /notifications 真 API
-// =========================================================================
-
-const HARD_PINNED_CHATS = [
-  { id: "p1", title: "Gacode 设计规范 v2" },
-  { id: "p2", title: "数据中台对接" },
-];
-
-const HARD_RECENT_CHATS = [
-  { id: "r1", title: "API 协议对齐讨论" },
-  { id: "r2", title: "OTA v1.2 发布计划" },
-  { id: "r3", title: "SSE 流式输出调研" },
-  { id: "r4", title: "知识库 chunk 切片" },
-  { id: "r5", title: "登录态续期方案" },
-];
-
-const UNREAD_NOTIF_COUNT = 0; // 阶段 2 接 /yinian/notifications?unread=true
-
-// =========================================================================
-// 路由 → 显示标题 + 返回目标
-// =========================================================================
+// ────────────────────────────────────────────────────────────
+// helpers
+// ────────────────────────────────────────────────────────────
 
 function resolveTitle(pathname: string): string {
   if (pathname === "/") return "首页";
@@ -58,20 +44,18 @@ function resolveTitle(pathname: string): string {
 }
 
 function isSubRoute(pathname: string): boolean {
-  // Home 不显示 ←, 其他子路由都显示
   return pathname !== "/";
 }
 
 function initials(displayName: string): string {
   const s = displayName.trim();
   if (!s) return "?";
-  // 中文取首字, 英文取首字母大写
   return s.charAt(0).toUpperCase();
 }
 
-// =========================================================================
-// Sidebar
-// =========================================================================
+// ────────────────────────────────────────────────────────────
+// navigation
+// ────────────────────────────────────────────────────────────
 
 interface NavItem {
   label: string;
@@ -83,7 +67,6 @@ const NAV_ITEMS: NavItem[] = [
   {
     label: "对话",
     to: "/chat",
-    // /chat 和 /chat/:id 都算"对话区"
     match: (p) => p === "/chat" || p.startsWith("/chat/"),
   },
   {
@@ -98,6 +81,10 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
+// ────────────────────────────────────────────────────────────
+// AppShell
+// ────────────────────────────────────────────────────────────
+
 export function AppShell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -107,8 +94,32 @@ export function AppShell({ children }: { children: ReactNode }) {
   const title = resolveTitle(location.pathname);
   const showBack = isSubRoute(location.pathname);
 
+  // chats — sidebar 真实数据
+  const { data: chatsData, isLoading: chatsLoading } = useQuery({
+    queryKey: ["chats"],
+    queryFn: getChats,
+    refetchInterval: 60_000, // 每分钟后台刷一次, sidebar 实时性够用
+  });
+  const allChats: ChatSession[] = chatsData?.chats ?? [];
+  const pinned = allChats.filter((c) => c.pinned);
+  const recent = allChats.filter((c) => !c.pinned);
+
+  // notifications — 顶红点
+  const { data: notifData } = useQuery({
+    queryKey: ["notifications", { unread: true }],
+    queryFn: () => listNotifications(true),
+    refetchInterval: 30_000, // 30s 轮询, refetchOnWindowFocus 默认 false
+  });
+  const unreadCount = notifData?.unreadCount ?? 0;
+
+  // 找出当前 chat id (pathname `/chat/:id`)
+  const currentChatId =
+    location.pathname.startsWith("/chat/") &&
+    location.pathname.length > "/chat/".length
+      ? location.pathname.slice("/chat/".length).split("/")[0]
+      : null;
+
   const handleBack = () => {
-    // router.back() 在 history 栈短时会回不到主页面; 走更稳的 navigate(-1) with fallback
     if (window.history.length > 1) {
       navigate(-1);
     } else {
@@ -131,16 +142,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden bg-bg-base text-fg">
       {/* ============================================================
-          Sidebar — 256px 持久展开
+          Sidebar (256px 持久)
           ============================================================ */}
       <aside
-        className={[
-          SIDEBAR_WIDTH,
-          "shrink-0 bg-bg-base border-r border-border flex flex-col",
-        ].join(" ")}
+        className={[SIDEBAR_WIDTH, "shrink-0 bg-bg-base border-r border-border flex flex-col"].join(" ")}
         aria-label="主导航"
       >
-        {/* TopBar: Cody icon + gacode + 🔔 */}
+        {/* TopBar */}
         <div className="px-3 pt-3">
           <div className="flex items-center gap-2 rounded-md bg-bg-elevated px-3 py-2">
             <div
@@ -158,16 +166,16 @@ export function AppShell({ children }: { children: ReactNode }) {
               className="relative w-8 h-8 rounded-full text-fg-muted hover:bg-bg-sunken hover:text-fg transition-colors duration-150 inline-flex items-center justify-center"
             >
               <BellIcon />
-              {UNREAD_NOTIF_COUNT > 0 && (
+              {unreadCount > 0 ? (
                 <span className="absolute top-0.5 right-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[10px] font-semibold bg-brand text-brand-on">
-                  {UNREAD_NOTIF_COUNT > 99 ? "99+" : UNREAD_NOTIF_COUNT}
+                  {unreadCount > 99 ? "99+" : unreadCount}
                 </span>
-              )}
+              ) : null}
             </button>
           </div>
         </div>
 
-        {/* 主菜单 — 知识库 / 交付中心 (对话走中间区块, 不重复) */}
+        {/* 主菜单 */}
         <nav className="px-3 mt-3">
           <div className="rounded-md bg-bg-elevated p-2 space-y-1">
             {NAV_ITEMS.map((item) => {
@@ -192,46 +200,21 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </nav>
 
-        {/* 对话列表 — 置顶 + 最近 (阶段 2 接真 API) */}
+        {/* 对话列表: 置顶 + 最近 */}
         <section className="flex-1 overflow-y-auto px-3 mt-3 min-h-0">
-          <div className="rounded-md bg-bg-elevated p-2">
-            {/* 置顶 */}
-            {HARD_PINNED_CHATS.length > 0 && (
-              <div>
-                <div className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-fg-muted">
-                  <PinIcon />
-                  <span className="flex-1">置顶</span>
-                  <span>{HARD_PINNED_CHATS.length}</span>
-                </div>
-                <div className="space-y-1">
-                  {HARD_PINNED_CHATS.map((c) => (
-                    <SidebarChatItem key={c.id} id={c.id} title={c.title} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* 最近 */}
-            <div className="mt-2">
-              <div className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-fg-muted">
-                <ClockIcon />
-                <span className="flex-1">最近</span>
-                <span>{HARD_RECENT_CHATS.length}</span>
-              </div>
-              <div className="space-y-1">
-                {HARD_RECENT_CHATS.map((c) => (
-                  <SidebarChatItem key={c.id} id={c.id} title={c.title} />
-                ))}
-              </div>
-            </div>
-          </div>
+          <ChatListPanel
+            pinned={pinned}
+            recent={recent}
+            currentChatId={currentChatId}
+            loading={chatsLoading}
+          />
         </section>
 
-        {/* 底部用户栏 */}
+        {/* 用户卡 */}
         <button
           type="button"
           onClick={() => navigate("/profile")}
-          className="mx-3 mb-3 mt-3 rounded-md bg-bg-elevated p-3 flex items-center gap-3 text-left hover:bg-bg-sunken transition-colors duration-150"
+          className="mx-3 mt-3 rounded-md bg-bg-elevated p-3 flex items-center gap-3 text-left hover:bg-bg-sunken transition-colors duration-150"
           aria-label="我的"
         >
           <div
@@ -246,8 +229,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <ChevronRightIcon />
         </button>
 
-        {/* 登出按钮 */}
-        <div className="mx-3 mb-3">
+        {/* 登出 */}
+        <div className="mx-3 mb-3 mt-2">
           <button
             type="button"
             onClick={handleLogout}
@@ -260,7 +243,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       {/* ============================================================
-          主内容区 — Header + 路由 outlet
+          Main (header + outlet)
           ============================================================ */}
       <div className="flex flex-col flex-1 min-w-0">
         <header
@@ -281,7 +264,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <h1 className="flex-1 text-base font-medium truncate min-w-0 text-center">
             {title}
           </h1>
-          {/* 右侧 slot — 阶段 1 留空, 阶段 2 chat 详情页会有 + 新建 / ⋮ 重命名 */}
+          {/* 阶段 2 右侧 slot 给 ChatDetail 用 "..."菜单 / ChatList 用 "新建对话" 等
+              父路由可自己用 fixed / absolutely 摆, 此处保留占位. */}
           <span className="w-9 h-9" aria-hidden="true" />
         </header>
 
@@ -291,28 +275,167 @@ export function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-// =========================================================================
-// Sidebar Chat Item
-// =========================================================================
+// ────────────────────────────────────────────────────────────
+// ChatListPanel — sidebar 的对话列表部分 (置顶可折叠 + 最近可展开)
+// ────────────────────────────────────────────────────────────
 
-function SidebarChatItem({ id, title }: { id: string; title: string }) {
+function ChatListPanel({
+  pinned,
+  recent,
+  currentChatId,
+  loading,
+}: {
+  pinned: ChatSession[];
+  recent: ChatSession[];
+  currentChatId: string | null;
+  loading: boolean;
+}) {
+  const [pinnedOpen, setPinnedOpen] = useState(true);
+  const [recentExpanded, setRecentExpanded] = useState(false);
+
+  const visibleRecent = recentExpanded
+    ? recent
+    : recent.slice(0, RECENT_DEFAULT_LIMIT);
+
+  const totalChats = pinned.length + recent.length;
+
+  return (
+    <div className="rounded-md bg-bg-elevated p-2">
+      {loading && totalChats === 0 ? (
+        <SkeletonLines />
+      ) : totalChats === 0 ? (
+        <div className="px-3 py-4 text-xs text-fg-subtle text-center">
+          暂无对话
+        </div>
+      ) : (
+        <>
+          {pinned.length > 0 ? (
+            <CollapsibleSection
+              icon={<PinIcon />}
+              title="置顶"
+              count={pinned.length}
+              open={pinnedOpen}
+              onToggle={() => setPinnedOpen((v) => !v)}
+            >
+              <div className="space-y-1">
+                {pinned.map((c) => (
+                  <SidebarChatItem
+                    key={c.id}
+                    chat={c}
+                    isActive={c.id === currentChatId}
+                  />
+                ))}
+              </div>
+            </CollapsibleSection>
+          ) : null}
+
+          {recent.length > 0 ? (
+            <div className={pinned.length > 0 ? "mt-2" : ""}>
+              <div className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-fg-muted">
+                <ClockIcon />
+                <span className="flex-1">最近</span>
+                <span>{recent.length}</span>
+              </div>
+              <div className="space-y-1">
+                {visibleRecent.map((c) => (
+                  <SidebarChatItem
+                    key={c.id}
+                    chat={c}
+                    isActive={c.id === currentChatId}
+                  />
+                ))}
+              </div>
+              {recent.length > RECENT_DEFAULT_LIMIT ? (
+                <button
+                  type="button"
+                  onClick={() => setRecentExpanded((v) => !v)}
+                  className="w-full text-xs text-fg-muted hover:text-fg transition-colors duration-150 px-3 py-1.5 text-left"
+                >
+                  {recentExpanded ? "收起" : `展开剩余 ${recent.length - RECENT_DEFAULT_LIMIT} 条`}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CollapsibleSection({
+  icon,
+  title,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-fg-muted hover:text-fg transition-colors duration-150"
+      >
+        {icon}
+        <span className="flex-1 text-left">{title}</span>
+        <span>{count}</span>
+        <ChevronDownIcon className={open ? "" : "-rotate-90"} />
+      </button>
+      {open ? children : null}
+    </div>
+  );
+}
+
+function SidebarChatItem({
+  chat,
+  isActive,
+}: {
+  chat: ChatSession;
+  isActive: boolean;
+}) {
   const navigate = useNavigate();
   return (
     <button
       type="button"
-      onClick={() => navigate(`/chat/${id}`)}
-      className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm text-fg hover:bg-bg-base hover:text-fg transition-colors duration-150 text-left"
+      onClick={() => navigate(`/chat/${chat.id}`)}
+      aria-current={isActive ? "page" : undefined}
+      className={[
+        "w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm text-left truncate transition-colors duration-150",
+        isActive
+          ? "bg-bg-sunken text-fg font-medium border-l-2 border-brand"
+          : "text-fg-muted hover:bg-bg-base hover:text-fg",
+      ].join(" ")}
     >
       <ChatBubbleIcon />
-      <span className="flex-1 truncate">{title}</span>
+      <span className="flex-1 truncate">{chat.title || "新对话"}</span>
     </button>
   );
 }
 
-// =========================================================================
-// Icons — 最小自绘, 不引 lucide-react (避免新依赖)
-// 用 viewBox 24, stroke-width 1.6 跟 gacode-web 风格近似
-// =========================================================================
+function SkeletonLines() {
+  return (
+    <div className="space-y-1.5 p-1">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div
+          key={i}
+          className="h-7 rounded bg-bg-sunken animate-pulse"
+        />
+      ))}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// Icons
+// ────────────────────────────────────────────────────────────
 
 function ChevronRightIcon() {
   return (
@@ -328,6 +451,25 @@ function ChevronRightIcon() {
       strokeLinejoin="round"
     >
       <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`transition-transform duration-150 ${className ?? ""}`}
+    >
+      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }
