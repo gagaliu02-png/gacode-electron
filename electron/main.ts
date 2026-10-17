@@ -396,6 +396,124 @@ function registerTaskbarProgressIpc(): void {
 }
 
 // =========================================================================
+// refresh-fix — refreshToken 持久化 IPC handlers
+//
+// 文件路径: %APPDATA%/Gacode/refresh-token.json
+// (userData 已经在 app.whenReady() 里 setPath 到 %APPDATA%/Gacode,
+//  跟现有 Cache / IndexedDB / GPU cache 共享一个目录)
+//
+// 文件格式: { refreshToken: string, userId: string, updatedAt: ISO string }
+// 权限: 0600 (Windows 下 fs.chmod 实际不强制, 但调一下无害, 让 POSIX layer
+//        至少给个意图标记)
+//
+// 失败策略: read/write/clear 全部 try/catch 兜底, IPC 不抛异常给渲染层,
+//          渲染层 lib/auth.tsx 内部 console.warn. refresh 流程不阻塞登录.
+// =========================================================================
+
+function getRefreshTokenFilePath(): string {
+  // userData 在 setPath 之后是 %APPDATA%/Gacode
+  return path.join(app.getPath('userData'), 'refresh-token.json');
+}
+
+interface RefreshTokenFile {
+  refreshToken: string;
+  userId: string;
+  updatedAt: string;
+}
+
+function readRefreshTokenFile(): RefreshTokenFile | null {
+  const fp = getRefreshTokenFilePath();
+  try {
+    if (!fs.existsSync(fp)) return null;
+    const raw = fs.readFileSync(fp, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<RefreshTokenFile>;
+    if (typeof parsed.refreshToken !== 'string' || parsed.refreshToken.length < 10) {
+      console.warn('[gacode-electron] refresh-token.json malformed, ignoring');
+      return null;
+    }
+    return {
+      refreshToken: parsed.refreshToken,
+      userId: typeof parsed.userId === 'string' ? parsed.userId : '',
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
+    };
+  } catch (err) {
+    console.warn('[gacode-electron] readRefreshTokenFile failed', err);
+    return null;
+  }
+}
+
+function writeRefreshTokenFile(rt: string, userId: string): void {
+  const fp = getRefreshTokenFilePath();
+  try {
+    const dir = path.dirname(fp);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const payload: RefreshTokenFile = {
+      refreshToken: rt,
+      userId,
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(fp, JSON.stringify(payload), 'utf8');
+    // 0600 权限 — Windows 下 fs.chmod 实际不强制, 但调一下无害.
+    try {
+      fs.chmodSync(fp, 0o600);
+    } catch {
+      /* ignore on Windows */
+    }
+  } catch (err) {
+    console.warn('[gacode-electron] writeRefreshTokenFile failed', err);
+    throw err;
+  }
+}
+
+function clearRefreshTokenFile(): void {
+  const fp = getRefreshTokenFilePath();
+  try {
+    if (fs.existsSync(fp)) {
+      fs.unlinkSync(fp);
+    }
+  } catch (err) {
+    console.warn('[gacode-electron] clearRefreshTokenFile failed', err);
+    throw err;
+  }
+}
+
+function registerAuthStorageIpc(): void {
+  ipcMain.handle(
+    'gacode:auth-read-refresh-token',
+    async (): Promise<string | null> => {
+      const f = readRefreshTokenFile();
+      return f?.refreshToken ?? null;
+    },
+  );
+
+  ipcMain.handle(
+    'gacode:auth-write-refresh-token',
+    async (
+      _event,
+      args: { refreshToken?: string; userId?: string },
+    ): Promise<void> => {
+      const rt = args?.refreshToken;
+      if (typeof rt !== 'string' || rt.length < 10) {
+        throw new Error('refreshToken missing or too short');
+      }
+      const userId = typeof args?.userId === 'string' ? args.userId : '';
+      writeRefreshTokenFile(rt, userId);
+    },
+  );
+
+  ipcMain.handle(
+    'gacode:auth-clear-refresh-token',
+    async (): Promise<void> => {
+      clearRefreshTokenFile();
+    },
+  );
+
+  console.log('[gacode-electron] Auth storage IPC handlers registered');
+}
+
+// =========================================================================
 // 阶段 4 — second-instance (deep link 唤起 first instance)
 //
 // `second-instance` 事件在 first instance 里触发, 第二个进程已经 quit,
@@ -476,6 +594,7 @@ app.whenReady().then(() => {
   registerNotificationIpc();
   registerBrowserTabIpc();
   registerTaskbarProgressIpc();
+  registerAuthStorageIpc();
 
   // 阶段 4: webContents 就绪后补发一次 argv deep link
   if (pendingDeepLink && mainWindow) {

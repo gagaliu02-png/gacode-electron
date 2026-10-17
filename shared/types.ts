@@ -61,6 +61,24 @@ export interface GacodeBridge {
    * 给 webview-bridge.ts 做"主进程关掉 tab 时反向通知渲染"用。
    */
   onBrowserTabClosed: (callback: (event: BrowserTabClosedEvent) => void) => () => void;
+
+  /**
+   * refreshToken 持久化桥 — 渲染层走 IPC, 主进程读写
+   * `%APPDATA%/Gacode/refresh-token.json`. 文件权限 0600 (Windows 下 fs.chmod
+   * 实际不强制, 但调一下无害).
+   *
+   *  - read(): Promise<string | null> — 启动时读, 没文件 / parse 失败返 null
+   *  - write(refreshToken, userId): 写盘, 同步刷新时 (login / refresh rotation)
+   *  - clear(): 登出 / refresh 失败时清盘
+   *
+   * 真实 web 流走 cookie 不会到这; Electron 端 refreshToken 走 body, 必须
+   * 显式存. 详情看 lib/auth.tsx hydrate 流程注释.
+   */
+  authStorage: {
+    read: () => Promise<string | null>;
+    write: (refreshToken: string, userId: string) => Promise<void>;
+    clear: () => Promise<void>;
+  };
 }
 
 /** 主进程 → 渲染层的菜单事件载荷。 */

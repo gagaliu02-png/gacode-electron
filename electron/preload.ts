@@ -80,6 +80,19 @@ contextBridge.exposeInMainWorld('gacode', {
   // Browser.tsx 主要用 `<webview>` 标签管 tab, 这条监听备用
   onBrowserTabClosed: (callback: (event: BrowserTabClosedEvent) => void): (() => void) =>
     listenMain<BrowserTabClosedEvent>('gacode:browser-tab-closed', (e) => callback(e)),
+
+  // refresh-fix: refreshToken 持久化桥 — 主进程持有
+  // %APPDATA%/Gacode/refresh-token.json, 渲染层走 IPC. AuthProvider 在
+  // login / refresh / logout 时调这三件套. 失败 swallow (lib/auth.tsx 内部
+  // 已经 console.warn, 这里只负责把请求送过去).
+  authStorage: {
+    read: (): Promise<string | null> =>
+      ipcRenderer.invoke('gacode:auth-read-refresh-token'),
+    write: (refreshToken: string, userId: string): Promise<void> =>
+      ipcRenderer.invoke('gacode:auth-write-refresh-token', { refreshToken, userId }),
+    clear: (): Promise<void> =>
+      ipcRenderer.invoke('gacode:auth-clear-refresh-token'),
+  },
 } satisfies GacodeBridge);
 
 console.log('[gacode-electron] preload loaded');

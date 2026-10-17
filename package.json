@@ -1,6 +1,6 @@
 {
   "name": "gacode-electron",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Gacode PC 版 - 独立 Electron 桌面应用(Windows 主)",
   "private": true,
   "main": "dist/main/index.js",
