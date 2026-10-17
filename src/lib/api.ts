@@ -7,15 +7,22 @@
  *     防止 token 从 XSS 漏出. XSS 也能读 memory 但 Electron renderer 是
  *     nodeIntegration=false / contextIsolation=true (PR 1 已加固), 攻击面
  *     大幅缩小, 跟 gacode-web 决策一致.
- *   - refresh_token: server Set-Cookie HttpOnly, 客户端不可读, 跟着
- *     `credentials: "include"` 自动带. refresh 时也走 include 一次, server
- *     读 cookie 鉴权 + 签发新 accessToken + 可能轮换 refresh cookie.
+ *   - refresh_token: server `unified-api/src/modules/auth/auth.service.js:107-122`
+ *     是 48 字节随机 base64url, 登录响应 body 里**明文返**(不是 HttpOnly cookie).
+ *     refresh 端点 (`auth.routes.js:29-35`) 要求 `body.refreshToken` (minLength 10),
+ *     `auth.service.js:127` 首行 `if (!refreshToken) throw BAD_REQUEST 400`.
+ *     也就是说 client 必须把 refreshToken 显式 POST 给 server, server 走
+ *     rotation, 旧 refreshToken 立刻失效.
+ *   - Electron 端 refreshToken 持久化策略: 存到 Electron userData 文件
+ *     (path.join(app.getPath('userData'), 'refresh-token.json')), accessToken
+ *     不持久化 — 关掉重启 accessToken 丢, 下次启动 hydrate 时通过持久化
+ *     refreshToken 调 /auth/refresh 拿回新 accessToken + 新 refreshToken.
  *   - v2 协议 unwrap: { ok, data?, error? } → 成功返 data, 失败 throw Error
  *     带 error.message/error.code
  *   - 大整数 ID 走字符串, 不做 Number 转换
  *
  * 401 自动 refresh (对齐 gacode-web api.ts):
- *   - 全局 fetch 包装, 捕获 401 时调 POST /auth/refresh 拿新 accessToken
+ *   - 全局 fetch 包装, 捕获 401 时调 POST /auth/refresh 带 body.refreshToken
  *   - refreshPromise 缓存: 多个 401 并发去重, 同一时间只触发一次 refresh
  *   - refresh 成功 → 用新 token 重发原请求
  *   - refresh 失败 → 调 useAuth.clear() 清状态 + 让 ProtectedRoute 把
@@ -32,19 +39,32 @@ const API_BASE = "https://www.gaga.sale/api/v1";
  * Auth state accessor — 延迟解析, 让 lib/auth.tsx 注册 useAuth 后再被读.
  * 避免 lib/api.ts 直接 import lib/auth.tsx 造成循环依赖.
  *
- * api.ts 只读不写 accessToken; token 的设置由 AuthProvider 在 login /
- * refresh 成功后显式调 setAccessToken. 这里只暴露"取 token" + "清状态"
- * 两个动作给 request() 内部用.
+ * api.ts 只读不写 token; token 的设置由 AuthProvider 在 login /
+ * refresh 成功后显式调 setAccessToken / setRefreshToken. 这里只暴露"取 token"
+ * + "清状态"两个动作给 request() 内部用.
  */
 type AccessTokenGetter = () => string | null;
+type RefreshTokenGetter = () => string | null;
 type AuthClearer = () => void;
 
 let getAccessToken: AccessTokenGetter = () => null;
+let getRefreshToken: RefreshTokenGetter = () => null;
 let clearAuth: AuthClearer = () => {};
 
-export function registerAuthAccessors(getter: AccessTokenGetter, clearer: AuthClearer): void {
+export function registerAuthAccessors(
+  getter: AccessTokenGetter,
+  clearer: AuthClearer,
+): void {
   getAccessToken = getter;
   clearAuth = clearer;
+}
+
+/**
+ * 注册 refresh token getter — lib/auth.tsx 把持久化的 refreshToken 装到
+ * 内存后调这个. tryRefresh() 拿它拼 POST /auth/refresh body.
+ */
+export function registerRefreshTokenGetter(getter: RefreshTokenGetter): void {
+  getRefreshToken = getter;
 }
 
 interface V2Response<T> {
@@ -60,18 +80,37 @@ async function tryRefresh(): Promise<boolean> {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
     try {
+      // server `auth.routes.js:29-35` schema 要求 body.refreshToken (minLength 10),
+      // `auth.service.js:127` 首行校验. 不带 body 一定 schema 失败 → clearAuth
+      // → "会话过期". 旧实现只 `credentials: "include"` 但 server 不再读 cookie
+      // 路径, refresh token 走 body. (unified-api 0.x 改版后的协议.)
+      const rt = getRefreshToken();
+      if (!rt) return false;
       const r = await fetch(`${API_BASE}/auth/refresh`, {
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: rt }),
       });
       if (!r.ok) return false;
-      const json = (await r.json()) as V2Response<{ accessToken?: string }>;
+      const json = (await r.json()) as V2Response<{
+        accessToken?: string;
+        refreshToken?: string;
+      }>;
       if (!json.ok || !json.data?.accessToken) return false;
-      // 通知 AuthProvider 更新内存里的 accessToken
-      // (useAuthStore/AuthProvider 监听这个 channel)
+      // 通知 AuthProvider 更新内存里的 accessToken + refreshToken.
+      // server 走 rotation, 旧 refreshToken 立刻失效 — 必须同步刷盘 (由
+      // AuthProvider 监听事件时调 gacode.authStorage.write).
       window.dispatchEvent(
         new CustomEvent("gacode:auth-refreshed", {
-          detail: { accessToken: json.data.accessToken },
+          detail: {
+            accessToken: json.data.accessToken,
+            // server 可能不返 refreshToken (旧 token 仍有效但未轮换); 这时
+            // 保持原值. 但其实 rotation 已写死, 老 token 下次一定失效, 所以
+            // 一般都有新 refreshToken. 没返就 fallthrough 到 undefined,
+            // AuthProvider 那边不会动.
+            refreshToken: json.data.refreshToken,
+          },
         }),
       );
       return true;
@@ -177,8 +216,15 @@ export interface User {
 
 export interface LoginResponse {
   accessToken: string;
+  /** server 在 body 里明文返 (unified-api auth.service.js:107-122), 客户端必须接收 + 持久化. */
+  refreshToken: string;
   user: User;
-  // refreshToken 走 HttpOnly Set-Cookie, 客户端不接
+}
+
+export interface RefreshResponse {
+  accessToken: string;
+  /** server 走 rotation, 旧 refreshToken 立刻失效; 不返就保持原值. */
+  refreshToken?: string;
 }
 
 export interface RegisterInput {
@@ -203,8 +249,49 @@ export const authApi = {
 
   me: () => request<User>("/auth/me"),
 
-  logout: () =>
-    request<{ ok: true }>("/auth/logout", { method: "POST" }),
+  /**
+   * refresh — POST /auth/refresh 带 body.refreshToken.
+   * server `auth.service.js:127` 首行校验, 不带 body 一定 BAD_REQUEST 400.
+   * 跟 tryRefresh() 的实现语义一致, 但这里是给 AuthProvider hydrate 主动调
+   * (启动时拿持久化 refreshToken 换新 token + 拿 user), 而 tryRefresh() 是
+   * 401 自动 refresh 路径.
+   */
+  refresh: (refreshToken: string) =>
+    request<RefreshResponse>("/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refreshToken }),
+    }),
+
+  /**
+   * logout — POST /auth/logout 带 body.refreshToken (可选).
+   * server 端 `logoutSchema` 不 required, 但带上去可以让 server 立刻作废那
+   * 个 refreshToken, 下次别人偷到旧 token 也无法再 refresh.
+   */
+  logout: (refreshToken?: string | null) =>
+    request<{ ok: true }>("/auth/logout", {
+      method: "POST",
+      body: JSON.stringify({ refreshToken: refreshToken ?? undefined }),
+    }),
+
+  // ===== QR-code login (2026-10-17) — PC 端用 =====
+  // issue / status 匿名; verify 在 App 端 (requireAuth) 走, 不归 PC 管.
+  // PC 流程: issue 拿 token → 显示 QR → App 扫 → 轮询 status → 拿到凭证后调 setSession
+  issueQrLogin: () =>
+    request<{ token: string; qrUrl: string; expiresIn: number; pollIntervalMs: number }>(
+      "/auth/qr-login-issue",
+      { method: "POST" },  // POST 没 body, 别带 Content-Type
+    ),
+
+  pollQrLoginStatus: (token: string) =>
+    request<
+        | { status: "pending" }
+        | {
+            status: "authorized";
+            accessToken: string;
+            refreshToken: string;
+            user: { id: string; displayName: string | null; avatarUrl: string | null };
+          }
+      >(`/auth/qr-login-status?token=${encodeURIComponent(token)}`),
 };
 
 // =========================================================================

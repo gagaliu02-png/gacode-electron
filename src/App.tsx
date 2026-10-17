@@ -14,6 +14,7 @@ import { NotificationSSEBridge } from "./lib/notifications-sse";
 import { DeepLinkBridge } from "./lib/deep-link";
 import { Login } from "./routes/Login";
 import { Register } from "./routes/Register";
+import { QrLogin } from "./routes/QrLogin";
 import { Home } from "./routes/Home";
 import { ChatList } from "./routes/ChatList";
 import { ChatDetail } from "./routes/ChatDetail";
@@ -97,6 +98,8 @@ export function App() {
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
+              {/* 2026-10-17: 扫码登录 (PC 显示 QR, App 扫了确认) */}
+              <Route path="/qr-login" element={<QrLogin />} />
               <Route
                 path="/"
                 element={

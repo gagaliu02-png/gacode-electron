@@ -105,6 +105,16 @@ export function Login() {
               立即注册
             </Link>
           </p>
+
+          {/* 2026-10-17: 加扫码登录入口 — 用 App 扫一下, PC 自动登录 */}
+          <p className="text-sm text-fg-muted text-center pt-1">
+            <Link
+              to="/qr-login"
+              className="text-brand hover:underline font-medium"
+            >
+              📱 用 App 扫码登录
+            </Link>
+          </p>
         </form>
       </div>
     </div>
