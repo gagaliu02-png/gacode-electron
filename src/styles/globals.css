@@ -248,6 +248,60 @@
       opacity: 1;
     }
   }
+
+  /* ==========================================================================
+     md-table-* — Markdown 表格 (来自 lib/markdown.tsx `table` / `th` / `td` 分支)
+
+     跟 gacode-web/src/styles/globals.css 1:1 对齐 (verified 2026-10-17)。
+     阶段 1 (gaga 拍板): 整张表横向滚动, 列不被拆开, 行内不换行.
+     暗色模式: 走 CSS 变量 --bg-sunken / --fg / --border-default, 跟 :root 默认
+              暗色 token 配套; .light class 切到浅色 token 时, 表格颜色一并切.
+     ========================================================================== */
+  .md-table-scroll {
+    overflow-x: auto;
+    max-width: 100%;
+    margin: 0.5rem 0;
+    border-radius: 6px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-sunken);
+  }
+
+  .md-table {
+    border-collapse: collapse;
+    line-height: 1.4;
+    font-size: 0.8125rem;
+  }
+
+  .md-table .md-table-thead,
+  .md-table thead {
+    background: var(--bg-elevated);
+    font-weight: 600;
+  }
+
+  .md-table-th,
+  .md-table-td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-default);
+    white-space: nowrap;
+    color: var(--fg);
+    text-align: left;
+  }
+
+  .md-table tbody tr:last-child .md-table-td,
+  .md-table tbody tr:last-child .md-table-th {
+    border-bottom: none;
+  }
+
+  .md-table-scroll::-webkit-scrollbar {
+    height: 6px;
+  }
+  .md-table-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border-radius: 3px;
+  }
+  .md-table-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--border-strong);
+  }
 }
 
 /* ============================================================================

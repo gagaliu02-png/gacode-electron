@@ -1,308 +1,311 @@
 /**
- * lib/markdown.tsx — 阶段 2 迷你 Markdown 渲染器 (不引第三方)
+ * lib/markdown.tsx — 阶段 1 升级: 自实现 → 共用 gacode-web 渲染管线
  *
- * 阶段 0 deps 不含 react-markdown / remark-gfm, 指令严格"不引新依赖",
- * 但 MessageBubble 需要渲染 LLM 输出的 markdown。 这里自实现一个
- * 覆盖基础语法 (heading/list/code block/quote/link/emphasis) 的子集.
+ * 背景:
+ *   阶段 0 约束"不引新依赖", 自实现了一个 mini 解析器 (h1-3 / paragraph / ul / ol /
+ *   blockquote / link / strong / em / code / codeblock), 完全不支持表格 / 图片 / 嵌套
+ *   列表 / task list. LLM 输出表格时 electron 端只能看到原样竖线.
+ *
+ * 阶段 1 (gaga 拍板): 弃用自实现, 引入 react-markdown + remark-gfm + remark-emoji +
+ * rehype-sanitize, 跟 gacode-web 共用同一套组件 (逻辑 1:1 移植, 见
+ * gacode-web/src/components/Markdown.tsx). Tailwind token 两边一致 (--bg-sunken /
+ * --fg-muted / --border-default 等), CSS 类 .md-table-* 在 globals.css 同步定义.
+ *
+ * 组件 API: { children: string; className?: string } — 跟 gacode-web 对齐, MessageBubble
+ * 切到 <Markdown>{content}</Markdown>.
  *
  * 安全:
- *   - **不做任何 HTML 注入** — 不识别/渲染 <script>; 代码块内一切是字面字符
- *   - link 只对 http(s):// 协议放行, 其他 (e.g. javascript:) 直接丢弃
+ *   - rehype-sanitize (defaultSchema) + 自定义 allowlist — 防御 LLM 输出 <script> /
+ *     <img onerror=...>. default schema 已经禁 on* 事件属性 + script/iframe 等危险标签.
+ *   - link 仍是 target=_blank + rel=noopener noreferrer.
  *
- * 范围:
- *   ✅  `#` / `##` / `###` headings
- *   ✅ `**bold**` / `*italic*` / `` `inline code` ``
- *   ✅ ` ``` ` fenced code block
- *   ✅ `-` / `*` / `1.` 列表 (无嵌套, 单层)
- *   ✅ `> blockquote`
- *   ✅ `[text](https://...)` link
- *   ✅ 段落 + 软换行 (双空格 + \n)
- *   ❌ 表格 / 嵌套列表 / HTML / 图片 / task list — 阶段 N 再补
+ * 阶段 2/3 (shiki 高亮 / mermaid / 暗色适配) 不在本 PR 范围.
  */
 
-import { type ReactNode } from "react";
+import * as React from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkEmoji from "remark-emoji";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
-interface InlineToken {
-  kind: "text" | "code" | "bold" | "italic" | "link";
-  text: string;
-  href?: string;
-}
+// electron 阶段 0 严格不引新依赖 → 不装 lucide-react, 用内联 SVG.
+// 图标跟 web/lucide-react 的 Copy / Check 同源 (12x12 viewBox, 1.5 stroke).
+const CopyIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+  </svg>
+);
 
-/** Inline parse — 把 "**bold** 和 `code` 与 [text](url)" 转成 token 流 */
-function parseInline(line: string): InlineToken[] {
-  const out: InlineToken[] = [];
-  let i = 0;
-  const n = line.length;
-  while (i < n) {
-    // 三连代码跳过
-    const triple = line.slice(i, i + 3);
-    if (triple === "```") {
-      // 在行内的 ``` (非 block) — 当作 lit
-      out.push({ kind: "text", text: "```" });
-      i += 3;
-      continue;
-    }
-
-    // `code`
-    if (line[i] === "`") {
-      const end = line.indexOf("`", i + 1);
-      if (end !== -1) {
-        out.push({ kind: "code", text: line.slice(i + 1, end) });
-        i = end + 1;
-        continue;
-      }
-    }
-
-    // **bold**
-    if (line[i] === "*" && line[i + 1] === "*") {
-      const end = line.indexOf("**", i + 2);
-      if (end !== -1 && end !== i + 2) {
-        out.push({ kind: "bold", text: line.slice(i + 2, end) });
-        i = end + 2;
-        continue;
-      }
-    }
-
-    // *italic*
-    if (line[i] === "*" && line[i + 1] !== "*" && line[i - 1] !== "*") {
-      // 找下一个 *
-      let end = -1;
-      for (let j = i + 1; j < n; j++) {
-        if (line[j] === "*" && line[j - 1] !== "\\") {
-          end = j;
-          break;
-        }
-        if (line[j] === "*" && line[j + 1] === "*") break;
-      }
-      if (end !== -1 && end !== i + 1) {
-        out.push({ kind: "italic", text: line.slice(i + 1, end) });
-        i = end + 1;
-        continue;
-      }
-    }
-
-    // [text](url) — 仅放行 http(s):
-    if (line[i] === "[") {
-      const close = line.indexOf("]", i + 1);
-      if (close !== -1 && line[close + 1] === "(") {
-        const urlEnd = line.indexOf(")", close + 2);
-        if (urlEnd !== -1) {
-          const text = line.slice(i + 1, close);
-          const href = line.slice(close + 2, urlEnd).trim();
-          if (/^https?:\/\//i.test(href)) {
-            out.push({ kind: "link", text, href });
-            i = urlEnd + 1;
-            continue;
-          }
-        }
-      }
-    }
-
-    // 其他字面字符 — 累积到下一个特殊字符
-    let nextSpecial = n;
-    for (let j = i + 1; j < n; j++) {
-      const c = line[j];
-      if (c === "`" || c === "*" || c === "[" || c === "\\") {
-        nextSpecial = j;
-        break;
-      }
-    }
-    out.push({ kind: "text", text: line.slice(i, nextSpecial) });
-    i = nextSpecial;
-  }
-  return out;
-}
-
-function renderInline(tokens: InlineToken[]): ReactNode[] {
-  return tokens.map((t, idx) => {
-    switch (t.kind) {
-      case "code":
-        return (
-          <code
-            key={idx}
-            className="px-1.5 py-0.5 rounded bg-bg-sunken text-brand text-[0.9em] font-mono break-words"
-          >
-            {t.text}
-          </code>
-        );
-      case "bold":
-        return (
-          <strong key={idx} className="font-semibold text-fg">
-            {t.text}
-          </strong>
-        );
-      case "italic":
-        return (
-          <em key={idx} className="italic">
-            {t.text}
-          </em>
-        );
-      case "link":
-        return (
-          <a
-            key={idx}
-            href={t.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-brand hover:underline break-words"
-          >
-            {t.text}
-          </a>
-        );
-      default:
-        return <span key={idx}>{t.text}</span>;
-    }
-  });
-}
+const CheckIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
 
 // =========================================================================
-// 段落级解析
+// helpers
 // =========================================================================
 
-type Block =
-  | { kind: "heading"; level: 1 | 2 | 3; text: string }
-  | { kind: "paragraph"; text: string }
-  | { kind: "codeblock"; lang: string; text: string }
-  | { kind: "list"; ordered: boolean; items: string[] }
-  | { kind: "quote"; text: string };
-
-function parseBlocks(src: string): Block[] {
-  const lines = src.replace(/\r\n?/g, "\n").split("\n");
-  const out: Block[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // fenced code block
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
-      const buf: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        buf.push(lines[i]);
-        i++;
-      }
-      // skip 闭合 fence
-      if (i < lines.length) i++;
-      out.push({ kind: "codeblock", lang, text: buf.join("\n") });
-      continue;
-    }
-
-    // heading
-    const h = /^(#{1,3})\s+(.*)$/.exec(line);
-    if (h) {
-      out.push({ kind: "heading", level: h[1].length as 1 | 2 | 3, text: h[2] });
-      i++;
-      continue;
-    }
-
-    // list (unordered / ordered)
-    if (/^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
-      const ordered = /^\d+\.\s+/.test(line);
-      const items: string[] = [];
-      while (
-        i < lines.length &&
-        ((ordered && /^\d+\.\s+/.test(lines[i])) ||
-          (!ordered && /^[-*]\s+/.test(lines[i])))
-      ) {
-        items.push(ordered ? lines[i].replace(/^\d+\.\s+/, "") : lines[i].replace(/^[-*]\s+/, ""));
-        i++;
-      }
-      out.push({ kind: "list", ordered, items });
-      continue;
-    }
-
-    // quote
-    if (/^>\s?/.test(line)) {
-      const buf: string[] = [];
-      while (i < lines.length && /^>\s?/.test(lines[i])) {
-        buf.push(lines[i].replace(/^>\s?/, ""));
-        i++;
-      }
-      out.push({ kind: "quote", text: buf.join("\n") });
-      continue;
-    }
-
-    // blank line → skip
-    if (line.trim() === "") {
-      i++;
-      continue;
-    }
-
-    // paragraph — 累积到下一个空行 / block 起始
-    const buf: string[] = [];
-    while (i < lines.length && lines[i].trim() !== "" && !lines[i].startsWith("```") && !/^#{1,3}\s+/.test(lines[i]) && !/^[-*]\s+/.test(lines[i]) && !/^\d+\.\s+/.test(lines[i]) && !/^>\s?/.test(lines[i])) {
-      buf.push(lines[i]);
-      i++;
-    }
-    out.push({ kind: "paragraph", text: buf.join("\n") });
-  }
-  return out;
+// Extract language from code block: ```ts\ncode\n``` => 'ts'
+function detectLang(className?: string): string | null {
+  if (!className) return null;
+  const m = /language-([\w-]+)/.exec(className);
+  return m ? m[1] : null;
 }
 
-// =========================================================================
-// React 渲染
-// =========================================================================
+const CodeBlock: React.FC<{
+  className?: string;
+  raw: string;
+}> = ({ className, raw }) => {
+  const lang = detectLang(className);
+  const [copied, setCopied] = React.useState(false);
 
-export function Markdown({ source }: { source: string }) {
-  if (!source.trim()) return null;
-  const blocks = parseBlocks(source);
+  const onCopy = React.useCallback(() => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    navigator.clipboard.writeText(raw).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [raw]);
 
   return (
-    <div className="space-y-2 text-sm leading-relaxed break-words">
-      {blocks.map((b, idx) => {
-        switch (b.kind) {
-          case "heading": {
-            const cls =
-              b.level === 1
-                ? "text-lg font-semibold mt-3"
-                : b.level === 2
-                  ? "text-base font-semibold mt-2"
-                  : "text-sm font-semibold mt-2";
-            return (
-              <div key={idx} className={cls}>
-                {renderInline(parseInline(b.text))}
-              </div>
-            );
-          }
-          case "codeblock":
-            return (
-              <pre
-                key={idx}
-                className="rounded-md bg-bg-sunken border border-border px-3 py-2 overflow-x-auto font-mono text-xs leading-relaxed whitespace-pre-wrap break-words"
-              >
-                <code>{b.text || ""}</code>
-              </pre>
-            );
-          case "list":
-            return (
-              <ul
-                key={idx}
-                className={b.ordered ? "list-decimal pl-6 space-y-1" : "list-disc pl-6 space-y-1"}
-              >
-                {b.items.map((it, j) => (
-                  <li key={j}>{renderInline(parseInline(it))}</li>
-                ))}
-              </ul>
-            );
-          case "quote":
-            return (
-              <blockquote
-                key={idx}
-                className="border-l-2 border-border-strong pl-3 text-fg-muted italic whitespace-pre-wrap"
-              >
-                {renderInline(parseInline(b.text))}
-              </blockquote>
-            );
-          case "paragraph":
-          default:
-            return (
-              <p key={idx} className="whitespace-pre-wrap">
-                {renderInline(parseInline(b.text))}
-              </p>
-            );
-        }
-      })}
+    <div className="my-2 overflow-hidden rounded-lg border border-border bg-bg-sunken">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-bg-elevated">
+        <span className="text-[10px] uppercase tracking-wide text-fg-muted">
+          {lang ?? "code"}
+        </span>
+        <button
+          type="button"
+          onClick={onCopy}
+          aria-label="Copy code"
+          className="inline-flex items-center gap-1 text-[10px] text-fg-muted hover:text-fg transition-colors"
+        >
+          {copied ? <CheckIcon className="h-3 w-3" /> : <CopyIcon className="h-3 w-3" />}
+          {copied ? "已复制" : "复制"}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-3 text-xs font-mono leading-relaxed text-fg">
+        <code className={className}>{raw}</code>
+      </pre>
+    </div>
+  );
+};
+
+// rehype-sanitize schema — 以 defaultSchema 为底, 补:
+//   - code / span 允许 className (remark-gfm 给 table cell 注入 language-xxx)
+//   - input 允许 type / checked / disabled (GFM task list checkbox)
+const sanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    code: [
+      ...(defaultSchema.attributes?.code ?? []),
+      ["className", /^language-./, /^(hljs|token|shiki).*/],
+    ],
+    span: [
+      ...(defaultSchema.attributes?.span ?? []),
+      ["className", /^(hljs|token|shiki).*/],
+    ],
+    input: [
+      ...(defaultSchema.attributes?.input ?? []),
+      ["type", "checkbox"],
+      "checked",
+      "disabled",
+    ],
+  },
+};
+
+const components: Components = {
+  code({ className, children, ...props }) {
+    const isInline = !className;
+    if (isInline) {
+      return (
+        <code
+          className="rounded px-1 py-0.5 text-xs font-mono bg-muted text-fg"
+          {...props}
+        >
+          {children}
+        </code>
+      );
+    }
+    const raw = String(children ?? "").replace(/\n$/, "");
+    return <CodeBlock className={className} raw={raw} />;
+  },
+  pre({ children }) {
+    return <>{children}</>;
+  },
+  a({ href, children, ...props }) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-brand underline-offset-2 hover:underline"
+        {...props}
+      >
+        {children}
+      </a>
+    );
+  },
+  h1({ children }) {
+    return (
+      <h1 className="text-xl font-semibold mt-3 mb-2 text-fg">{children}</h1>
+    );
+  },
+  h2({ children }) {
+    return (
+      <h2 className="text-lg font-semibold mt-3 mb-2 text-fg">{children}</h2>
+    );
+  },
+  h3({ children }) {
+    return (
+      <h3 className="text-base font-semibold mt-2 mb-1 text-fg">{children}</h3>
+    );
+  },
+  h4({ children }) {
+    return (
+      <h4 className="text-sm font-semibold mt-2 mb-1 text-fg">{children}</h4>
+    );
+  },
+  h5({ children }) {
+    return (
+      <h5 className="text-sm font-medium mt-2 mb-1 text-fg">{children}</h5>
+    );
+  },
+  h6({ children }) {
+    return (
+      <h6 className="text-xs font-medium mt-2 mb-1 text-fg-muted uppercase tracking-wide">
+        {children}
+      </h6>
+    );
+  },
+  p({ children }) {
+    return <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>;
+  },
+  ul({ children }) {
+    return (
+      <ul className="list-disc pl-5 my-2 space-y-1 marker:text-fg-muted">
+        {children}
+      </ul>
+    );
+  },
+  ol({ children }) {
+    return (
+      <ol className="list-decimal pl-5 my-2 space-y-1 marker:text-fg-muted">
+        {children}
+      </ol>
+    );
+  },
+  li({ children }) {
+    return <li className="leading-relaxed">{children}</li>;
+  },
+  blockquote({ children }) {
+    return (
+      <blockquote className="border-l-4 border-brand pl-3 my-2 text-fg-muted italic">
+        {children}
+      </blockquote>
+    );
+  },
+  // 表格 — 跟 web 同款横滚容器. CSS 见 globals.css `.md-table-scroll` / `.md-table`.
+  table({ children }) {
+    return (
+      <div className="md-table-scroll">
+        <table className="md-table" style={{ width: "max-content" }}>
+          {children}
+        </table>
+      </div>
+    );
+  },
+  thead({ children }) {
+    return <thead className="md-table-thead">{children}</thead>;
+  },
+  th({ children, style }) {
+    return (
+      <th className="md-table-th" style={style}>
+        {children}
+      </th>
+    );
+  },
+  td({ children, style }) {
+    return (
+      <td className="md-table-td" style={style}>
+        {children}
+      </td>
+    );
+  },
+  hr() {
+    return <hr className="my-3 border-border" />;
+  },
+  strong({ children }) {
+    return <strong className="font-semibold text-fg">{children}</strong>;
+  },
+  em({ children }) {
+    return <em className="italic text-fg">{children}</em>;
+  },
+  del({ children }) {
+    return <del className="text-fg-muted line-through">{children}</del>;
+  },
+  input(props) {
+    const { type, checked, disabled } = props as React.InputHTMLAttributes<HTMLInputElement>;
+    if (type === "checkbox") {
+      return (
+        <input
+          type="checkbox"
+          checked={!!checked}
+          disabled={disabled}
+          readOnly
+          className="mr-1 align-middle accent-brand"
+        />
+      );
+    }
+    return <input {...props} />;
+  },
+};
+
+interface MarkdownProps {
+  children: string;
+  className?: string;
+}
+
+export function Markdown({ children, className }: MarkdownProps) {
+  return (
+    <div
+      className={[
+        "text-sm leading-relaxed text-fg break-words",
+        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        className ?? "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkEmoji]}
+        rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
+        components={components}
+      >
+        {children}
+      </ReactMarkdown>
     </div>
   );
 }

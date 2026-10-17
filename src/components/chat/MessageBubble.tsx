@@ -121,7 +121,7 @@ function AssistantBubble({
         {/* Markdown 正文 */}
         {hasContent ? (
           <div className="rounded-md bg-bg-sunken border border-border px-3.5 py-2.5 text-fg text-sm">
-            <Markdown source={content} />
+            <Markdown>{content}</Markdown>
             {showCursor ? (
               <span
                 aria-hidden="true"
