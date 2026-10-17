@@ -254,8 +254,13 @@
 
      跟 gacode-web/src/styles/globals.css 1:1 对齐 (verified 2026-10-17)。
      阶段 2 (gaga 拍板): 列宽一致 + 正文断行 + 仅超容器时横滚.
+     阶段 3 (2026-10-17) 视觉精修 (跟 web 同步):
+       ① 表头居中 + 加粗 + 浅灰背景 + 加粗下边框 (跟正文区隔)
+       ② 单词边界优先 (overflow-wrap: break-word + word-break: normal),
+          长 URL 才强制断, 不再用 anywhere (anywhere 太激进英文单词内也断).
+       ③ 每列最多 6 行, 超过则折叠 + 底部"展开/收起"按钮
+          (测量 + 交互逻辑在 lib/markdown.tsx 的 ExpandableCell 里).
      - table-layout: auto 让同列 cell 等宽 (列内最长内容决定列宽).
-     - overflow-wrap: anywhere + word-break: break-word 取代 white-space: nowrap.
      暗色模式: 走 CSS 变量 --bg-sunken / --fg / --border-default, 跟 :root 默认
               暗色 token 配套; .light class 切到浅色 token 时, 表格颜色一并切.
      ========================================================================== */
@@ -278,22 +283,71 @@
     font-size: 0.8125rem;
   }
 
-  .md-table .md-table-thead,
+  /* 表头 — 浅灰背景 + 加粗, 阶段 3: 加粗下边框作为表头结束标记 */
   .md-table thead {
     background: var(--bg-elevated);
     font-weight: 600;
   }
 
-  .md-table-th,
+  /* 表头单元格 — 阶段 3: 略大 padding + 加粗下边框 (2px = 表头结束标记).
+     P0 (2026-10-17): 默认 text-align: left — GFM 规范无对齐标记就是左对齐;
+     markdown 源码里写了 `:---:` / `---:` 时, react-markdown-gfm 会注入 inline
+     style.textAlign= center/right, 自动覆盖此处 CSS 类默认值. */
+  .md-table-th {
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--border-strong);
+    color: var(--fg);
+    text-align: left;
+    vertical-align: middle;
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+
+  /* 正文单元格 — 阶段 3: 单词边界优先; 折叠逻辑见 .md-table-td-clamp + ExpandableCell */
   .md-table-td {
     padding: 8px 12px;
     border-bottom: 1px solid var(--border-default);
-    /* 阶段 2: 让列宽一致 (table-layout: auto), 正文写不下就换行 */
-    overflow-wrap: anywhere;
-    word-break: break-word;
     color: var(--fg);
     text-align: left;
     vertical-align: top;
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+
+  /* cell 内容容器 — 阶段 3: 平时 display:block, 加 .md-table-td-clamp 后切到 -webkit-box */
+  .md-table-td-inner {
+    display: block;
+    overflow-wrap: inherit;
+    word-break: inherit;
+  }
+
+  .md-table-td-clamp {
+    display: -webkit-box;
+    -webkit-line-clamp: 6;
+    line-clamp: 6;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* 展开/收起按钮 — 跟 gagaOS 其它 inline 链接同色 (brand), 11px 小号 */
+  .md-table-td-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    margin-top: 4px;
+    padding: 0;
+    background: none;
+    border: none;
+    font-size: 11px;
+    line-height: 1.2;
+    color: var(--brand);
+    cursor: pointer;
+    user-select: none;
+  }
+  .md-table-td-toggle:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+    border-radius: 2px;
   }
 
   .md-table tbody tr:last-child .md-table-td,
@@ -310,6 +364,121 @@
   }
   .md-table-scroll::-webkit-scrollbar-thumb:hover {
     background: var(--border-strong);
+  }
+
+  /* ==========================================================================
+     P0 markdown 渲染细节 (2026-10-17) — 7 项 (跟 gacode-web 同源)
+       ① md-img 图片居中 + 点击放大 (lightbox)
+       ② md-del 删除线 muted 色
+       ③ md-bq 嵌套引用 — descendant selector 每层 +1.5rem 缩进 + 切色
+       ④ li:has(input[type=checkbox][checked]) 已勾选 = line-through + 透明度
+       ⑤ md-hr 浅灰 + 居中短线
+       ⑥ 表格默认对齐: 跟随 gfm inline style (无 inline 时 left)
+       ⑦ md-lightbox 全屏图 + 关闭交互
+     ========================================================================== */
+
+  /* ① md-img — 居中 + 卡片化 + 鼠标 zoom-in 光标 */
+  .md-img-wrap {
+    display: block;
+    margin: 0.75rem auto;
+    text-align: center;
+  }
+  .md-img {
+    display: inline-block;
+    max-width: 100%;
+    max-height: 320px;
+    border-radius: 6px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-sunken);
+    cursor: zoom-in;
+    object-fit: contain;
+  }
+  .md-img:hover {
+    box-shadow: 0 0 0 1px var(--brand);
+  }
+  .md-img-fallback {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 1rem;
+    border: 1px dashed var(--border-default);
+    border-radius: 6px;
+    background: var(--bg-sunken);
+    color: var(--fg-muted);
+    font-size: 11px;
+    text-align: center;
+    max-width: 100%;
+    word-break: break-all;
+  }
+  .md-img-fallback-url {
+    font-size: 10px;
+    opacity: 0.7;
+  }
+
+  /* ② md-del — 删除线, 用半透明 muted 描线 */
+  .md-del {
+    color: var(--fg-muted);
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--fg-muted) 60%, transparent);
+    text-decoration-thickness: 1px;
+  }
+
+  /* ③ md-bq — 嵌套引用, 每层 +1.5rem 缩进 + 切换左边色阶 */
+  .md-bq {
+    margin: 0.5rem 0;
+    padding: 0.35rem 0 0.35rem 0.75rem;
+    border-left: 3px solid var(--brand);
+    color: var(--fg-muted);
+    font-style: italic;
+  }
+  .md-bq .md-bq {
+    margin-left: 1.5rem;
+    border-left-color: var(--brand-cyan);
+    border-left-width: 3px;
+  }
+  .md-bq .md-bq .md-bq {
+    margin-left: 1.5rem;
+    border-left-color: var(--brand-yellow);
+    border-left-width: 3px;
+  }
+  .md-bq .md-bq .md-bq .md-bq {
+    margin-left: 1.5rem;
+    border-left-color: var(--brand-yellow);
+  }
+  .md-bq > :first-child {
+    margin-top: 0;
+  }
+  .md-bq > :last-child {
+    margin-bottom: 0;
+  }
+
+  /* ④ 已勾选任务列表 = 划线 + 半透明 */
+  li:has(> input[type="checkbox"][checked]) {
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--fg-muted) 60%, transparent);
+    color: var(--fg-muted);
+    opacity: 0.6;
+  }
+  li > input[type="checkbox"] {
+    margin-right: 0.35rem;
+    vertical-align: middle;
+    accent-color: var(--brand);
+  }
+
+  /* ⑤ md-hr — 浅灰短线 + 居中 + 前后留空 */
+  .md-hr {
+    border: 0;
+    height: 1px;
+    background: var(--border-default);
+    margin: 1rem auto;
+    width: 35%;
+    min-width: 80px;
+  }
+
+  /* ⑥ 表格默认对齐 — 默认 left, 让 gfm 注入的 inline style 覆盖 */
+  .md-table .md-table-th {
+    text-align: left;
   }
 }
 
