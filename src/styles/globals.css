@@ -249,3 +249,22 @@
     }
   }
 }
+
+/* ============================================================================
+   gagaOS 全局禁用 CSS 动效（transition / animation）— gagaOS 设计规范
+   颜色 / 静态样式不动，只禁过渡和动画。包括:
+     - hover 过渡 (transition-colors / transition-all / transition-opacity 等)
+     - spinner 旋转 (.gagaos-spinner 的 gagaos-spin)
+     - typing dots 弹跳 (.gagaos-bounce)
+     - skeleton loading 脉冲 (animate-pulse)
+     - 任何 @keyframes 动画 / transition 过渡
+   !important 确保覆盖组件级 className (transition-* / duration-* / animate-*)。
+   颜色 / 静态布局 / 焦点态不动。
+   ============================================================================ */
+*, *::before, *::after {
+  transition-property: none !important;
+  transition-duration: 0s !important;
+  animation: none !important;
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+}
