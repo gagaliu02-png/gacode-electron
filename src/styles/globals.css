@@ -253,7 +253,9 @@
      md-table-* — Markdown 表格 (来自 lib/markdown.tsx `table` / `th` / `td` 分支)
 
      跟 gacode-web/src/styles/globals.css 1:1 对齐 (verified 2026-10-17)。
-     阶段 1 (gaga 拍板): 整张表横向滚动, 列不被拆开, 行内不换行.
+     阶段 2 (gaga 拍板): 列宽一致 + 正文断行 + 仅超容器时横滚.
+     - table-layout: auto 让同列 cell 等宽 (列内最长内容决定列宽).
+     - overflow-wrap: anywhere + word-break: break-word 取代 white-space: nowrap.
      暗色模式: 走 CSS 变量 --bg-sunken / --fg / --border-default, 跟 :root 默认
               暗色 token 配套; .light class 切到浅色 token 时, 表格颜色一并切.
      ========================================================================== */
@@ -268,6 +270,10 @@
 
   .md-table {
     border-collapse: collapse;
+    /* `table-layout: auto` 让同列 cell 等宽; `width: max-content` 让 table 撑到自然总宽,
+       否则浏览器钳到 container 宽后逼 cell 换行, 短 header + 长 body 仍错位. */
+    width: max-content;
+    table-layout: auto;
     line-height: 1.4;
     font-size: 0.8125rem;
   }
@@ -282,9 +288,12 @@
   .md-table-td {
     padding: 8px 12px;
     border-bottom: 1px solid var(--border-default);
-    white-space: nowrap;
+    /* 阶段 2: 让列宽一致 (table-layout: auto), 正文写不下就换行 */
+    overflow-wrap: anywhere;
+    word-break: break-word;
     color: var(--fg);
     text-align: left;
+    vertical-align: top;
   }
 
   .md-table tbody tr:last-child .md-table-td,

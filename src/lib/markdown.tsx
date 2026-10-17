@@ -227,13 +227,12 @@ const components: Components = {
       </blockquote>
     );
   },
-  // 表格 — 跟 web 同款横滚容器. CSS 见 globals.css `.md-table-scroll` / `.md-table`.
+  // 表格 — 跟 web 同款横滚容器. 阶段 2: 列宽一致 (table-layout: auto) + 正文断行
+  // (overflow-wrap: anywhere). CSS 见 globals.css `.md-table-scroll` / `.md-table`.
   table({ children }) {
     return (
       <div className="md-table-scroll">
-        <table className="md-table" style={{ width: "max-content" }}>
-          {children}
-        </table>
+        <table className="md-table">{children}</table>
       </div>
     );
   },
