@@ -23,6 +23,7 @@ files:
   - '!**/*.map'
 
 asar: true
+disableSanityCheckAsar: true
 compression: maximum
 
 win:
