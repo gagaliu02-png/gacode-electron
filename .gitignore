@@ -11,6 +11,15 @@ build/output/
 # Worker 临时 build output(阶段 5 撞 OS 锁留的,只锁住未删,下次忽略)
 release-stage5/
 release-stage5b/
+release-fix-final/
+release-fix-final-v2/
+release-refresh-fix/
+release-sidebar-fix/
+release-sidebar-fix-prev/
+
+# Internal helpers (build tooling, packaging wrappers, screenshot helpers)
+scripts/
+check-gacode.ps1
 
 # Intermediate icon-resize PNGs (only icon-source.png + icon-256.png + icon.ico committed)
 build/icon-16.png
