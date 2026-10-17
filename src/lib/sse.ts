@@ -27,6 +27,7 @@ import {
   sendCancelDelete,
   UserAbortError,
 } from "./cancel";
+import { tryRefreshAccessToken } from "./auth-refresh";
 
 // =========================================================================
 // SSE 解析 (纯函数, 单测可注入)
@@ -155,18 +156,40 @@ export function useChatStream(): ChatStreamHandle {
     }
 
     try {
-      const res = await fetch(`${API_BASE}${STREAM_PATH(opts.sessionId)}`, {
-        method: "POST",
-        headers: {
+      // 401 retry: server access_token 15min 过期, 流跑到一半会触发 401,
+      // 自动 refresh 拿新 token 重发一次 fetch + 重建 ReadableStream.
+      // 重试上限 1 次 — 仍 401 抛错给上层 (ChatDetail 的 banner 处理).
+      // signal abort 贯穿整个 retry: 用户主动停必须立刻终止, 不能 retry.
+      const fetchStream = async (
+        accessToken: string | null,
+      ): Promise<Response> => {
+        const headers: Record<string, string> = {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
-        },
-        credentials: "include",
-        cache: "no-store",
-        referrerPolicy: "no-referrer",
-        body: JSON.stringify(body),
-        signal: ac.signal,
-      });
+        };
+        if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+        return fetch(`${API_BASE}${STREAM_PATH(opts.sessionId)}`, {
+          method: "POST",
+          headers,
+          credentials: "include",
+          cache: "no-store",
+          referrerPolicy: "no-referrer",
+          body: JSON.stringify(body),
+          signal: ac.signal,
+        });
+      };
+
+      let res = await fetchStream(null);
+      if (res.status === 401) {
+        const newToken = await tryRefreshAccessToken();
+        if (newToken) {
+          console.warn(
+            "[gacode-sse] chat stream got 401, refreshed token, retrying",
+          );
+          res = await fetchStream(newToken);
+        }
+        // newToken=null (refresh 失败) → 仍 401, 下面 !res.ok 抛错给上层
+      }
 
       if (!res.ok || !res.body) {
         throw new Error(`SSE HTTP ${res.status} ${res.statusText}`);

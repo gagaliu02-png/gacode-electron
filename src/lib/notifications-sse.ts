@@ -24,7 +24,8 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "./auth";
-import { buildNotificationStreamUrl } from "./api";
+import { getAccessTokenForSse, getNotificationStreamUrl } from "./api";
+import { tryRefreshAccessToken } from "./auth-refresh";
 import { useToast } from "../components/ui/Toast";
 
 const BACKOFF_INITIAL_MS = 1000;
@@ -55,6 +56,9 @@ export function NotificationSSEBridge() {
   const { toast } = useToast();
   // 跟踪 "上次事件时间", 60s 没事件视为断流 (避免代理卡住 readyState)
   const lastEventAtRef = useRef<number>(Date.now());
+  // 跟踪 "是否曾经成功收到过 onmessage" — 用于区分首次就连不上 (server 401
+  // 拒绝) vs 中途网络断 (proxy 切了 / 服务端重启). 区分靠它走两条不同重连路径.
+  const everReceivedMessageRef = useRef<boolean>(false);
 
   useEffect(() => {
     // 未登录或 demo E2E 模式不连 (server requireAuth 会拒绝)
@@ -63,7 +67,20 @@ export function NotificationSSEBridge() {
     // access token 还没注入到 accessor 时也先等等 (AuthProvider mount 后会有)
     if (!accessToken) return;
 
-    const url = buildNotificationStreamUrl();
+    // 拼 URL 的 helper — 接受 overrideToken 用于 401 retry 路径:
+    //   第一次连接: 走 buildNotificationStreamUrl() (从 registerSseAuthAccessor
+    //     注入的 accessor 读, 拿的是 React 当前 render cycle 的 accessToken)
+    //   401 retry 后重建: overrideToken 是 tryRefreshAccessToken() 返回的新
+    //     token, 此时 AuthProvider 还没触发 React re-render 重新注册 accessor,
+    //     用 overrideToken 拼 URL 才能保证带新 token.
+    const buildUrl = (overrideToken?: string | null): string => {
+      const tok = overrideToken ?? getAccessTokenForSse();
+      const base = getNotificationStreamUrl();
+      if (!tok) return base;
+      return `${base}?token=${encodeURIComponent(tok)}`;
+    };
+
+    const initialUrl = buildUrl();
     let cancelled = false;
     let current: EventSource | null = null;
     let watchdog: number | null = null;
@@ -134,7 +151,7 @@ export function NotificationSSEBridge() {
       console.log(`[gacode-sse] notification received: "${n.title}"`);
     };
 
-    const schedule = () => {
+    const schedule = (overrideToken?: string | null) => {
       if (cancelled) return;
       if (current) {
         try {
@@ -144,6 +161,7 @@ export function NotificationSSEBridge() {
         }
         current = null;
       }
+      const url = overrideToken ? buildUrl(overrideToken) : initialUrl;
       try {
         const es = new EventSource(url, { withCredentials: true } as EventSourceInit);
         current = es;
@@ -155,17 +173,43 @@ export function NotificationSSEBridge() {
         };
         es.onmessage = (ev) => {
           if (cancelled) return;
+          everReceivedMessageRef.current = true;
           handleIncoming((ev as MessageEvent).data);
         };
-        es.onerror = (err) => {
+        es.onerror = async (err) => {
           if (cancelled) return;
           console.warn("[gacode-sse] EventSource error:", err);
+          const firstConnectFailed = !everReceivedMessageRef.current;
+          const closed = es.readyState === EventSource.CLOSED;
           try {
             es.close();
           } catch {
             /* ignore */
           }
           current = null;
+
+          // 401 retry 路径: EventSource 不暴露 status code, 区分靠"从未收到
+          // 过 onmessage + CLOSED" 这两个信号 (server 主动拒绝首次连接, 大概率
+          // access_token 过期). 网络断 readyState 通常是 CONNECTING, 不会 CLOSED;
+          // 已经收到过 message 的 CLOSED 多半是 server 重启, 走 backoff 重试即可.
+          if (firstConnectFailed && closed) {
+            console.warn(
+              "[gacode-sse] EventSource never connected, attempting token refresh",
+            );
+            const newToken = await tryRefreshAccessToken();
+            if (cancelled) return;
+            if (newToken) {
+              // 用新 token 立刻重建 — 不走 backoff (access_token 过期是确定原因,
+              // 等几秒没意义, 立即重试一次即可). 还是 fail 的话, 下次 onerror
+              // 会重新走这条路径 (或者走 backoff fallback).
+              schedule(newToken);
+              return;
+            }
+            console.warn(
+              "[gacode-sse] token refresh failed, falling back to backoff",
+            );
+          }
+
           const wait = backoff;
           backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
           console.log(

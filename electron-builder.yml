@@ -11,6 +11,7 @@
 
 appId: com.gaga.gacode
 productName: Gacode
+buildVersion: 0.1.2
 copyright: Copyright © 2026 gaga
 
 directories:

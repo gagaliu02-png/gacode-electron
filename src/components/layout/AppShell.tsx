@@ -7,7 +7,7 @@
  * 渲染:
  *   256px sidebar
  *     ├─ 顶 brand bar (gacode + 铃铛 + badge)
- *     ├─ 主菜单 (对话 / 知识库 / 交付中心) — active 高亮
+ *     ├─ 主菜单 (知识库 / 交付中心 / 通知 / 浏览器 / 我的) — active 高亮
  *     ├─ 置顶 (可折叠, 默认展开)
  *     ├─ 最近 (默认前 5, "show more" 展开)
  *     └─ 用户卡 + 注销
@@ -34,7 +34,6 @@ const RECENT_DEFAULT_LIMIT = 5;
 
 function resolveTitle(pathname: string): string {
   if (pathname === "/") return "首页";
-  if (pathname === "/chat") return "对话";
   if (pathname.startsWith("/chat/")) return "对话详情";
   if (pathname === "/library") return "知识库";
   if (pathname.startsWith("/library/")) return "知识库详情";
@@ -71,19 +70,29 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   {
-    label: "对话",
-    to: "/chat",
-    match: (p) => p === "/chat" || p.startsWith("/chat/"),
-  },
-  {
     label: "知识库",
     to: "/library",
-    match: (p) => p.startsWith("/library"),
+    match: (p) => p === "/library" || p.startsWith("/library/"),
   },
   {
     label: "交付中心",
     to: "/deliveries",
-    match: (p) => p.startsWith("/deliveries"),
+    match: (p) => p === "/deliveries" || p.startsWith("/deliveries/"),
+  },
+  {
+    label: "通知",
+    to: "/notifications",
+    match: (p) => p === "/notifications",
+  },
+  {
+    label: "浏览器",
+    to: "/browser",
+    match: (p) => p === "/browser",
+  },
+  {
+    label: "我的",
+    to: "/profile",
+    match: (p) => p.startsWith("/profile"),
   },
 ];
 
@@ -416,7 +425,7 @@ function SidebarChatItem({
       className={[
         "w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm text-left truncate transition-colors duration-150",
         isActive
-          ? "bg-bg-sunken text-fg font-medium border-l-2 border-brand"
+          ? "bg-bg-sunken text-fg font-medium border-l-2 border-fg"
           : "text-fg-muted hover:bg-bg-base hover:text-fg",
       ].join(" ")}
     >

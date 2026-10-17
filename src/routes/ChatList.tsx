@@ -416,7 +416,7 @@ function ChatRow({
       className={[
         "group flex items-center gap-3 rounded-md border px-3 py-2.5 transition-colors duration-150 cursor-pointer select-none",
         isSelected
-          ? "border-brand bg-brand-container/40"
+          ? "border-fg bg-bg-elevated"
           : "border-border bg-bg-sunken hover:bg-bg-elevated",
       ].join(" ")}
     >
@@ -427,7 +427,7 @@ function ChatRow({
           className={[
             "shrink-0 w-5 h-5 inline-flex items-center justify-center rounded border",
             isSelected
-              ? "bg-brand border-brand text-brand-on"
+              ? "bg-fg border-fg text-bg-base"
               : "bg-bg-base border-border text-transparent",
           ].join(" ")}
         >
