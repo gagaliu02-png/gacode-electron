@@ -1,15 +1,77 @@
 // 跨主进程 / preload / 渲染层共用的类型契约。
-// PR1 只放占位,PR2 加原生通知 + 菜单事件。
+// PR1 占位, PR2 加原生通知 + 菜单事件, 阶段 4 加 deep-link / taskbar / webview。
 
+/**
+ * 渲染层 `window.gacode` 全局对象契约 —— 阶段 4 扩展:
+ *   - 单实例唤起收到 deep link → onDeepLink(callback) 监听
+ *   - 任务栏进度: setTaskbarProgress(0..1) 0/-1/nan 都接受
+ *   - BrowserView 集合 (主进程持有 tab 池): open / close / focus
+ *   - SSE 推到主进程弹 Windows Toast (主进程只能拿到 renderer 推的事件)
+ *   - 已有: appVersion / platform / notify
+ */
 export interface GacodeBridge {
   appVersion: string;
-  platform: NodeJS.Platform;
+  /** 'win32' | 'darwin' | 'linux' 等 — 主进程 os.platform() 的字符串. 不引 NodeJS 命名空间, 让 web 端 tsconfig 也能编. */
+  platform: string;
+
   /**
    * 触发 Windows Toast / macOS Notification / Linux libnotify 通知。
    * 返回 Promise<boolean> 表示系统是否真的显示(Notification.isSupported())。
    */
   notify: (title: string, body: string) => Promise<boolean>;
+
+  /**
+   * 监听 deep link (gacode://chat/123 这种 custom protocol 唤起时推到渲染层)。
+   * 返回的函数调用 = 取消订阅 (避免内存泄漏)。
+   */
+  onDeepLink: (callback: (path: string) => void) => () => void;
+
+  /**
+   * 主进程已经有现成的 `window.gacode.notify`, 但 SSE 流不在 renderer
+   * (EventSource 是 renderer 起的), 让 renderer 推 SSE 事件过来由主进程弹
+   * Windows Toast, 在收到通知时调用这个。
+   */
+  notificationSSESend: (event: { title: string; body: string }) => void;
+
+  /**
+   * 设置 Windows 任务栏进度条 (`mainWindow.setProgressBar`)。
+   * - 0..1 → 进度
+   * - -1   → 清除
+   * - NaN / 非数 → 忽略 (上传进度回调经常推非整)
+   * 失败由 main 兜底, 这里 fire-and-forget 不返错误
+   */
+  setTaskbarProgress: (progress: number) => void;
+
+  /**
+   * 申请主进程开一个 BrowserView tab (顶层嵌入 mainWindow contentView)。
+   * 主进程管理 tab 池, 返 { tabId } 句柄, 后续 close / focus 都用这个 id。
+   * 渲染层 Browser.tsx 主要用 `<webview>` 渲染多个 tab, 这条 IPC 给"外层链接
+   * (如 chat 里的 '在浏览器打开')" 留入口, 现阶段由 webview-bridge.ts 暴露。
+   */
+  openBrowserTab: (url: string) => Promise<{ tabId: string }>;
+
+  /** 关掉一个 BrowserView tab; 未知 id 静默忽略。 */
+  closeBrowserTab: (tabId: string) => void;
+
+  /** 提到顶层 (BrowserView 允许多层堆叠)。 */
+  focusBrowserTab: (tabId: string) => void;
+
+  /**
+   * 监听 BrowserView 关闭事件 (主进程 → 渲染层)。
+   * 给 webview-bridge.ts 做"主进程关掉 tab 时反向通知渲染"用。
+   */
+  onBrowserTabClosed: (callback: (event: BrowserTabClosedEvent) => void) => () => void;
 }
 
 /** 主进程 → 渲染层的菜单事件载荷。 */
 export type GacodeMenuEvent = 'new-chat' | 'about';
+
+/** BrowserView 关闭事件载荷 (主进程 → 渲染层)。 */
+export interface BrowserTabClosedEvent {
+  tabId: string;
+}
+
+/** Deep link 唤起 (主进程 → 渲染层)。 */
+export interface DeepLinkEvent {
+  path: string;
+}

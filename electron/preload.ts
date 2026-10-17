@@ -1,7 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import * as os from 'os';
 import * as path from 'path';
-import type { GacodeBridge } from '../shared/types';
+import type {
+  BrowserTabClosedEvent,
+  DeepLinkEvent,
+  GacodeBridge,
+} from '../shared/types';
 
 // 把 app.getVersion() 在 preload 阶段读出来,渲染层读不到 process
 let cachedAppVersion = 'unknown';
@@ -22,13 +26,60 @@ try {
   }
 }
 
+// ipcRenderer.on('event', cb) 多次注册会有重复回调, 用包装函数管理
+// ① 一次性订阅, ② 收集 listen token, ③ 返回 unsubscribe 闭包
+function listenMain<T>(
+  channel: string,
+  handler: (payload: T) => void,
+): () => void {
+  const listener = (_e: unknown, payload: T) => handler(payload);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
 // contextBridge:安全暴露给 window.gacode,渲染层只能读不能改
 contextBridge.exposeInMainWorld('gacode', {
   appVersion: cachedAppVersion,
+  // 平台字符串,类型放宽,让 shared/ 跨 web + node 共用
   platform: os.platform(),
+
   // PR2:原生通知桥 —— 渲染层 await window.gacode.notify(title, body)
   notify: (title: string, body: string): Promise<boolean> =>
     ipcRenderer.invoke('gacode:notify', { title, body }),
+
+  // 阶段 4: 监听 deep-link (gacode://chat/123 这种 protocol 唤起)
+  onDeepLink: (callback: (path: string) => void): (() => void) =>
+    listenMain<DeepLinkEvent>('gacode:deep-link', (e) => {
+      if (e && typeof e.path === 'string') callback(e.path);
+    }),
+
+  // 阶段 4: SSE 收到事件 → 推主进程弹 Windows Toast (主进程的 Notification API)
+  notificationSSESend: (event: { title: string; body: string }): void => {
+    ipcRenderer.send('gacode:notification-sse-event', event);
+  },
+
+  // 阶段 4: 任务栏进度 (mainWindow.setProgressBar 0..1; -1 清除)
+  setTaskbarProgress: (progress: number): void => {
+    // NaN/undefined 让 main 自己处理 (filter); 此处只做基本鲁棒过滤
+    if (!Number.isFinite(progress)) return;
+    ipcRenderer.send('gacode:set-taskbar-progress', progress);
+  },
+
+  // 阶段 4: BrowserView 集合 (主进程持有 tab 池)
+  openBrowserTab: (url: string): Promise<{ tabId: string }> =>
+    ipcRenderer.invoke('gacode:open-browser-tab', { url }),
+  closeBrowserTab: (tabId: string): void => {
+    ipcRenderer.send('gacode:close-browser-tab', { tabId });
+  },
+  focusBrowserTab: (tabId: string): void => {
+    ipcRenderer.send('gacode:focus-browser-tab', { tabId });
+  },
+
+  // 阶段 4: BrowserView tab 关闭事件 (主进程 → 渲染层)
+  // 给 webview-bridge.ts 做"主进程关掉 tab 时反向通知渲染"用
+  // Browser.tsx 主要用 `<webview>` 标签管 tab, 这条监听备用
+  onBrowserTabClosed: (callback: (event: BrowserTabClosedEvent) => void): (() => void) =>
+    listenMain<BrowserTabClosedEvent>('gacode:browser-tab-closed', (e) => callback(e)),
 } satisfies GacodeBridge);
 
 console.log('[gacode-electron] preload loaded');

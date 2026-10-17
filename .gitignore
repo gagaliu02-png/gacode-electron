@@ -36,8 +36,7 @@ tmp/
 # Local verification artifacts (not part of source)
 capture-*.ps1
 screenshot-*.png
-
-# All helper scripts under scripts/ + ad-hoc test*.ps1 at repo root
-scripts/*
-!scripts/.gitkeep
-test*.ps1
+.e2e-user.json
+typecheck-*.log
+dev-stage*.log
+build-*-stage*.log
