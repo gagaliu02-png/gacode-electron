@@ -28,6 +28,7 @@ import { useToast } from "../components/ui/Toast";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { DeliveriesDropZone } from "../components/deliveries/DeliveriesDropZone";
 
 // =========================================================================
 // tab — 跟 web Deliveries 一致 (全部 / 图片 / 网站 / 文档)
@@ -109,9 +110,17 @@ export function Deliveries() {
   };
 
   return (
-    <div className="min-h-full flex flex-col">
-      {/* 顶部操作栏 */}
-      <div className="sticky top-0 z-10 bg-bg-base border-b border-border">
+    <DeliveriesDropZone
+      onRouted={(r) => {
+        toast({
+          message: r.ok ? `已转入知识库: ${r.file.name}` : `拖入失败: ${r.msg ?? "未知"}`,
+          variant: r.ok ? "success" : "danger",
+        });
+      }}
+    >
+      <div className="min-h-full flex flex-col">
+        {/* 顶部操作栏 */}
+        <div className="sticky top-0 z-10 bg-bg-base border-b border-border">
         <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full space-y-2 py-2">
           {/* Row 1: tabs (左) + 刷新 (右) */}
           <div className="flex items-center justify-between gap-2">
@@ -207,7 +216,8 @@ export function Deliveries() {
           onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
         />
       ) : null}
-    </div>
+      </div>
+    </DeliveriesDropZone>
   );
 }
 

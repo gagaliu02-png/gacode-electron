@@ -407,6 +407,57 @@ export function markAllNotificationsRead(): Promise<{ ok: true }> {
 }
 
 // =========================================================================
+// 阶段 4 — Notifications SSE
+//
+// 端点: GET /notifications/stream — unified-api notifications/notification.routes.js:46-83
+// 鉴权: 同其它端点 — Bearer accessToken (内存) + refresh cookie (credentials: include)
+// 载荷: text/event-stream, data: 行 JSON
+//   - `{ type: "connected" }` 握手
+//   - `{ type: "notification", notification: {id, title, body, ...} }` 新通知推送
+//   - `: heartbeat\n\n` 心跳 (comments, EventSource 会忽略)
+//
+// 为什么不放主进程: 主进程 + renderer 都要带 in-memory token, 主进程没有
+// (token 只在 AuthProvider 里), 让渲染层 EventSource 连更直接, query/cookie
+// 跟 fetch 同一个会话共享; 拿到通知后通过 IPC 把 {title, body} 推主进程弹
+// Windows Toast (系统通知栏)。
+// =========================================================================
+export const NOTIFICATION_STREAM_PATH = "/notifications/stream";
+
+export function getNotificationStreamUrl(): string {
+  return `${API_BASE}${NOTIFICATION_STREAM_PATH}`;
+}
+
+// =========================================================================
+// SSE 鉴权 accessor — EventSource 不能自定义 header (浏览器限制),
+// 必须把 token 拼到 ?token= query 上。这条 getter 由 AuthProvider mount 时
+// 注册 (跟 cancel / upload 同一套用法), SSE 客户端读它拼 URL。
+// =========================================================================
+type AuthTokenGetter = () => string | null;
+let sseTokenGetter: AuthTokenGetter = () => null;
+export function registerSseAuthAccessor(getter: AuthTokenGetter): void {
+  sseTokenGetter = getter;
+}
+
+export function getAccessTokenForSse(): string | null {
+  return sseTokenGetter();
+}
+
+/**
+ * 构造 EventSource URL: 携带 access token 到 ?token= query.
+ *
+ * 必须配合 server 端允许 (unified-api auth 插件读 query token, 跟 bearer
+ * header 等价). 这样 web 跟 electron 共用同一套 SSE 流.
+ *
+ * 注: 真实用户流拿 cookie (refresh 路径会自动轮换); demo E2E 模式不连 SSE.
+ */
+export function buildNotificationStreamUrl(): string {
+  const base = getNotificationStreamUrl();
+  const tok = sseTokenGetter();
+  if (!tok) return base;
+  return `${base}?token=${encodeURIComponent(tok)}`;
+}
+
+// =========================================================================
 // 阶段 3 — Library / Deliveries / Profile
 //
 // 端点跟 unified-api yinian.routes.js + library.routes.js + profile.routes.js

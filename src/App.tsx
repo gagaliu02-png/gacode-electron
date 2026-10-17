@@ -10,6 +10,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ToastProvider, useToast } from "./components/ui/Toast";
 import { AppShell } from "./components/layout/AppShell";
+import { NotificationSSEBridge } from "./lib/notifications-sse";
+import { DeepLinkBridge } from "./lib/deep-link";
 import { Login } from "./routes/Login";
 import { Register } from "./routes/Register";
 import { Home } from "./routes/Home";
@@ -88,6 +90,10 @@ export function App() {
         <HashRouter>
           <AuthProvider>
             <AuthClearListener />
+            {/* 阶段 4: SSE 桥 (需 user, 但 useAuth 已就绪; 用 NotificationSSEBridge 内部 if 分支)
+                + Deep link 桥 (在 Router 内部 useNavigate) */}
+            <NotificationSSEBridge />
+            <DeepLinkBridge />
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
@@ -191,7 +197,7 @@ export function App() {
                   </Protected>
                 }
               />
-              {/* 浏览器 (简化版) — 阶段 3 走系统默认浏览器; webview 留阶段 4 */}
+              {/* 浏览器 (webview 多 tab) — 阶段 4 */}
               <Route
                 path="/browser"
                 element={

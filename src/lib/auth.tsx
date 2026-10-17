@@ -27,13 +27,19 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { authApi, registerAuthAccessors, type User } from "./api";
+import { authApi, registerAuthAccessors, registerSseAuthAccessor, type User } from "./api";
 import { registerCancelAuthAccessors } from "./cancel";
 import { registerUploadAuthAccessors } from "./upload";
 
 interface AuthContextValue {
   /** 当前 user (登录态) / null (未登录) */
   user: User | null;
+  /**
+   * 当前内存里的 accessToken (SSE / 内部 hook 需要时直接读).
+   * SSE EventSource 不支持自定义 header, 用 ?token= query 拼这个值.
+   * 阶段 1 鉴权只走 api.ts 的 getter, 阶段 4 把 token 公开给渲染层旁路用.
+   */
+  accessToken: string | null;
   /** 启动时调 /auth/me, 期间为 true. App.tsx 期间显示 loading 占位 */
   loading: boolean;
   /** 调 /auth/login, 成功后 setUser + setAccessToken + 返回 user */
@@ -69,6 +75,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 结构上保证 accessToken 写在 AuthProvider 里, 其他模块只读不存。
     registerCancelAuthAccessors(snapshot);
     registerUploadAuthAccessors(snapshot);
+    // stage 4: SSE EventSource 不能自定义 header, 把 getter 注入到 api.ts,
+    // 由 buildNotificationStreamUrl() 拼到 ?token= query. 同一份 snapshot.
+    registerSseAuthAccessor(() => accessToken);
     // 监听 refresh 成功事件 (lib/api.ts:tryRefresh dispatch)
     const onRefreshed = (e: Event) => {
       const detail = (e as CustomEvent<{ accessToken?: string }>).detail;
@@ -188,13 +197,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
+      accessToken,
       loading,
       login,
       register,
       logout,
       setAccessToken: setAccessTokenState,
     }),
-    [user, loading, login, register, logout],
+    [user, accessToken, loading, login, register, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -25,6 +25,8 @@ import {
 } from "../lib/api";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { LibraryDropZone } from "../components/library/LibraryDropZone";
+import { useToast } from "../components/ui/Toast";
 
 // =========================================================================
 // 类型 tab — 用 web LibraryItem.type (image | doc | link | text) 做客户端过滤,
@@ -43,6 +45,7 @@ const PAGE_SIZE = 24;
 
 export function Library() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [type, setType] = useState<TypeFilter>("all");
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
@@ -82,9 +85,24 @@ export function Library() {
   };
 
   return (
-    <div className="min-h-full flex flex-col">
-      {/* 顶部操作栏 */}
-      <div className="sticky top-0 z-10 bg-bg-base border-b border-border">
+    <LibraryDropZone
+      onResult={(r) => {
+        if (r.ok) {
+          toast({
+            message: `已入库: ${r.file.name}`,
+            variant: "success",
+          });
+        } else {
+          toast({
+            message: `入库失败: ${r.msg ?? "未知"}`,
+            variant: "danger",
+          });
+        }
+      }}
+    >
+      <div className="min-h-full flex flex-col">
+        {/* 顶部操作栏 */}
+        <div className="sticky top-0 z-10 bg-bg-base border-b border-border">
         <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full space-y-2 py-2">
           {/* Row 1: 类型 chip (左) + 刷新按钮 (右) */}
           <div className="flex items-center justify-between gap-2">
@@ -173,7 +191,8 @@ export function Library() {
           </>
         )}
       </div>
-    </div>
+      </div>
+    </LibraryDropZone>
   );
 }
 
