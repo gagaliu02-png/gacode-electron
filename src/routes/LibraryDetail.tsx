@@ -93,7 +93,7 @@ export function LibraryDetail() {
         {/* 头部 */}
         <header className="space-y-2">
           <div className="flex items-center gap-2">
-            <span className="text-xs px-2 py-0.5 rounded bg-bg-elevated border border-border text-fg-muted">
+            <span className="text-xs px-2 py-0.5 rounded bg-bg-elevated text-fg-muted">
               {TYPE_LABEL[item.type] || item.type}
             </span>
             <span className="text-xs text-fg-subtle font-mono">#{item.id}</span>
@@ -108,7 +108,7 @@ export function LibraryDetail() {
         </header>
 
         {/* 元信息 */}
-        <div className="rounded-md bg-bg-elevated border border-border divide-y divide-border">
+        <div className="rounded-md bg-bg-elevated divide-y divide-border">
           {item.url ? (
             <InfoRow
               label="URL"
@@ -132,7 +132,7 @@ export function LibraryDetail() {
                   {item.tags.map((t) => (
                     <span
                       key={t}
-                      className="text-xs px-1.5 py-0.5 rounded bg-bg-sunken border border-border text-fg-muted"
+                      className="text-xs px-1.5 py-0.5 rounded bg-bg-sunken text-fg-muted"
                     >
                       #{t}
                     </span>
@@ -190,7 +190,7 @@ function ContentView({ item }: { item: LibraryItem }) {
 
   if (item.type === "image" && item.url) {
     return (
-      <div className="rounded-md bg-bg-elevated border border-border p-3">
+      <div className="rounded-md bg-bg-elevated p-3">
         <img
           src={item.url}
           alt={item.title || "image"}
@@ -202,7 +202,7 @@ function ContentView({ item }: { item: LibraryItem }) {
 
   if (content && content.length > 0) {
     return (
-      <pre className="rounded-md bg-bg-elevated border border-border p-4 text-sm text-fg whitespace-pre-wrap break-words font-mono max-h-[70vh] overflow-y-auto">
+      <pre className="rounded-md bg-bg-elevated p-4 text-sm text-fg whitespace-pre-wrap break-words font-mono max-h-[70vh] overflow-y-auto">
         {content}
       </pre>
     );
@@ -210,7 +210,7 @@ function ContentView({ item }: { item: LibraryItem }) {
 
   if (item.url) {
     return (
-      <div className="rounded-md bg-bg-elevated border border-border p-4 text-sm text-fg-muted">
+      <div className="rounded-md bg-bg-elevated p-4 text-sm text-fg-muted">
         <a
           href={item.url}
           target="_blank"
@@ -224,7 +224,7 @@ function ContentView({ item }: { item: LibraryItem }) {
   }
 
   return (
-    <div className="rounded-md bg-bg-elevated border border-border p-4 text-sm text-fg-muted text-center">
+    <div className="rounded-md bg-bg-elevated p-4 text-sm text-fg-muted text-center">
       无内容
     </div>
   );

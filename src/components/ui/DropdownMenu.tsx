@@ -85,7 +85,7 @@ export function DropdownMenu({
         <div
           role="menu"
           className={[
-            "absolute z-50 mt-1 min-w-[160px] rounded-md border border-border",
+            "absolute z-50 mt-1 min-w-[160px] rounded-md",
             "bg-bg-elevated shadow-dialog animate-fade-in py-1",
             align === "right" ? "right-0" : "left-0",
           ].join(" ")}

@@ -23,7 +23,7 @@ export function StreamingErrorBanner({ kind, message, onRetry, onDismiss }: Prop
   const description = describeStreamingError(kind);
 
   return (
-    <div className="border-t border-danger/40 bg-danger-soft/30 px-4 py-3 flex items-start gap-3">
+    <div className="bg-danger-soft/30 px-4 py-3 flex items-start gap-3">
       <div
         aria-hidden="true"
         className="w-5 h-5 rounded-full bg-danger text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5"

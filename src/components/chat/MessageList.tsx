@@ -121,7 +121,7 @@ export function MessageList({
           type="button"
           onClick={handleJumpToBottom}
           aria-label="跳到底部"
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-bg-elevated border border-border text-fg shadow-elevation-2 px-3 py-1.5 text-xs hover:bg-bg-sunken transition-colors duration-150"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-bg-elevated text-fg shadow-elevation-2 px-3 py-1.5 text-xs hover:bg-bg-sunken transition-colors duration-150"
         >
           ↓ 跳到底
         </button>

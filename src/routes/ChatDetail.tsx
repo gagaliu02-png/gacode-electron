@@ -315,7 +315,7 @@ export function ChatDetail() {
     <div className="h-full flex flex-col bg-bg-base">
       {/* 头部: 顶 AppShell 已占, 这里只渲染 "..." 按钮 由父级 slot 不可控;
           所以把 ⋮ 菜单放在内容区的顶部行, 内容区占 100% 高度. */}
-      <div className="shrink-0 h-12 border-b border-border bg-bg-base px-4 flex items-center justify-between">
+      <div className="shrink-0 h-12 bg-bg-elevated px-4 flex items-center justify-between">
         <div className="flex-1 min-w-0 truncate font-medium text-sm">{title}</div>
         <button
           type="button"

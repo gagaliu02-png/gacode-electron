@@ -42,7 +42,7 @@ export function Tabs({ tabs, activeKey, onChange, className = "" }: TabsProps) {
   return (
     <div
       className={[
-        "inline-flex p-1 rounded-md bg-bg-elevated border border-border gap-1",
+        "inline-flex p-1 rounded-md bg-bg-elevated gap-1",
         className,
       ].join(" ")}
       role="tablist"

@@ -60,7 +60,7 @@ export function Login() {
       </div>
 
       {/* Login card */}
-      <div className="w-full max-w-[400px] rounded-md bg-bg-sunken border border-border shadow-sm p-6">
+      <div className="w-full max-w-[400px] rounded-md bg-bg-sunken shadow-sm p-6">
         <h1 className="text-lg font-medium mb-1">Gacode · 登录</h1>
         <p className="text-sm text-fg-muted mb-6">
           使用 unified-api 账号登录,跨端通用

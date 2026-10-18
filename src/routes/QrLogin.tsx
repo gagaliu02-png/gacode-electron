@@ -209,7 +209,7 @@ export function QrLogin() {
         <span className="text-xl font-semibold tracking-wide">gacode</span>
       </div>
 
-      <div className="w-full max-w-[400px] rounded-md bg-bg-sunken border border-border shadow-sm p-6">
+      <div className="w-full max-w-[400px] rounded-md bg-bg-sunken shadow-sm p-6">
         <h1 className="text-lg font-medium mb-1 text-center">扫码登录</h1>
         <p className="text-sm text-fg-muted mb-6 text-center">
           打开 Gacode App 扫一扫, 即可在电脑上登录
@@ -229,7 +229,7 @@ export function QrLogin() {
                 alt="扫码登录二维码"
                 width={280}
                 height={280}
-                className="rounded-2xl bg-white p-3 border border-border/40"
+                className="rounded-2xl bg-white p-3"
               />
               <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-xs text-fg-muted">
                 {secondsLeft}s 后过期

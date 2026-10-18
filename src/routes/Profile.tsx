@@ -124,12 +124,12 @@ export function Profile() {
         <div className="flex flex-col items-center">
           <div className="relative">
             {isLoading ? (
-              <div className="w-24 h-24 rounded-full bg-bg-elevated border border-border animate-pulse" />
+              <div className="w-24 h-24 rounded-full bg-bg-elevated animate-pulse" />
             ) : avatarSrc ? (
               <img
                 src={avatarSrc}
                 alt={displayName}
-                className="w-24 h-24 rounded-full object-cover border border-border"
+                className="w-24 h-24 rounded-full object-cover"
               />
             ) : (
               <div
@@ -164,7 +164,7 @@ export function Profile() {
         </div>
 
         {/* 信息卡片 */}
-        <div className="rounded-md bg-bg-elevated border border-border divide-y divide-border">
+        <div className="rounded-md bg-bg-elevated divide-y divide-border">
           <InfoRow label="UID" value={uid} mono />
           <InfoRow label="邮箱" value={email} />
           <InfoRow label="性别" value={genderText} />
@@ -180,7 +180,7 @@ export function Profile() {
           <button
             type="button"
             onClick={() => navigate("/profile/edit")}
-            className="w-full rounded-md bg-bg-elevated border border-border p-4 flex items-center gap-3 text-left hover:bg-bg-sunken transition-colors duration-150"
+            className="w-full rounded-md bg-bg-elevated p-4 flex items-center gap-3 text-left hover:bg-bg-sunken transition-colors duration-150"
           >
             <EditIcon />
             <span className="flex-1 text-sm font-medium">编辑资料</span>
@@ -189,7 +189,7 @@ export function Profile() {
           <button
             type="button"
             onClick={() => navigate("/profile/change-password")}
-            className="w-full rounded-md bg-bg-elevated border border-border p-4 flex items-center gap-3 text-left hover:bg-bg-sunken transition-colors duration-150"
+            className="w-full rounded-md bg-bg-elevated p-4 flex items-center gap-3 text-left hover:bg-bg-sunken transition-colors duration-150"
           >
             <LockIcon />
             <span className="flex-1 text-sm font-medium">修改密码</span>
@@ -198,7 +198,7 @@ export function Profile() {
           <button
             type="button"
             onClick={() => navigate("/profile/apps")}
-            className="w-full rounded-md bg-bg-elevated border border-border p-4 flex items-center gap-3 text-left hover:bg-bg-sunken transition-colors duration-150"
+            className="w-full rounded-md bg-bg-elevated p-4 flex items-center gap-3 text-left hover:bg-bg-sunken transition-colors duration-150"
           >
             <AppsIcon />
             <span className="flex-1 text-sm font-medium">我的应用</span>

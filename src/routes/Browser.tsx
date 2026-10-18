@@ -222,7 +222,7 @@ export function Browser() {
   return (
     <div className="min-h-full flex flex-col">
       {/* tab bar */}
-      <div className="shrink-0 flex items-center gap-1 px-3 py-2 border-b border-border bg-bg-base overflow-x-auto">
+      <div className="shrink-0 flex items-center gap-1 px-3 py-2 bg-bg-elevated overflow-x-auto">
         {tabs.map((t) => {
           const isActive = t.id === activeTabId;
           return (
@@ -233,7 +233,7 @@ export function Browser() {
                 "transition-colors duration-150 cursor-pointer",
                 "max-w-[200px]",
                 isActive
-                  ? "bg-bg-elevated border border-border text-fg"
+                  ? "bg-bg-elevated text-fg"
                   : "bg-bg-sunken text-fg-muted hover:text-fg",
               ].join(" ")}
               onClick={() => setActiveTabId(t.id)}
@@ -292,10 +292,10 @@ export function Browser() {
       </div>
 
       {/* URL bar + 操作 */}
-      <div className="shrink-0 border-t border-border bg-bg-base px-3 py-2 space-y-2">
+      <div className="shrink-0 bg-bg-elevated px-3 py-2 space-y-2">
         <form
           onSubmit={onSubmit}
-          className="rounded-md bg-bg-elevated border border-border p-2 flex items-center gap-2"
+          className="rounded-md bg-bg-elevated p-2 flex items-center gap-2"
         >
           <button
             type="button"
@@ -334,7 +334,7 @@ export function Browser() {
               key={l.url}
               type="button"
               onClick={() => openInTab(l.url)}
-              className="text-xs px-2 py-1 rounded-md bg-bg-sunken border border-border text-fg-muted hover:text-fg hover:bg-bg-elevated transition-colors duration-150"
+              className="text-xs px-2 py-1 rounded-md bg-bg-sunken text-fg-muted hover:text-fg hover:bg-bg-elevated transition-colors duration-150"
             >
               {l.label}
             </button>

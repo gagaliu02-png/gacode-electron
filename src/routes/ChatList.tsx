@@ -203,7 +203,7 @@ export function ChatList() {
       {/* 错误态 */}
       {error ? (
         <div className="px-6 py-4">
-          <div className="rounded-md bg-danger-soft/30 border border-danger/40 px-4 py-3 text-sm">
+          <div className="rounded-md bg-danger-soft/30 px-4 py-3 text-sm">
             加载失败:{error instanceof Error ? error.message : String(error)}
           </div>
         </div>
@@ -264,7 +264,7 @@ export function ChatList() {
 
       {/* 多选模式 bottom bar */}
       {multiSelectIds.size > 0 ? (
-        <div className="sticky bottom-0 z-30 bg-bg-elevated border-t border-border px-4 py-3 flex items-center gap-3">
+        <div className="sticky bottom-0 z-30 bg-bg-elevated px-4 py-3 flex items-center gap-3">
           <span className="text-sm">
             已选 <strong>{multiSelectIds.size}</strong> 条
           </span>
@@ -414,10 +414,10 @@ function ChatRow({
         if (!triggeredRef.current) onClick();
       }}
       className={[
-        "group flex items-center gap-3 rounded-md border px-3 py-2.5 transition-colors duration-150 cursor-pointer select-none",
+        "group flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors duration-150 cursor-pointer select-none",
         isSelected
-          ? "border-fg bg-bg-elevated"
-          : "border-border bg-bg-sunken hover:bg-bg-elevated",
+          ? "bg-bg-elevated"
+          : "bg-bg-sunken hover:bg-bg-elevated",
       ].join(" ")}
     >
       {/* multi-select checkbox / pin icon */}
@@ -464,7 +464,7 @@ function ChatRow({
           {menuOpen ? (
             <div
               role="menu"
-              className="absolute right-0 top-9 z-40 min-w-[160px] rounded-md border border-border bg-bg-elevated shadow-elevation-3 py-1 animate-fade-in"
+              className="absolute right-0 top-9 z-40 min-w-[160px] rounded-md bg-bg-elevated shadow-elevation-3 py-1 animate-fade-in"
             >
               <MenuItem
                 icon={<PinIcon className="text-fg-muted" />}
@@ -566,7 +566,7 @@ function ConfirmDialog({
         onClick={onCancel}
         aria-hidden="true"
       />
-      <div className="relative w-full max-w-sm rounded-md bg-bg-elevated border border-border shadow-dialog p-5 animate-slide-in-from-bottom">
+      <div className="relative w-full max-w-sm rounded-md bg-bg-elevated shadow-dialog p-5 animate-slide-in-from-bottom">
         <h2 className="text-base font-medium mb-1">{title}</h2>
         {message ? <p className="text-sm text-fg-muted mb-4">{message}</p> : null}
         {children ? <div className="mb-4">{children}</div> : null}
@@ -599,7 +599,7 @@ function EmptyState({
 }) {
   return (
     <div className="h-full flex items-center justify-center">
-      <div className="rounded-md border border-border bg-bg-sunken p-8 text-center max-w-sm">
+      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm">
         <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-elevated flex items-center justify-center text-fg-muted">
           <ChatBubblePlus />
         </div>
@@ -624,7 +624,7 @@ function SkeletonList() {
       {Array.from({ length: 3 }).map((_, i) => (
         <div
           key={i}
-          className="rounded-md border border-border bg-bg-sunken px-3 py-3 animate-pulse"
+          className="rounded-md bg-bg-sunken px-3 py-3 animate-pulse"
         >
           <div className="h-4 w-2/3 bg-bg-elevated rounded" />
           <div className="h-3 w-1/3 bg-bg-elevated rounded mt-2" />

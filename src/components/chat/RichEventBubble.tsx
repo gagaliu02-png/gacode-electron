@@ -44,7 +44,7 @@ export function RichEventBubble({ event }: Props) {
     default:
       // unknown type → 显示 type + JSON 字面, 不抛错
       return (
-        <div className="text-xs font-mono text-fg-muted border border-border rounded-md px-3 py-2 my-1 break-words">
+        <div className="text-xs font-mono text-fg-muted rounded-md bg-bg-elevated/40 px-3 py-2 my-1 break-words">
           {event.type} · {shortObj(event)}
         </div>
       );
@@ -57,7 +57,7 @@ function ToolStartCard({ event }: { event: RichEvent }) {
   const tool = String(event.tool ?? event.name ?? "tool");
   const title = event.title ? String(event.title) : null;
   return (
-    <div className="my-1 border border-border rounded-md bg-bg-sunken/60 px-3 py-2 text-xs">
+    <div className="my-1 rounded-md bg-bg-sunken/60 px-3 py-2 text-xs">
       <div className="flex items-center gap-2">
         <ToolIcon />
         <span className="font-mono text-fg">{tool}</span>
@@ -81,7 +81,7 @@ function FileCard({ event }: { event: RichEvent }) {
       href={url ?? "#"}
       target="_blank"
       rel="noopener noreferrer"
-      className="my-1 inline-flex items-center gap-2 border border-border rounded-md bg-bg-sunken/60 px-3 py-2 hover:bg-bg-sunken transition-colors duration-150"
+      className="my-1 inline-flex items-center gap-2 rounded-md bg-bg-sunken/60 px-3 py-2 hover:bg-bg-sunken transition-colors duration-150"
     >
       <FileIcon />
       <span className="text-sm truncate max-w-[280px]">{name}</span>
@@ -99,7 +99,7 @@ function ImageCard({ event }: { event: RichEvent }) {
     <img
       src={url}
       alt={event.name ? String(event.name) : ""}
-      className="my-1 max-w-full max-h-[280px] rounded-md border border-border object-contain"
+      className="my-1 max-w-full max-h-[280px] rounded-md object-contain"
       loading="lazy"
     />
   );
@@ -114,7 +114,7 @@ function WebPreviewCard({ event }: { event: RichEvent }) {
       href={url ?? "#"}
       target="_blank"
       rel="noopener noreferrer"
-      className="my-1 block border border-border rounded-md bg-bg-sunken/60 px-3 py-2 hover:bg-bg-sunken transition-colors duration-150"
+      className="my-1 block rounded-md bg-bg-sunken/60 px-3 py-2 hover:bg-bg-sunken transition-colors duration-150"
     >
       <div className="flex items-center gap-2 text-sm font-medium truncate">
         <LinkIcon />

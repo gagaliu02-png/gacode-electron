@@ -42,7 +42,7 @@ export function Home() {
 
         {/* 快速开始输入框 */}
         <form onSubmit={handleSubmit} className="mt-8">
-          <div className="rounded-md bg-bg-sunken border border-border shadow-sm focus-within:border-brand transition-colors duration-150">
+          <div className="rounded-md bg-bg-sunken shadow-sm focus-within:bg-bg-elevated transition-colors duration-150">
             <input
               type="text"
               value={quickInput}
@@ -51,7 +51,7 @@ export function Home() {
               className="w-full bg-transparent px-4 py-3 text-base placeholder:text-fg-subtle focus:outline-none"
               autoFocus
             />
-            <div className="px-4 py-2 border-t border-border flex items-center justify-between">
+            <div className="px-4 py-2 flex items-center justify-between">
               <span className="text-xs text-fg-subtle font-mono">
                 阶段 2 接 createChat
               </span>
@@ -67,7 +67,7 @@ export function Home() {
         </form>
 
         {/* 提示卡 — 阶段 1 边界说明 */}
-        <div className="mt-12 rounded-md bg-bg-elevated border border-border p-4 text-left">
+        <div className="mt-12 rounded-md bg-bg-elevated p-4 text-left">
           <p className="text-xs text-fg-muted">
             <strong className="text-fg">阶段 1 范围</strong> · 认证 / App shell /
             持久 sidebar / 9 个空壳页面 / Toast / Button / Input

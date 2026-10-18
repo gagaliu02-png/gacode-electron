@@ -49,7 +49,7 @@ export function ConfirmDialog({
         onClick={onCancel}
         aria-hidden="true"
       />
-      <div className="relative w-full max-w-sm rounded-md bg-bg-elevated border border-border shadow-dialog p-5 animate-slide-in-from-bottom">
+      <div className="relative w-full max-w-sm rounded-md bg-bg-elevated shadow-dialog p-5 animate-slide-in-from-bottom">
         <h2 className="text-base font-medium mb-1">{title}</h2>
         {message ? <p className="text-sm text-fg-muted mb-4">{message}</p> : null}
         {children ? <div className="mb-4">{children}</div> : null}

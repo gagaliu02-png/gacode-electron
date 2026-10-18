@@ -29,7 +29,7 @@ export function ProfileApps() {
     return (
       <div className="min-h-full px-6 py-6">
         <div className="max-w-md mx-auto">
-          <div className="rounded-md bg-bg-elevated border border-border p-6 text-center">
+          <div className="rounded-md bg-bg-elevated p-6 text-center">
             <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-sunken flex items-center justify-center text-fg-muted">
               <LockIcon />
             </div>
@@ -56,7 +56,7 @@ export function ProfileApps() {
     <div className="min-h-full px-6 py-6">
       <div className="max-w-md mx-auto space-y-5">
         <h1 className="text-xl font-medium">我的应用</h1>
-        <div className="rounded-md bg-bg-elevated border border-border p-8 text-center">
+        <div className="rounded-md bg-bg-elevated p-8 text-center">
           <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-sunken flex items-center justify-center text-fg-muted">
             <ConstructionIcon />
           </div>

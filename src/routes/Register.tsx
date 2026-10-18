@@ -68,7 +68,7 @@ export function Register() {
         <span className="text-xl font-semibold tracking-wide">gacode</span>
       </div>
 
-      <div className="w-full max-w-[400px] rounded-md bg-bg-sunken border border-border shadow-sm p-6">
+      <div className="w-full max-w-[400px] rounded-md bg-bg-sunken shadow-sm p-6">
         <h1 className="text-lg font-medium mb-1">注册新账号</h1>
         <p className="text-sm text-fg-muted mb-6">
           创建一个 gacode 账号,跨端通用

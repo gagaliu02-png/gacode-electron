@@ -139,7 +139,7 @@ export function Notifications() {
   return (
     <div className="min-h-full flex flex-col">
       {/* 顶部 */}
-      <div className="sticky top-0 z-10 bg-bg-base border-b border-border px-6 py-3 flex items-center justify-between">
+      <div className="sticky top-0 z-10 bg-bg-base px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h1 className="text-base font-medium">通知</h1>
           {unreadCount > 0 ? (
@@ -173,7 +173,7 @@ export function Notifications() {
         {isLoading ? (
           <SkeletonList />
         ) : error ? (
-          <div className="rounded-md bg-danger-soft/30 border border-danger/40 px-4 py-3 text-sm">
+          <div className="rounded-md bg-danger-soft/30 px-4 py-3 text-sm">
             加载失败:{error instanceof Error ? error.message : String(error)}
           </div>
         ) : items.length === 0 ? (
@@ -212,7 +212,7 @@ function NotificationRow({
       type="button"
       onClick={onClick}
       className={[
-        "w-full text-left flex items-stretch gap-3 rounded-md bg-bg-elevated border border-border p-4",
+        "w-full text-left flex items-stretch gap-3 rounded-md bg-bg-elevated p-4",
         "hover:bg-bg-sunken transition-colors duration-150",
       ].join(" ")}
     >
@@ -244,7 +244,7 @@ function NotificationRow({
           </p>
         ) : null}
         {item.type ? (
-          <span className="inline-block text-xs px-1.5 py-0.5 rounded bg-bg-sunken border border-border text-fg-subtle">
+          <span className="inline-block text-xs px-1.5 py-0.5 rounded bg-bg-sunken text-fg-subtle">
             {item.type}
           </span>
         ) : null}
@@ -260,7 +260,7 @@ function NotificationRow({
 function EmptyState() {
   return (
     <div className="h-full flex items-center justify-center">
-      <div className="rounded-md border border-border bg-bg-sunken p-8 text-center max-w-sm">
+      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm">
         <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-elevated flex items-center justify-center text-fg-muted">
           <BellIcon />
         </div>
@@ -279,7 +279,7 @@ function SkeletonList() {
       {Array.from({ length: 3 }).map((_, i) => (
         <li
           key={i}
-          className="rounded-md bg-bg-elevated border border-border p-4 animate-pulse"
+          className="rounded-md bg-bg-elevated p-4 animate-pulse"
         >
           <div className="h-4 w-2/3 bg-bg-sunken rounded" />
           <div className="h-3 w-3/4 bg-bg-sunken rounded mt-2" />

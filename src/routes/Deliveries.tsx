@@ -120,12 +120,12 @@ export function Deliveries() {
     >
       <div className="min-h-full flex flex-col">
         {/* 顶部操作栏 */}
-        <div className="sticky top-0 z-10 bg-bg-base border-b border-border">
+        <div className="sticky top-0 z-10 bg-bg-base">
         <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full space-y-2 py-2">
           {/* Row 1: tabs (左) + 刷新 (右) */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex-1 min-w-0 overflow-x-auto">
-              <div className="inline-flex p-1 rounded-md bg-bg-elevated border border-border gap-1">
+              <div className="inline-flex p-1 rounded-md bg-bg-elevated gap-1">
                 {TAB_DEFS.map((t) => {
                   const active = tab === t.key;
                   return (
@@ -235,14 +235,14 @@ function DeliveryCard({
   onDelete: () => void;
 }) {
   return (
-    <div className="rounded-md bg-bg-elevated border border-border p-3 hover:bg-bg-sunken transition-colors duration-150">
+    <div className="rounded-md bg-bg-elevated p-3 hover:bg-bg-sunken transition-colors duration-150">
       <button
         type="button"
         onClick={onOpen}
         className="text-left w-full flex items-start gap-3"
       >
         {/* 缩略 / 类型 icon */}
-        <div className="shrink-0 w-16 h-16 rounded bg-bg-sunken border border-border flex items-center justify-center text-fg-muted overflow-hidden">
+        <div className="shrink-0 w-16 h-16 rounded bg-bg-sunken flex items-center justify-center text-fg-muted overflow-hidden">
           {item.thumbnailUrl || (item.deliverableType === "image" && item.url) ? (
             <img
               src={item.thumbnailUrl || item.url}
@@ -257,7 +257,7 @@ function DeliveryCard({
         {/* 元信息 */}
         <div className="flex-1 min-w-0 space-y-1">
           <div className="flex items-center gap-2">
-            <span className="text-xs px-1.5 py-0.5 rounded bg-bg-sunken border border-border text-fg-muted">
+            <span className="text-xs px-1.5 py-0.5 rounded bg-bg-sunken text-fg-muted">
               {TYPE_LABEL[item.deliverableType] || item.deliverableType}
             </span>
             {item.origin === "user_uploaded" ? (
@@ -334,7 +334,7 @@ function TypeIcon({ type }: { type: string }) {
 function EmptyState() {
   return (
     <div className="h-full flex items-center justify-center">
-      <div className="rounded-md border border-border bg-bg-sunken p-8 text-center max-w-sm">
+      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm">
         <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-elevated flex items-center justify-center text-fg-muted">
           <PackageIcon />
         </div>
@@ -353,7 +353,7 @@ function SkeletonGrid() {
       {Array.from({ length: 6 }).map((_, i) => (
         <div
           key={i}
-          className="rounded-md bg-bg-elevated border border-border p-3 animate-pulse flex items-start gap-3"
+          className="rounded-md bg-bg-elevated p-3 animate-pulse flex items-start gap-3"
         >
           <div className="w-16 h-16 rounded bg-bg-sunken" />
           <div className="flex-1 space-y-2">

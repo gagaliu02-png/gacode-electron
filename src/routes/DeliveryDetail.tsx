@@ -93,7 +93,7 @@ export function DeliveryDetail() {
         {/* 头部 */}
         <header className="space-y-2">
           <div className="flex items-center gap-2">
-            <span className="text-xs px-2 py-0.5 rounded bg-bg-elevated border border-border text-fg-muted">
+            <span className="text-xs px-2 py-0.5 rounded bg-bg-elevated text-fg-muted">
               {TYPE_LABEL[item.deliverableType] || item.deliverableType}
             </span>
             <span className="text-xs text-fg-subtle font-mono">#{item.id}</span>
@@ -113,7 +113,7 @@ export function DeliveryDetail() {
         </header>
 
         {/* 元信息 */}
-        <div className="rounded-md bg-bg-elevated border border-border divide-y divide-border">
+        <div className="rounded-md bg-bg-elevated divide-y divide-border">
           {item.url ? (
             <InfoRow
               label="URL"
@@ -199,7 +199,7 @@ function ContentView({ item }: { item: Deliverable }) {
   // image: <img>
   if (item.deliverableType === "image" && url) {
     return (
-      <div className="rounded-md bg-bg-elevated border border-border p-3">
+      <div className="rounded-md bg-bg-elevated p-3">
         <img
           src={url}
           alt={item.title || "image"}
@@ -212,7 +212,7 @@ function ContentView({ item }: { item: Deliverable }) {
   // web: 提示打开 (实际打开走外链 button, 这里展示 metadata)
   if (item.deliverableType === "web") {
     return (
-      <div className="rounded-md bg-bg-elevated border border-border p-6 text-center">
+      <div className="rounded-md bg-bg-elevated p-6 text-center">
         <p className="text-sm text-fg-muted mb-3">网页类交付物</p>
         <p className="text-xs text-fg-subtle">点击「打开」在浏览器中查看</p>
       </div>
@@ -225,7 +225,7 @@ function ContentView({ item }: { item: Deliverable }) {
 
     if (mime === "application/pdf" && url) {
       return (
-        <div className="rounded-md bg-bg-elevated border border-border overflow-hidden">
+        <div className="rounded-md bg-bg-elevated overflow-hidden">
           <iframe
             src={url}
             className="w-full h-[70vh] bg-bg-sunken"
@@ -239,7 +239,7 @@ function ContentView({ item }: { item: Deliverable }) {
       // text 类 — 客户端拉一次显示; 不暴露 content 给 list, detail 也没有 content 字段
       // 走 url 让浏览器 / electron 直接渲染, 这里给一个下载 / 打开按钮
       return (
-        <div className="rounded-md bg-bg-elevated border border-border p-6 text-center">
+        <div className="rounded-md bg-bg-elevated p-6 text-center">
           <p className="text-sm text-fg-muted mb-3">
             {mime ? mime : "未知类型"} 文件
           </p>
@@ -261,7 +261,7 @@ function ContentView({ item }: { item: Deliverable }) {
 
     // 其他二进制 (docx / xlsx 等): 兜底下载
     return (
-      <div className="rounded-md bg-bg-elevated border border-border p-6 text-center">
+      <div className="rounded-md bg-bg-elevated p-6 text-center">
         <p className="text-sm text-fg-muted mb-3">
           {mime || "未知类型"} 文件
         </p>
@@ -280,7 +280,7 @@ function ContentView({ item }: { item: Deliverable }) {
   }
 
   return (
-    <div className="rounded-md bg-bg-elevated border border-border p-4 text-sm text-fg-muted text-center">
+    <div className="rounded-md bg-bg-elevated p-4 text-sm text-fg-muted text-center">
       无内容
     </div>
   );

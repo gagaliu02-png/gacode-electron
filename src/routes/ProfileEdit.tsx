@@ -163,7 +163,7 @@ export function ProfileEdit() {
         {/* Gender — segmented */}
         <div>
           <label className="block text-sm font-medium mb-2">性别</label>
-          <div className="inline-flex p-1 rounded-md bg-bg-elevated border border-border gap-1">
+          <div className="inline-flex p-1 rounded-md bg-bg-elevated gap-1">
             {GENDER_OPTIONS.map((opt) => {
               const active = gender === opt.value;
               return (

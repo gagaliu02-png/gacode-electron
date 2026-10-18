@@ -102,12 +102,12 @@ export function Library() {
     >
       <div className="min-h-full flex flex-col">
         {/* 顶部操作栏 */}
-        <div className="sticky top-0 z-10 bg-bg-base border-b border-border">
+        <div className="sticky top-0 z-10 bg-bg-base">
         <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full space-y-2 py-2">
           {/* Row 1: 类型 chip (左) + 刷新按钮 (右) */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex-1 min-w-0 overflow-x-auto">
-              <div className="inline-flex p-1 rounded-md bg-bg-elevated border border-border gap-1">
+              <div className="inline-flex p-1 rounded-md bg-bg-elevated gap-1">
                 {TYPE_CHIPS.map((t) => {
                   const active = type === t.key;
                   return (
@@ -217,15 +217,15 @@ function LibraryCard({
     <button
       type="button"
       onClick={onClick}
-      className="text-left rounded-md bg-bg-elevated border border-border p-4 hover:bg-bg-sunken transition-colors duration-150"
+      className="text-left rounded-md bg-bg-elevated p-4 hover:bg-bg-sunken transition-colors duration-150"
     >
       <div className="flex items-start gap-3">
-        <div className="shrink-0 w-9 h-9 rounded bg-bg-sunken border border-border flex items-center justify-center text-fg-muted">
+        <div className="shrink-0 w-9 h-9 rounded bg-bg-sunken flex items-center justify-center text-fg-muted">
           <Icon />
         </div>
         <div className="flex-1 min-w-0 space-y-1">
           <div className="flex items-center gap-2">
-            <span className="text-xs px-1.5 py-0.5 rounded bg-bg-sunken border border-border text-fg-muted">
+            <span className="text-xs px-1.5 py-0.5 rounded bg-bg-sunken text-fg-muted">
               {TYPE_LABEL[item.type] || item.type}
             </span>
             <span className="text-xs text-fg-subtle font-mono truncate">
@@ -258,7 +258,7 @@ const TYPE_LABEL: Record<string, string> = {
 function EmptyState() {
   return (
     <div className="h-full flex items-center justify-center">
-      <div className="rounded-md border border-border bg-bg-sunken p-8 text-center max-w-sm">
+      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm">
         <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-elevated flex items-center justify-center text-fg-muted">
           <LibraryIcon />
         </div>
@@ -277,7 +277,7 @@ function SkeletonGrid() {
       {Array.from({ length: 6 }).map((_, i) => (
         <div
           key={i}
-          className="rounded-md bg-bg-elevated border border-border p-4 animate-pulse"
+          className="rounded-md bg-bg-elevated p-4 animate-pulse"
         >
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded bg-bg-sunken" />

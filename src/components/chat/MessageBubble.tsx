@@ -54,7 +54,7 @@ function UserBubble({
                 key={`${url}-${i}`}
                 src={url}
                 alt=""
-                className="max-w-[200px] max-h-[200px] rounded-md border border-border object-contain bg-bg-sunken"
+                className="max-w-[200px] max-h-[200px] rounded-md object-contain bg-bg-sunken"
                 loading="lazy"
               />
             ))}
@@ -71,7 +71,7 @@ function UserBubble({
               return (
                 <span
                   key={id}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-sunken border border-border text-xs text-fg-muted"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-elevated text-xs text-fg-muted"
                   title={name}
                 >
                   <FileGlyph />
@@ -120,7 +120,7 @@ function AssistantBubble({
 
         {/* Markdown 正文 */}
         {hasContent ? (
-          <div className="rounded-md bg-bg-sunken border border-border px-3.5 py-2.5 text-fg text-sm">
+          <div className="rounded-md bg-bg-sunken px-3.5 py-2.5 text-fg text-sm">
             <Markdown>{content}</Markdown>
             {showCursor ? (
               <span
@@ -145,7 +145,7 @@ function AssistantBubble({
 // ────────────────────────────────────────────────────────────
 function TypingDots(): ReactNode {
   return (
-    <div className="inline-flex items-center gap-1 px-3.5 py-2.5 rounded-md bg-bg-sunken border border-border text-fg-muted">
+    <div className="inline-flex items-center gap-1 px-3.5 py-2.5 rounded-md bg-bg-sunken text-fg-muted">
       <Dot delay={0} />
       <Dot delay={0.15} />
       <Dot delay={0.3} />

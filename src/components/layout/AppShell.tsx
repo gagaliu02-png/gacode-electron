@@ -160,7 +160,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           Sidebar (256px 持久)
           ============================================================ */}
       <aside
-        className={[SIDEBAR_WIDTH, "shrink-0 bg-bg-base border-r border-border flex flex-col"].join(" ")}
+        className={[SIDEBAR_WIDTH, "shrink-0 bg-bg-base flex flex-col"].join(" ")}
         aria-label="主导航"
       >
         {/* TopBar */}
@@ -262,7 +262,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           ============================================================ */}
       <div className="flex flex-col flex-1 min-w-0">
         <header
-          className="shrink-0 h-14 px-4 border-b border-border bg-bg-base flex items-center gap-2"
+          className="shrink-0 h-14 px-4 bg-bg-elevated flex items-center gap-2"
         >
           {showBack ? (
             <button
@@ -425,7 +425,7 @@ function SidebarChatItem({
       className={[
         "w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm text-left truncate transition-colors duration-150",
         isActive
-          ? "bg-bg-sunken text-fg font-medium border-l-2 border-fg"
+          ? "bg-bg-sunken text-fg font-medium"
           : "text-fg-muted hover:bg-bg-base hover:text-fg",
       ].join(" ")}
     >

@@ -187,14 +187,14 @@ export function ChatInputBar({
 
   return (
     <>
-      <div className="border-t border-border bg-bg-base px-3 py-2.5">
+      <div className="bg-bg-elevated px-3 py-2.5">
         {/* chips + progress */}
         {(chips.length > 0 || progress !== null) && (
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
             {chips.map((c, i) => (
               <span
                 key={i}
-                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-sunken border border-border text-xs"
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-elevated text-xs"
               >
                 <PaperclipSmallIcon />
                 <span className="truncate max-w-[160px]">{c.name}</span>
