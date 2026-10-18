@@ -102,7 +102,8 @@ export function QrLogin() {
         width: 280,
         margin: 2,
         errorCorrectionLevel: "H",
-        color: { dark: "#e5e7eb", light: "#0a0a0a" },
+        // QR 必须深色数据点 + 浅色背景才能扫(对比度需求), 跟 gacode-web 端对齐
+        color: { dark: "#000000", light: "#ffffff" },
       });
       if (cancelledRef.current) return;
       setQrDataUrl(dataUrl);
@@ -228,7 +229,7 @@ export function QrLogin() {
                 alt="扫码登录二维码"
                 width={280}
                 height={280}
-                className="rounded-2xl bg-[#0a0a0a] p-3 border border-border/40"
+                className="rounded-2xl bg-white p-3 border border-border/40"
               />
               <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-xs text-fg-muted">
                 {secondsLeft}s 后过期
