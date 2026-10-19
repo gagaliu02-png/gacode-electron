@@ -10,8 +10,8 @@
 #   - asar: true + compression: maximum 压缩 Electron 资源
 #
 # 0.7.5 (Deliveries/Detail/Browser/Register/AutoUpdate P1+P2 — misc worker):
-#   - output 改 release-misc-p1-v1/ 绕开 release-* 历史目录, 避免 Windows Search
-#     Indexer 锁住旧目录 EBUSY.
+#   - output 改 release-misc-p1-v1/ 绕开 release-* 历史目录, 避免 Windows
+#     Search Indexer 锁住旧目录 EBUSY.
 
 appId: com.gaga.gacode
 productName: Gacode
