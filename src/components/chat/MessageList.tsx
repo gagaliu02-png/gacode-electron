@@ -14,6 +14,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MessageBubble } from "./MessageBubble";
 import type { RichEvent } from "./RichEventBubble";
+import type { MessageAction } from "./MessageMenu";
 
 export interface ChatMessageModel {
   id: string;
@@ -26,6 +27,9 @@ export interface ChatMessageModel {
   /** 流式累积的 rich events (tool_start / file / image / thinking / …) */
   richEvents?: RichEvent[];
   createdAt?: string;
+  /** 阶段 8: 是否已撤回 (server listChatMessages 透传 recalled / recalled_at) */
+  recalled?: boolean;
+  recalledAt?: string | null;
 }
 
 interface Props {
@@ -34,12 +38,20 @@ interface Props {
   streamingAssistantId?: string | null;
   /** 用户已主动向上滚动的状态 (own 滚动观察). 用于"跳到底"按钮的显示控制. */
   onAutoScrollChange?: (sticky: boolean) => void;
+  /**
+   * 阶段 8: 消息动作回调 (复制 / 保存到 KB / 点赞 / 点踩 / 撤回 / 删除 / rerun).
+   * parent (ChatDetail) 收到 ok=true 时调 queryClient.invalidateQueries
+   * 刷新 history, 保证 server 端回流 (recalled / deleted_at 字段更新后
+   * 占位气泡自动出现, 软删的行彻底从 list 消失).
+   */
+  onMessageAction?: (msg: ChatMessageModel, action: MessageAction, ok: boolean) => void;
 }
 
 export function MessageList({
   messages,
   streamingAssistantId,
   onAutoScrollChange,
+  onMessageAction,
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -97,6 +109,7 @@ export function MessageList({
         {messages.map((m) => (
           <MessageBubble
             key={m.id}
+            messageId={m.id}
             role={m.role}
             content={m.content}
             richEvents={m.richEvents}
@@ -109,6 +122,13 @@ export function MessageList({
               m.role === "assistant"
             }
             createdAt={m.createdAt}
+            recalled={m.recalled}
+            recalledAt={m.recalledAt}
+            onAction={
+              onMessageAction
+                ? (action, ok) => onMessageAction(m, action, ok)
+                : undefined
+            }
           />
         ))}
 

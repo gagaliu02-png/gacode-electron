@@ -40,6 +40,14 @@ export interface ChatInputBarProps {
   onSubmit: (text: string, attachments: PendingAttachment[]) => boolean | void;
   /** Attachment upload failed (parent usually toasts) */
   onAttachmentError?: (msg: string) => void;
+  /**
+   * 阶段 8 chat-id-19 — 重新生成按钮 callback.
+   * canRerun=true 时, 右侧主按钮 (send/stop slot) 切换成 rerun 图标,
+   * 点击 → onRerun() (parent 取消 + 重发最后一条 user 消息).
+   * canRerun=false 时, 恢复 send 按钮 (行为不变).
+   */
+  canRerun?: boolean;
+  onRerun?: () => void;
 }
 
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -50,6 +58,8 @@ export function ChatInputBar({
   onStop,
   onSubmit,
   onAttachmentError,
+  canRerun = false,
+  onRerun,
 }: ChatInputBarProps) {
   const [text, setText] = useState("");
   const [chips, setChips] = useState<PendingAttachment[]>([]);
@@ -280,7 +290,10 @@ export function ChatInputBar({
             className="flex-1 resize-none bg-bg-sunken border border-border rounded-md px-3 py-2 text-sm leading-6 placeholder:text-fg-subtle focus:outline-none focus:border-brand disabled:opacity-70 max-h-32 overflow-y-auto"
           />
 
-          {/* send / stop */}
+          {/* send / stop / rerun — 三态按钮 (阶段 8 chat-id-19)
+              - 流式中 → stop (red)
+              - 非流式 + canRerun → rerun (brand, 复用同一位置) — 跟 web 同款
+              - 非流式 + !canRerun → send (brand, 默认) */}
           {isStreaming ? (
             <button
               type="button"
@@ -289,6 +302,17 @@ export function ChatInputBar({
               className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-md bg-danger text-white hover:bg-danger/90 active:opacity-80 transition-colors duration-150"
             >
               <StopIcon />
+            </button>
+          ) : canRerun && onRerun ? (
+            <button
+              type="button"
+              aria-label="重新生成最后一条回复"
+              title="重新生成最后一条回复"
+              onClick={onRerun}
+              className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-md bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active transition-colors duration-150"
+              data-testid="rerun-button"
+            >
+              <RerunIcon />
             </button>
           ) : (
             <button
@@ -394,6 +418,26 @@ function StopIcon() {
       strokeWidth="1.6"
     >
       <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
+
+// 阶段 8 chat-id-19 — 重新生成 icon. 跟 Send 图标区分; 用一个循环箭头.
+function RerunIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <polyline points="3 4 3 9 8 9" />
     </svg>
   );
 }

@@ -322,6 +322,10 @@ export interface ChatMessage {
   attachedFileIds?: string[];
   attachedFileNames?: Array<{ fileId: string; name: string }>;
   phasesJson?: string | null;
+  /** 阶段 8: 是否已撤回 (server 返 recalled=true 时不再走 modify, 但保留以渲占位) */
+  recalled?: boolean;
+  /** 阶段 8: 撤回时间, ISO; 当 recalled=true 时必返. UI 用它显示占位文案 */
+  recalledAt?: string | null;
 }
 
 export interface NotificationItem {
@@ -410,6 +414,8 @@ export async function getHistory(chatId: string): Promise<{
       content: string;
       created_at: string;
       metadata?: string | Record<string, unknown> | null;
+      recalled?: boolean;
+      recalled_at?: string | null;
     }>;
     next_cursor: string | null;
   }>(`/yinian/sessions/${chatId}/messages`);
@@ -445,9 +451,98 @@ export async function getHistory(chatId: string): Promise<{
       imageUrls,
       attachedFileIds,
       attachedFileNames,
+      // 阶段 8: 撤回态 — server listChatMessages 已过滤 deletedAt,
+      //   recalled 这条可选字段透传到 client, 用于 MessageBubble 占位 + 关闭菜单.
+      recalled: m.recalled ?? false,
+      recalledAt: m.recalled_at ?? null,
     };
   });
   return { messages, nextCursor: r.next_cursor };
+}
+
+// ─────────── ChatDetail P0 (阶段 8) — 单条消息 / approval 接口 ───────────
+// 对齐 gacode-web `src/lib/api.ts:988-1055` 同款, server 端
+//   PATCH  /api/v1/yinian/messages/:id/recall
+//   DELETE /api/v1/yinian/messages/:id
+//   POST   /api/v1/yinian/sessions/:id/approvals/:pendingId/decision
+// 鉴权走普通 Bearer (跟 fetch 拦截器一致), 客户端再调 invalidateQueries
+// 兜底刷新 [history, chatId] 让服务端回流.
+
+// ===== 撤回 (recall) =====
+// server 端 unified-api/src/modules/yinian/yinian.service.js:840
+//   RECALL_WINDOW_SEC = 120  (2 分钟, 客户端 UI 也卡这窗口, 超时按钮灰)
+//   yinian.routes.js:508  PATCH /messages/:id/recall
+//   重复调 = 幂等返当前状态. 失败 → Error 抛到 mutation onError.
+export interface RecallMessageResult {
+  id: string;
+  recalled: boolean;
+  recalled_at?: string | null;
+}
+
+export function recallMessage(id: string): Promise<RecallMessageResult> {
+  return request<RecallMessageResult>(`/yinian/messages/${id}/recall`, {
+    method: "PATCH",
+  });
+}
+
+// ===== 删除 (soft delete) =====
+// server 端 yinian.service.js:870 + yinian.routes.js:516
+//   无窗口, deleted_at = now. 客户端 store 立即移除, invalidate 兜底.
+export function deleteMessage(
+  id: string,
+): Promise<{ success: true; id: string }> {
+  return request<{ success: true; id: string }>(`/yinian/messages/${id}`, {
+    method: "DELETE",
+  });
+}
+
+// ===== Tool approval 决策 =====
+// server 端 yinian.chat.routes.js:662 POST /sessions/:id/approvals/:pendingId/decision
+//   body.action ∈ 'deny' | 'once' | 'session' | 'always'
+//   透传到 gaclaw /admin/approve-pending/:pendingId (alignment with Android
+//   ApprovalBanner.kt). client 这里只是包装, 业务路由在 server.
+export type ApprovalAction = "deny" | "once" | "session" | "always";
+
+export interface ApprovalDecisionResult {
+  ok: boolean;
+  action: ApprovalAction;
+  pendingId: string;
+  ttlSec?: number;
+  data?: unknown;
+}
+
+export function submitApprovalDecision(
+  sessionId: string,
+  pendingId: string,
+  action: ApprovalAction,
+): Promise<ApprovalDecisionResult> {
+  return request<ApprovalDecisionResult>(
+    `/yinian/sessions/${sessionId}/approvals/${pendingId}/decision`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    },
+  );
+}
+
+// ===== Tool approval 旧路径 (兼容 Android 旧 client) =====
+// yinian.chat.routes.js:556  POST /approvals  (body 带 sessionId/toolId/pendingId)
+// 保留作为兼容入口: 新 banner 走 decision 路径, 旧 store 仍可能 hit 这条.
+export function submitApprovalDecisionLegacy(input: {
+  sessionId: string;
+  toolId: string;
+  pendingId?: string;
+  tool?: string;
+  action: ApprovalAction;
+  ttlSec?: number;
+}): Promise<{ ok: boolean; action: ApprovalAction; ttlSec?: number; pendingId?: string; data?: unknown }> {
+  return request<{ ok: boolean; action: ApprovalAction; ttlSec?: number; pendingId?: string; data?: unknown }>(
+    `/yinian/approvals`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 // ─────────── Notifications (top-level, 非 /yinian/*) ───────────
@@ -620,6 +715,66 @@ export function createLibraryItem(
   });
 }
 
+// =========================================================================
+// Library 编辑 + Tag 列表 + 批量删除 (P0/P1, gacode-electron 0.7.2)
+//
+//   - PATCH /yinian/library/:id      server 已接 (部分更新 title/tags/content/url)
+//   - GET   /yinian/library/tags     server 已接 (group by 聚合当前用户所有 memory tag)
+//   - DELETE /yinian/library/:id    server 已接, 批量 = 客户端 fan-out (无新 endpoint),
+//                                    跟 gacode-web `batchDeleteLibraryItems` 同一策略
+// =========================================================================
+export interface UpdateLibraryItemInput {
+  title?: string;
+  tags?: string[];
+  url?: string;
+  content?: string;
+}
+
+export function updateLibraryItem(
+  id: string,
+  patch: UpdateLibraryItemInput,
+): Promise<LibraryItem> {
+  return request<LibraryItem>(`/yinian/library/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export interface LibraryTag {
+  name: string;
+  count: number;
+}
+
+export async function listLibraryTags(): Promise<{ tags: LibraryTag[] }> {
+  return request<{ tags: LibraryTag[] }>("/yinian/library/tags");
+}
+
+/**
+ * 批量删除 — 客户端 fan-out (无新 endpoint).
+ * 跟 gacode-web `api.ts:batchDeleteLibraryItems` 同款, 失败部分用 thrown Error
+ * 聚合给 toast. 返回 { succeeded, failed }, 单一使用方用它来局部重试 or 提示.
+ */
+export async function batchDeleteLibraryItems(
+  ids: string[],
+): Promise<{ succeeded: string[]; failed: { id: string; error: string }[] }> {
+  const results = await Promise.allSettled(
+    ids.map((id) => deleteLibraryItem(id).then(() => id)),
+  );
+  const succeeded: string[] = [];
+  const failed: { id: string; error: string }[] = [];
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") {
+      succeeded.push(r.value);
+    } else {
+      const reason = r.reason;
+      const error =
+        reason instanceof Error ? reason.message : String(reason ?? "未知错误");
+      failed.push({ id: ids[i], error });
+    }
+  });
+  return { succeeded, failed };
+}
+
 // ─────────── Link summarize (阶段 7 — Browser AI 总结) ───────────
 // 端点: POST /api/v1/yinian/links/summarize — unified-api
 //       `src/modules/yinian/yinian.links.routes.js:154`. schema:
@@ -756,4 +911,141 @@ export async function uploadAvatar(
   const url = r.avatarUrl || r.avatar || r.url;
   if (!url) throw new Error("头像上传响应缺少 url 字段");
   return { url };
+}
+
+// =========================================================================
+// 2026-10-19 v0.7.2 — Profile / Auth 扩展 (审计 §3.9 / §3.11 补齐)
+//
+// 注销账户: DELETE /auth/account (unified-api auth.routes.js:124-133 + auth.service.js:393)
+//   - JWT 鉴权, userId 只从 req.user.sub 取 (路由层强制, body 不读 userId, 防越权)
+//   - 物理删 user + 全部关联数据 (16 张表) + 抹磁盘残留 (uploads / sandbox / avatars)
+//   - 幂等: 已删账户再调仍返 200, 不冒 404
+//
+// 改密: POST /auth/change-password (unified-api auth.routes.js:140-147 + auth.service.js:214-233)
+//   - JWT 鉴权
+//   - body: { newPasswordHash } — argon2id 编码格式 ($argon2id$v=19$...$...), minLength 32, maxLength 512
+//   - service 层 defense-in-depth 校验 startsWith('$argon2id$')
+//   - 服务端不做二次 hash, 端侧必须用 argon2 算好再发
+//
+// 登出全部: POST /auth/logout-all (unified-api auth.routes.js:117-122)
+//   - JWT 鉴权, 撤销该用户的所有 refreshToken (不删 user, 后续可重新登录)
+//   - 改密后调这个, 其他人持有的旧 refreshToken 立刻失效
+//
+// 端侧 argon2 选型:
+//   - 选 hash-wasm (轻量 WASM, ~30KB minified 用于 argon2 本身)
+//   - 不依赖 Node native module (Electron renderer 走 chromium, 不能 require('argon2'))
+//   - 不动 electron/preload.ts (不让 IPC 多一跳)
+// =========================================================================
+
+/**
+ * 端侧 argon2id 哈希 — 跟 unified-api auth.service.js:155 (forgot-password-tools.js)
+ * 用的参数对齐: timeCost=3 / memoryCost=65536 / parallelism=1 / saltLength=16 /
+ * hashLength=32. server 不卡这些参数 (只看 startsWith('$argon2id$') + 长度),
+ * 所以参数只要合法即可, 但保持一致有助于后续若 server 加 verify-side 参数
+ * 校验时不踩坑.
+ *
+ * 输出是 PHC-encoded 完整字符串 (`$argon2id$v=19$m=...,t=...,p=1$<salt-b64>$<hash-b64>`),
+ * server 直接当 password_hash 写库. 用户下次登录时 `argon2.verify` 会从 hash
+ * 字符串里抽参数 + salt, 不需要 server 知道端侧的具体 cost.
+ */
+export async function hashPasswordArgon2id(password: string): Promise<string> {
+  if (!password || password.length < 1) {
+    throw new Error("password must be non-empty");
+  }
+  // 动态 import — vite/esbuild 自动把 hash-wasm 切到 wasm chunk
+  const { argon2id } = await import("hash-wasm");
+  // 16 bytes random salt — 跟 server-side argon2 默认 saltLength 一致
+  const saltBytes = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(saltBytes);
+  } else {
+    // fallback (SSR / 测试环境通常走不到这里, renderer 一定有 crypto)
+    for (let i = 0; i < saltBytes.length; i++) {
+      saltBytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  const hash = await argon2id({
+    password,
+    salt: saltBytes,
+    iterations: 3,
+    parallelism: 1,
+    memorySize: 65536, // KB — 跟 server `argon2.hash(password, {type: argon2.argon2id})` 默认 memoryCost=2^16
+    hashLength: 32,
+    outputType: "encoded", // 直接要 PHC-encoded 字符串
+  });
+  return hash;
+}
+
+/**
+ * changePassword — 已登录用户改密.
+ *
+ * server contract (unified-api/auth.routes.js:140-147):
+ *   POST /api/v1/auth/change-password
+ *   body { newPasswordHash } — argon2id encoded
+ *   requires JWT (Authorization: Bearer <accessToken>)
+ *
+ * 注意:
+ *   - 服务端不接受 oldPassword (additionalProperties: false). 函数签名保留
+ *     oldPassword 是为了 UI 层 client-side 一致性校验 (旧密码字段),
+ *     实际 hash 后只发 newPasswordHash.
+ *   - oldPassword 留空时不阻塞提交, server 不验旧密码 (这条是设计: 改密
+ *     走 JWT 鉴权 + 用户已经在自己设备上登录, 再加 oldPassword 校验是
+ *     UX 上冗余, server schema 已经隐式排除).
+ */
+export async function changePassword(
+  _oldPassword: string,
+  newPassword: string,
+): Promise<{ ok: true }> {
+  const newPasswordHash = await hashPasswordArgon2id(newPassword);
+  return request<{ ok: true }>("/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ newPasswordHash }),
+  });
+}
+
+/**
+ * logoutAll — 撤销当前用户所有 refreshToken (登出全部设备).
+ *
+ * server contract (unified-api/auth.routes.js:117-122):
+ *   POST /api/v1/auth/logout-all
+ *   requires JWT
+ *   body: 不需要 (server 用 req.user.sub 拿 userId)
+ *   resp: { ok: true, data: { message: 'all sessions revoked' } }
+ *
+ * 调用场景: 改密成功后, 让所有其他设备持有的 refreshToken 立刻失效,
+ * 防止别人偷到旧密码后长期登着.
+ */
+export function logoutAll(): Promise<{ ok: true; message: string }> {
+  return request<{ ok: true; message: string }>("/auth/logout-all", {
+    method: "POST",
+  });
+}
+
+/**
+ * deleteAccount — 真注销 (GDPR 性质, 物理删除).
+ *
+ * server contract (unified-api/auth.routes.js:124-133):
+ *   DELETE /api/v1/auth/account
+ *   requires JWT
+ *   body: 不需要 (userId 只从 req.user.sub 取, 防越权删号)
+ *   幂等: 已删账户再调返 200 (不冒 404)
+ *   resp: { ok: true, data: { ok, already_deleted, deleted, files } }
+ *
+ * 调用方负责 (Profile.tsx 的 DeleteAccountRow 接管):
+ *   - 成功后清前端 queryClient + 调 auth.logout() 清内存 token + user
+ *   - authStorage.clear() (走 IPC, 删 %APPDATA%/Gacode/refresh-token.json)
+ *   - navigate('/login') 把用户踢回登录页
+ */
+export function deleteAccount(): Promise<{
+  ok: boolean;
+  already_deleted: boolean;
+  deleted: Record<string, number>;
+  files: { removed: number; failed: number; skipped: number };
+}> {
+  return request<{
+    ok: boolean;
+    already_deleted: boolean;
+    deleted: Record<string, number>;
+    files: { removed: number; failed: number; skipped: number };
+  }>("/auth/account", { method: "DELETE" });
 }

@@ -1,5 +1,5 @@
 /**
- * routes/ChatDetail.tsx — 阶段 2 Chat 详情 (SSE 流式核心)
+ * routes/ChatDetail.tsx — 阶段 2 Chat 详情 (SSE 流式核心) — 阶段 8 加重写
  *
  * 数据流:
  *   - useQuery(["chats"], getChats)  ←→ 顶 Header 标题
@@ -9,7 +9,7 @@
  * 流式 status:
  *   - 流式开启 → 新建本地临时 assistant message (id = streaming-ts-xxx)
  *   - chunk.content 累积 → streamingContent
- *   - chunk.event / chunk.events → streamingEvents
+ *   - chunk.event / chunk.events → streamingEvents (含 approval_request)
  *   - isTerminalDone → 用 server messageId 替换本地 id + 触发 history invalidate
  *   - isCancelFrame  → 直接 closed (不调 ack, 已经在取消中)
  *
@@ -21,6 +21,18 @@
  * 边界:
  *   - 输入 image / 文档 都走 lib/upload.ts; 主调用流跟 ChatInputBar 联动
  *   - 当前 chat 标题 来自 useChats 拿到的 chat.title (server 持久化)
+ *
+ * 阶段 8 (chat-id-1/13/14/15/16/17/18/19 P0):
+ *   - chat-id-1 : Header ⋮ DropdownMenu (重命名 / 固定 / 删除) + ConfirmDialog
+ *   - chat-id-13: ApprovalBanner sticky 在输入栏上方, SSE approval_request 累积
+ *   - chat-id-14: 消息 ⋮ → recallMessage PATCH, 客户端 2 分钟窗口 UI 卡
+ *   - chat-id-15: 消息 ⋮ → createLibraryItem(doc) (跟 web fallback 同款, server
+ *                 还没专用端点 /messages/:id/save-to-kb, 文末报告 send-blocker)
+ *   - chat-id-16: 消息 ⋮ → deleteMessage DELETE, 软删, ConfirmDialog 二次确认
+ *   - chat-id-17: 消息 ⋮ → like/dislike 暂未上线 (server 没 /messages/:id/feedback
+ *                 endpoint, 报告 send-blocker)
+ *   - chat-id-18: 消息 ⋮ → clipboard.writeText + toast
+ *   - chat-id-19: ChatInputBar 右侧三态按钮 (stop / rerun / send), 重发最后一条 user
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,6 +42,8 @@ import {
   deleteSessions,
   getChats,
   getHistory,
+  renameChat,
+  setSessionPin,
   type ChatMessage,
 } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
@@ -52,6 +66,16 @@ import {
   classifyStreamingError,
   type StreamingErrorKind,
 } from "../components/chat/StreamingErrorBanner";
+import {
+  ApprovalBanner,
+  type ApprovalRequest,
+} from "../components/chat/ApprovalBanner";
+import {
+  DropdownMenu,
+  type DropdownMenuItem,
+} from "../components/ui/DropdownMenu";
+import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
 
 // 标签 id — 临时 assistant message 用, server 真 messageId 回来后替换
@@ -68,6 +92,59 @@ function extractFileIds(msg: ChatMessage): string[] {
 }
 function extractFileNames(msg: ChatMessage): Array<{ fileId: string; name: string }> {
   return msg.attachedFileNames ?? [];
+}
+
+/** 把 approval_request rich_event 抽成 ApprovalRequest; 缺字段兜底. */
+function toApprovalRequest(ev: Record<string, unknown>): ApprovalRequest | null {
+  const pendingId =
+    (typeof ev.pendingId === "string" && ev.pendingId) ||
+    (typeof ev.id === "string" && ev.id) ||
+    (typeof ev.toolId === "string" && ev.toolId) ||
+    "";
+  if (!pendingId) return null;
+  const risk = String(ev.riskLevel ?? "medium");
+  return {
+    // 用 pendingId 当 store 去重 key, 跟 web store.addPendingApproval 同款
+    id: pendingId,
+    pendingId,
+    tool: String(ev.tool ?? ev.name ?? "tool"),
+    title: String(ev.title ?? "需要你的授权"),
+    detail: ev.detail ? String(ev.detail) : undefined,
+    riskLevel: risk === "high" || risk === "low" ? risk : "medium",
+  };
+}
+
+// ────────────────────────────────────────────────────────────
+// chat-id-19 rerun: 从历史里拿最后一条 user 消息的 (text + attachments),
+//   严格只读 server 端同步下来的字段. 历史里的 user message 必然有 serverId,
+//   image_urls / attached_file_ids 都来自 metadata, 重发时同样能跑知识库知识图匹配.
+// ────────────────────────────────────────────────────────────
+function reconstructLastUserSubmission(messages: ChatMessageModel[]): {
+  text: string;
+  attachments: PendingAttachment[];
+} | null {
+  // 从尾部往前找第一条 role=user 的
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user") continue;
+    const text = m.content || "";
+    const attachments: PendingAttachment[] = [];
+    if (m.imageUrls) {
+      m.imageUrls.forEach((url, idx) =>
+        attachments.push({ url, name: m.attachedFileNames?.[idx]?.name ?? `图片 ${idx + 1}` }),
+      );
+    }
+    if (m.attachedFileIds) {
+      m.attachedFileIds.forEach((fileId) => {
+        attachments.push({
+          fileId,
+          name: m.attachedFileNames?.find((n) => n.fileId === fileId)?.name ?? "附件",
+        });
+      });
+    }
+    return { text, attachments };
+  }
+  return null;
 }
 
 export function ChatDetail() {
@@ -105,6 +182,8 @@ export function ChatDetail() {
       attachedFileIds: extractFileIds(m),
       attachedFileNames: extractFileNames(m),
       createdAt: m.createdAt,
+      recalled: m.recalled ?? false,
+      recalledAt: m.recalledAt ?? null,
     }));
     return list;
   }, [historyQuery.data]);
@@ -123,10 +202,40 @@ export function ChatDetail() {
     userAttachments: PendingAttachment[];
   } | null>(null);
 
-  // 取最后一次成功发送的 user 文本 (用于重试)
+  // 取最后一次成功发送的 user (text + attachments), 供重试 / 重新生成复用.
   const lastUserTextRef = useRef<string>("");
+  const lastUserAttachmentsRef = useRef<PendingAttachment[]>([]);
+
+  // 阶段 8 chat-id-13 — approval_request 累积. 任一按钮触发 → 清整张 banner.
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
+
+  const addPendingApproval = useCallback((req: ApprovalRequest) => {
+    setPendingApprovals((prev) =>
+      prev.some((p) => p.id === req.id) ? prev : [...prev, req],
+    );
+  }, []);
+
+  const clearPendingApprovals = useCallback(() => {
+    setPendingApprovals([]);
+  }, []);
+
   // 是否处于"等待首帧" 的状态 — 用来显示"正在思考" 占位
   const [waitingFirstFrame, setWaitingFirstFrame] = useState(false);
+
+  // 切 chat → 清 pendingApprovals (旧 session 的 pending 不带到新 session).
+  // 跟 web page.tsx:317-321 同款 (clear store on chat switch).
+  useEffect(() => {
+    setPendingApprovals([]);
+    setStreamingAssistantId(null);
+    setStreamingContent("");
+    setStreamingEvents([]);
+    setStreamError(null);
+    setWaitingFirstFrame(false);
+    return () => {
+      // 卸载时再清一次 — 切 chat / unmount 都覆盖到.
+      setPendingApprovals([]);
+    };
+  }, [chatId]);
 
   // 拼装最终 messages: 历史 + 流式那条占位
   const messages: ChatMessageModel[] = useMemo(() => {
@@ -140,6 +249,15 @@ export function ChatDetail() {
     return [...baseMessages, streamingMsg];
   }, [baseMessages, streamingAssistantId, streamingContent, streamingEvents]);
 
+  // chat-id-19 rerun 显示条件: 不在流式 + 历史非空 + 最后一条是 assistant.
+  // (web 同款: 在最后一条 assistant 后留 rerun 入口)
+  const canRerun = useMemo(() => {
+    if (streamingAssistantId) return false;
+    if (messages.length === 0) return false;
+    const last = messages[messages.length - 1];
+    return last.role === "assistant" && last.content.trim().length > 0;
+  }, [streamingAssistantId, messages]);
+
   // ────────────── SSE 启动 + chunk 处理 ──────────────
 
   const startStream = useCallback(
@@ -152,6 +270,8 @@ export function ChatDetail() {
       setStreamingEvents([]);
       setStreamError(null);
       setWaitingFirstFrame(true);
+      // 新一轮触发 → 清空旧 session 的 pending approvals (不再 stale)
+      clearPendingApprovals();
 
       const imageUrls = attachments
         .filter((a) => !!a.url)
@@ -172,11 +292,52 @@ export function ChatDetail() {
             if (chunk.content) {
               setStreamingContent((prev) => prev + chunk.content);
             }
+            // 阶段 8 chat-id-13/17 — 抽 approval_request / approval_granted /
+            //   approval_denied / feedback 事件走 ApprovalBanner / store, 不进
+            //   message.richEvents (跟 web page.tsx:622-655 + Android ApprovalBanner 同款)
             if (chunk.event) {
-              setStreamingEvents((prev) => [...prev, chunk.event!]);
+              const ev = chunk.event;
+              const type = ev.type as string | undefined;
+              if (type === "approval_request") {
+                const req = toApprovalRequest(ev);
+                if (req) addPendingApproval(req);
+                return; // 不进 richEvents (banner 唯一展示源)
+              }
+              if (type === "approval_granted" || type === "approval_denied") {
+                // first-wins: 任一端 granted/denied 后清空 banner
+                clearPendingApprovals();
+                return;
+              }
+              // 阶段 8 chat-id-17 server feedback 事件: SSE pipeline 兼容性预留,
+              //   server 暂未推. 留这分支给后续 /feedback 事件.
+              if (type === "feedback") {
+                // future: 进 store, 用来实时刷新 like/dislike 图标. 当前 server
+                //   不推, 代码先就位.
+                return;
+              }
+              setStreamingEvents((prev) => [...prev, ev]);
             }
             if (chunk.events && chunk.events.length > 0) {
-              setStreamingEvents((prev) => [...prev, ...chunk.events!]);
+              const kept: Array<Record<string, unknown>> = [];
+              for (const ev of chunk.events) {
+                const type = ev.type as string | undefined;
+                if (type === "approval_request") {
+                  const req = toApprovalRequest(ev);
+                  if (req) addPendingApproval(req);
+                  continue; // banner 唯一源
+                }
+                if (type === "approval_granted" || type === "approval_denied") {
+                  clearPendingApprovals();
+                  continue;
+                }
+                if (type === "feedback") {
+                  continue; // 预留, 当前不进 message
+                }
+                kept.push(ev);
+              }
+              if (kept.length > 0) {
+                setStreamingEvents((prev) => [...prev, ...kept]);
+              }
             }
             if (isTerminalDone(chunk)) {
               // 终态 → 立即用 server messageId 替换本地临时 id
@@ -234,19 +395,17 @@ export function ChatDetail() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chatId, queryClient],
+    [chatId, queryClient, addPendingApproval, clearPendingApprovals],
   );
 
-  // ────────────── 发送 / 停止 ──────────────
+  // ────────────── 发送 / 停止 / 重试 / 重生 ──────────────
 
   const handleSubmit = useCallback(
     (text: string, attachments: PendingAttachment[]): boolean => {
       if (!chatId) return false;
       if (streamingAssistantId) return false; // 已经在流式, 拒绝并发
       lastUserTextRef.current = text;
-      // 乐观把 user message 直接放进 history 是不行的 — server 还没写。
-      // 这里依靠 server 落库后 history invalidate, 用户视角的"刚发出"的
-      // 那条 user message 让 history 拉回来再渲染。
+      lastUserAttachmentsRef.current = attachments;
       void startStream(text, attachments);
       return true;
     },
@@ -254,8 +413,6 @@ export function ChatDetail() {
   );
 
   const handleStop = useCallback(() => {
-    // 用户主动 → abort('user') 让 turnState.userStopped = true
-    // finally 看到 userStopped → 走 sendCancelDelete('USER_STOP')
     stream.abort("user");
   }, [stream]);
 
@@ -267,10 +424,33 @@ export function ChatDetail() {
     void startStream(text, streamError.userAttachments);
   }, [streamError, startStream]);
 
-  // 流式完成后 + assistant message 已 server-side 落库 → history 已 invalidate
-  // (onChunk isTerminalDone 处理); 不需要额外的 patch 逻辑
+  // chat-id-19 — 重发最后一条 user 消息.
+  // 策略: 优先用 ref 里最近一次成功提交的 (text, attachments); ref 缺失时退化到
+  //   从 history 末尾反向扫 user 消息, 用 server metadata 重构.
+  const handleRerun = useCallback(() => {
+    if (!chatId) return;
+    if (streamingAssistantId) return; // canRerun 已是 false, 兜底
+    let text = lastUserTextRef.current;
+    let attachments = lastUserAttachmentsRef.current;
+    if (!text) {
+      const last = reconstructLastUserSubmission(baseMessages);
+      if (!last || !last.text.trim()) {
+        toast({ message: "找不到上一条用户消息, 重新发送", variant: "warning" });
+        return;
+      }
+      text = last.text;
+      attachments = last.attachments;
+      lastUserTextRef.current = text;
+      lastUserAttachmentsRef.current = attachments;
+    }
+    // 重新生成: 先 cancel 当前 (防御, 实际 canRerun=false 时不该触发到这里)
+    stream.abort("user");
+    void startStream(text, attachments);
+  }, [chatId, streamingAssistantId, baseMessages, startStream, stream, toast]);
 
-  // ────────────── 头部操作 (重命名 / 删除) ──────────────
+  // ────────────── 头部操作 (重命名 / 固定 / 删除) ──────────────
+
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteSessions([chatId!]),
@@ -287,12 +467,58 @@ export function ChatDetail() {
     },
   });
 
-  const handleDeleteChat = () => {
-    if (!currentChat) return;
-    if (window.confirm(`确认删除对话 "${currentChat.title || "新对话"}"?`)) {
-      deleteMutation.mutate();
-    }
-  };
+  // 重命名: ConfirmDialog + Input 子组件 (对应 ChatList 已有 dialogue 同款).
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+
+  const renameMutation = useMutation({
+    mutationFn: (title: string) => renameChat(chatId!, title),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ["chats"] });
+      toast({
+        message: `已重命名为 "${updated.title || "新对话"}"`,
+        variant: "success",
+      });
+      setRenameOpen(false);
+    },
+    onError: (err) => {
+      toast({
+        message: `重命名失败: ${err instanceof Error ? err.message : String(err)}`,
+        variant: "danger",
+      });
+    },
+  });
+
+  const pinMutation = useMutation({
+    mutationFn: (next: boolean) => setSessionPin(chatId!, next),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ["chats"] });
+      toast({
+        message: updated.pinned ? "已固定到顶部" : "已取消固定",
+        variant: "success",
+      });
+    },
+    onError: (err) => {
+      toast({
+        message: `操作失败: ${err instanceof Error ? err.message : String(err)}`,
+        variant: "danger",
+      });
+    },
+  });
+
+  // 阶段 8 — 消息操作回调 (来自 MessageMenu → MessageList → 这里).
+  // 成功后 invalidateQueries 拿 server 流回的最新数据 (recalled/recalledAt 字段会更新,
+  //   recalled 占位气泡自动出现; 软删的消息彻底从 history 里消失).
+  const handleMessageAction = useCallback(
+    (_msg: ChatMessageModel, action: string, ok: boolean) => {
+      if (!ok) return;
+      // 'copy' 不需要刷 history, 其余都刷
+      if (action !== "copy") {
+        queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+      }
+    },
+    [chatId, queryClient],
+  );
 
   // 组件卸载 → abort 但不 userStopped (跟 web 一致, 让流自然跑完落库)
   useEffect(() => {
@@ -310,22 +536,58 @@ export function ChatDetail() {
 
   const title = currentChat?.title || "新对话";
   const isStreaming = !!streamingAssistantId;
+  const pinned = !!currentChat?.pinned;
+
+  // Header ⋮ DropdownMenu items — 阶段 8 chat-id-1
+  const headerMenuItems: DropdownMenuItem[] = [
+    {
+      label: "重命名",
+      onClick: () => {
+        setRenameValue(title === "新对话" ? "" : title);
+        setRenameOpen(true);
+      },
+    },
+    {
+      label: pinned ? "取消固定" : "固定到顶部",
+      onClick: () => pinMutation.mutate(!pinned),
+      disabled: pinMutation.isPending,
+    },
+    {
+      label: "复制会话 ID",
+      onClick: () => {
+        void navigator.clipboard.writeText(chatId).then(() => {
+          toast({ message: "已复制会话 ID", variant: "success" });
+        });
+      },
+    },
+    {
+      label: "删除对话",
+      destructive: true,
+      onClick: () => setConfirmDeleteOpen(true),
+    },
+  ];
 
   return (
     <div className="h-full flex flex-col bg-bg-base">
-      {/* 头部: 顶 AppShell 已占, 这里只渲染 "..." 按钮 由父级 slot 不可控;
-          所以把 ⋮ 菜单放在内容区的顶部行, 内容区占 100% 高度. */}
+      {/* 头部 — 阶段 8 chat-id-1: 重命名 + 完整 ⋮ 菜单 */}
       <div className="shrink-0 h-12 bg-bg-elevated px-4 flex items-center justify-between">
-        <div className="flex-1 min-w-0 truncate font-medium text-sm">{title}</div>
-        <button
-          type="button"
-          aria-label="对话操作"
-          onClick={handleDeleteChat}
-          className="w-9 h-9 inline-flex items-center justify-center rounded hover:bg-bg-elevated text-fg-muted hover:text-danger transition-colors duration-150"
-          title="删除对话"
-        >
-          <TrashIcon />
-        </button>
+        <div className="flex-1 min-w-0 truncate font-medium text-sm" title={title}>
+          {title}
+        </div>
+        <DropdownMenu
+          trigger={
+            <button
+              type="button"
+              aria-label="对话操作"
+              className="w-9 h-9 inline-flex items-center justify-center rounded hover:bg-bg-sunken text-fg-muted hover:text-fg transition-colors duration-150"
+              data-testid="chat-header-more"
+            >
+              <MoreIcon />
+            </button>
+          }
+          items={headerMenuItems}
+          align="right"
+        />
       </div>
 
       {/* 错误 banner */}
@@ -348,13 +610,30 @@ export function ChatDetail() {
           <MessageList
             messages={messages}
             streamingAssistantId={streamingAssistantId}
+            onMessageAction={handleMessageAction}
           />
         )}
       </div>
 
-      {/* 输入栏 */}
+      {/* 阶段 8 chat-id-13 — ApprovalBanner sticky 在输入栏上方 */}
+      <ApprovalBanner
+        requests={pendingApprovals}
+        sessionId={chatId}
+        onClear={clearPendingApprovals}
+        onError={(msg) =>
+          toast({
+            message: `审批失败: ${msg}`,
+            variant: "danger",
+            duration: 4000,
+          })
+        }
+      />
+
+      {/* 输入栏 — chat-id-19 加 canRerun + onRerun */}
       <ChatInputBar
         isStreaming={isStreaming}
+        canRerun={canRerun}
+        onRerun={handleRerun}
         onStop={handleStop}
         onSubmit={handleSubmit}
         onAttachmentError={(msg) =>
@@ -368,19 +647,67 @@ export function ChatDetail() {
           等待流式首帧…
         </span>
       ) : null}
+
+      {/* 删除对话二次确认 */}
+      {confirmDeleteOpen ? (
+        <ConfirmDialog
+          title="删除对话"
+          message={`确认删除对话 "${title}"? 此操作无法撤销。`}
+          confirmLabel="删除"
+          cancelLabel="取消"
+          confirmVariant="danger"
+          loading={deleteMutation.isPending}
+          onCancel={() => setConfirmDeleteOpen(false)}
+          onConfirm={() => {
+            deleteMutation.mutate();
+            setConfirmDeleteOpen(false);
+          }}
+        />
+      ) : null}
+
+      {/* 重命名对话框 */}
+      {renameOpen ? (
+        <ConfirmDialog
+          title="重命名对话"
+          message="为这个对话设置一个新标题。"
+          confirmLabel="保存"
+          cancelLabel="取消"
+          loading={renameMutation.isPending}
+          onCancel={() => setRenameOpen(false)}
+          onConfirm={() => {
+            const v = renameValue.trim();
+            if (!v) {
+              toast({ message: "标题不能为空", variant: "warning" });
+              return;
+            }
+            renameMutation.mutate(v);
+          }}
+        >
+          <Input
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            maxLength={64}
+            placeholder="输入新标题"
+            autoFocus
+            data-testid="rename-input"
+          />
+        </ConfirmDialog>
+      ) : null}
     </div>
   );
 
-  // 消除 unused import 警告 (Button 是给未来更多 CTA 留的)
-  // 注: Button 上面已用到, 这里仅为类型提示, 不渲染
+  // 消除 unused import 警告 (Button / CancelIntent 模块引用, 留作未来扩展点)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   void Button;
-  // 显式用到 CancelIntent 不渲染, 仅用作 module import
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   void ({} as CancelIntent);
 }
 
-function TrashIcon() {
+// ────────────────────────────────────────────────────────────
+// icons — local; 不引 lucide-react, 跟项目其它组件保持一致
+// ────────────────────────────────────────────────────────────
+
+function MoreIcon() {
   return (
     <svg
       aria-hidden="true"
@@ -393,8 +720,9 @@ function TrashIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <circle cx="12" cy="5" r="1.4" />
+      <circle cx="12" cy="12" r="1.4" />
+      <circle cx="12" cy="19" r="1.4" />
     </svg>
   );
 }

@@ -1,5 +1,5 @@
 /**
- * components/chat/MessageBubble.tsx — 阶段 2 单条消息气泡
+ * components/chat/MessageBubble.tsx — 阶段 2 单条消息气泡 (阶段 8 加 ⋮ 菜单)
  *
  * 角色:
  *   - user      → 右对齐, brand 容器色, 圆角, 文字 / 图片 / 文件 chip
@@ -10,11 +10,19 @@
  *
  * 流式态: assistant 在 isStreaming=true 时, 末尾显示 "▍" pulse 光标,
  *         不抖动附加 reflow (text 累积在父组件).
+ *
+ * 阶段 8 (chat-id-13..18 P0):
+ *   - 挂 MessageMenu (复制 / 保存到知识库 / 点赞 / 点踩 / 撤回 / 删除)
+ *   - recalled 占位气泡 (贴 web 的 "X 撤回了一条消息" 同款, 用 CSS rounded-[8px] 浅底)
+ *   - 重新生成 (chat-id-19) 不在 ⋮ 菜单, 在 ChatInputBar 旁; 详见 ChatDetail.tsx
+ *
+ * 父组件拿到 recalled=true 时**不传 menu** — 这个组件再卡一道防误调.
  */
 
 import type { ReactNode } from "react";
 import { Markdown } from "../../lib/markdown";
 import { RichEventBubble, type RichEvent } from "./RichEventBubble";
+import { MessageMenu, type MessageAction } from "./MessageMenu";
 
 export interface MessageBubbleProps {
   /** "user" | "assistant" */
@@ -32,6 +40,15 @@ export interface MessageBubbleProps {
   isStreaming?: boolean;
   /** 时间戳 — 用于侧边 hover 显示 (optional) */
   createdAt?: string;
+  /**
+   * 阶段 8: 是否已撤回 (server listChatMessages 透传 recalled 字段).
+   * true 时整气泡换成 "已撤回" 占位, 不挂菜单.
+   */
+  recalled?: boolean;
+  /** 撤回时间 (ISO) — 占位文案用的相对时间; recalled=true 时建议提供 */
+  recalledAt?: string | null;
+  /** 阶段 8: 消息操作完成回调 (parent 用它 invalidate history / 切 store) */
+  onAction?: (action: MessageAction, ok: boolean) => void;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -42,11 +59,26 @@ function UserBubble({
   imageUrls,
   attachedFileIds,
   attachedFileNames,
-}: Pick<MessageBubbleProps, "content" | "imageUrls" | "attachedFileIds" | "attachedFileNames">) {
-  // 阶段 7 — chat 附件点击走系统默认应用.
+  recalled,
+  recalledAt,
+  onAction,
+  createdAt,
+  messageId,
+}: Pick<
+  MessageBubbleProps,
+  | "content"
+  | "imageUrls"
+  | "attachedFileIds"
+  | "attachedFileNames"
+  | "recalled"
+  | "recalledAt"
+  | "onAction"
+  | "createdAt"
+> & { messageId: string }) {
+  // 阶段 7 — chat 附件点击走系统默认应用:
   // image 用 `<a target="_blank">` 让 Electron 主进程 setWindowOpenHandler
-  // 自动调 shell.openExternal. file chip 加 onClick -> window.gacode.openWithSystem
-  // (远程 url 路径). 失败时 console.warn, 不阻塞 UI.
+  // 自动接 shell.openExternal. file chip 加 onClick -> window.gacode.openWithSystem
+  // (远程 url 路径). 失败时 console.warn, 不阻断 UI.
   const handleOpenUrl = (url: string) => {
     if (typeof window === "undefined") return;
     const w = window as unknown as {
@@ -63,11 +95,24 @@ function UserBubble({
     }
   };
 
+  if (recalled) {
+    return (
+      <div className="flex justify-end items-start gap-1.5">
+        <RecalledPlaceholder
+          side="user"
+          recalledAt={recalledAt}
+          createdAt={createdAt}
+        />
+        {!onAction ? null : null}
+      </div>
+    );
+  }
+
   return (
-    <div className="flex justify-end">
+    <div className="flex justify-end items-start gap-1.5">
       <div className="max-w-[80%]">
-        {/* 图片 (image mode 上传产物) — 阶段 7: 点击调起系统默认程序
-            (图片 URL → shell.openExternal 让 OS 默认图片查看器 / 浏览器接管) */}
+        {/* 图片 (image mode 上传产物) — 阶段 7: 点击唤起系统默认程序
+            (图片 URL → shell.openExternal 让 OS 默认图片查看器/浏览器接管) */}
         {imageUrls && imageUrls.length > 0 ? (
           <div className="flex flex-wrap gap-1.5 mb-1.5 justify-end">
             {imageUrls.map((url, i) => (
@@ -93,7 +138,7 @@ function UserBubble({
           </div>
         ) : null}
 
-        {/* 附件 chip (document mode 上传产物) — 阶段 7: 点击调起系统默认应用
+        {/* 附件 chip (document mode 上传产物) — 阶段 7: 点击唤起系统默认应用
             (chat 端没有 file 原始 url, 但 server 通过 metadata 返回了 fileName,
             渲染层可见的是 fileId; 这里简化为把 fileId 当作 placeholder, chip
             的 onClick 仅供 UI 反馈 — 真实场景需要 server 给一个下载 url) */}
@@ -110,9 +155,9 @@ function UserBubble({
                   onClick={() => {
                     // server metadata 暂未在 ChatMessage DTO 暴露 file url;
                     // 此处 chip 不再可以系统打开真实文件, 用 console 提示。
-                    // 阶段 N 接 listFiles(id) 时再调 openWithSystem.
+                    // 阶段 N 接 listFiles(id) 时再接 openWithSystem.
                     console.info(
-                      `[gacode-electron] chat 附件 ${name} (id=${id}) — file url 暂未暴露, 待 listFiles API`,
+                      `[gacode-electron] chat 附件 ${name} (id=${id}) — file url 暂未暴露, 走 listFiles API`,
                     );
                   }}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-elevated text-xs text-fg-muted hover:text-fg hover:bg-bg-sunken cursor-pointer"
@@ -133,6 +178,19 @@ function UserBubble({
           </div>
         ) : null}
       </div>
+
+      {/* 阶段 8 — 消息 ⋮ 菜单 (PC 端常显, 不依赖 hover) */}
+      {onAction ? (
+        <div className="shrink-0 pt-1">
+          <MessageMenu
+            role="user"
+            messageId={messageId}
+            content={content}
+            createdAt={createdAt}
+            onActionDone={onAction}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -144,18 +202,46 @@ function AssistantBubble({
   content,
   richEvents,
   isStreaming,
-}: Pick<MessageBubbleProps, "content" | "richEvents" | "isStreaming">) {
+  recalled,
+  recalledAt,
+  onAction,
+  createdAt,
+  messageId,
+}: Pick<
+  MessageBubbleProps,
+  | "content"
+  | "richEvents"
+  | "isStreaming"
+  | "recalled"
+  | "recalledAt"
+  | "onAction"
+  | "createdAt"
+> & { messageId: string }) {
   const showCursor = !!isStreaming;
   const hasRichEvents = !!richEvents && richEvents.length > 0;
   const hasContent = !!content && content.trim().length > 0;
 
-  // 空 + 没事件 → 完全不渲染 (流式刚开始那一两帧)
+  if (recalled) {
+    return (
+      <div className="flex justify-start items-start gap-1.5">
+        <RecalledPlaceholder
+          side="assistant"
+          recalledAt={recalledAt}
+          createdAt={createdAt}
+        />
+        {/* assistant 菜单也在 (复制 / 保存到知识库) — 但 web 习惯 recalled 后整菜单不下.
+            这边为统一, recalled 时 MessageMenu 自己不挂 (见 MessageMenu 的判定). */}
+      </div>
+    );
+  }
+
+  // 空 + 没事件 → 完全不渲染 (流式刚开始那两个 frame)
   if (!hasContent && !hasRichEvents) return null;
 
   return (
-    <div className="flex justify-start">
+    <div className="flex justify-start items-start gap-1.5">
       <div className="max-w-[85%] space-y-1">
-        {/* 工具 / 富事件 — 在正文之前 (server 累积顺序跟到达顺序一致) */}
+        {/* 工具 / 富事件 — 在正文之前 (server 累积顺序跟到末尾顺序一致) */}
         {hasRichEvents
           ? richEvents!.map((ev, i) => (
               <RichEventBubble key={`ev-${i}-${String(ev.type)}`} event={ev} />
@@ -175,13 +261,75 @@ function AssistantBubble({
           </div>
         ) : null}
 
-        {/* 流式态, 还没收到任何文字但有事件 → 显示占位 */}
+        {/* 流式态: 还没收到任何文字但有事件 → 显示占位 */}
         {isStreaming && !hasContent && !hasRichEvents ? (
           <TypingDots />
         ) : null}
       </div>
+
+      {/* 阶段 8 — 消息 ⋮ 菜单 */}
+      {onAction ? (
+        <div className="shrink-0 pt-1">
+          <MessageMenu
+            role="assistant"
+            messageId={messageId}
+            content={content}
+            createdAt={createdAt}
+            isStreaming={isStreaming}
+            onActionDone={onAction}
+          />
+        </div>
+      ) : null}
     </div>
   );
+}
+
+// ────────────────────────────────────────────────────────────
+// RecalledPlaceholder — 跟 web "已撤回了一条消息" 同款; 用户/助手共用
+// ────────────────────────────────────────────────────────────
+function RecalledPlaceholder({
+  side,
+  recalledAt,
+  createdAt,
+}: {
+  side: "user" | "assistant";
+  recalledAt?: string | null;
+  createdAt?: string;
+}) {
+  // 用 recalledAt (撤回时间) 或 createdAt 显示相对时间; 都缺就退到空
+  const ts = recalledAt || createdAt;
+  const ago = ts ? formatAgo(ts) : "";
+  const text =
+    side === "user" ? "你撤回了一条消息" : "AI 撤回了一条消息";
+  return (
+    <div
+      role="note"
+      data-testid="msg-recalled-placeholder"
+      className="rounded-md bg-bg-sunken/60 text-fg-muted border border-border px-3 py-1.5 text-xs italic flex items-center gap-1.5"
+    >
+      <span>{text}</span>
+      {ago ? <span className="opacity-70 not-italic">· {ago}</span> : null}
+    </div>
+  );
+}
+
+function formatAgo(iso: string): string {
+  try {
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t)) return "";
+    const dt = Date.now() - t;
+    if (dt < 0) return "";
+    const sec = Math.floor(dt / 1000);
+    if (sec < 60) return `${sec} 秒前`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min} 分钟前`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr} 小时前`;
+    const day = Math.floor(hr / 24);
+    return `${day} 天前`;
+  } catch {
+    return "";
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -232,7 +380,7 @@ function FileGlyph() {
 // 主入口
 // ────────────────────────────────────────────────────────────
 
-export function MessageBubble(props: MessageBubbleProps) {
+export function MessageBubble(props: MessageBubbleProps & { messageId: string }) {
   return props.role === "user" ? (
     <UserBubble {...props} />
   ) : (
