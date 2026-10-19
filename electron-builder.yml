@@ -8,17 +8,20 @@
 #   - 不配 code signing(无证书),electron-builder 默认跳过 Win 签名
 #   - perMachine=false 装到 %LOCALAPPDATA%\Programs\Gacode\,不污染 Program Files
 #   - asar: true + compression: maximum 压缩 Electron 资源
+#
+# 0.7.5 (Deliveries/Detail/Browser/Register/AutoUpdate P1+P2 — misc worker):
+#   - output 改 release-misc-p1-v1/ 绕开 release-* 历史目录, 避免 Windows Search
+#     Indexer 锁住旧目录 EBUSY.
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.4
+buildVersion: 0.7.5
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
-  # 0.7.4 (Library P0) worker: 输出到独立目录 release-library-p0-v1/, 跟 release/
-  # 隔离 (后者被前 worker 的 win-unpacked 锁定, 直接覆盖会触发 EBUSY).
-  output: release-library-p0-v1
+  # 0.7.5 (misc worker): 隔离输出目录
+  output: release-misc-p1-v1
 
 files:
   - dist/**/*
@@ -28,6 +31,16 @@ files:
 asar: true
 disableSanityCheckAsar: true
 compression: maximum
+
+# 0.7.5 global-11: electron-updater 配置 publish
+# provider=github + owner/repo — electron-builder 打包时会自动生成 latest.yml
+# 等 gagaOS 拍 push release 时 (git push + tag), autoUpdater.checkForUpdates 就能
+# 拉到. 现阶段不 push, 所以 update 永远 = no-update.
+publish:
+  provider: github
+  owner: gagaliu02-png
+  repo: gacode-electron
+  releaseType: release
 
 win:
   target:

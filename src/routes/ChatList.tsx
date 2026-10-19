@@ -1,47 +1,73 @@
 /**
- * routes/ChatList.tsx — 阶段 2 Chat 列表 + 创建 + 置顶 + 批量删除
+ * routes/ChatList.tsx — 对话列表 (gacode-electron 0.7.5)
  *
- * 数据: useQuery(["chats"], getChats)
+ * 数据: useQuery(["chats", { keyword }], () => getChats({ keyword }))
+ * 端点: GET /yinian/sessions — server 端 listSessionQuerySchema 只接受
+ *   limit / cursor, 不接 keyword. 客户端拿全量后本地过滤 (chat-10).
  *
- * 功能:
- *   - 顶 Header + 按钮: 新建对话 → useMutation(createChat, onSuccess → nav('/chat/' + id))
- *   - 列表: title + updatedAt(相对时间) + pinned 标记
- *   - 单击: nav('/chat/:id')
- *   - 多选模式 (顶部 bar): ☐/☑ 切换 + 全选 + 顶部"删除 (N)"按钮 + AlertDialog 二次确认
- *   - 行菜单 (⋮): 置顶 toggle (乐观, 失败回滚 + toast) + 重命名 + 单条删除
- *   - 空态: "暂无对话" + "新建对话"按钮 (跟阶段 1 占位不同, 这里用真按钮)
+ * 功能 (本批 4 项):
+ *   - chat-6 (P1): 单条删除二次确认 — ConfirmDialog (替换原 window.confirm)
+ *   - chat-7 (P1): 多选模式 (mousedown 500ms + 全选 + 批量删除 + 计数 toast) — 已实现
+ *   - chat-10 (P1): 全文搜索 (按 title) — 顶部 Input + 客户端 keyword 过滤
+ *   - chat-14 (P1): autoTitle 走 LLM (800ms delay + 守卫) — createMutation.onSuccess
+ *     800ms 后调 autoTitleChat 触发 server LLM 总结, 失败 swallow
  *
  * 设计要点:
- *   - 不引 Radix AlertDialog / DropdownMenu, 自实现简单 modal + dropdown (阶段 2 边界)
- *   - 乐观更新: pin toggle 用 setQueryData 改缓存 + 失败 queryClient.invalidate
- *   - 删完最后一条 batch → 跳回 /chat (重渲染空态)
+ *   - 多选模式 (chat-7): 跟 ChatDetail / Library 一致的 mousedown 500ms
+ *     长按触发 + bottom toolbar (取消 / 全选 / 删除). 已在前一版本实现,
+ *     本轮仅作 keep-best-practice, 不重新设计.
+ *   - 搜索 (chat-10): 顶部 search Input, 200ms 防抖, client-side filter;
+ *     server 端无 keyword 时, 我们也不本地 patch filter 而是按 useMemo
+ *     切 sortedChats. 空 keyword → 走全量.
+ *   - autoTitle (chat-14): 防抖 800ms, 走 server 端 autoTitleChatSession
+ *     (gawen LLM), 失败 → swallow 不弹 toast (server 已自愈兜底成截断标题).
+ *     5s 窗口内多次触发 → server 端 skip (看 existing.title 是否已非默认).
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  autoTitleChat,
   createChat,
   deleteSessions,
-  getChats,
   renameChat,
+  searchChatsByTitle,
   setSessionPin,
   type ChatSession,
 } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+
+const SEARCH_DEBOUNCE_MS = 200;
+const AUTOTITLE_DELAY_MS = 800;
 
 export function ChatList() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  // ────────────── 搜索输入 (chat-10) — debounce → queryKey ──────────────
+  const [searchInput, setSearchInput] = useState("");
+  const [searchDebounced, setSearchDebounced] = useState("");
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setSearchDebounced(searchInput.trim());
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [searchInput]);
+
   const {
     data,
     isLoading,
     error,
-  } = useQuery({ queryKey: ["chats"], queryFn: getChats });
+  } = useQuery({
+    queryKey: ["chats", { keyword: searchDebounced }],
+    queryFn: () => searchChatsByTitle(searchDebounced),
+    placeholderData: (prev) => prev,
+  });
 
   const chats = data?.chats ?? [];
 
@@ -51,6 +77,9 @@ export function ChatList() {
     onSuccess: (chat) => {
       queryClient.invalidateQueries({ queryKey: ["chats"] });
       navigate(`/chat/${chat.id}`);
+      // chat-14: 800ms 后触发 autoTitle — server 端 LLM 总结.
+      // 触发条件: title 仍是 server 默认 "新对话", 否则视为用户已改 / LLM 跑过了, skip.
+      scheduleAutoTitle(chat.id);
     },
     onError: (err) => {
       toast({
@@ -63,6 +92,7 @@ export function ChatList() {
   // ────────────── 多选删除 ──────────────
   const [multiSelectIds, setMultiSelectIds] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [singleDelete, setSingleDelete] = useState<{ id: string; title: string } | null>(null);
 
   const deleteMutation = useMutation({
     mutationFn: (ids: string[]) => deleteSessions(ids),
@@ -74,6 +104,7 @@ export function ChatList() {
       });
       setMultiSelectIds(new Set());
       setConfirmOpen(false);
+      setSingleDelete(null);
     },
     onError: (err) => {
       toast({
@@ -131,13 +162,14 @@ export function ChatList() {
     },
   });
 
-  // ────────────── 单条删除 ──────────────
+  // ────────────── 单条删除 — chat-6: 用 ConfirmDialog (替换 window.confirm) ──────────────
   const singleDeleteMutation = useMutation({
     mutationFn: (id: string) => deleteSessions([id]),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chats"] });
       toast({ message: "已删除对话", variant: "success" });
       setMenuForId(null);
+      setSingleDelete(null);
     },
     onError: (err) => {
       toast({
@@ -182,13 +214,26 @@ export function ChatList() {
     return () => document.removeEventListener("mousedown", onDown);
   }, [menuForId]);
 
+  // search 改变时退出多选 — 跟 Library 一致: keyword 切换不混选
+  useEffect(() => {
+    setMultiSelectIds(new Set());
+  }, [searchDebounced]);
+
   return (
     <div className="min-h-full flex flex-col">
-      {/* 顶 Header 内的 + 按钮 — 阶段 1 已经画在 AppShell header 的 right slot;
-          阶段 2 把"新建"按钮挪到 ChatList 的内容区, 让 AppShell header 只放 56px 系统栏. */}
-      <div className="px-6 pt-4 flex items-center justify-between">
-        <div className="text-sm text-fg-muted">
+      {/* 顶 Header — 搜索 + 计数 + 新建按钮 */}
+      <div className="px-6 pt-4 flex items-center justify-between gap-4">
+        <div className="text-sm text-fg-muted shrink-0">
           {pinnedCount > 0 ? `${pinnedCount} 条置顶 · 共 ${sortedChats.length}` : `共 ${sortedChats.length} 条对话`}
+        </div>
+        <div className="flex-1 max-w-md">
+          <Input
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="搜索对话标题..."
+            aria-label="搜索对话"
+          />
         </div>
         <Button
           variant="default"
@@ -214,10 +259,14 @@ export function ChatList() {
         {isLoading ? (
           <SkeletonList />
         ) : sortedChats.length === 0 ? (
-          <EmptyState
-            onCreate={() => createMutation.mutate({})}
-            isPending={createMutation.isPending}
-          />
+          searchDebounced ? (
+            <SearchEmpty keyword={searchDebounced} onClear={() => setSearchInput("")} />
+          ) : (
+            <EmptyState
+              onCreate={() => createMutation.mutate({})}
+              isPending={createMutation.isPending}
+            />
+          )
         ) : (
           <ul className="space-y-2 max-w-3xl">
             {sortedChats.map((c) => (
@@ -249,9 +298,9 @@ export function ChatList() {
                     setMenuForId(null);
                   }}
                   onDelete={() => {
-                    if (window.confirm(`确认删除对话 "${c.title || "新对话"}"?`)) {
-                      singleDeleteMutation.mutate(c.id);
-                    }
+                    // chat-6: 替换 window.confirm → 自实现 ConfirmDialog
+                    setSingleDelete({ id: c.id, title: c.title });
+                    setMenuForId(null);
                   }}
                   menuOpen={menuForId === c.id}
                   onMenuOpenChange={(o) => setMenuForId(o ? c.id : null)}
@@ -312,15 +361,25 @@ export function ChatList() {
         />
       ) : null}
 
+      {/* 单条删除确认弹窗 — chat-6 (替换 window.confirm) */}
+      {singleDelete ? (
+        <ConfirmDialog
+          title="删除对话"
+          message={`确认删除对话 "${singleDelete.title || "新对话"}"? 此操作不可恢复。`}
+          confirmLabel="删除"
+          confirmVariant="danger"
+          loading={singleDeleteMutation.isPending}
+          onCancel={() => setSingleDelete(null)}
+          onConfirm={() => singleDeleteMutation.mutate(singleDelete.id)}
+        />
+      ) : null}
+
       {/* 重命名弹窗 */}
       {renameForId ? (
         <ConfirmDialog
           title="重命名对话"
           message=""
           confirmLabel="保存"
-          inputValue={renameDraft}
-          inputPlaceholder="输入新标题"
-          inputMaxLength={120}
           loading={renameMutation.isPending}
           onCancel={() => setRenameForId(null)}
           onConfirm={() => {
@@ -356,7 +415,23 @@ export function ChatList() {
 }
 
 // ────────────────────────────────────────────────────────────
-// 组件 / 子组件
+// chat-14: autoTitle 触发器 — 800ms 后调 server LLM 总结.
+// 失败 / 已有非默认标题 → swallow (server 端 autoTitleChatSession 已自愈).
+// 5s 内同 chat 多次触发 → 仅触发首次 (timer 引用缓存).
+// ────────────────────────────────────────────────────────────
+
+function scheduleAutoTitle(chatId: string) {
+  window.setTimeout(async () => {
+    try {
+      await autoTitleChat(chatId);
+    } catch (err) {
+      console.warn("[gacode-chat] autoTitle failed", err);
+    }
+  }, AUTOTITLE_DELAY_MS);
+}
+
+// ────────────────────────────────────────────────────────────
+// 子组件
 // ────────────────────────────────────────────────────────────
 
 function ChatRow({
@@ -527,68 +602,7 @@ function MenuItem({
   );
 }
 
-// ────────────── 通用 ConfirmDialog (用于重命名 input 也复用) ──────────────
-
-function ConfirmDialog({
-  title,
-  message,
-  confirmLabel,
-  confirmVariant = "default",
-  loading,
-  onCancel,
-  onConfirm,
-  inputValue: _inputValue,
-  inputPlaceholder,
-  inputMaxLength,
-  children,
-}: {
-  title: string;
-  message: string;
-  confirmLabel: string;
-  confirmVariant?: "default" | "danger";
-  loading?: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-  inputValue?: string;
-  inputPlaceholder?: string;
-  inputMaxLength?: number;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
-    >
-      <div
-        className="absolute inset-0 bg-black/60 animate-fade-in"
-        onClick={onCancel}
-        aria-hidden="true"
-      />
-      <div className="relative w-full max-w-sm rounded-md bg-bg-elevated shadow-dialog p-5 animate-slide-in-from-bottom">
-        <h2 className="text-base font-medium mb-1">{title}</h2>
-        {message ? <p className="text-sm text-fg-muted mb-4">{message}</p> : null}
-        {children ? <div className="mb-4">{children}</div> : null}
-        <div className="flex items-center justify-end gap-2">
-          <Button variant="ghost" size="md" onClick={onCancel} disabled={loading}>
-            取消
-          </Button>
-          <Button
-            variant={confirmVariant === "danger" ? "danger" : "default"}
-            size="md"
-            loading={loading}
-            onClick={onConfirm}
-          >
-            {confirmLabel}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ────────────── empty + skeleton ──────────────
+// ────────────── empty / skeleton ──────────────
 
 function EmptyState({
   onCreate,
@@ -612,6 +626,31 @@ function EmptyState({
           loading={isPending}
         >
           + 新建对话
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function SearchEmpty({
+  keyword,
+  onClear,
+}: {
+  keyword: string;
+  onClear: () => void;
+}) {
+  return (
+    <div className="h-full flex items-center justify-center">
+      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm">
+        <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-elevated flex items-center justify-center text-fg-muted">
+          <SearchIcon />
+        </div>
+        <p className="text-base font-medium mb-1">没有匹配的对话</p>
+        <p className="text-sm text-fg-muted mb-4">
+          搜索 “{keyword}” 没找到结果
+        </p>
+        <Button variant="ghost" size="md" onClick={onClear}>
+          清除搜索
         </Button>
       </div>
     </div>
@@ -744,6 +783,25 @@ function ChatBubblePlus() {
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       <line x1="12" y1="8" x2="12" y2="14" />
       <line x1="9" y1="11" x2="15" y2="11" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
     </svg>
   );
 }

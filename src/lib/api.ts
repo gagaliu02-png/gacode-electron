@@ -335,6 +335,22 @@ export interface NotificationItem {
   type?: string;
   read?: boolean;
   createdAt: string;
+  /**
+   * server 端 notification.routes.js 实际返的扩展字段 — UI 用它判断跳哪种
+   * action (url 外链 / deep_link 路由内 / 无动作). 这些字段在阶段 3 client
+   * 没暴露, 这里加扩展.
+   */
+  actionType?: string;
+  actionValue?: string;
+  /** optional: notification category — system / chat / library / delivery */
+  category?: string;
+}
+
+export interface NotificationsListResponse {
+  notifications: NotificationItem[];
+  unreadCount: number;
+  /** 服务端 cursor, 分页拉下一批时回传 (notifications-5 增量) */
+  nextCursor?: string | null;
 }
 
 // ─────────── Sessions ───────────
@@ -363,6 +379,27 @@ export async function getChats(): Promise<{ chats: ChatSession[] }> {
   };
 }
 
+/**
+ * 客户端 title 全文搜索 (chat-10 增量).
+ *
+ * server unified-api listSessionQuerySchema 目前只接受 limit / cursor, 没接
+ * keyword. 这里 getChats 拉全量, 客户端本地 filter. server 端加 keyword 后,
+ * 函数签名不变, 实现里加 query param 即可.
+ *
+ * 不动 getChats 签名 (保持向后兼容 AppShell / ChatDetail / ShareSheet 等
+ * 多处调用点 — 它们都不带 keyword 调用).
+ */
+export async function searchChatsByTitle(
+  keyword: string,
+): Promise<{ chats: ChatSession[] }> {
+  const kw = keyword.trim().toLowerCase();
+  if (!kw) return getChats();
+  const { chats } = await getChats();
+  return {
+    chats: chats.filter((c) => (c.title || "").toLowerCase().includes(kw)),
+  };
+}
+
 export interface CreateChatInput {
   /** 可选: 客户端想塞的标题 (server 默认"新对话") */
   title?: string;
@@ -381,6 +418,32 @@ export function renameChat(id: string, title: string): Promise<ChatSession> {
     body: JSON.stringify({ title }),
   });
 }
+
+/**
+ * autoTitleChat — 调 gawen/MiniMax 自动按对话内容总结一个 5-12 字标题.
+ *
+ * server 端 unified-api yinian.routes.js:464 POST /yinian/sessions/:id/auto-title
+ *   - requireAuth
+ *   - 无 body, 内部拿 sessionId → 调 gawen LLM 总结
+ *   - service 层 autoTitleChatSession 自愈: 已有人工标题 / 已被旧实现污染
+ *     (isTruncationArtifact) 时也会重写
+ *   - 失败 / LLM 不可用时兜底成截断标题, 仍返 ChatSession
+ *   - 鉴权失败 (401) → 走 api.ts 401 自动 refresh + 重试
+ *
+ * 用法 (chat-14 增量): ChatList 的 createMutation.onSuccess 调这个延迟 800ms
+ * 触发, 让 server 异步给 chat 起标题, 然后 queryClient.invalidateQueries 把
+ * "新对话" 替换成 LLM 标题. 防抖: 同一 chat 在 5s 内多次触发会被 server 端
+ * skip (autoTitleChatSession 看 existing.title 已非默认就不再生).
+ */
+export function autoTitleChat(id: string): Promise<ChatSession> {
+  return request<ChatSession>(`/yinian/sessions/${id}/auto-title`, {
+    method: "POST",
+  });
+}
+// ChatDetail worker 的 autoTitleSession 同款端点, 别名兼容.
+// 注意: 这里不重复 export — 上面已经有 autoTitleChat, ChatDetail 那边用
+// autoTitleSession 直接拿这俩的 alias 也行. 但当前 ChatDetail worker 还没把
+// AutoTitleResult / autoTitleSession 接进 store, 后续等他落地再统一.
 
 export function setSessionPin(id: string, pinned: boolean): Promise<ChatSession> {
   return request<ChatSession>(`/yinian/sessions/${id}/pin`, {
@@ -549,8 +612,13 @@ export function submitApprovalDecisionLegacy(input: {
 
 export async function listNotifications(
   unread: boolean,
-): Promise<{ notifications: NotificationItem[]; unreadCount: number }> {
-  const qs = unread ? "?unread=true" : "";
+  params: { category?: string; cursor?: string } = {},
+): Promise<NotificationsListResponse> {
+  const qs = new URLSearchParams();
+  if (unread) qs.set("unread", "true");
+  if (params.category) qs.set("category", params.category);
+  if (params.cursor) qs.set("cursor", params.cursor);
+  const q = qs.toString();
   const r = await request<{
     notifications: Array<{
       id: string | number;
@@ -559,9 +627,13 @@ export async function listNotifications(
       type?: string;
       isRead?: boolean;
       createdAt: string;
+      actionType?: string;
+      actionValue?: string;
+      category?: string;
     }>;
     unreadCount: number;
-  }>(`/notifications${qs}`);
+    nextCursor?: string | null;
+  }>(`/notifications${q ? `?${q}` : ""}`);
   return {
     notifications: (r.notifications ?? []).map((n) => ({
       id: String(n.id),
@@ -570,8 +642,12 @@ export async function listNotifications(
       type: n.type,
       read: n.isRead,
       createdAt: n.createdAt,
+      actionType: n.actionType,
+      actionValue: n.actionValue,
+      category: n.category,
     })),
     unreadCount: r.unreadCount ?? 0,
+    nextCursor: r.nextCursor ?? null,
   };
 }
 
@@ -586,6 +662,87 @@ export function markNotificationRead(id: string): Promise<{ ok: true }> {
 
 export function markAllNotificationsRead(): Promise<{ ok: true }> {
   return request<{ ok: true }>("/notifications/read-all", { method: "PATCH" });
+}
+
+/**
+ * 通知偏好 — 客户端 localStorage 持久化 (gacode-electron 0.7.5).
+ *
+ * 设计依据: server 端 agent_push_preferences 表在 unified-api / Android 上是
+ * 接入的, 但 electron renderer 阶段没有 `/agent-push-preferences` 端点;
+ * 不引入 send-blocker (要 PM 拍板走哪个 server 入口). 客户端先落 localStorage
+ * 让"通知设置入口"有地方存用户偏好, 后续 server endpoint 接通再切回.
+ *
+ * 字段:
+ *   enabled:        boolean — 总开关, 关掉后 SSE bridge 收到也只走 in-app toast,
+ *                              不弹系统通知 + 不发 SSE → 子系统入 IPC.
+ *   desktopEnabled: boolean — 系统通知栏 (Electron main `new Notification()`)
+ *   inAppEnabled:   boolean — 应用内 toast
+ *   categories:     { [category]: boolean } — 按类目屏蔽 (system / chat /
+ *                                               library / delivery). false 时该
+ *                                               类不弹任何通知
+ *
+ * localStorage key: "gacode.notification-prefs.v1"
+ */
+export interface NotificationPrefs {
+  enabled: boolean;
+  desktopEnabled: boolean;
+  inAppEnabled: boolean;
+  categories: {
+    system: boolean;
+    chat: boolean;
+    library: boolean;
+    delivery: boolean;
+  };
+}
+
+export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
+  enabled: true,
+  desktopEnabled: true,
+  inAppEnabled: true,
+  categories: {
+    system: true,
+    chat: true,
+    library: true,
+    delivery: true,
+  },
+};
+
+const NOTIFICATION_PREFS_KEY = "gacode.notification-prefs.v1";
+
+export function loadNotificationPrefs(): NotificationPrefs {
+  if (typeof localStorage === "undefined") return DEFAULT_NOTIFICATION_PREFS;
+  try {
+    const raw = localStorage.getItem(NOTIFICATION_PREFS_KEY);
+    if (!raw) return DEFAULT_NOTIFICATION_PREFS;
+    const parsed = JSON.parse(raw) as Partial<NotificationPrefs>;
+    return {
+      ...DEFAULT_NOTIFICATION_PREFS,
+      ...parsed,
+      categories: {
+        ...DEFAULT_NOTIFICATION_PREFS.categories,
+        ...(parsed.categories ?? {}),
+      },
+    };
+  } catch {
+    return DEFAULT_NOTIFICATION_PREFS;
+  }
+}
+
+export function saveNotificationPrefs(prefs: NotificationPrefs): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(NOTIFICATION_PREFS_KEY, JSON.stringify(prefs));
+    // 通知 SSE bridge 重读偏好 — 走 window event 让其他组件 (sse bridge)
+    // 立即看到变化, 不需要 query refetch.
+    window.dispatchEvent(
+      new CustomEvent("gacode:notification-prefs-changed", { detail: prefs }),
+    );
+  } catch (err) {
+    console.warn(
+      "[gacode-notification-prefs] localStorage write failed",
+      err,
+    );
+  }
 }
 
 // =========================================================================
@@ -801,6 +958,9 @@ export function summarizeLink(
 // 端点跟 unified-api deliverables.routes.js 对齐. server 端 list DTO
 // 字段: id, sessionId, messageId, deliverableType, title, url, thumbnailUrl,
 // mimeType, sizeBytes, prompt, origin, createdAt.
+//
+// 阶段 7 (0.7.5) 增量: listDeliverables 新增 origin 参数 (deliveries-10),
+// type 也可用 sessionId 反查 (deliveries-id-7 用于关联 chat session 跳回).
 export interface Deliverable {
   id: string;
   sessionId: string;
@@ -833,6 +993,9 @@ export interface DeliverableListResponse {
 
 export async function listDeliverables(params: {
   type?: string;
+  /** "ai_generated" | "user_uploaded" | undefined. 0.7.5 阶段 7 加, server 端
+   *  schema 已接受但默认不过滤; 客户端传 undefined = 不带这个参数. */
+  origin?: "ai_generated" | "user_uploaded";
   page?: number;
   pageSize?: number;
   sessionId?: string;
@@ -858,6 +1021,111 @@ export function deleteDeliverable(
   return request<{ id: string; deletedAt: string }>(
     `/yinian/deliverables/${id}`,
     { method: "DELETE" },
+  );
+}
+
+/**
+ * 批量删除 — 客户端 fan-out (跟 library 同样策略, server 无新 endpoint).
+ * 失败/部分失败聚合给 caller. 0.7.5 deliveries-9 加.
+ */
+export async function batchDeleteDeliverables(
+  ids: string[],
+): Promise<{ succeeded: string[]; failed: { id: string; error: string }[] }> {
+  const results = await Promise.allSettled(
+    ids.map((id) => deleteDeliverable(id).then(() => id)),
+  );
+  const succeeded: string[] = [];
+  const failed: { id: string; error: string }[] = [];
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") {
+      succeeded.push(r.value);
+    } else {
+      const reason = r.reason;
+      const error =
+        reason instanceof Error ? reason.message : String(reason ?? "未知错误");
+      failed.push({ id: ids[i], error });
+    }
+  });
+  return { succeeded, failed };
+}
+
+/**
+ * 0.7.5 deliveries-16 — retry 失败交付.
+ *
+ * server unified-api 当前没有 `/yinian/deliverables/:id/retry` 端点 (send-blocker);
+ * 调用会 404 抛错. 这里先留 client 包装 + 错误提示, 等 server 端补 endpoint 后
+ * 自然走通. 路径按 web/Android 推测约定先定下来.
+ *
+ * 预期 server contract (gagaOS 拍板时确认):
+ *   POST /api/v1/yinian/deliverables/:id/retry
+ *   resp: { ok, data: { id, status: 'pending'|'processing'|'ready'|'failed' } }
+ */
+export interface RetryDownloadResult {
+  id: string;
+  status?: string;
+  retryAt?: string;
+}
+
+export function retryDownloadDeliverable(
+  id: string,
+): Promise<RetryDownloadResult> {
+  return request<RetryDownloadResult>(
+    `/yinian/deliverables/${id}/retry`,
+    { method: "POST" },
+  );
+}
+
+/**
+ * 0.7.5 deliveries-id-9 — 收藏 (star / favorite).
+ *
+ * server unified-api 当前没有交付物的 star endpoint (send-blocker); 调用会 404.
+ * 路径按 library 风格对齐 (跟 library 也没有 star — 因为 server 没实现).
+ * gagaOS 拍板后, server 若引入 `yinian_deliverable_favorite` 表, 这里路径要
+ * 跟 server 对齐.
+ */
+export function starDeliverable(
+  id: string,
+): Promise<{ id: string; starred: boolean }> {
+  return request<{ id: string; starred: boolean }>(
+    `/yinian/deliverables/${id}/star`,
+    { method: "POST" },
+  );
+}
+
+export function unstarDeliverable(
+  id: string,
+): Promise<{ id: string; starred: boolean }> {
+  return request<{ id: string; starred: boolean }>(
+    `/yinian/deliverables/${id}/star`,
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * 0.7.5 deliveries-id-8 — 分享到对话 (新开一条 session 并把 deliverable 引用挂上).
+ *
+ * server unified-api 当前没有 `/yinian/deliverables/:id/share` 端点 (send-blocker);
+ * 调用会 404. 预期 contract (跟 web/Android 推测约定):
+ *   POST /api/v1/yinian/deliverables/:id/share
+ *   body: { sessionId?: string }   // 不传 = 新建一个 session
+ *   resp: { ok, data: { sessionId, messageId, shareToken } }
+ */
+export interface ShareDeliverableToChatResult {
+  sessionId: string;
+  messageId?: string;
+  shareToken?: string;
+}
+
+export function shareDeliverableToChat(
+  id: string,
+  input: { sessionId?: string } = {},
+): Promise<ShareDeliverableToChatResult> {
+  return request<ShareDeliverableToChatResult>(
+    `/yinian/deliverables/${id}/share`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
   );
 }
 
@@ -1048,4 +1316,56 @@ export function deleteAccount(): Promise<{
     deleted: Record<string, number>;
     files: { removed: number; failed: number; skipped: number };
   }>("/auth/account", { method: "DELETE" });
+}
+
+// =========================================================================
+// ChatDetail P1 (v0.7.5) — autoTitleSession + listSessionDeliverables + models
+//
+// autoTitleSession:
+//   server 端 POST /yinian/sessions/:id/auto-title (unified-api yinian.routes.js:464-470)
+//   调 LLM 把当前 session 头几条消息摘要成 30 字以内的标题, 已自定义过标题不覆盖.
+//   客户端策略: history load 完 + 800ms delay + 仅当标题还是默认 '新对话' 才发.
+//   返回 { id, title }.
+export interface AutoTitleResult {
+  id: string;
+  title: string;
+}
+
+export function autoTitleSession(id: string): Promise<AutoTitleResult> {
+  return request<AutoTitleResult>(`/yinian/sessions/${id}/auto-title`, {
+    method: "POST",
+  });
+}
+
+// listSessionDeliverables — chat-id-29 / chat-id-32
+//   server 端 GET /yinian/deliverables?sessionId=:id (unified-api deliverables.routes.js)
+//   拿当前 session 内所有交付物 (image / web / document), 给 DeliverableStrip 用.
+export function listSessionDeliverables(
+  sessionId: string,
+  pageSize = 20,
+): Promise<DeliverableListResponse> {
+  return listDeliverables({ sessionId, pageSize });
+}
+
+// listAvailableModels — chat-id-31
+//   server 端目前**没有** /yinian/models 端点 (verifier 2026-10-19 grep 全局仅发现
+//   yinian.chat.routes.js 默认 'gawen' / yinian.service.js:751 'gawen'). 客户端硬编码
+//   一份可见列表: gawen (default) + 几个工程上预留但 server 还没接的占位 (disabled),
+//   让 ModelChips 在 ChatDetail 顶部展示, 用户即便选了 disabled 也只是 UI 反馈. 不阻断 send.
+//   后续 server 接 /yinian/models 时换成 GET 请求即可, 接口签名同.
+export interface AvailableModel {
+  key: string;
+  label: string;
+  /** server 实际接受 */
+  enabled: boolean;
+  /** 描述 (tooltip / subtitle) */
+  description?: string;
+}
+
+export function listAvailableModels(): AvailableModel[] {
+  return [
+    { key: "gawen", label: "Gawen", enabled: true, description: "默认模型" },
+    { key: "gawen-fast", label: "Gawen Fast", enabled: true, description: "更快但稍短" },
+    { key: "gaclaw-pro", label: "Gaclaw Pro", enabled: false, description: "即将开放" },
+  ];
 }

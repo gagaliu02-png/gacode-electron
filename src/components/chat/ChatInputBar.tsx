@@ -16,10 +16,11 @@
  *     drop 时 enter/leave 都要清零, leave 时若 ref 还在 body 外面也会清零.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AttachmentPicker } from "./AttachmentPicker";
 import { uploadAttachment, deriveUploadMode } from "../../lib/upload";
 import { extractSingleImage } from "../../lib/clipboard";
+import { SlashMenu, type SlashCommand } from "./SlashMenu";
 
 export interface PendingAttachment {
   /** image mode -> url, document mode -> fileId; mutually exclusive */
@@ -35,7 +36,7 @@ export interface ChatInputBarProps {
   onStop: () => void;
   /**
    * Submit callback (Enter). Return false to keep the input intact (e.g. parent wants to retry on failure).
-   * The default behavior (return undefined / true) clears the input + chips.
+   * The default behavior (return undefined / true) extends the input + chips.
    */
   onSubmit: (text: string, attachments: PendingAttachment[]) => boolean | void;
   /** Attachment upload failed (parent usually toasts) */
@@ -48,10 +49,25 @@ export interface ChatInputBarProps {
    */
   canRerun?: boolean;
   onRerun?: () => void;
+  // ============== 0.7.5 增量 ==============
+  /** chat-id-22: 自定义左侧 slot (替换默认 image/document attachment 按钮).
+   *  parent (ChatDetail) 注入 PlusActionsSheet trigger + knowledge refs chips 等. */
+  leftSlot?: ReactNode;
+  /** chat-id-25: slash 命令菜单 — 接收 cmd 后 ChatInputBar 自动清除 '/' 前缀.
+   *  ChatDetail 自实现 image/file/knowledge 等的真实行为 (image/document 走 input,
+   *  knowledge 走 sheet 回调, save 调 api). 模板类 (translate/summary) ChatInputBar
+   *  自动插入中文模板到 textarea. 其余 (search/template/favorite/voice) 默认 toast 占位. */
+  onSlashCommand?: (cmd: SlashCommand) => void;
 }
 
 const MAX_BYTES = 50 * 1024 * 1024;
 const FILE_MIME_RE = /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif|pdf|docx?|xlsx?|txt)$/i;
+
+// 0.7.5 chat-id-25 — slash 命令模板文本 (insert 类). 跟 web ChatInput 同款.
+const SLASH_TEMPLATES: Record<string, string> = {
+  translate: "请把以下内容翻译成中文:\n",
+  summary: "请用 5 个要点总结以下内容:\n",
+};
 
 export function ChatInputBar({
   isStreaming,
@@ -60,6 +76,8 @@ export function ChatInputBar({
   onAttachmentError,
   canRerun = false,
   onRerun,
+  leftSlot,
+  onSlashCommand,
 }: ChatInputBarProps) {
   const [text, setText] = useState("");
   const [chips, setChips] = useState<PendingAttachment[]>([]);
@@ -68,6 +86,9 @@ export function ChatInputBar({
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   // drag enter/leave counter: 嵌套 child element 多次触发时确保 stable
   const dragCounterRef = useRef(0);
+  // 0.7.5 chat-id-25: slash menu — 自管 trigger + filter + 插入模板.
+  const slashTriggerRef = useRef<{ before: string; filter: string } | null>(null);
+  const [slashOpen, setSlashOpen] = useState(false);
 
   // auto-resize — line-height ~24px, max 5 rows
   useEffect(() => {
@@ -189,7 +210,55 @@ export function ChatInputBar({
       e.preventDefault();
       handleSend();
     }
+    // chat-id-25: SlashMenu 内部用 ArrowUp/Down/Enter, 这里不重复
   };
+
+  // chat-id-25: 检测 "/" 开头 → 开 slash 菜单; 检测 "/cmd " → 自动触发.
+  // 注意 setText 是 React state 同步, 但触发回调要按状态派生, 不能直接调.
+  // 这里用一个 effect 监测 text 变化.
+  useEffect(() => {
+    if (!onSlashCommand) return;
+    // 没 / 开头 → 关菜单
+    if (!text.startsWith("/")) {
+      if (slashOpen) setSlashOpen(false);
+      slashTriggerRef.current = null;
+      return;
+    }
+    // 抽 '/' 后到第一个空白前的部分
+    const rest = text.slice(1);
+    const spaceIdx = rest.search(/\s/);
+    if (spaceIdx === -1) {
+      // 还在输 cmd, 显示菜单
+      slashTriggerRef.current = { before: "", filter: rest };
+      if (!slashOpen) setSlashOpen(true);
+    } else {
+      // 已输完 cmd + 空格 — 自动触发 (用户连打 "/image " 一气呵成)
+      const cmdStr = rest.slice(0, spaceIdx).toLowerCase();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const known = ["image", "file", "search", "new", "clear", "template", "translate", "summary", "save", "favorite", "camera", "knowledge", "voice"];
+      if (known.includes(cmdStr)) {
+        // 清掉整段 "/cmd " 前缀
+        const remaining = text.slice(1 + spaceIdx + 1);
+        const cmd = cmdStr as SlashCommand;
+        if (cmd === "translate" || cmd === "summary") {
+          // insert 模板文本
+          const tpl = SLASH_TEMPLATES[cmd] ?? "";
+          setText(remaining + tpl);
+        } else if (cmd === "clear") {
+          setText(remaining);
+          setChips([]);
+        } else {
+          setText(remaining);
+          onSlashCommand(cmd);
+        }
+        if (slashOpen) setSlashOpen(false);
+        slashTriggerRef.current = null;
+      } else {
+        // 未识别 → 关菜单
+        if (slashOpen) setSlashOpen(false);
+      }
+    }
+  }, [text, onSlashCommand, slashOpen]);
 
   const removeChip = (idx: number) => {
     setChips((prev) => prev.filter((_, i) => i !== idx));
@@ -231,48 +300,97 @@ export function ChatInputBar({
 
         {/* input row */}
         <div className="flex items-end gap-2">
-          {/* attachment buttons */}
-          <div className="flex items-center gap-1 pb-1">
-            <AttachmentPicker
-              mode="image"
-              accept="image/*"
-              label="添加图片"
+          {/* attachment buttons — 0.7.5 chat-id-22: 父组件可注入 leftSlot 替换默认两个 picker.
+              例如 ChatDetail 传 <PlusActionsSheet trigger /> 让 5 类 action 都从 sheet 走. */}
+          {leftSlot ? (
+            <div className="flex items-center gap-1 pb-1 relative">{leftSlot}</div>
+          ) : (
+            <div className="flex items-center gap-1 pb-1">
+              <AttachmentPicker
+                mode="image"
+                accept="image/*"
+                label="添加图片"
+                disabled={isStreaming}
+                onProgress={setProgress}
+                onError={(msg) => {
+                  setProgress(null);
+                  onAttachmentError?.(msg);
+                }}
+                onUploaded={(r) => {
+                  if (r.url) {
+                    setChips((prev) =>
+                      prev.some((x) => x.url === r.url)
+                        ? prev
+                        : [...prev, { name: r.name, url: r.url }],
+                    );
+                  }
+                }}
+              />
+              <AttachmentPicker
+                mode="document"
+                accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/msword,.doc,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,.xls,text/plain,.txt"
+                label="添加文档"
+                disabled={isStreaming}
+                onProgress={setProgress}
+                onError={(msg) => {
+                  setProgress(null);
+                  onAttachmentError?.(msg);
+                }}
+                onUploaded={(r) => {
+                  if (r.fileId) {
+                    setChips((prev) =>
+                      prev.some((x) => x.fileId === r.fileId)
+                        ? prev
+                        : [...prev, { name: r.name, fileId: r.fileId }],
+                    );
+                  }
+                }}
+              />
+            </div>
+          )}
+
+          {/* textarea — 0.7.5 chat-id-25: 包一个相对容器, SlashMenu 绝对定位浮在上方. */}
+          <div className="flex-1 relative min-w-0">
+            <textarea
+              ref={taRef}
+              rows={1}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              placeholder={
+                isStreaming
+                  ? "正在流式生成… 完成后再发下一条"
+                  : "说点什么… (Enter 发送, Shift+Enter 换行 · 输入 / 触发命令菜单)"
+              }
               disabled={isStreaming}
-              onProgress={setProgress}
-              onError={(msg) => {
-                setProgress(null);
-                onAttachmentError?.(msg);
-              }}
-              onUploaded={(r) => {
-                if (r.url) {
-                  setChips((prev) =>
-                    prev.some((x) => x.url === r.url)
-                      ? prev
-                      : [...prev, { name: r.name, url: r.url }],
-                  );
-                }
-              }}
+              className="w-full resize-none bg-bg-sunken border border-border rounded-md px-3 py-2 text-sm leading-6 placeholder:text-fg-subtle focus:outline-none focus:border-brand disabled:opacity-70 max-h-32 overflow-y-auto"
             />
-            <AttachmentPicker
-              mode="document"
-              accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/msword,.doc,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,.xls,text/plain,.txt"
-              label="添加文档"
-              disabled={isStreaming}
-              onProgress={setProgress}
-              onError={(msg) => {
-                setProgress(null);
-                onAttachmentError?.(msg);
-              }}
-              onUploaded={(r) => {
-                if (r.fileId) {
-                  setChips((prev) =>
-                    prev.some((x) => x.fileId === r.fileId)
-                      ? prev
-                      : [...prev, { name: r.name, fileId: r.fileId }],
-                  );
-                }
-              }}
-            />
+            {slashOpen && onSlashCommand ? (
+              <SlashMenu
+                open={slashOpen}
+                filter={slashTriggerRef.current?.filter ?? ""}
+                onSelect={(cmd) => {
+                  if (cmd === "translate" || cmd === "summary") {
+                    const tpl = SLASH_TEMPLATES[cmd] ?? "";
+                    setText(text.replace(/^\/[a-zA-Z]*\s?/, "") + tpl);
+                  } else if (cmd === "clear") {
+                    setText(text.replace(/^\/[a-zA-Z]*\s?/, ""));
+                    setChips([]);
+                  } else {
+                    // 清掉 '/' + cmd + 可选空格
+                    setText(text.replace(/^\/[a-zA-Z]*\s?/, ""));
+                    onSlashCommand(cmd);
+                  }
+                  setSlashOpen(false);
+                  slashTriggerRef.current = null;
+                }}
+                onDismiss={() => {
+                  setSlashOpen(false);
+                  slashTriggerRef.current = null;
+                }}
+              />
+            ) : null}
           </div>
 
           {/* textarea */}

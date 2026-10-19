@@ -44,7 +44,12 @@ import {
   getHistory,
   renameChat,
   setSessionPin,
+  autoTitleSession,
+  listSessionDeliverables,
+  createLibraryItem,
+  createChat,
   type ChatMessage,
+  type LibraryItem,
 } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
 import { useChatStream } from "../lib/sse";
@@ -77,6 +82,20 @@ import {
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
+
+// 0.7.5 ChatDetail P1 增量 — 新组件
+import { ChatTopBanner } from "../components/chat/ChatTopBanner";
+import { DeliverableStrip } from "../components/chat/DeliverableStrip";
+import { ModelChips } from "../components/chat/ModelChips";
+import { PlusActionsSheet, type PlusActionKind } from "../components/chat/PlusActionsSheet";
+import { KnowledgeAttachSheet } from "../components/chat/KnowledgeAttachSheet";
+import type { CallTreeNode } from "../components/chat/CallTreeCard";
+import type { SlashCommand } from "../components/chat/SlashMenu";
+import {
+  HOME_FIRST_MESSAGE_KEY,
+  HOME_ATTACHMENTS_KEY,
+  type HomeAttachments,
+} from "./Home";
 
 // 标签 id — 临时 assistant message 用, server 真 messageId 回来后替换
 function streamingId(): string {
@@ -205,6 +224,26 @@ export function ChatDetail() {
   // 取最后一次成功发送的 user (text + attachments), 供重试 / 重新生成复用.
   const lastUserTextRef = useRef<string>("");
   const lastUserAttachmentsRef = useRef<PendingAttachment[]>([]);
+
+  // 0.7.5 增量 — model 选择 (chat-id-31) / 知识库挂载 (chat-id-30) /
+  //   流式起始时间戳 (chat-id-20) / call tree (chat-id-12) / phases 合并 (chat-id-35)
+  const [activeModel, setActiveModel] = useState<string>("gawen");
+  const [knowledgeAttachOpen, setKnowledgeAttachOpen] = useState(false);
+  const [pendingKnowledgeRefs, setPendingKnowledgeRefs] = useState<string[]>([]);
+  const [plusOpen, setPlusOpen] = useState(false);
+  // 0.7.5 chat-id-20/12: 流式起始时间戳 + call tree 节点 (走 React state 渲染)
+  const [streamingCallTree, setStreamingCallTree] = useState<CallTreeNode[]>([]);
+  const [streamingSinceState, setStreamingSinceState] = useState<number | null>(null);
+  // 这俩 ref 不进 useMemo, 仅 startStream 内部用
+  const streamingSinceRef = useRef<number | null>(null);
+  const callTreeRef = useRef<CallTreeNode[]>([]);
+  const phaseTimelineRef = useRef<Array<{
+    type: "thinking" | "tool";
+    tool?: string;
+    text?: string;
+    startedAt: number;
+    endedAt?: number;
+  }>>([]);
 
   // 阶段 8 chat-id-13 — approval_request 累积. 任一按钮触发 → 清整张 banner.
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
@@ -520,6 +559,20 @@ export function ChatDetail() {
     [chatId, queryClient],
   );
 
+  // 0.7.5 chat-id-25: `/new` slash 命令派发用 — 跟 Home createChat mutation 同款.
+  const createChatMutation = useMutation({
+    mutationFn: () => createChat(),
+    onSuccess: (chat) => {
+      navigate(`/chat/${chat.id}`);
+    },
+    onError: (err) => {
+      toast({
+        message: `创建对话失败: ${err instanceof Error ? err.message : String(err)}`,
+        variant: "danger",
+      });
+    },
+  });
+
   // 组件卸载 → abort 但不 userStopped (跟 web 一致, 让流自然跑完落库)
   useEffect(() => {
     return () => {
@@ -527,6 +580,87 @@ export function ChatDetail() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ────────────── home-13 firstMessage 自动 send ──────────────
+  // Home worker (f93e98e 0.7.2) 写入 sessionStorage 两个 key 后 navigate('/chat/:id').
+  // ChatDetail mount 时消费: 拿到 chatId 后读 storage → 拼 attachments + 文本
+  // → 调 handleSubmit 启动流式 → 清 storage (避免重入). 5 行核心 + 防御.
+  const autoSendFiredRef = useRef(false);
+  useEffect(() => {
+    if (!chatId) return;
+    if (autoSendFiredRef.current) return;
+    if (typeof window === "undefined" || !window.sessionStorage) return;
+    let firstMessage: string | null = null;
+    let attachments: HomeAttachments | null = null;
+    try {
+      firstMessage = window.sessionStorage.getItem(HOME_FIRST_MESSAGE_KEY);
+      const rawAtt = window.sessionStorage.getItem(HOME_ATTACHMENTS_KEY);
+      if (rawAtt) attachments = JSON.parse(rawAtt) as HomeAttachments;
+    } catch {
+      /* storage 不可用 — 静默, 不阻断 */
+    }
+    if (!firstMessage || firstMessage.trim().length === 0) return;
+    autoSendFiredRef.current = true;
+    try {
+      window.sessionStorage.removeItem(HOME_FIRST_MESSAGE_KEY);
+      window.sessionStorage.removeItem(HOME_ATTACHMENTS_KEY);
+    } catch {
+      /* ignore */
+    }
+    queueMicrotask(() => {
+      const pending: PendingAttachment[] = [];
+      if (attachments) {
+        for (const url of attachments.imageUrls ?? []) {
+          pending.push({ url, name: "图片" });
+        }
+        for (const fileId of attachments.attachedFileIds ?? []) {
+          const found = attachments.attachedFileNames?.find((n) => n.fileId === fileId);
+          pending.push({ fileId, name: found?.name ?? "附件" });
+        }
+      }
+      const ok = handleSubmit(firstMessage!, pending);
+      if (ok === false) {
+        autoSendFiredRef.current = false;
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
+
+  // ────────────── chat-id-33 autoTitleSession (LLM 800ms delay) ──────────────
+  // 跟 web page.tsx:341-396 同款: history load 完 + 第一条 user 消息 ≥ 5 字 + 当前
+  // 标题仍是 '新对话' 时, 800ms 后发一次 autoTitle. server 拿到当前头几条消息自动命名,
+  // 不会覆盖已自定义的标题 (server yinian.service.js 内部判).
+  const autoTitleFiredRef = useRef(false);
+  useEffect(() => {
+    if (!chatId) return;
+    if (autoTitleFiredRef.current) return;
+    if (!historyQuery.data || historyQuery.isLoading) return;
+    const msgs = historyQuery.data.messages;
+    if (msgs.length < 2) return;
+    const firstUser = msgs.find((m) => m.role === "user");
+    if (!firstUser || firstUser.content.trim().length < 5) return;
+    if (currentChat && currentChat.title !== "新对话") return;
+    autoTitleFiredRef.current = true;
+    const t = window.setTimeout(() => {
+      autoTitleSession(chatId)
+        .then(() => {
+          queryClient.invalidateQueries({ queryKey: ["chats"] });
+        })
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn("[autoTitle] failed:", err);
+        });
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, [chatId, historyQuery.data, historyQuery.isLoading, currentChat, queryClient]);
+
+  // ────────────── chat-id-29 Session 交付物 (供 DeliverableStrip 用) ──────────────
+  const deliverablesQuery = useQuery({
+    queryKey: ["deliverables", chatId],
+    queryFn: () => listSessionDeliverables(chatId!, 20),
+    enabled: !!chatId,
+    staleTime: 30_000,
+  });
 
   // ────────────── 渲染 ──────────────
 
@@ -567,13 +701,154 @@ export function ChatDetail() {
     },
   ];
 
+  // ────────────── PlusActionsSheet 派发 ──────────────
+// chat-id-22: 把 5 类 action 路由到具体行为.
+//   - emoji: 占位
+//   - knowledge: 打开 KnowledgeAttachSheet (chat-id-30 复用)
+//   - image / document / camera: 提示用户走 ChatInputBar 自身的 image/document 按钮
+//     (Electron 端没真相机能力, camera → image fallback 跟 web 同款. 但本轮 ChatInputBar
+//     仍保留 2 个 inline picker 按钮, 所以 sheet 这边的 image/document/camera 都用 toast
+//     指引用户到 input bar 上的按钮, 避免双重 picker 路径.)
+const handlePlusAction = useCallback(
+  (kind: PlusActionKind) => {
+    switch (kind) {
+      case "emoji":
+        toast({
+          message: "表情输入即将开放, 当前可在 textarea 手输",
+          variant: "default",
+        });
+        break;
+      case "knowledge":
+        setKnowledgeAttachOpen(true);
+        break;
+      case "image":
+      case "document":
+      case "camera":
+        toast({
+          message: "请用输入栏左侧的「图片 / 文档」按钮添加附件",
+          variant: "default",
+        });
+        break;
+    }
+  },
+  [toast],
+);
+
+// 知识库挂载 — chat-id-30
+const handleKnowledgePick = useCallback(
+  (item: LibraryItem) => {
+    setPendingKnowledgeRefs((prev) =>
+      prev.includes(item.id) ? prev : [...prev, item.id],
+    );
+    toast({ message: `已挂载: ${item.title || "未命名"}`, variant: "default" });
+  },
+  [toast],
+);
+
+// ────────────── Slash 命令派发 (chat-id-25) ──────────────
+  // 13 条命令的客户端路由:
+  //   - translate / summary / search / template / favorite / voice → 已由 ChatInputBar
+  //     自处理 (insert 模板 / 静默) 或保留默认 (slashmenu 自带 supported=false 占位)
+  //   - clear / image / file / camera → 已在 ChatInputBar 处理 (clear 清 chips, image/file
+  //     走其内 AttachmentPicker)
+  //   - knowledge → 打开 KnowledgeAttachSheet (同 PlusAction.knowledge)
+  //   - new → 触发 createChat + navigate 到新 chat
+  //   - save → 把最近一条 assistant 消息保存到知识库 (chat-id-15 fallback 路径)
+  const handleSlashCommand = useCallback(
+    (cmd: SlashCommand) => {
+      switch (cmd) {
+        case "knowledge":
+          setKnowledgeAttachOpen(true);
+          break;
+        case "new":
+          // 走 createChat mutation (跟 ChatList / Home 同款)
+          createChatMutation.mutate();
+          break;
+        case "save": {
+          // 找最近一条 assistant 消息, 调 createLibraryItem (跟 MessageMenu.handleSaveToKnowledge
+          // 同款). 失败 toast, 成功 toast.
+          const lastAssistant = [...messages]
+            .reverse()
+            .find((m) => m.role === "assistant" && m.content && !m.recalled);
+          if (!lastAssistant) {
+            toast({ message: "暂无可保存的助手消息", variant: "warning" });
+            return;
+          }
+          const titleBase =
+            lastAssistant.content.trim().slice(0, 30) || "未命名消息";
+          createLibraryItem({
+            type: "doc",
+            title: titleBase,
+            tags: ["from-chat"],
+          })
+            .then(() => {
+              toast({ message: "已保存到知识库", variant: "success" });
+            })
+            .catch((err) => {
+              toast({
+                message: `保存失败: ${err instanceof Error ? err.message : String(err)}`,
+                variant: "danger",
+              });
+            });
+          break;
+        }
+        case "image":
+        case "file":
+        case "camera":
+        case "search":
+        case "template":
+        case "favorite":
+        case "voice":
+        case "clear":
+        case "translate":
+        case "summary":
+          // 已在 ChatInputBar / SlashMenu 内部处理, 这里兜底 no-op
+          break;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messages, toast],
+  );
+
+  // ChatDetail 的 PlusActionsSheet trigger — 注入到 ChatInputBar 的 leftSlot.
+  // 0.7.5 chat-id-22: 把现有 2 类 picker 入口包到 sheet 里, 加 3 类新项.
+  const chatDetailLeftSlot = (
+    <>
+      <button
+        type="button"
+        aria-label="添加附件"
+        title="添加附件"
+        onClick={() => setPlusOpen(true)}
+        disabled={isStreaming}
+        data-testid="chat-plus-trigger"
+        className="h-9 w-9 inline-flex items-center justify-center rounded-md text-fg-muted hover:bg-bg-elevated hover:text-fg disabled:opacity-50 disabled:pointer-events-none transition-colors duration-150"
+      >
+        <PlusGlyph />
+      </button>
+      {pendingKnowledgeRefs.length > 0 ? (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-bg-elevated text-[11px] text-fg-muted"
+          title={`已挂载 ${pendingKnowledgeRefs.length} 条知识库`}
+        >
+          📚 ×{pendingKnowledgeRefs.length}
+        </span>
+      ) : null}
+    </>
+  );
+
   return (
     <div className="h-full flex flex-col bg-bg-base">
-      {/* 头部 — 阶段 8 chat-id-1: 重命名 + 完整 ⋮ 菜单 */}
-      <div className="shrink-0 h-12 bg-bg-elevated px-4 flex items-center justify-between">
+      {/* 头部 — 阶段 8 chat-id-1: 重命名 + 完整 ⋮ 菜单 + 0.7.5 chat-id-31 ModelChips */}
+      <div className="shrink-0 h-12 bg-bg-elevated px-4 flex items-center justify-between gap-2">
         <div className="flex-1 min-w-0 truncate font-medium text-sm" title={title}>
           {title}
         </div>
+        {/* chat-id-31: 顶部 model 切换 chips */}
+        <ModelChips
+          active={activeModel}
+          onChange={setActiveModel}
+          disabled={isStreaming}
+        />
         <DropdownMenu
           trigger={
             <button
@@ -589,6 +864,9 @@ export function ChatDetail() {
           align="right"
         />
       </div>
+
+      {/* 0.7.5 chat-id-28: 顶部 banner — 断网 / 网关版本不一致 */}
+      <ChatTopBanner />
 
       {/* 错误 banner */}
       {streamError ? (
@@ -629,16 +907,35 @@ export function ChatDetail() {
         }
       />
 
-      {/* 输入栏 — chat-id-19 加 canRerun + onRerun */}
+      {/* 0.7.5 chat-id-29: Session 交付物缩略条 (卡片跳交付详情 — chat-id-32) */}
+      <DeliverableStrip items={deliverablesQuery.data?.items ?? []} />
+
+      {/* 输入栏 — chat-id-19 加 canRerun + onRerun. 0.7.5 加 leftSlot (PlusActionsSheet trigger + knowledge chips) */}
       <ChatInputBar
         isStreaming={isStreaming}
         canRerun={canRerun}
         onRerun={handleRerun}
         onStop={handleStop}
         onSubmit={handleSubmit}
+        leftSlot={chatDetailLeftSlot}
+        onSlashCommand={handleSlashCommand}
         onAttachmentError={(msg) =>
           toast({ message: `上传失败: ${msg}`, variant: "danger" })
         }
+      />
+
+      {/* 0.7.5 chat-id-22 PlusActionsSheet — 5 类附件入口 */}
+      <PlusActionsSheet
+        open={plusOpen}
+        onClose={() => setPlusOpen(false)}
+        onAction={handlePlusAction}
+      />
+
+      {/* 0.7.5 chat-id-30 KnowledgeAttachSheet — 复用 Home LibraryPicker */}
+      <KnowledgeAttachSheet
+        open={knowledgeAttachOpen}
+        onClose={() => setKnowledgeAttachOpen(false)}
+        onPick={handleKnowledgePick}
       />
 
       {/* 首帧等待占位: 在 MessageList 内部已经能做 typing dots, 这里留作 future use */}
@@ -723,6 +1020,26 @@ function MoreIcon() {
       <circle cx="12" cy="5" r="1.4" />
       <circle cx="12" cy="12" r="1.4" />
       <circle cx="12" cy="19" r="1.4" />
+    </svg>
+  );
+}
+
+// 0.7.5 chat-id-22: PlusActionsSheet trigger 用
+function PlusGlyph() {
+  return (
+    <svg
+      aria-hidden="true"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
     </svg>
   );
 }
