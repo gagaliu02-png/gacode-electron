@@ -5,6 +5,8 @@
  *   - 居中卡 + brand logo + 标题 "Gacode · 登录"
  *   - 用户名 + 密码输入 + 登录按钮 (brand 橙)
  *   - 没账号? 去注册链接
+ *   - 📱 用 App 扫码登录 (阶段 1 加)
+ *   - 忘记密码? 外链到 https://www.gaga.sale/forgot-password (阶段 7+) — gagaOS 密保 + gawen 流, 走系统浏览器
  *
  * 真实接通 /auth/login (unified-api):
  *   - 成功 → AuthProvider.login 设 accessToken + user + navigate("/")
@@ -114,6 +116,18 @@ export function Login() {
             >
               📱 用 App 扫码登录
             </Link>
+          </p>
+
+          {/* 2026-10-19: 忘记密码走 unified-api 忘记密码页 (gagaOS 密保 + gawen 流), 系统浏览器打开 */}
+          <p className="text-sm text-fg-muted text-center pt-1">
+            <a
+              href="https://www.gaga.sale/forgot-password"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-brand hover:underline font-medium"
+            >
+              忘记密码?
+            </a>
           </p>
         </form>
       </div>
