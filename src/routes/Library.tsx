@@ -1,32 +1,44 @@
 /**
- * routes/Library.tsx — 阶段 3 知识库列表
+ * routes/Library.tsx — 阶段 0.7.2 知识库列表 (P0 6 项补齐)
  *
- * 数据: useQuery(["library", { type, page }], listLibrary)
- * 端点: GET /yinian/library?type=&page=&pageSize= — server 端返回
- *   { items: LibraryItem[], total, hasMore }. type enum = ['image','file'] (DB
- *   modality), 跟 web 端 LibraryItem.type 枚举 ('image'|'doc'|'link') 不同.
- *   这里把 web 的 'doc' / 'link' 都映射回 'file' 查 server, 客户端再展示 web 侧
- *   的图标 + 文案. 不改 server schema, 单边 hack.
+ * 增量 (gagaOS feedback 2026-10-19 §3.4 library-9..14):
+ *   - library-9 (P0): 手动采集 4 路 Sheet (text / link / image / file) — 顶部 "+ 新建" 按钮
+ *   - library-10 (P0): AI 总结入库 — see send-blocker note below
+ *   - library-11 (P0): 编辑条目 (title + tags) — EditSheet + 卡片 ⋮ 菜单 + LibraryDetail "编辑" 按钮
+ *   - library-12 (P1): 批量删除 — 长按 500ms 进多选 + bottom toolbar (取消/全选/删除)
+ *   - library-13 (P1): tag 维度过滤 — TagFilter chip 行 (GET /yinian/library/tags)
+ *   - library-14 (P2): 排序 — SortMenu 下拉 (newest/oldest/title), 客户端排
  *
- * 功能:
- *   - 顶部搜索 + 类型 chip (全部 / 图片 / 文档 / 链接) + 刷新
- *   - 列表 grid (1 / 2 列响应式), 卡片显示 title / 类型图标 / updatedAt / id
- *   - 卡片点击 → nav('/library/:id') (LibraryDetail 接管)
- *   - 空态: "还没有知识库" + 提示 (阶段 3 不做采集入口, 见 brief)
- *   - 分页: 加载更多按钮 (hasMore 翻页)
+ * send-blocker (library-10):
+ *   server unified-api 没有 /yinian/library/save-message-to-knowledge 端点 (或任何
+ *   类似 endpoint), ChatDetail 又是 P0-A worker (chat-id-15) 范围. 本次只做 Library
+ *   的 UI 端, AI 总结到 KB 入口不由本页触发 — 等 server 端补 endpoint 或 ChatDetail
+ *   实现改造触发点.
+ *
+ * 单文件改动; 多选状态 / 编辑 / 排序 / tag 过滤状态全在 Library() 顶层,
+ * 卡片改用 LibraryCard (src/components/library/LibraryCard.tsx).
  */
 
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  batchDeleteLibraryItems,
+  deleteLibraryItem,
   listLibrary,
   type LibraryItem,
 } from "../lib/api";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
-import { LibraryDropZone } from "../components/library/LibraryDropZone";
+import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { useToast } from "../components/ui/Toast";
+import { LibraryDropZone } from "../components/library/LibraryDropZone";
+import { LibraryCard } from "../components/library/LibraryCard";
+import { CollectSheet } from "../components/library/CollectSheet";
+import { EditSheet } from "../components/library/EditSheet";
+import { MultiSelectToolbar } from "../components/library/MultiSelectToolbar";
+import { TagFilter } from "../components/library/TagFilter";
+import { SortMenu, type LibrarySort } from "../components/library/SortMenu";
 
 // =========================================================================
 // 类型 tab — 用 web LibraryItem.type (image | doc | link | text) 做客户端过滤,
@@ -46,9 +58,27 @@ const PAGE_SIZE = 24;
 export function Library() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
+
   const [type, setType] = useState<TypeFilter>("all");
   const [keyword, setKeyword] = useState("");
+  const [tagFilter, setTagFilter] = useState<string | undefined>(undefined);
+  const [sort, setSort] = useState<LibrarySort>("newest");
   const [page, setPage] = useState(1);
+
+  // 采集 Sheet
+  const [collectOpen, setCollectOpen] = useState(false);
+
+  // 编辑 Sheet
+  const [editingItem, setEditingItem] = useState<LibraryItem | null>(null);
+
+  // 多选模式
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const isInMultiSelect = selectedIds.size > 0;
+
+  // 单条删除 (直接从卡片菜单触发)
+  const [pendingSingleDelete, setPendingSingleDelete] = useState<LibraryItem | null>(null);
 
   // 把 web 的 'doc' / 'link' 映射回 server 的 modality 'file' — server 端
   // /yinian/library 只接受 ['text','image','audio','video','file']. web 端
@@ -59,11 +89,15 @@ export function Library() {
     return "file";
   }, [type]);
 
+  // server tag 参数 — listLibrary 接受 `tag` (单 tag), 与本地 tagFilter 同步
+  const serverTag = useMemo(() => tagFilter, [tagFilter]);
+
   const { data, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ["library", { type, page }],
+    queryKey: ["library", { type, tag: serverTag, keyword, page }],
     queryFn: () =>
       listLibrary({
         type: serverType,
+        tag: serverTag,
         page,
         pageSize: PAGE_SIZE,
         keyword: keyword.trim() || undefined,
@@ -71,17 +105,116 @@ export function Library() {
     placeholderData: (prev) => prev,
   });
 
-  const allItems: LibraryItem[] = useMemo(() => {
+  // 客户端二次过滤 (server modality='file' 包了 doc+link, 这里拆开) + 客户端排序
+  const filteredItems: LibraryItem[] = useMemo(() => {
     const raw = data?.items ?? [];
-    if (type === "all") return raw;
-    return raw.filter((it) => it.type === type);
-  }, [data?.items, type]);
+    const t = type === "all"
+      ? raw
+      : raw.filter((it) => it.type === type);
+    const sorted = [...t];
+    sorted.sort((a, b) => {
+      if (sort === "newest") return Date.parse(b.createdAt) - Date.parse(a.createdAt);
+      if (sort === "oldest") return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+      // title
+      return (a.title || "").localeCompare(b.title || "", "zh-Hans-CN");
+    });
+    return sorted;
+  }, [data?.items, type, sort]);
 
   const hasMore = data?.hasMore ?? false;
 
   const handleRefresh = () => {
     setPage(1);
     refetch();
+  };
+
+  // ────── 切 type/tag/keyword/sort → 重置分页 + 退出多选 ──────
+  const resetFilters = () => {
+    setPage(1);
+    setSelectedIds(new Set());
+  };
+
+  // ────── 多选 toggle ──────
+  const toggleMultiSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const enterMultiSelect = (item: LibraryItem) => {
+    setSelectedIds(new Set([item.id]));
+  };
+
+  const allSelected =
+    filteredItems.length > 0 && selectedIds.size === filteredItems.length;
+
+  const handleToggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredItems.map((it) => String(it.id))));
+    }
+  };
+
+  const cancelMultiSelect = () => setSelectedIds(new Set());
+
+  // ────── 单条删除 ──────
+  const singleDeleteMutation = useMutation({
+    mutationFn: (id: string) => deleteLibraryItem(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["library"] });
+      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
+      toast({ message: "已删除", variant: "success" });
+      setPendingSingleDelete(null);
+    },
+    onError: (err) => {
+      toast({
+        message: `删除失败: ${err instanceof Error ? err.message : String(err)}`,
+        variant: "danger",
+      });
+    },
+  });
+
+  // ────── 批量删除 — 客户端 fan-out ──────
+  const batchDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) => batchDeleteLibraryItems(ids),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["library"] });
+      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
+      if (res.failed.length === 0) {
+        toast({
+          message: `已删除 ${res.succeeded.length} 条`,
+          variant: "success",
+        });
+      } else if (res.succeeded.length === 0) {
+        toast({
+          message: `全部删除失败`,
+          variant: "danger",
+        });
+      } else {
+        toast({
+          message: `成功 ${res.succeeded.length} / 失败 ${res.failed.length}`,
+          variant: "warning",
+        });
+      }
+      cancelMultiSelect();
+      setBatchDeleteOpen(false);
+    },
+    onError: (err) => {
+      toast({
+        message: `删除失败: ${err instanceof Error ? err.message : String(err)}`,
+        variant: "danger",
+      });
+      setBatchDeleteOpen(false);
+    },
+  });
+
+  const handleBatchDelete = () => {
+    if (selectedIds.size === 0) return;
+    batchDeleteMutation.mutate(Array.from(selectedIds));
   };
 
   return (
@@ -92,6 +225,7 @@ export function Library() {
             message: `已入库: ${r.file.name}`,
             variant: "success",
           });
+          queryClient.invalidateQueries({ queryKey: ["library-tags"] });
         } else {
           toast({
             message: `入库失败: ${r.msg ?? "未知"}`,
@@ -103,169 +237,192 @@ export function Library() {
       <div className="min-h-full flex flex-col">
         {/* 顶部操作栏 */}
         <div className="sticky top-0 z-10 bg-bg-base">
-        <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full space-y-2 py-2">
-          {/* Row 1: 类型 chip (左) + 刷新按钮 (右) */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex-1 min-w-0 overflow-x-auto">
-              <div className="inline-flex p-1 rounded-md bg-bg-elevated gap-1">
-                {TYPE_CHIPS.map((t) => {
-                  const active = type === t.key;
-                  return (
-                    <button
-                      key={t.key}
-                      type="button"
-                      onClick={() => {
-                        setType(t.key);
-                        setPage(1);
-                      }}
-                      className={[
-                        "px-3 py-1 text-sm rounded transition-colors duration-150",
-                        active
-                          ? "bg-brand text-brand-on shadow-sm"
-                          : "text-fg-muted hover:text-fg",
-                      ].join(" ")}
-                    >
-                      {t.label}
-                    </button>
-                  );
-                })}
+          <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full space-y-2 py-2">
+            {/* Row 1: 类型 chip (左) + [+ 新建] (中) + 排序 + 刷新 (右) */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex-1 min-w-0 overflow-x-auto">
+                <div className="inline-flex p-1 rounded-md bg-bg-elevated gap-1">
+                  {TYPE_CHIPS.map((t) => {
+                    const active = type === t.key;
+                    return (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => {
+                          setType(t.key);
+                          resetFilters();
+                        }}
+                        className={[
+                          "px-3 py-1 text-sm rounded transition-colors duration-150",
+                          active
+                            ? "bg-brand text-brand-on shadow-sm"
+                            : "text-fg-muted hover:text-fg",
+                        ].join(" ")}
+                      >
+                        {t.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => setCollectOpen(true)}
+                  aria-label="新建条目"
+                >
+                  <PlusIcon />
+                  <span className="hidden sm:inline">新建</span>
+                </Button>
+                <SortMenu value={sort} onChange={setSort} />
+                <button
+                  type="button"
+                  onClick={handleRefresh}
+                  aria-label="刷新"
+                  disabled={isFetching}
+                  className="shrink-0 w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated transition-colors duration-150 inline-flex items-center justify-center disabled:opacity-50"
+                >
+                  <RefreshIcon className={isFetching ? "animate-spin" : ""} />
+                </button>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={handleRefresh}
-              aria-label="刷新"
-              disabled={isFetching}
-              className="shrink-0 w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated transition-colors duration-150 inline-flex items-center justify-center disabled:opacity-50"
-            >
-              <RefreshIcon className={isFetching ? "animate-spin" : ""} />
-            </button>
-          </div>
 
-          {/* Row 2: 搜索框 */}
-          <div className="relative">
-            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted pointer-events-none" />
-            <Input
-              type="search"
-              value={keyword}
-              onChange={(e) => {
-                setKeyword(e.target.value);
-                setPage(1);
+            {/* Row 2: 搜索框 */}
+            <div className="relative">
+              <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted pointer-events-none" />
+              <Input
+                type="search"
+                value={keyword}
+                onChange={(e) => {
+                  setKeyword(e.target.value);
+                  resetFilters();
+                }}
+                placeholder="搜索标题..."
+                className="pl-9 py-2 text-sm"
+              />
+            </div>
+
+            {/* Row 3: Tag 维度过滤 */}
+            <TagFilter
+              selected={tagFilter}
+              onSelect={(t) => {
+                setTagFilter(t);
+                resetFilters();
               }}
-              placeholder="搜索标题..."
-              className="pl-9 py-2 text-sm"
             />
           </div>
         </div>
+
+        {/* 列表区 */}
+        <div className="flex-1 px-4 lg:px-8 max-w-5xl mx-auto w-full py-4">
+          {isLoading ? (
+            <SkeletonGrid />
+          ) : filteredItems.length === 0 ? (
+            <EmptyState onCreateClick={() => setCollectOpen(true)} />
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {filteredItems.map((it) => (
+                  <LibraryCard
+                    key={it.id}
+                    item={it}
+                    isInMultiSelect={isInMultiSelect}
+                    isSelected={selectedIds.has(it.id)}
+                    onOpen={() => navigate(`/library/${it.id}`)}
+                    onToggleSelect={() => toggleMultiSelect(it.id)}
+                    onEnterMultiSelect={() => enterMultiSelect(it)}
+                    onEdit={() => setEditingItem(it)}
+                    onDelete={() => setPendingSingleDelete(it)}
+                  />
+                ))}
+              </div>
+              {hasMore ? (
+                <div className="flex justify-center mt-4">
+                  <Button
+                    variant="ghost"
+                    size="md"
+                    loading={isFetching}
+                    onClick={() => setPage((p) => p + 1)}
+                  >
+                    加载更多
+                  </Button>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
       </div>
 
-      {/* 列表区 */}
-      <div className="flex-1 px-4 lg:px-8 max-w-5xl mx-auto w-full py-4">
-        {isLoading ? (
-          <SkeletonGrid />
-        ) : allItems.length === 0 ? (
-          <EmptyState />
-        ) : (
-          <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {allItems.map((it) => (
-                <LibraryCard
-                  key={it.id}
-                  item={it}
-                  onClick={() => navigate(`/library/${it.id}`)}
-                />
-              ))}
-            </div>
-            {hasMore ? (
-              <div className="flex justify-center mt-4">
-                <Button
-                  variant="ghost"
-                  size="md"
-                  loading={isFetching}
-                  onClick={() => setPage((p) => p + 1)}
-                >
-                  加载更多
-                </Button>
-              </div>
-            ) : null}
-          </>
-        )}
-      </div>
-      </div>
+      {/* 多选模式 bottom toolbar — sticky 在底部; 列表区有 flex-1 让 toolbar 永远贴底 */}
+      {isInMultiSelect ? (
+        <MultiSelectToolbar
+          selectedCount={selectedIds.size}
+          totalVisible={filteredItems.length}
+          onCancel={cancelMultiSelect}
+          onToggleSelectAll={handleToggleSelectAll}
+          onConfirmDelete={handleBatchDelete}
+          confirmOpen={batchDeleteOpen}
+          onConfirmOpenChange={setBatchDeleteOpen}
+          deletePending={batchDeleteMutation.isPending}
+          deleteConfirmMessage="选中条目将从知识库移除, 此操作不可撤销。"
+        />
+      ) : null}
+
+      {/* 单条删除二次确认 */}
+      {pendingSingleDelete ? (
+        <ConfirmDialog
+          title="删除这条知识?"
+          message={`「${pendingSingleDelete.title || "未命名"}」 将从知识库移除, 此操作不可撤销。`}
+          confirmLabel="确认删除"
+          confirmVariant="danger"
+          loading={singleDeleteMutation.isPending}
+          onCancel={() => setPendingSingleDelete(null)}
+          onConfirm={() =>
+            singleDeleteMutation.mutate(pendingSingleDelete.id)
+          }
+        />
+      ) : null}
+
+      {/* 编辑 Sheet */}
+      <EditSheet
+        open={editingItem !== null}
+        item={editingItem}
+        onClose={() => setEditingItem(null)}
+      />
+
+      {/* 采集入口 Sheet */}
+      <CollectSheet
+        open={collectOpen}
+        onClose={() => setCollectOpen(false)}
+      />
     </LibraryDropZone>
   );
 }
 
 // ────────────────────────────────────────────────────────────
-// LibraryCard — 知识库单条卡片
+// EmptyState — 无数据 + 「+ 新建」 CTA (gagaOS feedback #4)
 // ────────────────────────────────────────────────────────────
 
-function LibraryCard({
-  item,
-  onClick,
-}: {
-  item: LibraryItem;
-  onClick: () => void;
-}) {
-  const Icon =
-    item.type === "image" ? ImageIcon :
-    item.type === "doc" ? FileTextIcon :
-    item.type === "link" ? LinkIcon :
-    TextIcon;
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="text-left rounded-md bg-bg-elevated p-4 hover:bg-bg-sunken transition-colors duration-150"
-    >
-      <div className="flex items-start gap-3">
-        <div className="shrink-0 w-9 h-9 rounded bg-bg-sunken flex items-center justify-center text-fg-muted">
-          <Icon />
-        </div>
-        <div className="flex-1 min-w-0 space-y-1">
-          <div className="flex items-center gap-2">
-            <span className="text-xs px-1.5 py-0.5 rounded bg-bg-sunken text-fg-muted">
-              {TYPE_LABEL[item.type] || item.type}
-            </span>
-            <span className="text-xs text-fg-subtle font-mono truncate">
-              #{item.id}
-            </span>
-          </div>
-          <h3 className="text-sm font-medium text-fg line-clamp-2 break-all">
-            {item.title || "(无标题)"}
-          </h3>
-          <p className="text-xs text-fg-subtle">
-            {formatRelative(item.createdAt)}
-          </p>
-        </div>
-      </div>
-    </button>
-  );
-}
-
-const TYPE_LABEL: Record<string, string> = {
-  image: "图片",
-  doc: "文档",
-  link: "链接",
-  text: "文本",
-};
-
-// ────────────────────────────────────────────────────────────
-// EmptyState — 无数据
-// ────────────────────────────────────────────────────────────
-
-function EmptyState() {
+function EmptyState({ onCreateClick }: { onCreateClick: () => void }) {
   return (
     <div className="h-full flex items-center justify-center">
-      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm">
+      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm w-full">
         <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-elevated flex items-center justify-center text-fg-muted">
           <LibraryIcon />
         </div>
         <p className="text-base font-medium mb-1">还没有知识库</p>
-        <p className="text-sm text-fg-muted">
-          在对话中采集内容,会自动入库
+        <p className="text-sm text-fg-muted mb-4">
+          拖入文件入库,或点击下方按钮手动添加
         </p>
+        <Button
+          variant="default"
+          size="md"
+          onClick={onCreateClick}
+        >
+          <PlusIcon />
+          新建条目
+        </Button>
       </div>
     </div>
   );
@@ -294,71 +451,8 @@ function SkeletonGrid() {
 }
 
 // ────────────────────────────────────────────────────────────
-// 时间格式化 — 简单相对时间 (避免引 date-fns)
-// ────────────────────────────────────────────────────────────
-
-function formatRelative(iso: string): string {
-  if (!iso) return "-";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const diff = Date.now() - t;
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return "刚刚";
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} 分钟前`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} 小时前`;
-  const day = Math.floor(hr / 24);
-  if (day < 30) return `${day} 天前`;
-  const month = Math.floor(day / 30);
-  if (month < 12) return `${month} 个月前`;
-  return `${Math.floor(month / 12)} 年前`;
-}
-
-// ────────────────────────────────────────────────────────────
 // Icons
 // ────────────────────────────────────────────────────────────
-
-function ImageIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <circle cx="9" cy="9" r="2" />
-      <path d="m21 15-5-5L5 21" />
-    </svg>
-  );
-}
-
-function FileTextIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="16" y1="13" x2="8" y2="13" />
-      <line x1="16" y1="17" x2="8" y2="17" />
-      <polyline points="10 9 9 9 8 9" />
-    </svg>
-  );
-}
-
-function LinkIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-    </svg>
-  );
-}
-
-function TextIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="4 7 4 4 20 4 20 7" />
-      <line x1="9" y1="20" x2="15" y2="20" />
-      <line x1="12" y1="4" x2="12" y2="20" />
-    </svg>
-  );
-}
 
 function LibraryIcon() {
   return (
@@ -389,6 +483,15 @@ function SearchIcon({ className = "" }: { className?: string }) {
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <circle cx="11" cy="11" r="8" />
       <path d="m21 21-4.3-4.3" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
     </svg>
   );
 }

@@ -11,12 +11,14 @@
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.1
+buildVersion: 0.7.4
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
-  output: release
+  # 0.7.4 (Library P0) worker: 输出到独立目录 release-library-p0-v1/, 跟 release/
+  # 隔离 (后者被前 worker 的 win-unpacked 锁定, 直接覆盖会触发 EBUSY).
+  output: release-library-p0-v1
 
 files:
   - dist/**/*

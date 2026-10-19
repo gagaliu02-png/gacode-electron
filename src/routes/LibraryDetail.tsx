@@ -1,5 +1,5 @@
 /**
- * routes/LibraryDetail.tsx — 阶段 3 知识库详情
+ * routes/LibraryDetail.tsx — 知识库详情 (gacode-electron 0.7.2)
  *
  * 数据: useQuery(["library-item", id], () => getLibraryItem(id, true))
  * 端点: GET /yinian/library/:id?withContent=true — server 返回 LibraryItem,
@@ -12,9 +12,10 @@
  *       - text/content: <pre> 滚动展示
  *       - image (有 url): <img> 显示
  *       - link (有 url): 跳外链 + 下载按钮
- *   - 操作: 删除 (AlertDialog 二次确认) + 返回
+ *   - 操作: 编辑 (EditSheet) / 删除 (ConfirmDialog) / 返回列表
  *
- * 不做"采集更多文件" — 阶段 3 不接采集, 跟 brief 一致. 编辑入口留给阶段 N.
+ * 增量 (0.7.2 P0 library-11): 加 "编辑" 按钮 + EditSheet, 调 PATCH /yinian/library/:id.
+ * 不做"采集更多文件" — 一致由 Library 列表 CollectSheet 触发.
  */
 
 import { useState } from "react";
@@ -28,6 +29,7 @@ import {
 import { useToast } from "../components/ui/Toast";
 import { Button } from "../components/ui/Button";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { EditSheet } from "../components/library/EditSheet";
 
 export function LibraryDetail() {
   const { id = "" } = useParams<{ id: string }>();
@@ -42,6 +44,8 @@ export function LibraryDetail() {
   });
 
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // 编辑 Sheet — gacode-electron 0.7.2 P0 library-11 (LibraryDetail 加编辑入口)
+  const [editOpen, setEditOpen] = useState(false);
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteLibraryItem(id),
@@ -146,7 +150,7 @@ export function LibraryDetail() {
         {/* 正文 — 按 type 渲染 */}
         <ContentView item={item} />
 
-        {/* 操作区 */}
+        {/* 操作区 — 编辑/删除/返回 (gacode-electron 0.7.2 + 编辑入口) */}
         <div className="flex items-center justify-end gap-2 pt-2">
           <Button
             variant="ghost"
@@ -154,6 +158,13 @@ export function LibraryDetail() {
             onClick={() => navigate("/library")}
           >
             返回列表
+          </Button>
+          <Button
+            variant="outline"
+            size="md"
+            onClick={() => setEditOpen(true)}
+          >
+            编辑
           </Button>
           <Button
             variant="danger"
@@ -176,6 +187,13 @@ export function LibraryDetail() {
           onConfirm={() => deleteMutation.mutate()}
         />
       ) : null}
+
+      {/* 编辑 Sheet — gacode-electron 0.7.2 */}
+      <EditSheet
+        open={editOpen && !!item}
+        item={item ?? null}
+        onClose={() => setEditOpen(false)}
+      />
     </div>
   );
 }
