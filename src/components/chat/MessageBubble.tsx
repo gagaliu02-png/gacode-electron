@@ -16,6 +16,14 @@
  *   - recalled 占位气泡 (贴 web 的 "X 撤回了一条消息" 同款, 用 CSS rounded-[8px] 浅底)
  *   - 重新生成 (chat-id-19) 不在 ⋮ 菜单, 在 ChatInputBar 旁; 详见 ChatDetail.tsx
  *
+ * 0.7.5 (ChatDetail P1) 增量:
+ *   - chat-id-9:  挂 ReferenceFold (知识库引用折叠条)
+ *   - chat-id-11: RichEventBubble 自身挂 ToolTimingBadge (tool_end 带 duration_ms)
+ *   - chat-id-12: assistant 气泡顶部挂 CallTreeCard (链路树)
+ *   - chat-id-20: assistant 气泡底部挂 ExecutionTiming (已执行 X 秒 / 用时)
+ *   - chat-id-27: assistant 气泡右侧挂 TtsButton (TTS 朗读)
+ *   - chat-id-40: 顶部挂 QuoteReplyBlock (引用 / 回复 块)
+ *
  * 父组件拿到 recalled=true 时**不传 menu** — 这个组件再卡一道防误调.
  */
 
@@ -23,6 +31,11 @@ import type { ReactNode } from "react";
 import { Markdown } from "../../lib/markdown";
 import { RichEventBubble, type RichEvent } from "./RichEventBubble";
 import { MessageMenu, type MessageAction } from "./MessageMenu";
+import { ReferenceFold } from "./ReferenceFold";
+import { QuoteReplyBlock } from "./QuoteReplyBlock";
+import { TtsButton } from "./TtsButton";
+import { ExecutionTiming } from "./ExecutionTiming";
+import { CallTreeCard, type CallTreeNode } from "./CallTreeCard";
 
 export interface MessageBubbleProps {
   /** "user" | "assistant" */
@@ -49,6 +62,18 @@ export interface MessageBubbleProps {
   recalledAt?: string | null;
   /** 阶段 8: 消息操作完成回调 (parent 用它 invalidate history / 切 store) */
   onAction?: (action: MessageAction, ok: boolean) => void;
+  // ============== 0.7.5 ChatDetail P1 增量 ==============
+  /** chat-id-9: server metadata.knowledge_refs (用户本轮挂载的 atom id 列表) */
+  knowledgeRefs?: string[];
+  /** chat-id-40: server metadata.quoted_message_id / quoted_content */
+  quotedMessageId?: string | null;
+  quotedContent?: string | null;
+  /** chat-id-20: 流式开始时间戳 (ms). 气泡底部「已执行 X 秒」用. */
+  streamingSince?: number | null;
+  /** chat-id-11 / chat-id-20: 完成态总耗时 ms (server metadata.tool_total_ms) */
+  toolTotalMs?: number | null;
+  /** chat-id-12: 链路树节点 (从 chunk.events 解析). 缺省 → 走 RichEventBubble 单卡片 */
+  callTree?: CallTreeNode[];
 }
 
 // ────────────────────────────────────────────────────────────
@@ -64,6 +89,9 @@ function UserBubble({
   onAction,
   createdAt,
   messageId,
+  knowledgeRefs,
+  quotedMessageId,
+  quotedContent,
 }: Pick<
   MessageBubbleProps,
   | "content"
@@ -74,6 +102,9 @@ function UserBubble({
   | "recalledAt"
   | "onAction"
   | "createdAt"
+  | "knowledgeRefs"
+  | "quotedMessageId"
+  | "quotedContent"
 > & { messageId: string }) {
   // 阶段 7 — chat 附件点击走系统默认应用:
   // image 用 `<a target="_blank">` 让 Electron 主进程 setWindowOpenHandler
@@ -111,6 +142,15 @@ function UserBubble({
   return (
     <div className="flex justify-end items-start gap-1.5">
       <div className="max-w-[80%]">
+        {/* chat-id-40: 引用块 — 在气泡顶部显示被回复的消息预览 */}
+        {quotedContent ? (
+          <QuoteReplyBlock
+            content={quotedContent}
+            from="assistant"
+            messageId={quotedMessageId}
+          />
+        ) : null}
+
         {/* 图片 (image mode 上传产物) — 阶段 7: 点击唤起系统默认程序
             (图片 URL → shell.openExternal 让 OS 默认图片查看器/浏览器接管) */}
         {imageUrls && imageUrls.length > 0 ? (
@@ -177,6 +217,11 @@ function UserBubble({
             {content}
           </div>
         ) : null}
+
+        {/* chat-id-9: 知识库引用折叠条 (在气泡底部, 跟 web MessageBubble 同款) */}
+        {knowledgeRefs && knowledgeRefs.length > 0 ? (
+          <ReferenceFold ids={knowledgeRefs} />
+        ) : null}
       </div>
 
       {/* 阶段 8 — 消息 ⋮ 菜单 (PC 端常显, 不依赖 hover) */}
@@ -207,6 +252,12 @@ function AssistantBubble({
   onAction,
   createdAt,
   messageId,
+  knowledgeRefs,
+  quotedMessageId,
+  quotedContent,
+  streamingSince,
+  toolTotalMs,
+  callTree,
 }: Pick<
   MessageBubbleProps,
   | "content"
@@ -216,9 +267,16 @@ function AssistantBubble({
   | "recalledAt"
   | "onAction"
   | "createdAt"
+  | "knowledgeRefs"
+  | "quotedMessageId"
+  | "quotedContent"
+  | "streamingSince"
+  | "toolTotalMs"
+  | "callTree"
 > & { messageId: string }) {
   const showCursor = !!isStreaming;
   const hasRichEvents = !!richEvents && richEvents.length > 0;
+  const hasCallTree = !!callTree && callTree.length > 0;
   const hasContent = !!content && content.trim().length > 0;
 
   if (recalled) {
@@ -236,11 +294,23 @@ function AssistantBubble({
   }
 
   // 空 + 没事件 → 完全不渲染 (流式刚开始那两个 frame)
-  if (!hasContent && !hasRichEvents) return null;
+  if (!hasContent && !hasRichEvents && !hasCallTree) return null;
 
   return (
     <div className="flex justify-start items-start gap-1.5">
       <div className="max-w-[85%] space-y-1">
+        {/* chat-id-40: 引用块 (assistant 也可能引用 user 消息) */}
+        {quotedContent ? (
+          <QuoteReplyBlock
+            content={quotedContent}
+            from="user"
+            messageId={quotedMessageId}
+          />
+        ) : null}
+
+        {/* chat-id-12: 链路树卡片 (从 chunk.events 解析, 整棵树挂到气泡顶部) */}
+        {hasCallTree ? <CallTreeCard nodes={callTree!} /> : null}
+
         {/* 工具 / 富事件 — 在正文之前 (server 累积顺序跟到末尾顺序一致) */}
         {hasRichEvents
           ? richEvents!.map((ev, i) => (
@@ -262,22 +332,38 @@ function AssistantBubble({
         ) : null}
 
         {/* 流式态: 还没收到任何文字但有事件 → 显示占位 */}
-        {isStreaming && !hasContent && !hasRichEvents ? (
+        {isStreaming && !hasContent && !hasRichEvents && !hasCallTree ? (
           <TypingDots />
         ) : null}
+
+        {/* chat-id-9: assistant 也支持 knowledge_refs (server 暂未回传, 解析就位) */}
+        {knowledgeRefs && knowledgeRefs.length > 0 ? (
+          <ReferenceFold ids={knowledgeRefs} />
+        ) : null}
+
+        {/* chat-id-20: 助手气泡底部「已执行 X 秒」 / 「用时 X」 */}
+        <ExecutionTiming
+          runningSince={isStreaming ? streamingSince ?? null : null}
+          completedMs={!isStreaming && toolTotalMs != null ? toolTotalMs : null}
+        />
       </div>
 
-      {/* 阶段 8 — 消息 ⋮ 菜单 */}
-      {onAction ? (
-        <div className="shrink-0 pt-1">
-          <MessageMenu
-            role="assistant"
-            messageId={messageId}
-            content={content}
-            createdAt={createdAt}
-            isStreaming={isStreaming}
-            onActionDone={onAction}
-          />
+      {/* 阶段 8 — 消息 ⋮ 菜单 + 0.7.5 chat-id-27 TTS */}
+      {onAction || hasContent ? (
+        <div className="shrink-0 pt-1 flex flex-col items-center gap-1">
+          {hasContent ? (
+            <TtsButton content={content} disabled={isStreaming} />
+          ) : null}
+          {onAction ? (
+            <MessageMenu
+              role="assistant"
+              messageId={messageId}
+              content={content}
+              createdAt={createdAt}
+              isStreaming={isStreaming}
+              onActionDone={onAction}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -381,9 +467,28 @@ function FileGlyph() {
 // ────────────────────────────────────────────────────────────
 
 export function MessageBubble(props: MessageBubbleProps & { messageId: string }) {
-  return props.role === "user" ? (
-    <UserBubble {...props} />
+  // 0.7.5: 拆出新字段分别传递, 不走 spread (避免某些 React 版本把未知 prop 推到 DOM).
+  const {
+    knowledgeRefs,
+    quotedMessageId,
+    quotedContent,
+    streamingSince,
+    toolTotalMs,
+    callTree,
+    ...rest
+  } = props;
+  const bubbleProps = {
+    ...rest,
+    knowledgeRefs,
+    quotedMessageId,
+    quotedContent,
+    streamingSince,
+    toolTotalMs,
+    callTree,
+  };
+  return rest.role === "user" ? (
+    <UserBubble {...bubbleProps} />
   ) : (
-    <AssistantBubble {...props} />
+    <AssistantBubble {...bubbleProps} />
   );
 }

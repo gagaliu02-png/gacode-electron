@@ -15,6 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MessageBubble } from "./MessageBubble";
 import type { RichEvent } from "./RichEventBubble";
 import type { MessageAction } from "./MessageMenu";
+import type { CallTreeNode } from "./CallTreeCard";
 
 export interface ChatMessageModel {
   id: string;
@@ -30,6 +31,18 @@ export interface ChatMessageModel {
   /** 阶段 8: 是否已撤回 (server listChatMessages 透传 recalled / recalled_at) */
   recalled?: boolean;
   recalledAt?: string | null;
+  // ============== 0.7.5 ==============
+  /** chat-id-9: server metadata.knowledge_refs */
+  knowledgeRefs?: string[];
+  /** chat-id-40: server metadata.quoted_message_id / quoted_content */
+  quotedMessageId?: string | null;
+  quotedContent?: string | null;
+  /** chat-id-20: 流式开始时间戳 ms (parent 用 useRef Date.now() 记) */
+  streamingSince?: number | null;
+  /** chat-id-11 / chat-id-20: server metadata.tool_total_ms */
+  toolTotalMs?: number | null;
+  /** chat-id-12: call tree 节点 (parent 从 chunk.events 解析) */
+  callTree?: CallTreeNode[];
 }
 
 interface Props {
@@ -124,6 +137,12 @@ export function MessageList({
             createdAt={m.createdAt}
             recalled={m.recalled}
             recalledAt={m.recalledAt}
+            knowledgeRefs={m.knowledgeRefs}
+            quotedMessageId={m.quotedMessageId}
+            quotedContent={m.quotedContent}
+            streamingSince={m.streamingSince ?? null}
+            toolTotalMs={m.toolTotalMs ?? null}
+            callTree={m.callTree}
             onAction={
               onMessageAction
                 ? (action, ok) => onMessageAction(m, action, ok)

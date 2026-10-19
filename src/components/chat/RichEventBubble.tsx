@@ -9,6 +9,7 @@
  *   { type: string, ...其他 props }
  * 已知 type:
  *   - "tool_start"     { tool, args?, title? }
+ *   - "tool_end"       { tool, duration_ms?, status? }     (0.7.5 chat-id-11 加)
  *   - "file"           { name, url?, mime_type?, size_bytes? }
  *   - "image"          { url, name? }
  *   - "web_preview"    { url, title?, snippet? }
@@ -17,6 +18,7 @@
  */
 
 import type { ReactNode } from "react";
+import { ToolTimingBadge } from "./ToolTimingBadge";
 
 export interface RichEvent {
   type: string;
@@ -31,6 +33,8 @@ export function RichEventBubble({ event }: Props) {
   switch (event.type) {
     case "tool_start":
       return <ToolStartCard event={event} />;
+    case "tool_end":
+      return <ToolEndCard event={event} />;
     case "file":
       return <FileCard event={event} />;
     case "image":
@@ -67,6 +71,40 @@ function ToolStartCard({ event }: { event: RichEvent }) {
         <pre className="mt-1.5 font-mono text-[11px] text-fg-muted whitespace-pre-wrap break-words leading-relaxed">
           {shortArgs(String(event.args ?? ""))}
         </pre>
+      ) : null}
+    </div>
+  );
+}
+
+// 0.7.5 chat-id-11: tool_end 显耗时 (Clock 图标 + ms/秒)
+function ToolEndCard({ event }: { event: RichEvent }) {
+  const tool = String(event.tool ?? event.name ?? "tool");
+  const status = String(event.status ?? "ok");
+  const durationMs =
+    typeof event.duration_ms === "number"
+      ? (event.duration_ms as number)
+      : typeof event.elapsed_ms === "number"
+        ? (event.elapsed_ms as number)
+        : null;
+  return (
+    <div className="my-1 rounded-md bg-bg-sunken/60 px-3 py-2 text-xs flex items-center gap-2">
+      <ToolIcon />
+      <span className="font-mono text-fg">{tool}</span>
+      <span
+        className={
+          status === "error"
+            ? "text-[10px] text-danger"
+            : status === "running"
+              ? "text-[10px] text-warning"
+              : "text-[10px] text-fg-muted"
+        }
+      >
+        {status === "error" ? "失败" : status === "running" ? "运行中" : "完成"}
+      </span>
+      {durationMs != null ? (
+        <span className="ml-auto">
+          <ToolTimingBadge elapsedMs={durationMs} />
+        </span>
       ) : null}
     </div>
   );
