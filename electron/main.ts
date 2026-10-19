@@ -514,6 +514,182 @@ function registerAuthStorageIpc(): void {
 }
 
 // =========================================================================
+// 阶段 7 — Browser bookmarks IPC handlers
+//
+// 文件路径: %APPDATA%/Gacode/bookmarks.json
+// 文件格式: { bookmarks: BookmarkEntry[] }
+// 权限: 0600 (Windows 下 fs.chmod 不强制, 但调一下无害)
+// 失败策略: read/write 全部 try/catch, IPC 失败返空数组. 主进程不抛异常
+//          给渲染层. 跟 refresh-token.json 一样的兜底风格.
+//
+// id 生成: `bm-${Date.now()}-${random4bytes}` —— 跟 Android 端 BookmarkEntity
+//          primary key 风格一致 (递增 + 随机后缀).
+// 唯一性: 按 url 去重 (重复 add 同一 url → 不存第二条, 保留最早那条).
+// =========================================================================
+
+interface BookmarkFile {
+  bookmarks: Array<{
+    id: string;
+    url: string;
+    title: string;
+    createdAt: string;
+  }>;
+}
+
+function getBookmarksFilePath(): string {
+  return path.join(app.getPath('userData'), 'bookmarks.json');
+}
+
+function readBookmarksFile(): BookmarkFile {
+  const fp = getBookmarksFilePath();
+  const empty: BookmarkFile = { bookmarks: [] };
+  try {
+    if (!fs.existsSync(fp)) return empty;
+    const raw = fs.readFileSync(fp, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<BookmarkFile>;
+    if (!parsed || !Array.isArray(parsed.bookmarks)) return empty;
+    const items = parsed.bookmarks.filter(
+      (b) =>
+        b &&
+        typeof b.id === 'string' &&
+        typeof b.url === 'string' &&
+        typeof b.title === 'string' &&
+        b.url.length > 0,
+    );
+    return { bookmarks: items };
+  } catch (err) {
+    console.warn('[gacode-electron] readBookmarksFile failed', err);
+    return empty;
+  }
+}
+
+function writeBookmarksFile(file: BookmarkFile): void {
+  const fp = getBookmarksFilePath();
+  try {
+    const dir = path.dirname(fp);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(fp, JSON.stringify(file), 'utf8');
+    try {
+      fs.chmodSync(fp, 0o600);
+    } catch {
+      /* ignore on Windows */
+    }
+  } catch (err) {
+    console.warn('[gacode-electron] writeBookmarksFile failed', err);
+    throw err;
+  }
+}
+
+function registerBookmarksIpc(): void {
+  ipcMain.handle(
+    'gacode:bookmarks-read',
+    async (): Promise<Array<{ id: string; url: string; title: string; createdAt: string }>> => {
+      return readBookmarksFile().bookmarks;
+    },
+  );
+
+  ipcMain.handle(
+    'gacode:bookmarks-add',
+    async (
+      _event,
+      args: { url?: string; title?: string },
+    ): Promise<Array<{ id: string; url: string; title: string; createdAt: string }>> => {
+      const url = typeof args?.url === 'string' ? args.url.trim() : '';
+      const title = typeof args?.title === 'string' ? args.title.trim() : '';
+      if (!url) return readBookmarksFile().bookmarks;
+      const cur = readBookmarksFile().bookmarks;
+      if (cur.some((b) => b.url === url)) {
+        return cur;
+      }
+      const id = `bm-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+      const entry = { id, url, title: title || url, createdAt: new Date().toISOString() };
+      const next = [entry, ...cur];
+      writeBookmarksFile({ bookmarks: next });
+      console.log(`[gacode-electron] Bookmark added: ${url} (total=${next.length})`);
+      return next;
+    },
+  );
+
+  ipcMain.handle(
+    'gacode:bookmarks-remove',
+    async (
+      _event,
+      args: { idOrUrl?: string },
+    ): Promise<Array<{ id: string; url: string; title: string; createdAt: string }>> => {
+      const key = typeof args?.idOrUrl === 'string' ? args.idOrUrl.trim() : '';
+      if (!key) return readBookmarksFile().bookmarks;
+      const cur = readBookmarksFile().bookmarks;
+      const next = cur.filter((b) => b.id !== key && b.url !== key);
+      if (next.length === cur.length) return cur;
+      writeBookmarksFile({ bookmarks: next });
+      console.log(`[gacode-electron] Bookmark removed: ${key} (total=${next.length})`);
+      return next;
+    },
+  );
+
+  console.log('[gacode-electron] Bookmarks IPC handlers registered');
+}
+
+// =========================================================================
+// 阶段 7 — openWithSystem IPC handler
+//
+// filePath: shell.openPath(filePath) — Windows 上按 .pdf / .docx / 图片 /
+//           视频 后缀自动调默认应用 (Edge / Word / Photos / Movies...)
+//           返非空字符串 = 错误消息, 空字符串 = 成功.
+// url:      shell.openExternal(url) — 走系统默认浏览器 (Edge / Chrome 等).
+//           注释: shell.openExternal 也会调注册过的 custom protocol;
+//           gacode:// 唤起会被 first-instance 的 second-instance 监听
+//           截获. HTTP(S) URL 则由系统默认浏览器接管.
+//
+// 失败策略: 不抛异常给渲染层, 返 { ok: false, error: msg }. 渲染层 toast.
+// =========================================================================
+
+function registerOpenWithSystemIpc(): void {
+  ipcMain.handle(
+    'gacode:open-with-system',
+    async (
+      _event,
+      args: { url?: string; filePath?: string },
+    ): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        if (args?.filePath && typeof args.filePath === 'string') {
+          const fp = args.filePath.trim();
+          if (!fp) return { ok: false, error: 'filePath empty' };
+          if (!fs.existsSync(fp)) {
+            return { ok: false, error: `file not found: ${fp}` };
+          }
+          const result = await shell.openPath(fp);
+          if (result) {
+            console.warn(`[gacode-electron] shell.openPath failed: ${result}`);
+            return { ok: false, error: result };
+          }
+          return { ok: true };
+        }
+        if (args?.url && typeof args.url === 'string') {
+          const u = args.url.trim();
+          if (!u) return { ok: false, error: 'url empty' };
+          // 仅允许 http(s); 其它 (file:// / gacode:// / javascript:) 拦截,
+          // 避免 shell.openExternal 触发非预期行为
+          if (!/^https?:\/\//i.test(u)) {
+            return { ok: false, error: `unsupported protocol: ${u}` };
+          }
+          await shell.openExternal(u);
+          return { ok: true };
+        }
+        return { ok: false, error: 'missing url or filePath' };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[gacode-electron] openWithSystem error', err);
+        return { ok: false, error: msg };
+      }
+    },
+  );
+  console.log('[gacode-electron] openWithSystem IPC handler registered');
+}
+
+// =========================================================================
 // 阶段 4 — second-instance (deep link 唤起 first instance)
 //
 // `second-instance` 事件在 first instance 里触发, 第二个进程已经 quit,
@@ -595,6 +771,8 @@ app.whenReady().then(() => {
   registerBrowserTabIpc();
   registerTaskbarProgressIpc();
   registerAuthStorageIpc();
+  registerBookmarksIpc();
+  registerOpenWithSystemIpc();
 
   // 阶段 4: webContents 就绪后补发一次 argv deep link
   if (pendingDeepLink && mainWindow) {

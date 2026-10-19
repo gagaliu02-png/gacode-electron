@@ -43,25 +43,60 @@ function UserBubble({
   attachedFileIds,
   attachedFileNames,
 }: Pick<MessageBubbleProps, "content" | "imageUrls" | "attachedFileIds" | "attachedFileNames">) {
+  // 阶段 7 — chat 附件点击走系统默认应用.
+  // image 用 `<a target="_blank">` 让 Electron 主进程 setWindowOpenHandler
+  // 自动调 shell.openExternal. file chip 加 onClick -> window.gacode.openWithSystem
+  // (远程 url 路径). 失败时 console.warn, 不阻塞 UI.
+  const handleOpenUrl = (url: string) => {
+    if (typeof window === "undefined") return;
+    const w = window as unknown as {
+      gacode?: { openWithSystem: (args: { url?: string; filePath?: string }) => Promise<{ ok: boolean; error?: string }> };
+    };
+    if (w.gacode?.openWithSystem) {
+      void w.gacode.openWithSystem({ url }).then((r) => {
+        if (!r.ok) console.warn("[gacode-electron] openWithSystem failed:", r.error);
+      });
+    } else {
+      // fallback: 新窗口由主进程 setWindowOpenHandler 接管
+      const a = window.open(url, "_blank", "noopener,noreferrer");
+      void a;
+    }
+  };
+
   return (
     <div className="flex justify-end">
       <div className="max-w-[80%]">
-        {/* 图片 (image mode 上传产物) */}
+        {/* 图片 (image mode 上传产物) — 阶段 7: 点击调起系统默认程序
+            (图片 URL → shell.openExternal 让 OS 默认图片查看器 / 浏览器接管) */}
         {imageUrls && imageUrls.length > 0 ? (
           <div className="flex flex-wrap gap-1.5 mb-1.5 justify-end">
             {imageUrls.map((url, i) => (
-              <img
+              <a
                 key={`${url}-${i}`}
-                src={url}
-                alt=""
-                className="max-w-[200px] max-h-[200px] rounded-md object-contain bg-bg-sunken"
-                loading="lazy"
-              />
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleOpenUrl(url);
+                }}
+                className="block"
+              >
+                <img
+                  src={url}
+                  alt=""
+                  className="max-w-[200px] max-h-[200px] rounded-md object-contain bg-bg-sunken cursor-pointer"
+                  loading="lazy"
+                />
+              </a>
             ))}
           </div>
         ) : null}
 
-        {/* 附件 chip (document mode 上传产物) */}
+        {/* 附件 chip (document mode 上传产物) — 阶段 7: 点击调起系统默认应用
+            (chat 端没有 file 原始 url, 但 server 通过 metadata 返回了 fileName,
+            渲染层可见的是 fileId; 这里简化为把 fileId 当作 placeholder, chip
+            的 onClick 仅供 UI 反馈 — 真实场景需要 server 给一个下载 url) */}
         {attachedFileIds && attachedFileIds.length > 0 ? (
           <div className="flex flex-wrap gap-1.5 mb-1.5 justify-end">
             {attachedFileIds.map((id, i) => {
@@ -69,14 +104,23 @@ function UserBubble({
               const name =
                 attachedFileNames?.find((n) => n.fileId === id)?.name || fallback;
               return (
-                <span
+                <button
                   key={id}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-elevated text-xs text-fg-muted"
+                  type="button"
+                  onClick={() => {
+                    // server metadata 暂未在 ChatMessage DTO 暴露 file url;
+                    // 此处 chip 不再可以系统打开真实文件, 用 console 提示。
+                    // 阶段 N 接 listFiles(id) 时再调 openWithSystem.
+                    console.info(
+                      `[gacode-electron] chat 附件 ${name} (id=${id}) — file url 暂未暴露, 待 listFiles API`,
+                    );
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-elevated text-xs text-fg-muted hover:text-fg hover:bg-bg-sunken cursor-pointer"
                   title={name}
                 >
                   <FileGlyph />
                   <span className="truncate max-w-[180px]">{name}</span>
-                </span>
+                </button>
               );
             })}
           </div>

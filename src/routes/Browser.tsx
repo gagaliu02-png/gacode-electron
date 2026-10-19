@@ -1,30 +1,39 @@
 /**
- * routes/Browser.tsx — 阶段 4 内嵌 webview 多 tab 浏览器
+ * routes/Browser.tsx — 阶段 7 内嵌 webview 多 tab 浏览器
  *
- * 渲染层用 Electron `<webview>` 标签 (webviewTag: true) 直接挂多个 tab,
- * tab 状态在 React state 里维护. 主进程 `BrowserView` IPC (
- * gacode:open-browser-tab / close / focus) 作为底层支撑:
- *   - 当前页面用 `<webview>` tag, 不依赖 BrowserView IPC
- *   - 现阶段用户可见流程是 webview tag; 未来"外层入口" (chat 链接 →
- *     in-app browser) 用 BrowserView IPC
+ * 阶段 4: tab bar + URL form + 常用链接 + 历史
+ * 阶段 7 (对齐 Android 端 BrowserViewModel):
+ *   - 进度条 (跟 webview 加载进度)
+ *   - 后退 / 前进 / 主页 按钮 (canGoBack/canGoForward 状态联动)
+ *   - 收藏夹: 收藏按钮 + ModalBottomSheet 列表 (持久化走主进程 IPC)
+ *   - AI 总结按钮 + summary sheet + 「保存到知识库」按钮
+ *   - 0.1.4 全局禁 transition: 不做 fade-in / slide; 用 fixed 定位直出
  *
- * 设计:
- *   - 顶部: tab bar (单 tab 显示关闭 × 按钮, 多 tab 时水平滚动)
- *   - 中部: 当前 tab 对应的 `<webview src={url}>` 占满剩余空间
- *   - 底部: URL 输入框 + 常用链接 + 历史
- *   - "+ 新建 tab" 按钮: 用当前 url 字符串新建, 若没字符串则去首页
+ * IPC 依赖 (主进程):
+ *   - window.gacode.bookmarks.{read, add, remove} → /workspace absolute
+ *   - 渲染层调 POST /api/v1/yinian/links/summarize 走 api.ts summarizeLink()
  *
- * 注意: `<webview>` 是 Electron-specific 元素, 不被 React DOM 当成 HTML
- * 标准元素, 要保留 HTML-like 属性 + 走 src 直接挂 URL. Chromium 渲染, 不能
- * nodeIntegration, sandbox 必须开 (webPreferences 在 tag 上设).
- *
- * 防御: webview 加载失败 (ERR_FILE_NOT_FOUND 等) 时, 切回系统默认浏览器 +
- * 关闭 tab. 避免用户卡死.
+ * 实现细节:
+ *   - <webview> ref 走 HTMLDivElement 占位, cast 到 ElectronWebview (扩展
+ *     reload/goBack/goForward/canGoBack 等方法)
+ *   - 进度条: 用 progress 0..100, 渲染在 webview 容器顶部, width 跟 progress.
+ *     100% 时 300ms setTimeout hide (不用 transition)
+ *   - 后/前按钮 disabled 用 canGoBack / canGoForward 状态维护 (webview
+ *     change 事件触发更新)
  */
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { BottomSheet } from "../components/ui/BottomSheet";
+import { useToast } from "../components/ui/Toast";
+import {
+  addBookmark,
+  readBookmarks,
+  removeBookmark,
+} from "../lib/bookmarks";
+import { createLibraryItem, summarizeLink } from "../lib/api";
+import type { BookmarkEntry } from "../../shared/types";
 
 const QUICK_LINKS: Array<{ label: string; url: string }> = [
   { label: "gaga 官网", url: "https://www.gaga.sale" },
@@ -40,6 +49,11 @@ interface Tab {
   url: string;
   loading: boolean;
   failed: boolean;
+  /** 跟 webview 加载进度 0..100, 用 tab 自身的 progress 给 sheet 用 */
+  progress: number;
+  /** 该 tab 的 webview 是否还可以 goBack/goForward. 没初始化时 false. */
+  canGoBack: boolean;
+  canGoForward: boolean;
 }
 
 function normalizeUrl(input: string): string | null {
@@ -60,7 +74,16 @@ function uid(): string {
 
 export function Browser() {
   const [tabs, setTabs] = useState<Tab[]>([
-    { id: uid(), title: "首页", url: HOME_URL, loading: false, failed: false },
+    {
+      id: uid(),
+      title: "首页",
+      url: HOME_URL,
+      loading: false,
+      failed: false,
+      progress: 0,
+      canGoBack: false,
+      canGoForward: false,
+    },
   ]);
   const [activeTabId, setActiveTabId] = useState<string>(() =>
     tabs[0]?.id ?? "",
@@ -68,11 +91,37 @@ export function Browser() {
   const [urlInput, setUrlInput] = useState("");
   const [history, setHistory] = useState<Array<{ url: string; openedAt: number }>>([]);
 
+  // 收藏夹 state — 同步主进程文件
+  const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+
+  // AI 总结 state
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryText, setSummaryText] = useState("");
+  const [summaryUrl, setSummaryUrl] = useState("");
+  const [summaryTitle, setSummaryTitle] = useState("");
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [savingToLibrary, setSavingToLibrary] = useState(false);
+
+  const { toast } = useToast();
+
   const active = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
+  const isBookmarked = !!bookmarks.find((b) => b.url === active?.url);
 
   useEffect(() => {
     setUrlInput(active?.url ?? "");
   }, [active?.url, active?.id]);
+
+  // 启动时拉一次 bookmarks
+  useEffect(() => {
+    let alive = true;
+    void readBookmarks().then((list) => {
+      if (alive) setBookmarks(list);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const recordHistory = (url: string) => {
     setHistory((cur) => {
@@ -88,20 +137,18 @@ export function Browser() {
   };
 
   const openInTab = (url: string) => {
-    if (!active || active.url === url) {
-      // 已开就切到那个 tab
+    if (!active) return;
+    if (active.url === url) {
       setActiveTabId(active.id);
       recordHistory(url);
       return;
     }
-    // 已有同 url tab → 激活
     const existing = tabs.find((t) => t.url === url);
     if (existing) {
       setActiveTabId(existing.id);
       recordHistory(url);
       return;
     }
-    // 新建
     const id = uid();
     setTabs((cur) => [
       ...cur,
@@ -111,6 +158,9 @@ export function Browser() {
         url,
         loading: true,
         failed: false,
+        progress: 0,
+        canGoBack: false,
+        canGoForward: false,
       },
     ]);
     setActiveTabId(id);
@@ -130,13 +180,15 @@ export function Browser() {
 
   const closeTab = (id: string) => {
     if (tabs.length <= 1) {
-      // 只剩一个, 重置为首页
       const newTab: Tab = {
         id: uid(),
         title: "首页",
         url: HOME_URL,
         loading: false,
         failed: false,
+        progress: 0,
+        canGoBack: false,
+        canGoForward: false,
       };
       setTabs([newTab]);
       setActiveTabId(newTab.id);
@@ -158,9 +210,43 @@ export function Browser() {
       url: HOME_URL,
       loading: false,
       failed: false,
+      progress: 0,
+      canGoBack: false,
+      canGoForward: false,
     };
     setTabs((cur) => [...cur, tab]);
     setActiveTabId(id);
+  };
+
+  // ────────────── 操作 webview 的 helper ──────────────
+  const getWebviewForActive = (): ElectronWebview | null => {
+    const id = active?.id;
+    if (!id) return null;
+    return document.querySelector(
+      `webview[data-tab-id="${id}"]`,
+    ) as ElectronWebview | null;
+  };
+
+  const goBack = () => {
+    const wv = getWebviewForActive();
+    try {
+      wv?.goBack();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const goForward = () => {
+    const wv = getWebviewForActive();
+    try {
+      wv?.goForward();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const goHome = () => {
+    submit(HOME_URL);
   };
 
   const refresh = () => {
@@ -168,13 +254,10 @@ export function Browser() {
     const id = active.id;
     setTabs((cur) =>
       cur.map((t) =>
-        t.id === id ? { ...t, loading: true, failed: false } : t,
+        t.id === id ? { ...t, loading: true, failed: false, progress: 0 } : t,
       ),
     );
-    // 强制 webview 重新加载 — 调 src 重设 (Chromium 渲染层)
-    const wv = document.querySelector(
-      `webview[data-tab-id="${id}"]`,
-    ) as ElectronWebview | null;
+    const wv = getWebviewForActive();
     try {
       wv?.reload();
     } catch {
@@ -182,6 +265,82 @@ export function Browser() {
     }
   };
 
+  // ────────────── 收藏夹操作 ──────────────
+  const toggleBookmark = async () => {
+    if (!active?.url) return;
+    const url = active.url;
+    const title = active.title || url;
+    if (isBookmarked) {
+      // 取消收藏 — 按 url 删
+      const next = await removeBookmark(url);
+      setBookmarks(next);
+      toast({ message: "已取消收藏", variant: "default" });
+    } else {
+      const next = await addBookmark(url, title);
+      setBookmarks(next);
+      toast({ message: "已加入收藏", variant: "success" });
+    }
+  };
+
+  const openBookmark = (entry: BookmarkEntry) => {
+    setBookmarksOpen(false);
+    submit(entry.url);
+  };
+
+  const deleteBookmark = async (entry: BookmarkEntry, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = await removeBookmark(entry.id);
+    setBookmarks(next);
+    toast({ message: `已删除: ${entry.title}`, variant: "default" });
+  };
+
+  // ────────────── AI 总结 ──────────────
+  const runSummarize = async () => {
+    if (!active?.url) return;
+    if (!/^https?:\/\//i.test(active.url)) {
+      toast({ message: "当前页面无 URL,无法总结", variant: "warning" });
+      return;
+    }
+    const url = active.url;
+    const title = active.title || hostFromUrl(url);
+    setSummaryUrl(url);
+    setSummaryTitle(title);
+    setSummaryText("");
+    setSummaryLoading(true);
+    setSummaryOpen(true);
+    try {
+      const resp = await summarizeLink(url, title);
+      setSummaryText(resp.summary || "(该页面无文字内容)");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast({ message: `总结失败: ${msg}`, variant: "danger" });
+      setSummaryOpen(false);
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const saveSummaryToLibrary = async () => {
+    if (!summaryUrl) return;
+    setSavingToLibrary(true);
+    try {
+      await createLibraryItem({
+        type: "link",
+        title: summaryTitle || summaryUrl,
+        url: summaryUrl,
+        tags: ["ai-summary"],
+      });
+      toast({ message: "已保存到知识库", variant: "success" });
+      setSummaryOpen(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast({ message: `保存失败: ${msg}`, variant: "danger" });
+    } finally {
+      setSavingToLibrary(false);
+    }
+  };
+
+  // ────────────── webview 事件回调 (state 更新) ──────────────
   const handleWebviewLoaded = (id: string, e?: Event) => {
     setTabs((cur) =>
       cur.map((t) =>
@@ -190,13 +349,28 @@ export function Browser() {
               ...t,
               loading: false,
               failed: false,
+              progress: 100,
               title:
                 (e as unknown as { title?: string })?.title ||
                 hostFromUrl(t.url),
               url: (e as unknown as { url?: string })?.url || t.url,
+              canGoBack: syncCanGoBack(id),
+              canGoForward: syncCanGoForward(id),
             }
           : t,
       ),
+    );
+    // 100% 后 300ms 隐藏进度条 (setTimeout hidden, 不依赖 transition)
+    setTimeout(() => {
+      setTabs((cur) =>
+        cur.map((t) => (t.id === id && t.progress === 100 ? { ...t, progress: 0 } : t)),
+      );
+    }, 300);
+  };
+
+  const handleWebviewProgress = (id: string, p: number) => {
+    setTabs((cur) =>
+      cur.map((t) => (t.id === id ? { ...t, progress: Math.max(0, Math.min(100, p)) } : t)),
     );
   };
 
@@ -210,12 +384,11 @@ export function Browser() {
     setTabs((cur) =>
       cur.map((t) =>
         t.id === id
-          ? { ...t, url, title: hostFromUrl(url) }
+          ? { ...t, url, title: hostFromUrl(url), canGoBack: syncCanGoBack(id), canGoForward: syncCanGoForward(id) }
           : t,
       ),
     );
     recordHistory(url);
-    // 同步 url input 到当前 active tab
     if (id === activeTabId) setUrlInput(url);
   };
 
@@ -230,7 +403,7 @@ export function Browser() {
               key={t.id}
               className={[
                 "group inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm shrink-0",
-                "transition-colors duration-150 cursor-pointer",
+                "cursor-pointer",
                 "max-w-[200px]",
                 isActive
                   ? "bg-bg-elevated text-fg"
@@ -273,17 +446,30 @@ export function Browser() {
         </button>
       </div>
 
-      {/* webview 区域 — 给每个 tab 一个 webview 但只 render 当前显示的,
-          隐藏的 tab 不创建 webview (减少内存). 同时也避免每个 webview 各自
-          触发进程间消息开销. */}
+      {/* webview 区域 — 进度条 + 当前 tab 的 webview */}
       <div className="flex-1 relative bg-bg-base">
         {active ? (
-          <WebviewPane
-            tab={active}
-            onLoaded={(e) => handleWebviewLoaded(active.id, e)}
-            onFailed={() => handleWebviewFailed(active.id)}
-            onNavigate={(url) => handleWebviewNavigate(active.id, url)}
-          />
+          <>
+            {/* 进度条: 顶部 1px 高, 跟随 active.progress 变化. 0 不渲染. */}
+            {active.progress > 0 ? (
+              <div
+                className="absolute top-0 left-0 right-0 h-1 z-10 bg-bg-elevated"
+                aria-hidden="true"
+              >
+                <div
+                  className="h-full bg-brand"
+                  style={{ width: `${active.progress}%` }}
+                />
+              </div>
+            ) : null}
+            <WebviewPane
+              tab={active}
+              onLoaded={(e) => handleWebviewLoaded(active.id, e)}
+              onFailed={() => handleWebviewFailed(active.id)}
+              onNavigate={(url) => handleWebviewNavigate(active.id, url)}
+              onProgress={(p) => handleWebviewProgress(active.id, p)}
+            />
+          </>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-fg-subtle text-sm">
             没有 tab
@@ -297,26 +483,74 @@ export function Browser() {
           onSubmit={onSubmit}
           className="rounded-md bg-bg-elevated p-2 flex items-center gap-2"
         >
-          <button
-            type="button"
-            aria-label="刷新"
-            onClick={refresh}
-            className="shrink-0 w-8 h-8 rounded-md text-fg-muted hover:bg-bg-sunken hover:text-fg inline-flex items-center justify-center"
-          >
+          {/* 后退 / 前进 / 主页 */}
+          <div className="shrink-0 inline-flex items-center gap-1">
+            <IconButton
+              ariaLabel="后退"
+              title="后退"
+              disabled={!active?.canGoBack}
+              onClick={goBack}
+            >
+              <ArrowLeftIcon />
+            </IconButton>
+            <IconButton
+              ariaLabel="前进"
+              title="前进"
+              disabled={!active?.canGoForward}
+              onClick={goForward}
+            >
+              <ArrowRightIcon />
+            </IconButton>
+            <IconButton
+              ariaLabel="主页"
+              title="主页"
+              onClick={goHome}
+            >
+              <HomeIcon />
+            </IconButton>
+          </div>
+
+          {/* 刷新 */}
+          <IconButton ariaLabel="刷新" title="刷新" onClick={refresh}>
             <RefreshIcon />
-          </button>
+          </IconButton>
+
           <Input
             type="search"
             value={urlInput}
             onChange={(e) => setUrlInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                // form submit 自然触发
-              }
-            }}
             placeholder="输入网址或搜索关键词"
             className="flex-1 py-2 text-sm"
           />
+
+          {/* 收藏夹按钮 */}
+          <IconButton
+            ariaLabel={isBookmarked ? "取消收藏" : "加入收藏"}
+            title={isBookmarked ? "取消收藏" : "加入收藏"}
+            active={isBookmarked}
+            onClick={() => void toggleBookmark()}
+          >
+            <BookmarkIcon filled={isBookmarked} />
+          </IconButton>
+
+          {/* AI 总结按钮 */}
+          <IconButton
+            ariaLabel="AI 总结"
+            title="AI 总结"
+            onClick={() => void runSummarize()}
+          >
+            <SparkleIcon />
+          </IconButton>
+
+          {/* 查看收藏列表 */}
+          <IconButton
+            ariaLabel="收藏夹"
+            title="收藏夹"
+            onClick={() => setBookmarksOpen(true)}
+          >
+            <FolderIcon />
+          </IconButton>
+
           <Button
             type="submit"
             variant="default"
@@ -334,7 +568,7 @@ export function Browser() {
               key={l.url}
               type="button"
               onClick={() => openInTab(l.url)}
-              className="text-xs px-2 py-1 rounded-md bg-bg-sunken text-fg-muted hover:text-fg hover:bg-bg-elevated transition-colors duration-150"
+              className="text-xs px-2 py-1 rounded-md bg-bg-sunken text-fg-muted hover:text-fg hover:bg-bg-elevated"
             >
               {l.label}
             </button>
@@ -343,14 +577,133 @@ export function Browser() {
             <button
               type="button"
               onClick={() => setHistory([])}
-              className="ml-auto text-xs text-fg-subtle hover:text-fg transition-colors duration-150"
+              className="ml-auto text-xs text-fg-subtle hover:text-fg"
             >
               清空历史
             </button>
           ) : null}
         </div>
       </div>
+
+      {/* 收藏夹 sheet */}
+      <BottomSheet
+        open={bookmarksOpen}
+        title={`收藏夹 (${bookmarks.length})`}
+        onClose={() => setBookmarksOpen(false)}
+      >
+        {bookmarks.length === 0 ? (
+          <p className="text-sm text-fg-muted text-center py-6">
+            还没有收藏的网页
+          </p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {bookmarks.map((b) => (
+              <li
+                key={b.id}
+                className="flex items-center gap-3 py-2 cursor-pointer hover:bg-bg-sunken rounded-md px-2"
+                onClick={() => openBookmark(b)}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm truncate">{b.title}</div>
+                  <div className="text-xs text-fg-subtle truncate">{b.url}</div>
+                </div>
+                <button
+                  type="button"
+                  aria-label="删除收藏"
+                  onClick={(e) => void deleteBookmark(b, e)}
+                  className="text-fg-muted hover:text-danger px-2"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </BottomSheet>
+
+      {/* AI 总结 sheet */}
+      <BottomSheet
+        open={summaryOpen}
+        title="AI 总结"
+        onClose={() => setSummaryOpen(false)}
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              size="md"
+              onClick={() => setSummaryOpen(false)}
+            >
+              关闭
+            </Button>
+            <Button
+              variant="default"
+              size="md"
+              loading={savingToLibrary}
+              disabled={summaryLoading || !summaryUrl}
+              onClick={() => void saveSummaryToLibrary()}
+            >
+              保存到知识库
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <div className="text-xs text-fg-subtle break-all">
+            {summaryUrl || "(加载中…)"}
+          </div>
+          {summaryLoading ? (
+            <div className="text-sm text-fg-muted">正在总结…</div>
+          ) : (
+            <div className="text-sm whitespace-pre-wrap text-fg">
+              {summaryText}
+            </div>
+          )}
+        </div>
+      </BottomSheet>
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// IconButton — 小尺寸 icon-only 按钮, Browser toolbar 复用
+// ────────────────────────────────────────────────────────────
+
+interface IconButtonProps {
+  ariaLabel: string;
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+  /** 收藏按钮高亮态 — 跟 webview tag 风格一致 (active 走 brand container) */
+  active?: boolean;
+  children: React.ReactNode;
+}
+
+function IconButton({
+  ariaLabel,
+  title,
+  onClick,
+  disabled,
+  active,
+  children,
+}: IconButtonProps) {
+  return (
+    <button
+      type="button"
+      aria-label={ariaLabel}
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={[
+        "shrink-0 w-8 h-8 rounded-md inline-flex items-center justify-center",
+        disabled
+          ? "text-fg-subtle opacity-40 cursor-not-allowed"
+          : active
+            ? "bg-brand-container text-brand-on-container hover:bg-brand-container/80"
+            : "text-fg-muted hover:bg-bg-sunken hover:text-fg",
+      ].join(" ")}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -360,7 +713,15 @@ export function Browser() {
 
 interface ElectronWebview extends HTMLElement {
   reload: () => void;
+  goBack: () => void;
+  goForward: () => void;
+  canGoBack: () => boolean;
+  canGoForward: () => boolean;
   src: string;
+  /** Electron 扩展: 获取当前 URL (webview 内可能跨 origin navigate) */
+  getURL: () => string;
+  /** 0..100 加载进度; -1 表示 inactive / done */
+  getActiveProgress: () => number;
 }
 
 interface WebviewPaneProps {
@@ -368,16 +729,32 @@ interface WebviewPaneProps {
   onLoaded: (e: Event) => void;
   onFailed: () => void;
   onNavigate: (url: string) => void;
+  onProgress: (p: number) => void;
 }
 
-function WebviewPane({ tab, onLoaded, onFailed, onNavigate }: WebviewPaneProps) {
+function WebviewPane({
+  tab,
+  onLoaded,
+  onFailed,
+  onNavigate,
+  onProgress,
+}: WebviewPaneProps) {
   const ref = useRef<ElectronWebview | null>(null);
 
+  // 同步当前 webview 的 canGoBack/canGoForward — 把 transition 关了,
+  // 切 tab / nav 完成时态更新外层 tab state.
   useEffect(() => {
     const wv = ref.current;
     if (!wv) return;
     const handleDidStartLoading = () => {
-      // tab.loading = true 由 parent 在 src 变化时已设; 这里 re-fire 也无所谓
+      onProgress(5);
+    };
+    const handleDidStopLoading = () => {
+      // finish 时 100%, 外层 setTimeout 隐藏
+      onProgress(100);
+    };
+    const handleProgress = (p: number) => {
+      onProgress(typeof p === "number" ? p : 0);
     };
     const handleDidFinishLoad = (e: Event) => {
       onLoaded(e);
@@ -390,16 +767,27 @@ function WebviewPane({ tab, onLoaded, onFailed, onNavigate }: WebviewPaneProps) 
       if (url) onNavigate(url);
     };
     wv.addEventListener("did-start-loading", handleDidStartLoading);
+    wv.addEventListener("did-stop-loading", handleDidStopLoading);
     wv.addEventListener("did-finish-load", handleDidFinishLoad as EventListener);
     wv.addEventListener("did-fail-load", handleDidFailLoad);
     wv.addEventListener("will-navigate", handleWillNavigate as EventListener);
+    // Electron 扩展事件 (CustomEvent 携带 number payload, 不是标准 Event)
+    wv.addEventListener(
+      "did-change-progress",
+      handleProgress as unknown as EventListener,
+    );
     return () => {
       wv.removeEventListener("did-start-loading", handleDidStartLoading);
+      wv.removeEventListener("did-stop-loading", handleDidStopLoading);
       wv.removeEventListener("did-finish-load", handleDidFinishLoad as EventListener);
       wv.removeEventListener("did-fail-load", handleDidFailLoad);
       wv.removeEventListener("will-navigate", handleWillNavigate as EventListener);
+      wv.removeEventListener(
+        "did-change-progress",
+        handleProgress as unknown as EventListener,
+      );
     };
-  }, [tab.id, onLoaded, onFailed, onNavigate]);
+  }, [tab.id, onLoaded, onFailed, onNavigate, onProgress]);
 
   if (tab.failed) {
     return (
@@ -407,9 +795,16 @@ function WebviewPane({ tab, onLoaded, onFailed, onNavigate }: WebviewPaneProps) 
         <div className="text-center space-y-2">
           <p className="text-base">加载失败</p>
           <p className="text-xs">{tab.url}</p>
-          <Button size="sm" onClick={() => {
-            try { ref.current?.reload(); } catch { /* ignore */ }
-          }}>
+          <Button
+            size="sm"
+            onClick={() => {
+              try {
+                ref.current?.reload();
+              } catch {
+                /* ignore */
+              }
+            }}
+          >
             重试
           </Button>
         </div>
@@ -422,9 +817,6 @@ function WebviewPane({ tab, onLoaded, onFailed, onNavigate }: WebviewPaneProps) 
       ref={ref as unknown as React.RefObject<HTMLDivElement>}
       data-tab-id={tab.id}
       src={tab.url}
-      // webview tag 是 Electron-specific intrinsic element. React 18 类型
-      // 给 HTMLWebViewElement 单独定义了属性 (webpreferences 已经认),
-      // 但 sandbox / allowpopups 这些是 Electron 扩展, 需要 ts-expect-error 跳过.
       // @ts-expect-error sandbox 是 Electron webview 扩展属性
       sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
       webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes"
@@ -437,6 +829,28 @@ function WebviewPane({ tab, onLoaded, onFailed, onNavigate }: WebviewPaneProps) 
       }}
     />
   );
+}
+
+// 同步 webview 当前 canGoBack / canGoForward 到 state (副作用 pure read).
+function syncCanGoBack(id: string): boolean {
+  const wv = document.querySelector(
+    `webview[data-tab-id="${id}"]`,
+  ) as ElectronWebview | null;
+  try {
+    return !!wv?.canGoBack?.();
+  } catch {
+    return false;
+  }
+}
+function syncCanGoForward(id: string): boolean {
+  const wv = document.querySelector(
+    `webview[data-tab-id="${id}"]`,
+  ) as ElectronWebview | null;
+  try {
+    return !!wv?.canGoForward?.();
+  } catch {
+    return false;
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -463,11 +877,124 @@ function RefreshIcon() {
       strokeWidth="1.6"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden="true"
     >
       <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
       <path d="M21 3v5h-5" />
       <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
       <path d="M3 21v-5h5" />
+    </svg>
+  );
+}
+
+function ArrowLeftIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="12 19 5 12 12 5" />
+    </svg>
+  );
+}
+
+function ArrowRightIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <line x1="5" y1="12" x2="19" y2="12" />
+      <polyline points="12 5 19 12 12 19" />
+    </svg>
+  );
+}
+
+function HomeIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 12L12 3l9 9" />
+      <path d="M5 10v10h14V10" />
+    </svg>
+  );
+}
+
+function BookmarkIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill={filled ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function SparkleIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z" />
+      <path d="M19 14l.7 2.1L22 17l-2.3.9L19 20l-.7-2.1L16 17l2.3-.9z" />
+    </svg>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
     </svg>
   );
 }

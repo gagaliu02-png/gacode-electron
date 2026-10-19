@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import * as os from 'os';
 import * as path from 'path';
 import type {
+  BookmarkEntry,
   BrowserTabClosedEvent,
   DeepLinkEvent,
   GacodeBridge,
@@ -93,6 +94,24 @@ contextBridge.exposeInMainWorld('gacode', {
     clear: (): Promise<void> =>
       ipcRenderer.invoke('gacode:auth-clear-refresh-token'),
   },
+
+  // 阶段 7: 浏览器收藏夹 — 持久化到 %APPDATA%/Gacode/bookmarks.json.
+  // 渲染层 Browser.tsx 调 read 初始化 state, add / remove 时再调写.
+  bookmarks: {
+    read: (): Promise<BookmarkEntry[]> =>
+      ipcRenderer.invoke('gacode:bookmarks-read'),
+    add: (entry: { url: string; title: string }): Promise<BookmarkEntry[]> =>
+      ipcRenderer.invoke('gacode:bookmarks-add', entry),
+    remove: (idOrUrl: string): Promise<BookmarkEntry[]> =>
+      ipcRenderer.invoke('gacode:bookmarks-remove', { idOrUrl }),
+  },
+
+  // 阶段 7: 文件走系统默认应用 — DeliveryDetail 看到 PDF / docx / 图片 /
+  // 视频时调这个让 Windows 启动对应程序; url 走系统默认浏览器.
+  openWithSystem: (
+    args: { url?: string; filePath?: string },
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('gacode:open-with-system', args),
 } satisfies GacodeBridge);
 
 console.log('[gacode-electron] preload loaded');

@@ -620,6 +620,28 @@ export function createLibraryItem(
   });
 }
 
+// ─────────── Link summarize (阶段 7 — Browser AI 总结) ───────────
+// 端点: POST /api/v1/yinian/links/summarize — unified-api
+//       `src/modules/yinian/yinian.links.routes.js:154`. schema:
+//   body: { url: string (required, max 2048), title?: string }
+//   resp: { ok, data: { summary, url, title } }
+// 跟 Android 端 `BrowserViewModel.summarizeLink()` 行为对齐.
+export interface LinkSummaryResponse {
+  summary: string;
+  url: string;
+  title: string;
+}
+
+export function summarizeLink(
+  url: string,
+  title?: string,
+): Promise<LinkSummaryResponse> {
+  return request<LinkSummaryResponse>("/yinian/links/summarize", {
+    method: "POST",
+    body: JSON.stringify({ url, title: title ?? "" }),
+  });
+}
+
 // ─────────── Deliveries ───────────
 // 端点跟 unified-api deliverables.routes.js 对齐. server 端 list DTO
 // 字段: id, sessionId, messageId, deliverableType, title, url, thumbnailUrl,

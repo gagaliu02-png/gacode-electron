@@ -79,6 +79,39 @@ export interface GacodeBridge {
     write: (refreshToken: string, userId: string) => Promise<void>;
     clear: () => Promise<void>;
   };
+
+  /**
+   * 阶段 7 — 浏览器收藏夹 (`%APPDATA%/Gacode/bookmarks.json`, 0600)。
+   * 跟 Android 端 `BrowserViewModel` 行为对齐: 增删按 url + title。
+   * 这里用 url 当唯一键 (server 端没同步, 所以本地一份).
+   */
+  bookmarks: {
+    read: () => Promise<BookmarkEntry[]>;
+    add: (entry: { url: string; title: string }) => Promise<BookmarkEntry[]>;
+    remove: (idOrUrl: string) => Promise<BookmarkEntry[]>;
+  };
+
+  /**
+   * 阶段 7 — 文件走系统默认应用。
+   * DeliveryDetail 看到 PDF / docx / xlsx / 视频 / 压缩包 / 图片时, 调这个
+   * 让 Windows 启动对应的默认程序 (Edge / Word / Excel / Photos / 7zip...).
+   * filePath: 本地文件绝对路径 (主进程 shell.openPath)
+   * url:      远程 URL (主进程 shell.openExternal, 走系统默认浏览器)
+   * 二选一; 都没传返 { ok: false, error: 'missing url or filePath' }.
+   */
+  openWithSystem: (args: {
+    url?: string;
+    filePath?: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
+}
+
+/** 收藏夹条目 — 跟 Android 端 `BookmarkEntity` shape 对齐. */
+export interface BookmarkEntry {
+  id: string;
+  url: string;
+  title: string;
+  /** ISO 字符串, 持久化不存 Date 对象 (JSON.parse 后变字符串) */
+  createdAt: string;
 }
 
 /** 主进程 → 渲染层的菜单事件载荷。 */
