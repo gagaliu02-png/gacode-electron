@@ -103,6 +103,17 @@ export interface GacodeBridge {
     url?: string;
     filePath?: string;
   }) => Promise<{ ok: boolean; error?: string }>;
+
+  /**
+   * 0.7.5 deliveries-15 — 交付物自动下载 worker IPC 桥.
+   *  - downloadDeliverable(): 触发一次手动轮询 (拉未下载完的 deliverable),
+   *    返回 worker 当前 status (downloadedTotal / failuresTotal / lastRunAt ...).
+   *  - getDeliverablesStatus(): 只读, 不触发新轮询, 返回当前 status.
+   * 渲染层一般用 getDeliverablesStatus 展示状态, 在网络条件差时可以调
+   * downloadDeliverable 立即重拉一轮.
+   */
+  downloadDeliverable: () => Promise<unknown>;
+  getDeliverablesStatus: () => Promise<unknown>;
 }
 
 /** 收藏夹条目 — 跟 Android 端 `BookmarkEntity` shape 对齐. */

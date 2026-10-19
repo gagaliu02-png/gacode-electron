@@ -27,6 +27,7 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { BottomSheet } from "../components/ui/BottomSheet";
 import { useToast } from "../components/ui/Toast";
+import { LongPressMenu, type LongPressMenuItem } from "../components/ui/LongPressMenu";
 import {
   addBookmark,
   readBookmarks,
@@ -103,6 +104,11 @@ export function Browser() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [savingToLibrary, setSavingToLibrary] = useState(false);
 
+  // 0.7.5 browser-15: 长按菜单 state — webview 内 postMessage 过来的链接/图片点击
+  const [longPressAnchor, setLongPressAnchor] = useState<
+    { x: number; y: number; url: string; kind: "link" | "image" } | null
+  >(null);
+
   const { toast } = useToast();
 
   const active = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
@@ -120,6 +126,38 @@ export function Browser() {
     });
     return () => {
       alive = false;
+    };
+  }, []);
+
+  // 0.7.5 browser-15: 监听 webview 内部 postMessage (长按链接 / 图片)
+  // 注入脚本在 WebviewPane 的 did-finish-load / will-navigate 后跑, 通过
+  // window.parent.postMessage 把 { type: 'gacode:longpress', payload: { x, y, url, kind } }
+  // 推过来.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data as
+        | { type?: string; payload?: unknown }
+        | undefined;
+      if (!data || data.type !== "gacode:longpress" || !data.payload) return;
+      const p = data.payload as {
+        x?: number;
+        y?: number;
+        url?: string;
+        kind?: string;
+      };
+      if (
+        typeof p.x !== "number" ||
+        typeof p.y !== "number" ||
+        typeof p.url !== "string" ||
+        (p.kind !== "link" && p.kind !== "image")
+      ) {
+        return;
+      }
+      setLongPressAnchor({ x: p.x, y: p.y, url: p.url, kind: p.kind });
+    };
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
     };
   }, []);
 
@@ -366,6 +404,8 @@ export function Browser() {
         cur.map((t) => (t.id === id && t.progress === 100 ? { ...t, progress: 0 } : t)),
       );
     }, 300);
+    // 0.7.5 browser-15: 注入长按监听脚本到 webview 内容 (did-finish-load 后)
+    void injectLongPressScript(id);
   };
 
   const handleWebviewProgress = (id: string, p: number) => {
@@ -390,7 +430,53 @@ export function Browser() {
     );
     recordHistory(url);
     if (id === activeTabId) setUrlInput(url);
+    // 0.7.5 browser-15: navigation 完成后重注入监听 (SPA 路由切换后脚本丢)
+    void injectLongPressScript(id);
   };
+
+  // 0.7.5 browser-15: 长按菜单当前项的 items (从 longPressAnchor 派生)
+  const longPressItems: LongPressMenuItem[] = longPressAnchor
+    ? buildLongPressItems(longPressAnchor, {
+        openInTab: (url) => openInTab(url),
+        copyToClipboard: async (url) => {
+          try {
+            await navigator.clipboard.writeText(url);
+            toast({ message: "已复制链接", variant: "success" });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            toast({ message: `复制失败: ${msg}`, variant: "danger" });
+          }
+        },
+        saveImageToKb: async (url) => {
+          try {
+            await createLibraryItem({
+              type: "image",
+              title: "从浏览器保存",
+              url,
+              tags: ["from-browser"],
+            });
+            toast({ message: "已保存到知识库", variant: "success" });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            toast({ message: `保存失败: ${msg}`, variant: "danger" });
+          }
+        },
+        saveLinkToKb: async (url) => {
+          try {
+            await createLibraryItem({
+              type: "link",
+              title: "从浏览器保存",
+              url,
+              tags: ["from-browser"],
+            });
+            toast({ message: "已保存到知识库", variant: "success" });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            toast({ message: `保存失败: ${msg}`, variant: "danger" });
+          }
+        },
+      })
+    : [];
 
   return (
     <div className="min-h-full flex flex-col">
@@ -660,8 +746,147 @@ export function Browser() {
           )}
         </div>
       </BottomSheet>
+
+      {/* 0.7.5 browser-15: 长按链接 / 图片 → LongPressMenu */}
+      <LongPressMenu
+        anchor={longPressAnchor ? { x: longPressAnchor.x, y: longPressAnchor.y } : null}
+        onClose={() => setLongPressAnchor(null)}
+        items={longPressItems}
+      />
     </div>
   );
+}
+
+// ────────────────────────────────────────────────────────────
+// 0.7.5 browser-15 — 注入长按 / 右键监听脚本到 webview
+//
+// 脚本做两件事:
+//   - 监听 document contextmenu, 找到最近的 <a> 或 <img>, 把 href/src +
+//     client 坐标 postMessage 给渲染层 (window.parent.postMessage).
+//   - 监听 touchstart + touchend, 500ms 内不抬起 → 算长按, 同样 postMessage.
+//
+// 注入策略: 每次 did-finish-load / will-navigate 后重新注入, 避免 SPA 路由
+// 切换后脚本被丢掉. webview.sandbox + contextIsolation 都开了, 这个脚本
+// 跑在 page 主世界 (webview 注入脚本默认是 page 主世界), 不能访问 Node, 只
+// 能用浏览器 API. window.parent.postMessage 跨 webview 边界 OK, 因为我们的
+// webview 没有 sandbox=all (实际 webpreferences 里 sandbox=yes, 但 postMessage
+// 仍然可以传字符串到顶层文档的 message listener).
+// ────────────────────────────────────────────────────────────
+
+function injectLongPressScript(tabId: string): Promise<void> {
+  const wv = document.querySelector(
+    `webview[data-tab-id="${tabId}"]`,
+  ) as ElectronWebview | null;
+  if (!wv) return Promise.resolve();
+  // webview 的 executeJavaScript 在主进程执行, 内容沙箱化, 但允许
+  // postMessage 出去. 这里 catch + 静默 — SPA 路由过程 / 主进程繁忙都可能失败,
+  // 不要让 toast 噪音.
+  const js = LONG_PRESS_SCRIPT;
+  try {
+    const r = wv.executeJavaScript(js, true) as Promise<unknown> | undefined;
+    return Promise.resolve(r as unknown as void);
+  } catch {
+    return Promise.resolve();
+  }
+}
+
+const LONG_PRESS_SCRIPT = `(function () {
+  if (window.__gacode_longpress_installed__) return;
+  window.__gacode_longpress_installed__ = true;
+  function post(payload) {
+    try { window.parent.postMessage({ type: 'gacode:longpress', payload }, '*'); } catch (e) {}
+  }
+  // 右键 (contextmenu) — 找最近的 <a> 或 <img>
+  document.addEventListener('contextmenu', function (e) {
+    var target = e.target;
+    while (target && target !== document.body) {
+      if (target.tagName === 'A' && target.href) {
+        e.preventDefault();
+        post({ x: e.clientX, y: e.clientY, url: target.href, kind: 'link' });
+        return;
+      }
+      if (target.tagName === 'IMG' && target.src) {
+        e.preventDefault();
+        post({ x: e.clientX, y: e.clientY, url: target.src, kind: 'image' });
+        return;
+      }
+      target = target.parentNode;
+    }
+  }, true);
+  // 长按 — touchstart 起 timer, 500ms 触发; touchend/move/cancel 清掉
+  var timer = null;
+  var startX = 0, startY = 0;
+  function clear() {
+    if (timer != null) { clearTimeout(timer); timer = null; }
+  }
+  document.addEventListener('touchstart', function (e) {
+    var t = e.targetTouches && e.targetTouches[0];
+    if (!t) return;
+    startX = t.clientX; startY = t.clientY;
+    clear();
+    timer = setTimeout(function () {
+      timer = null;
+      var target = e.target;
+      while (target && target !== document.body) {
+        if (target.tagName === 'A' && target.href) {
+          post({ x: startX, y: startY, url: target.href, kind: 'link' });
+          return;
+        }
+        if (target.tagName === 'IMG' && target.src) {
+          post({ x: startX, y: startY, url: target.src, kind: 'image' });
+          return;
+        }
+        target = target.parentNode;
+      }
+    }, 500);
+  }, true);
+  document.addEventListener('touchend', clear, true);
+  document.addEventListener('touchcancel', clear, true);
+  document.addEventListener('touchmove', clear, true);
+})();`;
+
+interface LongPressActions {
+  openInTab: (url: string) => void;
+  copyToClipboard: (url: string) => Promise<void> | void;
+  saveLinkToKb: (url: string) => Promise<void> | void;
+  saveImageToKb: (url: string) => Promise<void> | void;
+}
+
+function buildLongPressItems(
+  anchor: { url: string; kind: "link" | "image" },
+  actions: LongPressActions,
+): LongPressMenuItem[] {
+  if (anchor.kind === "image") {
+    return [
+      {
+        label: "在新标签中打开",
+        onClick: () => actions.openInTab(anchor.url),
+      },
+      {
+        label: "复制图片地址",
+        onClick: () => void actions.copyToClipboard(anchor.url),
+      },
+      {
+        label: "保存到知识库",
+        onClick: () => void actions.saveImageToKb(anchor.url),
+      },
+    ];
+  }
+  // link
+  return [
+    {
+      label: "在新标签中打开",
+      onClick: () => actions.openInTab(anchor.url),
+    },
+    {
+      label: "复制链接",
+      onClick: () => void actions.copyToClipboard(anchor.url),
+    },
+    {
+      label: "保存到知识库",
+      onClick: () => void actions.saveLinkToKb(anchor.url),
+    },
+  ];
 }
 
 // ────────────────────────────────────────────────────────────
@@ -722,6 +947,8 @@ interface ElectronWebview extends HTMLElement {
   getURL: () => string;
   /** 0..100 加载进度; -1 表示 inactive / done */
   getActiveProgress: () => number;
+  /** 0.7.5 browser-15: 注入脚本到 webview 内容 (用于长按监听). */
+  executeJavaScript: (code: string, userGesture?: boolean) => Promise<unknown>;
 }
 
 interface WebviewPaneProps {

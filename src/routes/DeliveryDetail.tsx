@@ -1,24 +1,18 @@
 /**
- * routes/DeliveryDetail.tsx — 阶段 3 交付详情 (阶段 7 加系统默认应用打开)
+ * routes/DeliveryDetail.tsx — 阶段 0.7.5 交付详情 (P1+P2 共 3 项补齐)
  *
- * 数据: useQuery(["delivery", id], () => getDeliverable(id))
- * 端点: GET /yinian/deliverables/:id — server 端 deliverables.routes.js
- *   返 DeliverableDetailDto (含 url / thumbnailUrl / mimeType / sizeBytes /
- *   prompt / toolName / metadata 等).
+ * 阶段 3 阶段 7 baseline: type + meta + 系统默认应用打开 + 删除.
+ * 0.7.5 增量 (gagaOS feedback 2026-10-19 §3.7):
+ *   - deliveries-id-7 (P1): 关联 chat session 跳回 — 顶部加 "回到对话 #<sessionId>" 按钮
+ *                          (server Deliverable.sessionId 字段已返, 直接跳 /chat/:id)
+ *   - deliveries-id-8 (P1): share / 分享到对话 — ShareSheet sheet (新建或选已有 session)
+ *                          send-blocker: server 端 shareDeliverableToChat endpoint 未实现
+ *   - deliveries-id-9 (P2): 收藏 (star) — StarButton (server star endpoint 未实现)
  *
- * 渲染策略 — 阶段 7 跟 Android 端对齐 + PC 桌面特性 (走系统默认应用):
- *   - image: <img> 内嵌 (小图直接看, 大图仍可走系统 viewer)
- *   - web:   「打开」 按钮 → 调 IPC shell.openExternal 走系统默认浏览器
- *   - document: 根据 mimeType 选 iframe / 「打开」按钮
- *     · text/html / .html / .htm  → 内嵌 iframe (跟 web 一致体验)
- *     · text/* / text-markdown      → 内嵌 pre 滚动
- *     · PDF / 视频 / 图片 / docx / xlsx / pptx / 压缩包 / 未知 binary
- *       → 不内嵌, 「打开」按钮 → shell.openPath/External 走系统默认应用
- *
- * IPC: window.gacode.openWithSystem({ url | filePath })
- *   - 给 url: shell.openExternal 走默认浏览器
- *   - 给 filePath: shell.openPath 走系统默认程序 (Edge/Word/Photos/...)
- *   - 失败: { ok: false, error: msg }, 渲染层 toast 提示
+ * file scope:
+ *   - 本文件改: routes/DeliveryDetail.tsx
+ *   - 新建/复用: components/deliveries/{ShareSheet, StarButton}.tsx, components/ui/ConfirmDialog
+ *   - 改 api.ts: 新增 shareDeliverableToChat / starDeliverable / unstarDeliverable
  */
 
 import { useState } from "react";
@@ -32,6 +26,8 @@ import {
 import { useToast } from "../components/ui/Toast";
 import { Button } from "../components/ui/Button";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { ShareSheet } from "../components/deliveries/ShareSheet";
+import { StarButton } from "../components/deliveries/StarButton";
 
 export function DeliveryDetail() {
   const { id = "" } = useParams<{ id: string }>();
@@ -46,6 +42,7 @@ export function DeliveryDetail() {
   });
 
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   // 阶段 7: 调主进程 IPC 走系统默认应用打开交付文件 (PDF / 视频 / 图片 ...)
   const openWithSystem = async (targetUrl: string) => {
@@ -171,8 +168,8 @@ export function DeliveryDetail() {
         <ContentView item={item} onOpenWithSystem={openWithSystem} />
 
         {/* 操作区 — 阶段 7: 「打开 / 下载」统一走 openWithSystem IPC.
-           删除 `<a target="_blank">` 外链, 全部走主进程 shell. */}
-        <div className="flex items-center justify-end gap-2 pt-2">
+           0.7.5: 关联 chat session 跳回 + 分享到对话 + 收藏 + 删除. */}
+        <div className="flex items-center justify-end gap-2 pt-2 flex-wrap">
           <Button
             variant="ghost"
             size="md"
@@ -189,6 +186,26 @@ export function DeliveryDetail() {
               下载
             </Button>
           ) : null}
+          {/* 0.7.5 deliveries-id-7: 关联 chat session 跳回 */}
+          {item.sessionId ? (
+            <Button
+              variant="outline"
+              size="md"
+              onClick={() => navigate(`/chat/${item.sessionId}`)}
+            >
+              回到对话
+            </Button>
+          ) : null}
+          {/* 0.7.5 deliveries-id-9: 收藏 (star) */}
+          <StarButton deliverableId={item.id} size="md" />
+          {/* 0.7.5 deliveries-id-8: 分享到对话 */}
+          <Button
+            variant="default"
+            size="md"
+            onClick={() => setShareOpen(true)}
+          >
+            分享到对话
+          </Button>
           <Button
             variant="danger"
             size="md"
@@ -210,6 +227,12 @@ export function DeliveryDetail() {
           onConfirm={() => deleteMutation.mutate()}
         />
       ) : null}
+
+      <ShareSheet
+        open={shareOpen}
+        deliverable={item}
+        onClose={() => setShareOpen(false)}
+      />
     </div>
   );
 }

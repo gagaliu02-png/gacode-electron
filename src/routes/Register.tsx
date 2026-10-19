@@ -1,10 +1,13 @@
 /**
- * routes/Register.tsx — 阶段 1 注册页
+ * routes/Register.tsx — 阶段 1 注册页 (0.7.5 加注册协议勾选 register-5)
  *
  * 对齐 gacode-web 注册流程 + Android RegisterScreen:
  *   - 用户名 (必填) + 密码 (必填) + 邮箱 (选填) + 显示名 (选填)
+ *   - 注册协议勾选 (0.7.5 P2 register-5): 不勾 = 提交按钮 disabled + toast 提示
  *   - 成功后自动跳 /login 让用户登录 (阶段 1 简化: server register 是否
  *     直接返 accessToken 取决于 unified-api, 不强依赖, 失败也能跑通登录)
+ *
+ * file scope: 本文件改; 不动 Login/QrLogin.
  */
 
 import { useState, type FormEvent } from "react";
@@ -23,6 +26,7 @@ export function Register() {
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [agreeTos, setAgreeTos] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -33,6 +37,13 @@ export function Register() {
     }
     if (password.length < 8) {
       toast({ message: "密码至少 8 位", variant: "default" });
+      return;
+    }
+    if (!agreeTos) {
+      toast({
+        message: "请先勾选服务条款与隐私协议",
+        variant: "warning",
+      });
       return;
     }
     setSubmitting(true);
@@ -107,11 +118,43 @@ export function Register() {
             disabled={submitting}
           />
 
+          {/* 0.7.5 register-5: 服务条款 + 隐私协议勾选 */}
+          <label className="flex items-start gap-2 text-sm text-fg-muted select-none">
+            <input
+              type="checkbox"
+              checked={agreeTos}
+              onChange={(e) => setAgreeTos(e.target.checked)}
+              disabled={submitting}
+              className="mt-0.5"
+            />
+            <span>
+              我已阅读并同意{" "}
+              <a
+                href="https://www.gaga.sale/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand hover:underline"
+              >
+                《服务条款》
+              </a>{" "}
+              与{" "}
+              <a
+                href="https://www.gaga.sale/privacy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand hover:underline"
+              >
+                《隐私协议》
+              </a>
+            </span>
+          </label>
+
           <Button
             type="submit"
             variant="default"
             size="lg"
             loading={submitting}
+            disabled={!agreeTos}
             className="w-full"
           >
             {submitting ? "注册中..." : "注册"}

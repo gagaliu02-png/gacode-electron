@@ -112,6 +112,14 @@ contextBridge.exposeInMainWorld('gacode', {
     args: { url?: string; filePath?: string },
   ): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('gacode:open-with-system', args),
+
+  // 0.7.5 deliveries-15: 触发一次手动下载轮询 + 读 worker 当前状态.
+  // 跟主进程 deliveries-downloader.ts 联动; 渲染层 (比如 DeliveryDetail 页)
+  // 想立刻重试缓存可以调.
+  downloadDeliverable: (): Promise<unknown> =>
+    ipcRenderer.invoke('gacode:download-deliverable'),
+  getDeliverablesStatus: (): Promise<unknown> =>
+    ipcRenderer.invoke('gacode:deliverables-status'),
 } satisfies GacodeBridge);
 
 console.log('[gacode-electron] preload loaded');

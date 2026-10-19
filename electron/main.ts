@@ -12,6 +12,10 @@ import * as crypto from 'crypto';
 import { createTray } from './tray';
 import { createAppMenu } from './menu';
 import { registerNotificationIpc } from './notifications';
+import {
+  startDeliveriesDownloader,
+  stopDeliveriesDownloader,
+} from './deliveries-downloader';
 
 // CommonJS 下 __dirname 已有,这里只是为了类型注释
 // const __filename = fileURLToPath(import.meta.url); // ESM 模式才需要
@@ -690,6 +694,36 @@ function registerOpenWithSystemIpc(): void {
 }
 
 // =========================================================================
+// 0.7.5 deliveries-15 — deliveries downloader IPC bridge
+//   - gacode:download-deliverable → 触发一次手动下载轮询 (返回 worker status)
+//   - gacode:deliverables-status  → 读 worker 当前状态 (UI 显示用)
+// 跟主进程 worker (deliveries-downloader.ts) 联动, 不阻塞.
+// =========================================================================
+function registerDeliveriesDownloaderIpc(): void {
+  ipcMain.handle(
+    'gacode:download-deliverable',
+    async () => {
+      const { runOnce, getDownloaderStatus } = require('./deliveries-downloader') as {
+        runOnce: () => Promise<unknown>;
+        getDownloaderStatus: () => unknown;
+      };
+      await runOnce();
+      return getDownloaderStatus();
+    },
+  );
+  ipcMain.handle(
+    'gacode:deliverables-status',
+    async () => {
+      const { getDownloaderStatus } = require('./deliveries-downloader') as {
+        getDownloaderStatus: () => unknown;
+      };
+      return getDownloaderStatus();
+    },
+  );
+  console.log('[gacode-electron] deliveries-downloader IPC handlers registered');
+}
+
+// =========================================================================
 // 阶段 4 — second-instance (deep link 唤起 first instance)
 //
 // `second-instance` 事件在 first instance 里触发, 第二个进程已经 quit,
@@ -773,6 +807,54 @@ app.whenReady().then(() => {
   registerAuthStorageIpc();
   registerBookmarksIpc();
   registerOpenWithSystemIpc();
+  registerDeliveriesDownloaderIpc();
+
+  // 0.7.5 deliveries-15: 起交付物自动下载 worker (5 分钟拉一次)
+  startDeliveriesDownloader();
+
+  // 0.7.5 global-11: electron-updater 自动更新 — 配置 OK, build 跑通但不
+  // 实际触发 (publish 配置 github 但 gagaOS 拍 push 时再 git push + tag).
+  // autoUpdater 在 dev 模式调 checkForUpdates 会 warn 但不报错.
+  try {
+    // dynamic import — electron-updater 是 CommonJS 包, esbuild 默认走 require
+    const { autoUpdater } = require('electron-updater') as {
+      autoUpdater: {
+        autoDownload?: boolean;
+        checkForUpdates: () => Promise<unknown> | unknown;
+        on: (event: string, cb: (...args: unknown[]) => void) => void;
+        logger?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void };
+      };
+    };
+    // 不主动下载 — 等 gagaOS 拍 push + release 后才会真有更新
+    if (autoUpdater.autoDownload !== undefined) {
+      autoUpdater.autoDownload = false;
+    }
+    autoUpdater.on('error', (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[gacode-electron] autoUpdater error: ${msg}`);
+    });
+    autoUpdater.on('checking-for-update', () => {
+      console.log('[gacode-electron] autoUpdater: checking-for-update');
+    });
+    autoUpdater.on('update-available', (info: unknown) => {
+      console.log('[gacode-electron] autoUpdater: update-available', info);
+    });
+    autoUpdater.on('update-not-available', () => {
+      console.log('[gacode-electron] autoUpdater: no update available');
+    });
+    // 调一次 (失败只 warn, 不抛) — dev 模式跑也会触发一次 HEAD 给 GitHub.
+    const result = autoUpdater.checkForUpdates();
+    if (result && typeof (result as { catch?: unknown }).catch === 'function') {
+      (result as Promise<unknown>).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[gacode-electron] autoUpdater.checkForUpdates failed: ${msg}`);
+      });
+    }
+    console.log('[gacode-electron] autoUpdater wired (publish=github gagaliu02-png/gacode-electron)');
+  } catch (err) {
+    // electron-updater 没装 / 加载失败 — build 仍能跑, 只是不查更新
+    console.warn('[gacode-electron] autoUpdater init failed (build still OK):', err);
+  }
 
   // 阶段 4: webContents 就绪后补发一次 argv deep link
   if (pendingDeepLink && mainWindow) {
@@ -843,6 +925,8 @@ app.whenReady().then(() => {
 // PR2:before-quit 标记用户主动退出 —— 让 BrowserWindow.close 不再被劫持
 app.on('before-quit', () => {
   isQuiting = true;
+  // 0.7.5 deliveries-15: 关掉自动下载 worker
+  stopDeliveriesDownloader();
   console.log('[gacode-electron] before-quit, isQuiting=true');
 });
 
