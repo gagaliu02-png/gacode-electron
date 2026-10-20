@@ -115,7 +115,7 @@ export function ProfileChangePassword() {
   const pending = changeMutation.isPending;
 
   return (
-    <div className="min-h-full px-6 py-6">
+    <div className="min-h-full px-4 lg:px-8 py-6">
       <div className="max-w-md mx-auto space-y-5">
         <h1 className="text-xl font-medium">修改密码</h1>
 

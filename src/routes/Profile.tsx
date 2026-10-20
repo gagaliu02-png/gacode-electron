@@ -111,7 +111,7 @@ export function Profile() {
   const uid = user?.id || "-";
 
   return (
-    <div className="min-h-full px-6 py-6">
+    <div className="min-h-full px-4 lg:px-8 py-6">
       <div className="max-w-2xl mx-auto space-y-6">
         {/* 顶部操作区 */}
         <div className="flex items-center justify-end gap-2">

@@ -222,7 +222,7 @@ export function ChatList() {
   return (
     <div className="min-h-full flex flex-col">
       {/* 顶 Header — 搜索 + 计数 + 新建按钮 */}
-      <div className="px-6 pt-4 flex items-center justify-between gap-4">
+      <div className="px-4 lg:px-8 pt-4 flex items-center justify-between gap-4">
         <div className="text-sm text-fg-muted shrink-0">
           {pinnedCount > 0 ? `${pinnedCount} 条置顶 · 共 ${sortedChats.length}` : `共 ${sortedChats.length} 条对话`}
         </div>
@@ -247,7 +247,7 @@ export function ChatList() {
 
       {/* 错误态 */}
       {error ? (
-        <div className="px-6 py-4">
+        <div className="px-4 lg:px-8 py-4">
           <div className="rounded-md bg-danger-soft/30 px-4 py-3 text-sm">
             加载失败:{error instanceof Error ? error.message : String(error)}
           </div>
@@ -255,7 +255,7 @@ export function ChatList() {
       ) : null}
 
       {/* 列表 */}
-      <div className="px-6 py-4 flex-1">
+      <div className="px-4 lg:px-8 py-4 flex-1">
         {isLoading ? (
           <SkeletonList />
         ) : sortedChats.length === 0 ? (
@@ -313,7 +313,7 @@ export function ChatList() {
 
       {/* 多选模式 bottom bar */}
       {multiSelectIds.size > 0 ? (
-        <div className="sticky bottom-0 z-30 bg-bg-elevated px-4 py-3 flex items-center gap-3">
+        <div className="sticky bottom-0 z-30 bg-bg-elevated px-4 lg:px-8 py-3 flex items-center gap-3">
           <span className="text-sm">
             已选 <strong>{multiSelectIds.size}</strong> 条
           </span>

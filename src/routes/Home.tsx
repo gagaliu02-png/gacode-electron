@@ -275,7 +275,7 @@ export function Home() {
       {/* 中部: 居中 logo + 欢迎语
           0.7.6 — 删掉顶部 brand bar (gaga 截图反馈 §2: 重复), AppShell 的 sidebar
           已有 G + gacode 标识, Home 再画一次是冗余. */}
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-8">
+      <div className="flex-1 flex flex-col items-center justify-center px-4 lg:px-8 py-8">
         <div className="flex flex-col items-center gap-3 text-center">
           <div
             aria-hidden="true"
@@ -296,7 +296,7 @@ export function Home() {
           0.7.6 — 删掉 Home 外层独立的 `+` 按钮 (gaga 截图反馈 §4 补充: 两个 +
           重复). 现在用 onPlusClick 把 `+` 触发传到 PlusSheet, ChatInputBar 内
           置的 `+` 按钮负责 UI. ref 让 emoji / 知识库 选中后注入 textarea 文本. */}
-      <div className="px-4 pb-4 pt-2">
+      <div className="px-4 lg:px-8 pb-4 pt-2">
         <ChatInputBar
           ref={inputBarRef}
           isStreaming={false}

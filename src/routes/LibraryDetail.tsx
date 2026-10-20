@@ -153,7 +153,7 @@ export function LibraryDetail() {
 
   if (isLoading) {
     return (
-      <div className="min-h-full px-6 py-8">
+      <div className="min-h-full px-4 lg:px-8 py-8">
         <div className="max-w-3xl mx-auto">
           <div className="h-8 w-1/2 bg-bg-sunken rounded animate-pulse" />
           <div className="h-4 w-1/3 bg-bg-sunken rounded mt-3 animate-pulse" />
@@ -165,7 +165,7 @@ export function LibraryDetail() {
 
   if (error || !item) {
     return (
-      <div className="min-h-full px-6 py-8">
+      <div className="min-h-full px-4 lg:px-8 py-8">
         <div className="max-w-3xl mx-auto">
           <div className="rounded-md bg-danger-soft/30 border border-danger/40 px-4 py-3 text-sm">
             加载失败:{error instanceof Error ? error.message : "未找到"}
@@ -181,7 +181,7 @@ export function LibraryDetail() {
   }
 
   return (
-    <div className="min-h-full px-6 py-6">
+    <div className="min-h-full px-4 lg:px-8 py-6">
       <div className="max-w-3xl mx-auto space-y-5">
         {/* 头部 */}
         <header className="space-y-2">

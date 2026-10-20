@@ -225,7 +225,7 @@ export function Notifications() {
   return (
     <div className="min-h-full flex flex-col">
       {/* 顶部 */}
-      <div className="sticky top-0 z-10 bg-bg-base px-6 py-3 flex items-center justify-between">
+      <div className="sticky top-0 z-10 bg-bg-base px-4 lg:px-8 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h1 className="text-base font-medium">通知</h1>
           {unreadCount > 0 ? (
@@ -263,12 +263,12 @@ export function Notifications() {
       </div>
 
       {/* 分类 tab (notifications-6) */}
-      <div className="px-6 py-2 border-b border-border">
+      <div className="px-4 lg:px-8 py-2 border-b border-border">
         <CategoryTabs active={category} onChange={setCategory} />
       </div>
 
       {/* 列表 */}
-      <div className="flex-1 px-6 py-4">
+      <div className="flex-1 px-4 lg:px-8 py-4">
         {isLoading ? (
           <SkeletonList />
         ) : error ? (

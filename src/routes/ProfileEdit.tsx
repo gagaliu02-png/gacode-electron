@@ -155,7 +155,7 @@ export function ProfileEdit() {
 
   if (isLoading) {
     return (
-      <div className="min-h-full px-6 py-6">
+      <div className="min-h-full px-4 lg:px-8 py-6">
         <div className="max-w-2xl mx-auto">
           <div className="h-8 w-1/3 bg-bg-sunken rounded animate-pulse" />
         </div>
@@ -164,7 +164,7 @@ export function ProfileEdit() {
   }
 
   return (
-    <div className="min-h-full px-6 py-6">
+    <div className="min-h-full px-4 lg:px-8 py-6">
       <div className="max-w-2xl mx-auto space-y-5">
         <h1 className="text-xl font-medium">编辑资料</h1>
 
