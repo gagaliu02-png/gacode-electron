@@ -35,7 +35,8 @@ const HOME_PATH = "/";
 
 function resolveTitle(pathname: string): string {
   if (pathname === "/") return "首页";
-  if (pathname.startsWith("/chat/")) return "对话详情";
+  // 0.7.7 — /chat/* 不再渲染外层 header (ChatDetail 自管 h-12 header).
+  //   这里不处理 /chat/* 分支, 避免死代码保留"对话详情"字面量.
   if (pathname === "/library") return "知识库";
   if (pathname.startsWith("/library/")) return "知识库详情";
   if (pathname === "/deliveries") return "交付中心";
@@ -113,7 +114,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   //   ☰ 按钮 + sticky transparent 背景, 不显示标题栏). electron 是桌面端 sidebar
   //   已常驻, Home 不要 header 等价于"右半部分纯背景 + 内容", 跟 sidebar 同底色
   //   视觉一体.
-  const showHeader = location.pathname !== HOME_PATH;
+  //
+  // 0.7.7 — ChatDetail 双层头部修复: /chat/* 也不渲染外层 header, 由 ChatDetail
+  //   自有的 h-12 header (真实会话名 + ModelChips + ⋮) 负责标题展示. AppShell 在
+  //   这里再画一个写死的"对话详情"会和 ChatDetail 自管 header 同时出现两层.
+  const showHeader =
+    location.pathname !== HOME_PATH &&
+    !location.pathname.startsWith("/chat/");
 
   // chats — sidebar 真实数据
   const { data: chatsData, isLoading: chatsLoading } = useQuery({
