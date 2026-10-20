@@ -19,8 +19,10 @@
  *   - 组件卸载 → abort() 但不发 USER_STOP (让 gaclaw 跑完正常落库)
  *
  * 边界:
- *   - 输入 image / 文档 / emoji / knowledge 4 类附件, 全部走 ChatInputBar 内置按钮
- *     (gagaOS §④ — 不再独立渲染附件按钮区; 删 PlusActionsSheet)
+ *   - 输入附件入口统一收在 ChatInputBar 左侧 `+` 按钮 (gagaOS 2026-10-20 hotfix 2):
+ *     点 `+` → PlusActionsSheet (6 项: image / document / emoji / knowledge / camera / template)
+ *     → ChatDetail 自管 sheet / file input / emoji picker / knowledge sheet.
+ *     ChatInputBar 只通过 ref 暴露 insertEmoji / addAttachment / focus.
  *   - 当前 chat 标题 来自 useChats 拿到的 chat.title (server 持久化)
  *
  * 阶段 8 (chat-id-1/13/14/15/16/17/18/19 P0):
@@ -50,6 +52,16 @@
  *   - §④ ChatDetail.tsx 独立附件按钮区删除 (leftSlot / PlusActionsSheet 全删)
  *   - §⑤ autoTitle 跨 chat firedRef reset 修复 (chatId 变化时清 ref)
  *   - §⑥ 点赞 / 点砍删除, MessageMenu 退到 4 项
+ *
+ * gagaOS 2026-10-20 反馈 (0.7.5 hotfix 2):
+ *   - §A 撤销 §②③④ — 附件入口应统一收在 `+` 按钮, 不再 inline 塞入 ChatInputBar
+ *   - §B 恢复 PlusActionsSheet (chat/PlusActionsSheet.tsx) 6 项:
+ *     图片 (image) / 文档 (document) / 表情 (emoji) / 知识库 (knowledge) /
+ *     拍照 (camera) / 模板 (template, electron 未实现 → toast)
+ *   - §C ChatInputBar 只保留 1 个 `+` 按钮 → onPlusClick → ChatDetail 弹 sheet
+ *   - §D ChatDetail 自管 EmojiPicker / KnowledgeAttachSheet open 状态
+ *   - §E 文件格式明确列出 (image: jpeg/png/gif/webp/svg/heic/bmp;
+ *     document: pdf/doc/docx/xls/xlsx/ppt/pptx/txt/md)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -78,11 +90,24 @@ import {
   type ChatChunk,
   type CancelIntent,
 } from "../lib/cancel";
+import {
+  uploadAttachment,
+  deriveUploadMode,
+  type UploadMode,
+} from "../lib/upload";
 import { MessageList, type ChatMessageModel } from "../components/chat/MessageList";
 import {
   ChatInputBar,
+  type ChatInputBarHandle,
   type PendingAttachment,
 } from "../components/chat/ChatInputBar";
+import {
+  PlusActionsSheet,
+  type PlusActionKind,
+  PLUS_ACTION_ACCEPT,
+} from "../components/chat/PlusActionsSheet";
+import { EmojiPicker } from "../components/home/EmojiPicker";
+import { KnowledgeAttachSheet } from "../components/chat/KnowledgeAttachSheet";
 import {
   StreamingErrorBanner,
   classifyStreamingError,
@@ -260,6 +285,25 @@ export function ChatDetail() {
 
   // 阶段 8 chat-id-13 — approval_request 累积. 任一按钮触发 → 清整张 banner.
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
+
+  // ────────────── 0.7.5 hotfix 2 (gaga 反馈 2026-10-20) — `+` 按钮 + sheet 流程 ──────────────
+  // ChatInputBar 不再内置 4 个附件按钮, 只在 textarea 左侧放一个 `+` 按钮.
+  //   点 `+` → onPlusClick → ChatDetail 把 plusOpen=true → 弹 PlusActionsSheet.
+  //   选中某项 → handlePlusAction(kind) → 触发对应 file input / 弹 EmojiPicker / 弹 KB sheet / toast.
+  // ChatInputBar 通过 ref 暴露 imperative handle:
+  //   - inputBarRef.current.insertEmoji(emoji)  → EmojiPicker 选中后插入 cursor 位置
+  //   - inputBarRef.current.addAttachment(att) → 文件上传完成后加 chip
+  //   - inputBarRef.current.focus()            → EmojiPicker / KB sheet 关闭后拿回焦点
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const inputBarRef = useRef<ChatInputBarHandle | null>(null);
+  // 三个隐藏 file input: image / document / camera. trigger 通过 imageInputRef.current.click().
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const documentInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  // 当前 sheet 选中的 kind → handleFileChange 拿到 File 后用它选 upload mode.
+  const pendingUploadKindRef = useRef<UploadMode | null>(null);
 
   const addPendingApproval = useCallback((req: ApprovalRequest) => {
     setPendingApprovals((prev) =>
@@ -745,8 +789,10 @@ export function ChatDetail() {
   ];
 
   // ────────────── 知识库挂载 — chat-id-30 ──────────────
-  // ChatInputBar 自管 KnowledgeAttachSheet open 状态; 选中 item.id 推给我们
-  // 累积到 pendingKnowledgeRefs (chip 提示 user 已挂载, 跟 web 同款).
+  // 0.7.5 hotfix 2 — ChatDetail 自管 KnowledgeAttachSheet open 状态 (不再让
+  //   ChatInputBar 内部持有). 选中 item.id 累积到 pendingKnowledgeRefs
+  //   (chip 提示 user 已挂载, 跟 web 同款). PlusActionsSheet → knowledge action
+  //   → setKnowledgeOpen(true) → KnowledgeAttachSheet onPick → 这里.
   const handleKnowledgePick = useCallback(
     (item: LibraryItem) => {
       setPendingKnowledgeRefs((prev) =>
@@ -757,22 +803,146 @@ export function ChatDetail() {
     [toast],
   );
 
+  // ────────────── 0.7.5 hotfix 2 — PlusActionsSheet 派发 + 文件上传 ──────────────
+  // 选中 PlusActionsSheet 某项 → handlePlusAction(kind):
+  //   - image     → 触发 image file input → 上传 (mode=image) → chip 加进 ChatInputBar
+  //   - document  → 触发 document file input → 上传 (mode=document) → chip 加进 ChatInputBar
+  //   - camera    → 触发 camera file input (capture=environment) → 上传 (mode=image)
+  //   - emoji     → 弹 EmojiPicker → 选中 → inputBarRef.current.insertEmoji(emoji)
+  //   - knowledge → 弹 KnowledgeAttachSheet → 选中 → handleKnowledgePick 累积
+  //   - template  → toast "模板功能即将推出" (electron 端未实现, 跟 web 同款)
+  const triggerUpload = useCallback(
+    (kind: "image" | "document" | "camera") => {
+      if (streamingAssistantId) {
+        toast({
+          message: "流式生成中,无法上传新附件,请等上一轮结束",
+          variant: "warning",
+        });
+        return;
+      }
+      pendingUploadKindRef.current =
+        kind === "document" ? "document" : "image";
+      // 80ms delay 让 sheet 先关, 再 click file input (避免同时两个 dialog 抢焦点)
+      window.setTimeout(() => {
+        const ref =
+          kind === "image"
+            ? imageInputRef
+            : kind === "document"
+            ? documentInputRef
+            : cameraInputRef;
+        ref.current?.click();
+      }, 80);
+    },
+    [streamingAssistantId, toast],
+  );
+
+  const handlePlusAction = useCallback(
+    (kind: PlusActionKind) => {
+      // PlusActionsSheet 自己关闭 onClose (BottomSheet 内置), 这里 dispatch
+      switch (kind) {
+        case "image":
+          triggerUpload("image");
+          break;
+        case "document":
+          triggerUpload("document");
+          break;
+        case "camera":
+          triggerUpload("camera");
+          break;
+        case "emoji":
+          window.setTimeout(() => {
+            setEmojiOpen(true);
+            // 关 sheet 后拿回 textarea 焦点
+            inputBarRef.current?.focus();
+          }, 80);
+          break;
+        case "knowledge":
+          window.setTimeout(() => {
+            setKnowledgeOpen(true);
+            inputBarRef.current?.focus();
+          }, 80);
+          break;
+        case "template":
+          toast({ message: "模板功能即将推出", variant: "default" });
+          break;
+      }
+    },
+    [triggerUpload, toast],
+  );
+
+  // 文件 input change handler — 上传 → 调 inputBarRef.current.addAttachment(att)
+  //   让 ChatInputBar 把 chip 渲染出来 (ChatInputBar 仍持有 chips/状态/progress).
+  //   image/document 走 upload.ts 的 uploadAttachment, 复用 web gacode-web 同条路径.
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      // 清 value 让同名文件二次选择仍能触发
+      e.target.value = "";
+      if (!f) return;
+      if (streamingAssistantId) {
+        toast({
+          message: "流式生成中,无法上传新附件,请等上一轮结束",
+          variant: "warning",
+        });
+        return;
+      }
+      const mode = pendingUploadKindRef.current ?? deriveUploadMode(f);
+      pendingUploadKindRef.current = null;
+      uploadAttachment(f, { mode })
+        .promise.then((res) => {
+          if (!res.url && !res.fileId) {
+            toast({ message: "未拿到附件信息", variant: "danger" });
+            return;
+          }
+          inputBarRef.current?.addAttachment({
+            url: res.url,
+            fileId: res.fileId,
+            name: f.name,
+          });
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg === "aborted" || msg.includes("aborted")) return;
+          toast({ message: `上传失败: ${msg}`, variant: "danger" });
+        });
+    },
+    [streamingAssistantId, toast],
+  );
+
+  // EmojiPicker 选中 → 调 inputBarRef.current.insertEmoji(emoji) 让 ChatInputBar
+  //   在 textarea 光标处插入 (不破坏现有 selection, 跟 web 同款).
+  const handleEmojiSelect = useCallback((emoji: string) => {
+    inputBarRef.current?.insertEmoji(emoji);
+    setEmojiOpen(false);
+  }, []);
+
 // ────────────── Slash 命令派发 (chat-id-25) ──────────────
   // 13 条命令的客户端路由:
-  //   - translate / summary / search / template / favorite / voice → 已由 ChatInputBar
-  //     自处理 (insert 模板 / 静默) 或保留默认 (slashmenu 自带 supported=false 占位)
-  //   - clear / image / file / camera → 已在 ChatInputBar 处理 (clear 清 chips, image/file
-  //     走其内 AttachmentPicker)
-  //   - knowledge → 走 ChatInputBar 内部 KnowledgeAttachSheet (gagaOS §② — ChatInputBar
-  //     自己管 sheet open, 选中调 onKnowledgePick 推回这里累积)
+  //   - translate / summary → 已由 ChatInputBar 自处理 (insert 中文模板)
+  //   - clear              → 已由 ChatInputBar 自处理 (清 chips)
+  //   - image / file / camera / knowledge → 0.7.5 hotfix 2: 路由到 handlePlusAction,
+  //     跟 `+` 按钮流程同源 (触发 file input 或弹对应 sheet).
+  //   - search / template / favorite / voice → 保留 no-op / SlashMenu 自带 supported=false 占位
   //   - new → 触发 createChat + navigate 到新 chat
   //   - save → 把最近一条 assistant 消息保存到知识库 (chat-id-15 fallback 路径)
   const handleSlashCommand = useCallback(
     (cmd: SlashCommand) => {
       switch (cmd) {
+        case "image":
+          // 0.7.5 hotfix 2: `/image` 走 handlePlusAction("image") 走 file input
+          handlePlusAction("image");
+          break;
+        case "file":
+          // `/file` 走 handlePlusAction("document") 走 file input
+          handlePlusAction("document");
+          break;
+        case "camera":
+          // `/camera` 走 handlePlusAction("camera") 走 capture file input
+          handlePlusAction("camera");
+          break;
         case "knowledge":
-          // gagaOS §② — 走 ChatInputBar 内部 sheet; 这里给 toast 提示 user 用 📚 按钮
-          toast({ message: "请用输入栏的「📚 知识库」按钮挂载", variant: "default" });
+          // `/knowledge` 走 handlePlusAction("knowledge") 弹 KnowledgeAttachSheet
+          handlePlusAction("knowledge");
           break;
         case "new":
           // 走 createChat mutation (跟 ChatList / Home 同款)
@@ -806,9 +976,6 @@ export function ChatDetail() {
             });
           break;
         }
-        case "image":
-        case "file":
-        case "camera":
         case "search":
         case "template":
         case "favorite":
@@ -821,13 +988,13 @@ export function ChatDetail() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [messages, toast],
+    [messages, toast, createChatMutation, handlePlusAction],
   );
 
-  // gagaOS §②④ — 旧 PlusActionsSheet + leftSlot 已删; ChatInputBar 内置 4 个附件入口
-  //   (image / document / emoji / knowledge). pendingKnowledgeRefs chip 提示保留在
-  //   ChatDetail 渲染层 (输入栏上方), 由 ChatInputBar 内部 KnowledgeAttachSheet 处理 +
-  //   onKnowledgePick 回调推 item.id 累积到这里.
+  // gagaOS §②④ hotfix 2 — `+` 按钮 + 弹层流程全部由 ChatDetail 自管 (PlusActionsSheet /
+  //   EmojiPicker / KnowledgeAttachSheet). pendingKnowledgeRefs chip 提示保留在
+  //   ChatDetail 渲染层 (输入栏上方), 由 KnowledgeAttachSheet onPick → handleKnowledgePick
+  //   把 item.id 累积到这里.
 
   return (
     <div className="h-full flex flex-col bg-bg-base">
@@ -915,20 +1082,81 @@ export function ChatDetail() {
         </div>
       ) : null}
 
-      {/* 输入栏 — chat-id-19 加 canRerun + onRerun. gagaOS §②④ — 内置 image/document/emoji/knowledge 4 个
-          附件入口; 不再传 leftSlot; KnowledgeAttachSheet 走 ChatInputBar 内部状态.
-          chat-id-25 slash 命令走 onSlashCommand 回调. */}
+      {/* 输入栏 — chat-id-19 加 canRerun + onRerun. 0.7.5 hotfix 2 — 单一 `+` 按钮
+          替代原本 4 个 inline 附件按钮. `+` → onPlusClick → ChatDetail 弹 PlusActionsSheet.
+          ChatInputBar 通过 ref 暴露 insertEmoji / addAttachment / focus. */}
       <ChatInputBar
+        ref={inputBarRef}
         isStreaming={isStreaming}
         canRerun={canRerun}
         onRerun={handleRerun}
         onStop={handleStop}
         onSubmit={handleSubmit}
-        onKnowledgePick={handleKnowledgePick}
+        onPlusClick={() => setPlusOpen(true)}
         onSlashCommand={handleSlashCommand}
         onAttachmentError={(msg) =>
           toast({ message: `上传失败: ${msg}`, variant: "danger" })
         }
+      />
+
+      {/* 0.7.5 hotfix 2 — `+` 按钮触发 6 项 action sheet (image / document / emoji /
+          knowledge / camera / template). 选中 → handlePlusAction(kind) 派发. */}
+      <PlusActionsSheet
+        open={plusOpen}
+        onClose={() => setPlusOpen(false)}
+        onAction={handlePlusAction}
+      />
+
+      {/* 0.7.5 hotfix 2 — EmojiPicker 浮层 (复用 components/home/EmojiPicker.tsx).
+          选中 → handleEmojiSelect → inputBarRef.current.insertEmoji(emoji)
+          在 textarea 光标处插入. */}
+      <EmojiPicker
+        open={emojiOpen}
+        onClose={() => {
+          setEmojiOpen(false);
+          inputBarRef.current?.focus();
+        }}
+        onSelect={handleEmojiSelect}
+      />
+
+      {/* 0.7.5 hotfix 2 — KnowledgeAttachSheet 浮层 (复用 components/chat/KnowledgeAttachSheet.tsx).
+          选中 → handleKnowledgePick 累积 item.id 到 pendingKnowledgeRefs. */}
+      <KnowledgeAttachSheet
+        open={knowledgeOpen}
+        onClose={() => {
+          setKnowledgeOpen(false);
+          inputBarRef.current?.focus();
+        }}
+        onPick={handleKnowledgePick}
+      />
+
+      {/* 0.7.5 hotfix 2 — 三个隐藏 file input, 触发走 handleFileChange.
+          accept 跟 PlusActionsSheet 描述对齐 (PLUS_ACTION_ACCEPT). */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        hidden
+        accept={PLUS_ACTION_ACCEPT.image}
+        onChange={handleFileChange}
+        data-testid="file-input-image"
+      />
+      <input
+        ref={documentInputRef}
+        type="file"
+        hidden
+        accept={PLUS_ACTION_ACCEPT.document}
+        onChange={handleFileChange}
+        data-testid="file-input-document"
+      />
+      <input
+        ref={cameraInputRef}
+        type="file"
+        hidden
+        accept={PLUS_ACTION_ACCEPT.camera}
+        // capture="environment" → Electron Chromium 调起相机 (Windows 多 fallback 到 image picker)
+        capture="environment"
+        onChange={handleFileChange}
+        data-testid="file-input-camera"
       />
 
       {/* 首帧等待占位: 在 MessageList 内部已经能做 typing dots, 这里留作 future use */}
@@ -1017,4 +1245,6 @@ function MoreIcon() {
   );
 }
 
-// gagaOS §②④ — PlusGlyph 已删 (PlusActionsSheet 整体下线, 不再需要触发按钮).
+// gagaOS 2026-10-20 §B — PlusActionsSheet 已重新引入, 由 ChatDetail 自管, 通过
+//   inputBarRef + onPlusClick 跟 ChatInputBar 协同. PlusGlyph 现在住在 ChatInputBar
+//   内部 (`+` 按钮的图标), 不再在 ChatDetail 这边.

@@ -12,6 +12,8 @@
 # 0.7.5 (Deliveries/Detail/Browser/Register/AutoUpdate P1+P2 — misc worker):
 #   - output 改 release-misc-p1-v1/ 绕开 release-* 历史目录, 避免 Windows
 #     Search Indexer 锁住旧目录 EBUSY.
+# 0.7.5 (ChatDetail PlusActionsSheet hotfix 2 — gaga 反馈 2026-10-20):
+#   - output 改 release-chatdetail-plus-v1/ 绕 Search Indexer
 
 appId: com.gaga.gacode
 productName: Gacode
@@ -20,8 +22,8 @@ copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
-  # 0.7.5 (misc worker): 隔离输出目录
-  output: release-misc-p1-v1
+  # 0.7.5 (ChatDetail PlusActionsSheet hotfix 2): 隔离输出目录
+  output: release-chatdetail-plus-v1
 
 files:
   - dist/**/*
