@@ -41,10 +41,6 @@ import { DeliveriesDropZone } from "../components/deliveries/DeliveriesDropZone"
 import {
   DeliveriesMultiSelectToolbar,
 } from "../components/deliveries/MultiSelectToolbar";
-import {
-  OriginFilterChips,
-} from "../components/deliveries/OriginFilter";
-import { originOf, type OriginFilter } from "../components/deliveries/origin";
 import { SortMenu, type LibrarySort } from "../components/library/SortMenu";
 
 // =========================================================================
@@ -67,7 +63,6 @@ export function Deliveries() {
   const { toast } = useToast();
 
   const [tab, setTab] = useState<TabKey>("all");
-  const [origin, setOrigin] = useState<OriginFilter>("all");
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<Deliverable[]>([]);
   const [hasMore, setHasMore] = useState(true);
@@ -82,26 +77,21 @@ export function Deliveries() {
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const isInMultiSelect = selectedIds.size > 0;
 
-  // tab / keyword / origin / sort 变化 → 重置累积列表
+  // tab / keyword / sort 变化 → 重置累积列表
   useEffect(() => {
     setItems([]);
     setPage(1);
     setHasMore(true);
-  }, [tab, keyword, origin, sort]);
-
-  // origin → server 参数 (server 端 schema 当前可能没接受, server 会静默忽略未定义字段)
-  const serverOrigin =
-    origin === "all" ? undefined : (origin as "ai_generated" | "user_uploaded");
+  }, [tab, keyword, sort]);
 
   const { data: pageData, isLoading, isFetching } = useQuery({
-    queryKey: ["deliveries", { type: tab, page, pageSize: PAGE_SIZE, keyword, origin: serverOrigin }],
+    queryKey: ["deliveries", { type: tab, page, pageSize: PAGE_SIZE, keyword }],
     queryFn: () =>
       listDeliverables({
         type: tab === "all" ? undefined : tab,
         page,
         pageSize: PAGE_SIZE,
         keyword: keyword.trim() || undefined,
-        origin: serverOrigin,
       }),
     placeholderData: (prev) => prev,
   });
@@ -297,9 +287,6 @@ export function Deliveries() {
                 className="pl-9 py-2 text-sm"
               />
             </div>
-
-            {/* Row 3: origin 过滤 (P2 deliveries-10) */}
-            <OriginFilterChips selected={origin} onSelect={setOrigin} />
           </div>
         </div>
 
@@ -555,9 +542,6 @@ function DeliveryCard({
         <div className="flex items-center gap-2">
           <span className="text-xs px-1.5 py-0.5 rounded bg-bg-sunken text-fg-muted">
             {TYPE_LABEL[item.deliverableType] || item.deliverableType}
-          </span>
-          <span className="text-xs text-fg-subtle">
-            {originOf(item) === "ai_generated" ? "AI 生成" : "用户上传"}
           </span>
         </div>
         <h3 className="text-sm font-medium text-fg line-clamp-2 break-all">

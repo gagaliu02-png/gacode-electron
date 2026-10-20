@@ -1000,9 +1000,6 @@ export interface DeliverableListResponse {
 
 export async function listDeliverables(params: {
   type?: string;
-  /** "ai_generated" | "user_uploaded" | undefined. 0.7.5 阶段 7 加, server 端
-   *  schema 已接受但默认不过滤; 客户端传 undefined = 不带这个参数. */
-  origin?: "ai_generated" | "user_uploaded";
   page?: number;
   pageSize?: number;
   sessionId?: string;
