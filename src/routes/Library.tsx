@@ -17,6 +17,15 @@
  *
  * 单文件改动; 多选状态 / 编辑 / 排序 / tag 过滤状态全在 Library() 顶层,
  * 卡片改用 LibraryCard (src/components/library/LibraryCard.tsx).
+ *
+ * PC-6 (2026-10-20 gagaOS 拍板): Library 定稿页 — 七项对齐 web
+ *   1. Tabs: pill → underline (用 <Tabs variant="underline">)
+ *   2. 搜索框: 常驻 → 折叠圆药丸 (showSearch toggle)
+ *   3. 卡片: grid 两列 → space-y-3 单列行列表
+ *   4. 圆角: rounded-md → rounded-2xl (在 LibraryCard 组件内改)
+ *   5. 容器宽度: max-w-5xl → max-w-3xl (对齐 web)
+ *   6. 空态: bg-bg-sunken 圆角小卡 → 居中 icon + 标题 + 副文案 + 行动 (border + bg-bg-elevated)
+ *   7. FAB: 缺则补 fixed bottom-right + (对齐 web L568)
  */
 
 import { useMemo, useState } from "react";
@@ -32,6 +41,7 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { useToast } from "../components/ui/Toast";
+import { Tabs } from "../components/ui/Tabs";
 import { LibraryDropZone } from "../components/library/LibraryDropZone";
 import { LibraryCard } from "../components/library/LibraryCard";
 import { CollectSheet } from "../components/library/CollectSheet";
@@ -62,6 +72,8 @@ export function Library() {
 
   const [type, setType] = useState<TypeFilter>("all");
   const [keyword, setKeyword] = useState("");
+  // PC-6: 搜索框折叠 toggle — 默认收起, 跟 web Library (L138 showSearch=false) 一致
+  const [showSearch, setShowSearch] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | undefined>(undefined);
   const [sort, setSort] = useState<LibrarySort>("newest");
   const [page, setPage] = useState(1);
@@ -237,33 +249,22 @@ export function Library() {
       <div className="min-h-full flex flex-col">
         {/* 顶部操作栏 */}
         <div className="sticky top-0 z-10 bg-bg-base">
-          <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full space-y-2 py-2">
-            {/* Row 1: 类型 chip (左) + [+ 新建] (中) + 排序 + 刷新 (右) */}
+          {/* PC-6: 容器宽度对齐 web (max-w-3xl) — 跟 web L421/481/493 一致 */}
+          <div className="px-4 lg:px-8 max-w-3xl mx-auto w-full space-y-2 py-2">
+            {/* Row 1: Tabs (左, 下划线变体 — 对齐 web) + [+ 新建] (中) + 排序 + 搜索 + 刷新 (右) */}
             <div className="flex items-center justify-between gap-2">
-              <div className="flex-1 min-w-0 overflow-x-auto">
-                <div className="inline-flex p-1 rounded-md bg-bg-elevated gap-1">
-                  {TYPE_CHIPS.map((t) => {
-                    const active = type === t.key;
-                    return (
-                      <button
-                        key={t.key}
-                        type="button"
-                        onClick={() => {
-                          setType(t.key);
-                          resetFilters();
-                        }}
-                        className={[
-                          "px-3 py-1 text-sm rounded transition-colors duration-150",
-                          active
-                            ? "bg-brand text-brand-on shadow-sm"
-                            : "text-fg-muted hover:text-fg",
-                        ].join(" ")}
-                      >
-                        {t.label}
-                      </button>
-                    );
-                  })}
-                </div>
+              <div className="flex-1 min-w-0 overflow-x-auto scrollbar-none">
+                {/* PC-6: 改用 <Tabs variant="underline"> — 文字 + brand 下划线
+                     替代旧的实心橙药丸 (item 1). web Library L424-432 同款. */}
+                <Tabs
+                  variant="underline"
+                  tabs={TYPE_CHIPS.map((t) => ({ key: t.key, label: t.label }))}
+                  activeKey={type}
+                  onChange={(k) => {
+                    setType(k as TypeFilter);
+                    resetFilters();
+                  }}
+                />
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <Button
@@ -276,6 +277,21 @@ export function Library() {
                   <span className="hidden sm:inline">新建</span>
                 </Button>
                 <SortMenu value={sort} onChange={setSort} />
+                {/* PC-6: 搜索按钮 toggle — 跟 web Library L437-445 同款圆药丸 icon 按钮 */}
+                <button
+                  type="button"
+                  onClick={() => setShowSearch((v) => !v)}
+                  aria-label="搜索"
+                  className={[
+                    "shrink-0 w-9 h-9 rounded-full transition-colors duration-150",
+                    "inline-flex items-center justify-center",
+                    showSearch
+                      ? "bg-bg-elevated text-fg"
+                      : "text-fg-muted hover:bg-bg-elevated",
+                  ].join(" ")}
+                >
+                  <SearchIcon />
+                </button>
                 <button
                   type="button"
                   onClick={handleRefresh}
@@ -288,20 +304,27 @@ export function Library() {
               </div>
             </div>
 
-            {/* Row 2: 搜索框 */}
-            <div className="relative">
-              <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted pointer-events-none" />
-              <Input
-                type="search"
-                value={keyword}
-                onChange={(e) => {
-                  setKeyword(e.target.value);
-                  resetFilters();
-                }}
-                placeholder="搜索标题..."
-                className="pl-9 py-2 text-sm"
-              />
-            </div>
+            {/* Row 2: 搜索框 (折叠) — showSearch=true 时展开, 默认收起
+                 PC-6: 改 web L458-474 折叠 + 圆药丸形态 (item 2)
+                 CSS 顺序坑: Input base = `rounded-md`, web 要 rounded-full
+                 → 产物里 .rounded-full (pos=34692) 早于 .rounded-md (pos=34952),
+                 需 `!rounded-full` 强制覆盖 */}
+            {showSearch ? (
+              <div className="relative pt-1">
+                <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted pointer-events-none z-10" />
+                <Input
+                  type="search"
+                  value={keyword}
+                  onChange={(e) => {
+                    setKeyword(e.target.value);
+                    resetFilters();
+                  }}
+                  placeholder="搜索标题或标签..."
+                  autoFocus
+                  className="pl-9 py-2 text-sm bg-muted/50 border-0 !rounded-full"
+                />
+              </div>
+            ) : null}
 
             {/* Row 3: Tag 维度过滤 */}
             <TagFilter
@@ -314,15 +337,16 @@ export function Library() {
           </div>
         </div>
 
-        {/* 列表区 */}
-        <div className="flex-1 px-4 lg:px-8 max-w-5xl mx-auto w-full py-4">
+        {/* 列表区 — PC-6: 容器 max-w-3xl (item 5); grid → space-y-3 (item 3) */}
+        <div className="flex-1 px-4 lg:px-8 max-w-3xl mx-auto w-full py-4">
           {isLoading ? (
             <SkeletonGrid />
           ) : filteredItems.length === 0 ? (
             <EmptyState onCreateClick={() => setCollectOpen(true)} />
           ) : (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* PC-6: 单列行列表 + space-y-3 (item 3) — 对齐 web L516 */}
+              <div className="space-y-3">
                 {filteredItems.map((it) => (
                   <LibraryCard
                     key={it.id}
@@ -353,6 +377,26 @@ export function Library() {
           )}
         </div>
       </div>
+
+      {/* PC-6: FAB — 右下角 + 按钮 (item 7)
+          对齐 web L564-572: fixed bottom-6 right-6 z-30 w-14 h-14
+          rounded-full bg-brand text-brand-on shadow-lg hover:bg-brand/90
+          多选模式隐藏 (避免与底部 toolbar 重复入口), 跟 web L563 一致 */}
+      {!isInMultiSelect ? (
+        <button
+          type="button"
+          aria-label="采集内容"
+          onClick={() => setCollectOpen(true)}
+          className={[
+            "fixed bottom-6 right-6 z-30 w-14 h-14 rounded-full",
+            "bg-brand text-brand-on shadow-lg",
+            "hover:bg-brand/90 transition-colors duration-150",
+            "inline-flex items-center justify-center",
+          ].join(" ")}
+        >
+          <FabPlusIcon />
+        </button>
+      ) : null}
 
       {/* 多选模式 bottom toolbar — sticky 在底部; 列表区有 flex-1 让 toolbar 永远贴底 */}
       {isInMultiSelect ? (
@@ -402,39 +446,45 @@ export function Library() {
 
 // ────────────────────────────────────────────────────────────
 // EmptyState — 无数据 + 「+ 新建」 CTA (gagaOS feedback #4)
+//
+// PC-6 (item 6): 对齐 web L1022-1027 空态形态
+//   - 旧: rounded-md bg-bg-sunken p-8 + icon 圆背景
+//   - 新: rounded-2xl border border-border bg-bg-elevated p-12 + 居中 icon
+//         (无圆背景, 跟 web 一致) + 标题 + 副文案 + 行动按钮
 // ────────────────────────────────────────────────────────────
 
 function EmptyState({ onCreateClick }: { onCreateClick: () => void }) {
   return (
     <div className="h-full flex items-center justify-center">
-      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm w-full">
-        <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-elevated flex items-center justify-center text-fg-muted">
-          <LibraryIcon />
-        </div>
-        <p className="text-base font-medium mb-1">还没有知识库</p>
-        <p className="text-sm text-fg-muted mb-4">
+      <div className="rounded-2xl border border-border bg-bg-elevated p-12 text-center max-w-sm w-full">
+        <LibraryIcon className="w-12 h-12 mx-auto text-fg-muted mb-4" />
+        <p className="text-base font-medium">还没有知识库</p>
+        <p className="text-sm text-fg-muted mt-2">
           拖入文件入库,或点击下方按钮手动添加
         </p>
-        <Button
-          variant="default"
-          size="md"
-          onClick={onCreateClick}
-        >
-          <PlusIcon />
-          新建条目
-        </Button>
+        <div className="mt-4">
+          <Button
+            variant="default"
+            size="md"
+            onClick={onCreateClick}
+          >
+            <PlusIcon />
+            新建条目
+          </Button>
+        </div>
       </div>
     </div>
   );
 }
 
+// SkeletonGrid — PC-6: 跟随主列表 grid → space-y-3 + 卡片圆角对齐 rounded-2xl
 function SkeletonGrid() {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div className="space-y-3">
       {Array.from({ length: 6 }).map((_, i) => (
         <div
           key={i}
-          className="rounded-md bg-bg-elevated p-4 animate-pulse"
+          className="rounded-2xl bg-bg-elevated p-4 animate-pulse"
         >
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded bg-bg-sunken" />
@@ -454,15 +504,44 @@ function SkeletonGrid() {
 // Icons
 // ────────────────────────────────────────────────────────────
 
-function LibraryIcon() {
+function LibraryIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
       <path d="M16 6 4 14" />
       <path d="m12 8 8 4" />
       <path d="M3 18a1 1 0 0 1 1 1v3a2 2 0 0 0 4 0v-3" />
       <path d="M21 18a1 1 0 0 0-1 1v3a2 2 0 0 1-4 0v-3" />
       <path d="M4 14v6" />
       <path d="M20 14v6" />
+    </svg>
+  );
+}
+
+// FabPlusIcon — FAB 用, 比顶部 + 新建按钮稍大的 + (对齐 web L568-571 w-7 h-7)
+function FabPlusIcon() {
+  return (
+    <svg
+      width="28"
+      height="28"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
     </svg>
   );
 }

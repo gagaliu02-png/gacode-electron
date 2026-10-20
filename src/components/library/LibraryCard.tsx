@@ -111,7 +111,8 @@ export function LibraryCard({
         }
       }}
       className={[
-        "text-left rounded-md p-4 flex items-start gap-3 select-none",
+        // PC-6: 圆角对齐 web (rounded-2xl) — 直接替换 rounded-md, 元素上无 className 冲突
+        "text-left rounded-2xl p-4 flex items-start gap-3 select-none",
         "cursor-pointer",
         isInMultiSelect && isSelected
           ? "bg-bg-elevated ring-1 ring-brand/60"
