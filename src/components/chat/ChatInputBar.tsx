@@ -10,17 +10,29 @@
  *   - paste 图片: e.clipboardData.items 拿 image/* File → 走 uploadAttachment mode 'image'
  *   - 上传完成后通过 chips 累积, 跟按钮选择走同一条路径
  *
+ * 0.7.5 (chat-id-22/25/30/33 整合 — gaga 截图反馈 6 条):
+ *   - 内置 image / document / emoji / knowledge 4 个附件入口按钮 (gagaOS §④)
+ *   - emoji 按钮 → EmojiPicker (复用 components/home/EmojiPicker.tsx) (gagaOS §③)
+ *   - knowledge 按钮 → KnowledgeAttachSheet (调用 onKnowledgePick 回调) (gagaOS §②)
+ *   - slash menu (chat-id-25) + 13 条命令派发
+ *   - 单一 textarea (阶段 8 chat-id-19 跟 0.7.5 P1 f08e147 撞改: 删掉重复 textarea)
+ *
  * 设计:
  *   - 拖拽高亮是全屏遮罩 + 品牌色边框 + 「拖入文件上传」文字 (非局域 hover)
  *   - counter 处理 dragenter/dragleave 嵌套 (fileSystem 控件会重复触发),
  *     drop 时 enter/leave 都要清零, leave 时若 ref 还在 body 外面也会清零.
+ *   - emoji 选中插入到光标位置 (用 selectionStart/End)
+ *   - knowledge 按钮仅当 onKnowledgePick 给出时显示 (ChatDetail 提供 / Home 不提供)
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AttachmentPicker } from "./AttachmentPicker";
 import { uploadAttachment, deriveUploadMode } from "../../lib/upload";
 import { extractSingleImage } from "../../lib/clipboard";
 import { SlashMenu, type SlashCommand } from "./SlashMenu";
+import { EmojiPicker } from "../home/EmojiPicker";
+import { KnowledgeAttachSheet } from "./KnowledgeAttachSheet";
+import type { LibraryItem } from "../../lib/api";
 
 export interface PendingAttachment {
   /** image mode -> url, document mode -> fileId; mutually exclusive */
@@ -50,14 +62,15 @@ export interface ChatInputBarProps {
   canRerun?: boolean;
   onRerun?: () => void;
   // ============== 0.7.5 增量 ==============
-  /** chat-id-22: 自定义左侧 slot (替换默认 image/document attachment 按钮).
-   *  parent (ChatDetail) 注入 PlusActionsSheet trigger + knowledge refs chips 等. */
-  leftSlot?: ReactNode;
   /** chat-id-25: slash 命令菜单 — 接收 cmd 后 ChatInputBar 自动清除 '/' 前缀.
    *  ChatDetail 自实现 image/file/knowledge 等的真实行为 (image/document 走 input,
    *  knowledge 走 sheet 回调, save 调 api). 模板类 (translate/summary) ChatInputBar
    *  自动插入中文模板到 textarea. 其余 (search/template/favorite/voice) 默认 toast 占位. */
   onSlashCommand?: (cmd: SlashCommand) => void;
+  /** chat-id-30: 知识库挂载 (gagaOS §②③). parent 提供时, ChatInputBar 才显示 📚 按钮,
+   *  点击 → 内部打开 KnowledgeAttachSheet; 选中 → 调 onKnowledgePick(item) →
+   *  parent 维护 pendingKnowledgeRefs 数组. 不提供时按钮隐藏, Home 等场景不受影响. */
+  onKnowledgePick?: (item: LibraryItem) => void;
 }
 
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -76,8 +89,8 @@ export function ChatInputBar({
   onAttachmentError,
   canRerun = false,
   onRerun,
-  leftSlot,
   onSlashCommand,
+  onKnowledgePick,
 }: ChatInputBarProps) {
   const [text, setText] = useState("");
   const [chips, setChips] = useState<PendingAttachment[]>([]);
@@ -89,6 +102,10 @@ export function ChatInputBar({
   // 0.7.5 chat-id-25: slash menu — 自管 trigger + filter + 插入模板.
   const slashTriggerRef = useRef<{ before: string; filter: string } | null>(null);
   const [slashOpen, setSlashOpen] = useState(false);
+  // 0.7.5 gagaOS §③: emoji picker — 自管 open 状态 + 在 textarea cursor 处插入.
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  // 0.7.5 gagaOS §②: knowledge attach sheet — 自管 open 状态, 选中调 onKnowledgePick.
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
 
   // auto-resize — line-height ~24px, max 5 rows
   useEffect(() => {
@@ -264,6 +281,30 @@ export function ChatInputBar({
     setChips((prev) => prev.filter((_, i) => i !== idx));
   };
 
+  // 0.7.5 gagaOS §③ — 在 textarea 光标处插入 emoji. 不破坏现有 selection.
+  const insertEmojiAtCursor = (emoji: string) => {
+    const ta = taRef.current;
+    if (!ta) {
+      setText((prev) => prev + emoji);
+      return;
+    }
+    const start = ta.selectionStart ?? text.length;
+    const end = ta.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    setText(next);
+    // 把 cursor 移到 emoji 之后, focus 拿回 textarea.
+    const caret = start + emoji.length;
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(caret, caret);
+    });
+  };
+
+  // 0.7.5 gagaOS §② — KnowledgeAttachSheet 选中回调 (单选: 推给 parent, sheet 不关)
+  const handleKnowledgePickInternal = (item: LibraryItem) => {
+    onKnowledgePick?.(item);
+  };
+
   return (
     <>
       <div className="bg-bg-elevated px-3 py-2.5">
@@ -300,56 +341,79 @@ export function ChatInputBar({
 
         {/* input row */}
         <div className="flex items-end gap-2">
-          {/* attachment buttons — 0.7.5 chat-id-22: 父组件可注入 leftSlot 替换默认两个 picker.
-              例如 ChatDetail 传 <PlusActionsSheet trigger /> 让 5 类 action 都从 sheet 走. */}
-          {leftSlot ? (
-            <div className="flex items-center gap-1 pb-1 relative">{leftSlot}</div>
-          ) : (
-            <div className="flex items-center gap-1 pb-1">
-              <AttachmentPicker
-                mode="image"
-                accept="image/*"
-                label="添加图片"
+          {/* 0.7.5 gagaOS §④ — 内置 4 个附件入口按钮: image / document / emoji / knowledge.
+                knowledge 仅在 onKnowledgePick 提供时显示 (Home 等无 chip 累加场景不显示). */}
+          <div className="flex items-center gap-1 pb-1">
+            <AttachmentPicker
+              mode="image"
+              accept="image/*"
+              label="添加图片"
+              disabled={isStreaming}
+              onProgress={setProgress}
+              onError={(msg) => {
+                setProgress(null);
+                onAttachmentError?.(msg);
+              }}
+              onUploaded={(r) => {
+                if (r.url) {
+                  setChips((prev) =>
+                    prev.some((x) => x.url === r.url)
+                      ? prev
+                      : [...prev, { name: r.name, url: r.url }],
+                  );
+                }
+              }}
+            />
+            <AttachmentPicker
+              mode="document"
+              accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/msword,.doc,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,.xls,text/plain,.txt"
+              label="添加文档"
+              disabled={isStreaming}
+              onProgress={setProgress}
+              onError={(msg) => {
+                setProgress(null);
+                onAttachmentError?.(msg);
+              }}
+              onUploaded={(r) => {
+                if (r.fileId) {
+                  setChips((prev) =>
+                    prev.some((x) => x.fileId === r.fileId)
+                      ? prev
+                      : [...prev, { name: r.name, fileId: r.fileId }],
+                  );
+                }
+              }}
+            />
+            {/* gagaOS §③ — emoji 按钮 (永远显示; Home 也走) */}
+            <button
+              type="button"
+              aria-label="选择表情"
+              title="选择表情"
+              disabled={isStreaming}
+              onClick={() => setEmojiOpen(true)}
+              data-testid="emoji-trigger"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-fg-muted hover:bg-bg-elevated hover:text-fg disabled:opacity-50 disabled:pointer-events-none transition-colors duration-150 text-base"
+            >
+              <EmojiGlyph />
+            </button>
+            {/* gagaOS §② — knowledge 按钮 (仅当 parent 提供回调时显示) */}
+            {onKnowledgePick ? (
+              <button
+                type="button"
+                aria-label="挂载知识库"
+                title="挂载知识库"
                 disabled={isStreaming}
-                onProgress={setProgress}
-                onError={(msg) => {
-                  setProgress(null);
-                  onAttachmentError?.(msg);
-                }}
-                onUploaded={(r) => {
-                  if (r.url) {
-                    setChips((prev) =>
-                      prev.some((x) => x.url === r.url)
-                        ? prev
-                        : [...prev, { name: r.name, url: r.url }],
-                    );
-                  }
-                }}
-              />
-              <AttachmentPicker
-                mode="document"
-                accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/msword,.doc,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,.xls,text/plain,.txt"
-                label="添加文档"
-                disabled={isStreaming}
-                onProgress={setProgress}
-                onError={(msg) => {
-                  setProgress(null);
-                  onAttachmentError?.(msg);
-                }}
-                onUploaded={(r) => {
-                  if (r.fileId) {
-                    setChips((prev) =>
-                      prev.some((x) => x.fileId === r.fileId)
-                        ? prev
-                        : [...prev, { name: r.name, fileId: r.fileId }],
-                    );
-                  }
-                }}
-              />
-            </div>
-          )}
+                onClick={() => setKnowledgeOpen(true)}
+                data-testid="knowledge-trigger"
+                className="h-9 w-9 inline-flex items-center justify-center rounded-md text-fg-muted hover:bg-bg-elevated hover:text-fg disabled:opacity-50 disabled:pointer-events-none transition-colors duration-150"
+              >
+                <BookGlyph />
+              </button>
+            ) : null}
+          </div>
 
-          {/* textarea — 0.7.5 chat-id-25: 包一个相对容器, SlashMenu 绝对定位浮在上方. */}
+          {/* textarea — 0.7.5 chat-id-25: 包一个相对容器, SlashMenu 绝对定位浮在上方.
+              单一 textarea (阶段 8 chat-id-19 + 0.7.5 P1 f08e147 撞改; 删掉重复 textarea — gagaOS §①) */}
           <div className="flex-1 relative min-w-0">
             <textarea
               ref={taRef}
@@ -393,21 +457,6 @@ export function ChatInputBar({
             ) : null}
           </div>
 
-          {/* textarea */}
-          <textarea
-            ref={taRef}
-            rows={1}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            placeholder={
-              isStreaming ? "正在流式生成… 完成后再发下一条" : "说点什么… (Enter 发送, Shift+Enter 换行 · 可拖入 / 粘贴图片)"
-            }
-            disabled={isStreaming}
-            className="flex-1 resize-none bg-bg-sunken border border-border rounded-md px-3 py-2 text-sm leading-6 placeholder:text-fg-subtle focus:outline-none focus:border-brand disabled:opacity-70 max-h-32 overflow-y-auto"
-          />
-
           {/* send / stop / rerun — 三态按钮 (阶段 8 chat-id-19)
               - 流式中 → stop (red)
               - 非流式 + canRerun → rerun (brand, 复用同一位置) — 跟 web 同款
@@ -445,6 +494,25 @@ export function ChatInputBar({
           )}
         </div>
       </div>
+
+      {/* gagaOS §③ — EmojiPicker 浮层 (复用 components/home/EmojiPicker.tsx) */}
+      <EmojiPicker
+        open={emojiOpen}
+        onClose={() => setEmojiOpen(false)}
+        onSelect={(emoji) => {
+          insertEmojiAtCursor(emoji);
+          setEmojiOpen(false);
+        }}
+      />
+
+      {/* gagaOS §② — KnowledgeAttachSheet 浮层 (单选, 选中推 onKnowledgePick) */}
+      {onKnowledgePick ? (
+        <KnowledgeAttachSheet
+          open={knowledgeOpen}
+          onClose={() => setKnowledgeOpen(false)}
+          onPick={handleKnowledgePickInternal}
+        />
+      ) : null}
 
       {/* 全屏 drag 高亮 — 阶段 4 */}
       {dragActive ? (
@@ -556,6 +624,31 @@ function RerunIcon() {
     >
       <path d="M3 12a9 9 0 1 0 3-6.7" />
       <polyline points="3 4 3 9 8 9" />
+    </svg>
+  );
+}
+
+// 0.7.5 gagaOS §③ — emoji 入口按钮图标 (常见笑脸). 走 unicode emoji 不引 lucide.
+function EmojiGlyph() {
+  return <span aria-hidden="true">😀</span>;
+}
+
+// 0.7.5 gagaOS §② — knowledge 入口按钮图标 (书). 跟 emoji 按钮风格一致.
+function BookGlyph() {
+  return (
+    <svg
+      aria-hidden="true"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
     </svg>
   );
 }

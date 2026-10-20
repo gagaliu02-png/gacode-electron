@@ -5,14 +5,14 @@
  * 但 electron 这边把菜单抽成独立组件 (web 内嵌在 MessageBubble 内),
  * 给 MessageBubble 提供 props (callbacks + capability flags) 即可开/关菜单:
  *
- *   用户侧条目 (cell 共 5 个 action):
+ *   用户侧条目 (gagaOS 2026-10-19 拍板 — 推翻之前 chat-id-17 yes):
  *     - 复制            : 任意 role, 不依赖 server
  *     - 保存到知识库   : 任意 role, 走 createLibraryItem(text snippet)
- *     - 点赞 / 点踩    : assistant only, 暂未接入 server endpoint (BLOCKER)
  *     - 撤回            : assistant only, 2 分钟窗口, PATCH /messages/:id/recall
  *     - 删除            : 任意 role, DELETE /messages/:id
- *
- *   重新生成 (chat-id-19) 不放在 ⋮ 菜单, 放 ChatInputBar 旁 (web 同款).
+ *     - 重新生成         : 在 ChatInputBar 右侧 (chat-id-19), 不放 ⋮ 菜单
+ *   删 (gagaOS §⑥ — 整体删除, server 无 /messages/:id/feedback endpoint):
+ *     - 点赞 / 点踩    : assistant only
  *
  * 复用 src/components/ui/DropdownMenu.tsx + src/lib/toast.tsx.
  *
@@ -23,8 +23,6 @@
  *   - Save to KB / Recall / Delete 都调 server; onSuccess → invalidateQueries
  *     兜底刷新本地 history.
  *   - copy 拿 navigator.clipboard.writeText, 不支持时降级到 textarea + execCommand.
- *   - like / dislike: server 没 endpoint, 点 → toast '暂未上线' + console.warn.
- *     文末报告时显式 send-blocker.
  */
 
 import { useCallback } from "react";
@@ -58,8 +56,6 @@ export interface MessageMenuProps {
 export type MessageAction =
   | "copy"
   | "save-to-knowledge"
-  | "like"
-  | "dislike"
   | "recall"
   | "delete";
 
@@ -177,39 +173,6 @@ export function MessageMenu(props: MessageMenuProps) {
     }
   }, [content, toast, onActionDone]);
 
-  const handleLike = useCallback(() => {
-    // BLOCKER (报告 §X.1): server unified-api 当前**没有** message feedback 端点.
-    //   gacode-web 也未实现 like/dislike (web api.ts 第 1011-1087 行只做
-    //   approval, 没有 thumbsUp/feedback). yinian-android ChatDetailScreen.kt
-    //   历史上有 `feedbackRating()` 调 /messages/:id/rating, 但 unified-api
-    //   当前 routes 里搜不到 — 同步落后. 等 server 接 /messages/:id/feedback
-    //   后, 这里改成 POST 调它 + invalidation. 先 toast 不让按钮死点.
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[message-menu] like not wired: server endpoint /messages/${messageId}/feedback missing (send-blocker)`,
-    );
-    toast({
-      message: "点赞反馈暂未上线, 等后端接口就绪",
-      variant: "warning",
-      duration: 4000,
-    });
-    onActionDone?.("like", false, "endpoint-missing");
-  }, [messageId, toast, onActionDone]);
-
-  const handleDislike = useCallback(() => {
-    // BLOCKER (见 handleLike 注释) — dislike 同样等 server 端 feedback 端点.
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[message-menu] dislike not wired: server endpoint /messages/${messageId}/feedback missing (send-blocker)`,
-    );
-    toast({
-      message: "点踩反馈暂未上线, 等后端接口就绪",
-      variant: "warning",
-      duration: 4000,
-    });
-    onActionDone?.("dislike", false, "endpoint-missing");
-  }, [messageId, toast, onActionDone]);
-
   const handleRecall = useCallback(async () => {
     if (!canRecall) {
       toast({
@@ -258,23 +221,13 @@ export function MessageMenu(props: MessageMenuProps) {
   }
 
   const items: DropdownMenuItem[] = [
-    // 1) 复制
+    // 1) 复制 (任意 role)
     { label: "复制", onClick: () => void handleCopy() },
+    // 2) 保存到知识库 (任意 role) — 走 web page.tsx:962-969 fallback createLibraryItem
+    { label: "保存到知识库", onClick: () => void handleSaveToKnowledge() },
   ];
 
-  if (role === "assistant") {
-    // 2-3) 反馈 (BLOCKER) — 当前 enabled 但点 → toast; 菜单项保留以显示 UI 形态,
-    //    也方便 gaga 看出"差一个 server 端点"。
-    items.push(
-      { label: "点赞", onClick: () => void handleLike() },
-      { label: "点踩", onClick: () => void handleDislike() },
-    );
-  }
-
-  // 4) 保存到知识库
-  items.push({ label: "保存到知识库", onClick: () => void handleSaveToKnowledge() });
-
-  // 5) 撤回 (assistant + 2 分钟窗口)
+  // 3) 撤回 (assistant + 2 分钟窗口)
   if (showRecall) {
     items.push({
       label: canRecall ? "撤回" : "撤回（已超过 2 分钟）",
@@ -283,7 +236,7 @@ export function MessageMenu(props: MessageMenuProps) {
     });
   }
 
-  // 6) 删除 — destructive (红色), 放最后
+  // 4) 删除 — destructive (红色), 放最后
   items.push({
     label: "删除",
     onClick: () => void handleDelete(),

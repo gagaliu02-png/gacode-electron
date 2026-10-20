@@ -19,7 +19,8 @@
  *   - 组件卸载 → abort() 但不发 USER_STOP (让 gaclaw 跑完正常落库)
  *
  * 边界:
- *   - 输入 image / 文档 都走 lib/upload.ts; 主调用流跟 ChatInputBar 联动
+ *   - 输入 image / 文档 / emoji / knowledge 4 类附件, 全部走 ChatInputBar 内置按钮
+ *     (gagaOS §④ — 不再独立渲染附件按钮区; 删 PlusActionsSheet)
  *   - 当前 chat 标题 来自 useChats 拿到的 chat.title (server 持久化)
  *
  * 阶段 8 (chat-id-1/13/14/15/16/17/18/19 P0):
@@ -29,10 +30,26 @@
  *   - chat-id-15: 消息 ⋮ → createLibraryItem(doc) (跟 web fallback 同款, server
  *                 还没专用端点 /messages/:id/save-to-kb, 文末报告 send-blocker)
  *   - chat-id-16: 消息 ⋮ → deleteMessage DELETE, 软删, ConfirmDialog 二次确认
- *   - chat-id-17: 消息 ⋮ → like/dislike 暂未上线 (server 没 /messages/:id/feedback
- *                 endpoint, 报告 send-blocker)
+ *   - chat-id-17: ⚠️ gagaOS 2026-10-19 新拍板 推翻之前 yes, **点赞 / 点砍**功能
+ *                 整体删除 (server 端没 /messages/:id/feedback endpoint), 保留
+ *                 复制 / 重新生成 (ChatInputBar 右侧) / 撤回 / 保存 KB / 删除 5 项
+ *                 — 见 MessageMenu.tsx
  *   - chat-id-18: 消息 ⋮ → clipboard.writeText + toast
  *   - chat-id-19: ChatInputBar 右侧三态按钮 (stop / rerun / send), 重发最后一条 user
+ *
+ * 0.7.5 ChatDetail P1 (f08e147) 增量:
+ *   - chat-id-30: 知识库挂载 chip + KnowledgeAttachSheet; ChatInputBar 内置 📚 按钮
+ *     选中 → handleKnowledgePick 推送 item.id 到 pendingKnowledgeRefs
+ *   - chat-id-31: ModelChips 顶部 model 切换
+ *   - chat-id-33: autoTitleSession 800ms delay 触发 server LLM 标题 (gagaOS §⑤)
+ *
+ * gagaOS 2026-10-19 反馈 (0.7.5 hotfix):
+ *   - §① ChatInputBar 重复 textarea 删除 (阶段 8 P0 + 0.7.5 P1 三 worker 撞改)
+ *   - §② ChatInputBar 内置 image / document / emoji / knowledge, 不再依赖外部 sheet
+ *   - §③ EmojiPicker 入口接入 ChatInputBar (复用 components/home/EmojiPicker.tsx)
+ *   - §④ ChatDetail.tsx 独立附件按钮区删除 (leftSlot / PlusActionsSheet 全删)
+ *   - §⑤ autoTitle 跨 chat firedRef reset 修复 (chatId 变化时清 ref)
+ *   - §⑥ 点赞 / 点砍删除, MessageMenu 退到 4 项
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -87,8 +104,6 @@ import { Button } from "../components/ui/Button";
 import { ChatTopBanner } from "../components/chat/ChatTopBanner";
 import { DeliverableStrip } from "../components/chat/DeliverableStrip";
 import { ModelChips } from "../components/chat/ModelChips";
-import { PlusActionsSheet, type PlusActionKind } from "../components/chat/PlusActionsSheet";
-import { KnowledgeAttachSheet } from "../components/chat/KnowledgeAttachSheet";
 import type { CallTreeNode } from "../components/chat/CallTreeCard";
 import type { SlashCommand } from "../components/chat/SlashMenu";
 import {
@@ -228,9 +243,7 @@ export function ChatDetail() {
   // 0.7.5 增量 — model 选择 (chat-id-31) / 知识库挂载 (chat-id-30) /
   //   流式起始时间戳 (chat-id-20) / call tree (chat-id-12) / phases 合并 (chat-id-35)
   const [activeModel, setActiveModel] = useState<string>("gawen");
-  const [knowledgeAttachOpen, setKnowledgeAttachOpen] = useState(false);
   const [pendingKnowledgeRefs, setPendingKnowledgeRefs] = useState<string[]>([]);
-  const [plusOpen, setPlusOpen] = useState(false);
   // 0.7.5 chat-id-20/12: 流式起始时间戳 + call tree 节点 (走 React state 渲染)
   const [streamingCallTree, setStreamingCallTree] = useState<CallTreeNode[]>([]);
   const [streamingSinceState, setStreamingSinceState] = useState<number | null>(null);
@@ -347,11 +360,9 @@ export function ChatDetail() {
                 clearPendingApprovals();
                 return;
               }
-              // 阶段 8 chat-id-17 server feedback 事件: SSE pipeline 兼容性预留,
-              //   server 暂未推. 留这分支给后续 /feedback 事件.
+              // gagaOS §⑥ — 点赞 / 点砍整体删除; server 即便推 'feedback' 事件也丢弃
+              //   (跟 Phase 1 server 协议不接 /messages/:id/feedback 一致)
               if (type === "feedback") {
-                // future: 进 store, 用来实时刷新 like/dislike 图标. 当前 server
-                //   不推, 代码先就位.
                 return;
               }
               setStreamingEvents((prev) => [...prev, ev]);
@@ -370,7 +381,8 @@ export function ChatDetail() {
                   continue;
                 }
                 if (type === "feedback") {
-                  continue; // 预留, 当前不进 message
+                  // gagaOS §⑥ — 点赞/点砍删除, feedback 事件丢弃
+                  continue;
                 }
                 kept.push(ev);
               }
@@ -626,29 +638,60 @@ export function ChatDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
-  // ────────────── chat-id-33 autoTitleSession (LLM 800ms delay) ──────────────
-  // 跟 web page.tsx:341-396 同款: history load 完 + 第一条 user 消息 ≥ 5 字 + 当前
-  // 标题仍是 '新对话' 时, 800ms 后发一次 autoTitle. server 拿到当前头几条消息自动命名,
-  // 不会覆盖已自定义的标题 (server yinian.service.js 内部判).
+  // ────────────── chat-id-33 autoTitleSession (LLM 800ms delay) — gagaOS §⑤ ──────────────
+  // 跟 web page.tsx:341-396 同款: history load 完 + 800ms 后发一次 autoTitle.
+  // 触发条件 (跟 web shouldRequestAutoTitle 同款, 更宽松):
+  //   - title 为空 / 默认 '新对话' / 截断产物 '…' → 触发
+  //   - 其他 (用户手动改 / LLM 已定型) → skip
+  // 关键修复 (gagaOS §⑤):
+  //   1. 跨 chat 切换时重置 firedRef (上一个 chat 已 fired 后 ref 仍为 true 会卡死新 chat)
+  //   2. fetchQuery with staleTime: 0 拿 fresh title (避免被 stale chats cache 卡死)
+  //   3. server 拿到新 ChatSession 后 invalidate ["chats"] 让 header title 自动更新
+  //   4. 失败静默 (console.warn only) — 第一次会话体验差会被 toast 干扰
   const autoTitleFiredRef = useRef(false);
+  const lastAutoTitleChatRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastAutoTitleChatRef.current !== chatId) {
+      autoTitleFiredRef.current = false;
+      lastAutoTitleChatRef.current = chatId ?? null;
+    }
+  }, [chatId]);
+
   useEffect(() => {
     if (!chatId) return;
     if (autoTitleFiredRef.current) return;
     if (!historyQuery.data || historyQuery.isLoading) return;
     const msgs = historyQuery.data.messages;
-    if (msgs.length < 2) return;
+    if (msgs.length < 1) return; // 至少 1 条消息 (server 端 autoTitleChatSession 要求有 firstUserMsg)
     const firstUser = msgs.find((m) => m.role === "user");
-    if (!firstUser || firstUser.content.trim().length < 5) return;
-    if (currentChat && currentChat.title !== "新对话") return;
+    if (!firstUser || firstUser.content.trim().length === 0) return;
     autoTitleFiredRef.current = true;
     const t = window.setTimeout(() => {
-      autoTitleSession(chatId)
-        .then(() => {
-          queryClient.invalidateQueries({ queryKey: ["chats"] });
+      // 跟 web 同款: fetchQuery with staleTime: 0 拿 fresh title, 不被 stale chats cache 卡.
+      queryClient
+        .fetchQuery({ queryKey: ["chats"], queryFn: getChats, staleTime: 0 })
+        .then((latest) => {
+          const fresh = latest.chats.find((c) => c.id === chatId);
+          const liveTitle = fresh?.title ?? currentChat?.title ?? "新对话";
+          // 跟 web shouldRequestAutoTitle 同款守卫
+          const shouldRequest =
+            !liveTitle ||
+            liveTitle.trim() === "" ||
+            liveTitle === "新对话" ||
+            liveTitle.endsWith("…");
+          if (!shouldRequest) return;
+          return autoTitleSession(chatId)
+            .then(() => {
+              queryClient.invalidateQueries({ queryKey: ["chats"] });
+            })
+            .catch((err) => {
+              // eslint-disable-next-line no-console
+              console.warn("[autoTitle] failed:", err);
+            });
         })
         .catch((err) => {
           // eslint-disable-next-line no-console
-          console.warn("[autoTitle] failed:", err);
+          console.warn("[autoTitle] fetchQuery failed:", err);
         });
     }, 800);
     return () => window.clearTimeout(t);
@@ -701,49 +744,18 @@ export function ChatDetail() {
     },
   ];
 
-  // ────────────── PlusActionsSheet 派发 ──────────────
-// chat-id-22: 把 5 类 action 路由到具体行为.
-//   - emoji: 占位
-//   - knowledge: 打开 KnowledgeAttachSheet (chat-id-30 复用)
-//   - image / document / camera: 提示用户走 ChatInputBar 自身的 image/document 按钮
-//     (Electron 端没真相机能力, camera → image fallback 跟 web 同款. 但本轮 ChatInputBar
-//     仍保留 2 个 inline picker 按钮, 所以 sheet 这边的 image/document/camera 都用 toast
-//     指引用户到 input bar 上的按钮, 避免双重 picker 路径.)
-const handlePlusAction = useCallback(
-  (kind: PlusActionKind) => {
-    switch (kind) {
-      case "emoji":
-        toast({
-          message: "表情输入即将开放, 当前可在 textarea 手输",
-          variant: "default",
-        });
-        break;
-      case "knowledge":
-        setKnowledgeAttachOpen(true);
-        break;
-      case "image":
-      case "document":
-      case "camera":
-        toast({
-          message: "请用输入栏左侧的「图片 / 文档」按钮添加附件",
-          variant: "default",
-        });
-        break;
-    }
-  },
-  [toast],
-);
-
-// 知识库挂载 — chat-id-30
-const handleKnowledgePick = useCallback(
-  (item: LibraryItem) => {
-    setPendingKnowledgeRefs((prev) =>
-      prev.includes(item.id) ? prev : [...prev, item.id],
-    );
-    toast({ message: `已挂载: ${item.title || "未命名"}`, variant: "default" });
-  },
-  [toast],
-);
+  // ────────────── 知识库挂载 — chat-id-30 ──────────────
+  // ChatInputBar 自管 KnowledgeAttachSheet open 状态; 选中 item.id 推给我们
+  // 累积到 pendingKnowledgeRefs (chip 提示 user 已挂载, 跟 web 同款).
+  const handleKnowledgePick = useCallback(
+    (item: LibraryItem) => {
+      setPendingKnowledgeRefs((prev) =>
+        prev.includes(item.id) ? prev : [...prev, item.id],
+      );
+      toast({ message: `已挂载: ${item.title || "未命名"}`, variant: "default" });
+    },
+    [toast],
+  );
 
 // ────────────── Slash 命令派发 (chat-id-25) ──────────────
   // 13 条命令的客户端路由:
@@ -751,14 +763,16 @@ const handleKnowledgePick = useCallback(
   //     自处理 (insert 模板 / 静默) 或保留默认 (slashmenu 自带 supported=false 占位)
   //   - clear / image / file / camera → 已在 ChatInputBar 处理 (clear 清 chips, image/file
   //     走其内 AttachmentPicker)
-  //   - knowledge → 打开 KnowledgeAttachSheet (同 PlusAction.knowledge)
+  //   - knowledge → 走 ChatInputBar 内部 KnowledgeAttachSheet (gagaOS §② — ChatInputBar
+  //     自己管 sheet open, 选中调 onKnowledgePick 推回这里累积)
   //   - new → 触发 createChat + navigate 到新 chat
   //   - save → 把最近一条 assistant 消息保存到知识库 (chat-id-15 fallback 路径)
   const handleSlashCommand = useCallback(
     (cmd: SlashCommand) => {
       switch (cmd) {
         case "knowledge":
-          setKnowledgeAttachOpen(true);
+          // gagaOS §② — 走 ChatInputBar 内部 sheet; 这里给 toast 提示 user 用 📚 按钮
+          toast({ message: "请用输入栏的「📚 知识库」按钮挂载", variant: "default" });
           break;
         case "new":
           // 走 createChat mutation (跟 ChatList / Home 同款)
@@ -810,31 +824,10 @@ const handleKnowledgePick = useCallback(
     [messages, toast],
   );
 
-  // ChatDetail 的 PlusActionsSheet trigger — 注入到 ChatInputBar 的 leftSlot.
-  // 0.7.5 chat-id-22: 把现有 2 类 picker 入口包到 sheet 里, 加 3 类新项.
-  const chatDetailLeftSlot = (
-    <>
-      <button
-        type="button"
-        aria-label="添加附件"
-        title="添加附件"
-        onClick={() => setPlusOpen(true)}
-        disabled={isStreaming}
-        data-testid="chat-plus-trigger"
-        className="h-9 w-9 inline-flex items-center justify-center rounded-md text-fg-muted hover:bg-bg-elevated hover:text-fg disabled:opacity-50 disabled:pointer-events-none transition-colors duration-150"
-      >
-        <PlusGlyph />
-      </button>
-      {pendingKnowledgeRefs.length > 0 ? (
-        <span
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-bg-elevated text-[11px] text-fg-muted"
-          title={`已挂载 ${pendingKnowledgeRefs.length} 条知识库`}
-        >
-          📚 ×{pendingKnowledgeRefs.length}
-        </span>
-      ) : null}
-    </>
-  );
+  // gagaOS §②④ — 旧 PlusActionsSheet + leftSlot 已删; ChatInputBar 内置 4 个附件入口
+  //   (image / document / emoji / knowledge). pendingKnowledgeRefs chip 提示保留在
+  //   ChatDetail 渲染层 (输入栏上方), 由 ChatInputBar 内部 KnowledgeAttachSheet 处理 +
+  //   onKnowledgePick 回调推 item.id 累积到这里.
 
   return (
     <div className="h-full flex flex-col bg-bg-base">
@@ -910,32 +903,32 @@ const handleKnowledgePick = useCallback(
       {/* 0.7.5 chat-id-29: Session 交付物缩略条 (卡片跳交付详情 — chat-id-32) */}
       <DeliverableStrip items={deliverablesQuery.data?.items ?? []} />
 
-      {/* 输入栏 — chat-id-19 加 canRerun + onRerun. 0.7.5 加 leftSlot (PlusActionsSheet trigger + knowledge chips) */}
+      {/* gagaOS §② — 知识库挂载 chip (原 leftSlot 内, 跟 📚 按钮对应) */}
+      {pendingKnowledgeRefs.length > 0 ? (
+        <div className="shrink-0 px-3 py-1.5 bg-bg-elevated border-t border-border">
+          <span
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-bg-sunken text-[11px] text-fg-muted"
+            title={`已挂载 ${pendingKnowledgeRefs.length} 条知识库`}
+          >
+            📚 已挂载 ×{pendingKnowledgeRefs.length}
+          </span>
+        </div>
+      ) : null}
+
+      {/* 输入栏 — chat-id-19 加 canRerun + onRerun. gagaOS §②④ — 内置 image/document/emoji/knowledge 4 个
+          附件入口; 不再传 leftSlot; KnowledgeAttachSheet 走 ChatInputBar 内部状态.
+          chat-id-25 slash 命令走 onSlashCommand 回调. */}
       <ChatInputBar
         isStreaming={isStreaming}
         canRerun={canRerun}
         onRerun={handleRerun}
         onStop={handleStop}
         onSubmit={handleSubmit}
-        leftSlot={chatDetailLeftSlot}
+        onKnowledgePick={handleKnowledgePick}
         onSlashCommand={handleSlashCommand}
         onAttachmentError={(msg) =>
           toast({ message: `上传失败: ${msg}`, variant: "danger" })
         }
-      />
-
-      {/* 0.7.5 chat-id-22 PlusActionsSheet — 5 类附件入口 */}
-      <PlusActionsSheet
-        open={plusOpen}
-        onClose={() => setPlusOpen(false)}
-        onAction={handlePlusAction}
-      />
-
-      {/* 0.7.5 chat-id-30 KnowledgeAttachSheet — 复用 Home LibraryPicker */}
-      <KnowledgeAttachSheet
-        open={knowledgeAttachOpen}
-        onClose={() => setKnowledgeAttachOpen(false)}
-        onPick={handleKnowledgePick}
       />
 
       {/* 首帧等待占位: 在 MessageList 内部已经能做 typing dots, 这里留作 future use */}
@@ -1024,22 +1017,4 @@ function MoreIcon() {
   );
 }
 
-// 0.7.5 chat-id-22: PlusActionsSheet trigger 用
-function PlusGlyph() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
-    </svg>
-  );
-}
+// gagaOS §②④ — PlusGlyph 已删 (PlusActionsSheet 整体下线, 不再需要触发按钮).
