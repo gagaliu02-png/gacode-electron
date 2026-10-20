@@ -16,7 +16,8 @@
  *   - 多选模式 (chat-7): 跟 ChatDetail / Library 一致的 mousedown 500ms
  *     长按触发 + bottom toolbar (取消 / 全选 / 删除). 已在前一版本实现,
  *     本轮仅作 keep-best-practice, 不重新设计.
- *   - 搜索 (chat-10): 顶部 search Input, 200ms 防抖, client-side filter;
+ *   - 搜索 (chat-10): 折叠式 search Input (PC-5, 对齐 web Library L434-475 —
+ *     icon-only 按钮点开 → 圆药丸输入框, 再点收起), 200ms 防抖, client-side filter;
  *     server 端无 keyword 时, 我们也不本地 patch filter 而是按 useMemo
  *     切 sortedChats. 空 keyword → 走全量.
  *   - autoTitle (chat-14): 防抖 800ms, 走 server 端 autoTitleChatSession
@@ -52,6 +53,9 @@ export function ChatList() {
   // ────────────── 搜索输入 (chat-10) — debounce → queryKey ──────────────
   const [searchInput, setSearchInput] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
+  // PC-5: 搜索框折叠形态 — 默认只渲染 icon 按钮, 点开才展开圆药丸输入框.
+  // 收起时 searchInput 不清空 (搜索状态保留), 跟 web Library showSearch 同语义.
+  const [showSearch, setShowSearch] = useState(false);
   useEffect(() => {
     const t = window.setTimeout(() => {
       setSearchDebounced(searchInput.trim());
@@ -221,19 +225,46 @@ export function ChatList() {
 
   return (
     <div className="min-h-full flex flex-col">
-      {/* 顶 Header — 搜索 + 计数 + 新建按钮 */}
+      {/* 顶 Header — 搜索 (折叠药丸) + 计数 + 新建按钮 */}
       <div className="px-4 lg:px-8 pt-4 flex items-center justify-between gap-4">
         <div className="text-sm text-fg-muted shrink-0">
           {pinnedCount > 0 ? `${pinnedCount} 条置顶 · 共 ${sortedChats.length}` : `共 ${sortedChats.length} 条对话`}
         </div>
-        <div className="flex-1 max-w-md">
-          <Input
-            type="search"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="搜索对话标题..."
-            aria-label="搜索对话"
-          />
+        {/* PC-5: 搜索 — icon-only 按钮折叠/展开圆药丸输入框 (对齐 web Library
+            L434-475: w-9 h-9 rounded-full toggle + rounded-full bg-muted/50 border-0).
+            Input 组件把 className 追加在 base className 之后 (Input.tsx:30). */}
+        <div className="flex-1 min-w-0 flex items-center justify-end gap-1">
+          {showSearch ? (
+            <div className="relative flex-1 min-w-0 max-w-md">
+              <SearchIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted pointer-events-none z-10" />
+              <Input
+                type="search"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="搜索对话标题..."
+                aria-label="搜索对话"
+                autoFocus
+                // bg-muted/50 + border-0 + pl-9 在 tailwind 产物里本就排在 base
+                // 之后 (bg-bg-sunken / .border / .px-4), 直接覆盖即可;
+                // 但 .rounded-full 排在 .rounded-md 之前 → 会输给 base rounded-md,
+                // 故 radius 额外用 ! 强制 (本仓无 tailwind-merge).
+                className="rounded-full bg-muted/50 border-0 pl-9 focus-visible:ring-1 focus-visible:ring-brand !rounded-full"
+              />
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setShowSearch((v) => !v)}
+            aria-label={showSearch ? "关闭搜索" : "搜索"}
+            aria-expanded={showSearch}
+            className={[
+              "shrink-0 w-9 h-9 rounded-full inline-flex items-center justify-center",
+              "transition-colors duration-150",
+              showSearch ? "bg-bg-elevated text-fg" : "text-fg-muted hover:bg-bg-elevated",
+            ].join(" ")}
+          >
+            <SearchIcon className="w-5 h-5" />
+          </button>
         </div>
         <Button
           variant="default"
@@ -787,7 +818,7 @@ function ChatBubblePlus() {
   );
 }
 
-function SearchIcon() {
+function SearchIcon({ className }: { className?: string }) {
   return (
     <svg
       width="22"
@@ -799,6 +830,7 @@ function SearchIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
+      className={className}
     >
       <circle cx="11" cy="11" r="8" />
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
