@@ -496,7 +496,10 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
 
     return (
       <>
-        <div className="bg-bg-elevated px-3 py-2.5">
+        {/* 0.7.6 (gaga 截图反馈): 输入区不再垫底板 — 首页是 bg-bg-base (#000),
+            再叠一层 bg-bg-elevated 会多出一条横贯的色带 (跟 Home 右半区"不要区隔"冲突).
+            附件 chip / input 自身有底色, 靠它们跟页面背景区分即可. */}
+        <div className="px-4 pb-4 pt-2">
           {/* attachments — 三态合一 (0.7.6, 对齐 web)
                 uploading → UploadProgressBar (带文件名 + 取消)
                 done      → AttachmentChip  (缩略图 + 类型角标 + 文件名 + X)

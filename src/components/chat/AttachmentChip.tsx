@@ -2,7 +2,7 @@
  * components/chat/AttachmentChip.tsx — 上传完成附件 chip 卡片
  *
  * 对齐 gacode-web/src/components/chat/AttachmentChip.tsx 1:1 (Tailwind class 名换成 electron token):
- *   - 白底圆角 (bg-bg-base + rounded-md) + shadow-sm
+ *   - 圆角 chip (bg-bg-elevated + rounded-md)
  *   - 左侧可选缩略图: image 类型显示真图缩略, 非 image 显示 FileText 图标
  *   - 中间文件类型角标 (ext.uppercase, bg-bg-sunken)
  *   - 文件名 (truncate max-w-[180px])
@@ -45,7 +45,9 @@ export function AttachmentChip({
   return (
     <div
       className={[
-        "inline-flex items-center gap-2 px-3 py-2 rounded-md bg-bg-base shadow-sm max-w-full",
+        // 0.7.6 (gaga 截图反馈): 输入区底板去掉后, chip 背景跟页面都是 bg-bg-base (#000)
+        // 就看不见了 — 改用 bg-bg-elevated (#181818) 往上抬一层, 靠色阶跟背景区分.
+        "inline-flex items-center gap-2 px-3 py-2 rounded-md bg-bg-elevated max-w-full",
         className ?? "",
       ].join(" ")}
     >

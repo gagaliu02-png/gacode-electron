@@ -2,7 +2,7 @@
  * components/chat/UploadProgressBar.tsx — 文件上传进度条
  *
  * 对齐 gacode-web/src/components/ui/progress.tsx 1:1:
- *   - 白底圆角 (bg-bg-base + rounded-full) + shadow-sm
+ *   - 圆角胶囊 (bg-bg-elevated + rounded-full)
  *   - 进度条轨道 (bg-bg-sunken) + brand-orange 填充 (bg-brand / 跟 CTA 同色)
  *   - 左侧文件名 (truncate max-w-[120px])
  *   - 中间进度条 flex-1
@@ -33,7 +33,7 @@ export function UploadProgressBar({
   return (
     <div
       className={[
-        "flex items-center gap-2 px-3 py-2 rounded-full bg-bg-base shadow-sm",
+        "flex items-center gap-2 px-3 py-2 rounded-full bg-bg-elevated",
         className ?? "",
       ].join(" ")}
     >
