@@ -181,8 +181,10 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
       queryClient.invalidateQueries({ queryKey: ["library"] });
       onClose();
     } catch (err) {
+      // upload.ts 已按 mode 输出人话文案 ("图片上传失败: ..."), 这里不再加前缀,
+      // 否则会出现 "采集失败: 文档上传失败: ..." 双前缀
       toast({
-        message: `采集失败: ${err instanceof Error ? err.message : String(err)}`,
+        message: err instanceof Error ? err.message : String(err),
         variant: "danger",
       });
     } finally {

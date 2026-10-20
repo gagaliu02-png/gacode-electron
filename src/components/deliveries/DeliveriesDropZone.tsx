@@ -6,7 +6,7 @@
  * 路径 (后者 server 已经硬过滤掉, 只剩 AI 产物). PC 端允许用户拖拽文件入库
  * 的同时, 这里"占位"提示一份边界:
  *
- *   1. 拖入文件 → 走一样的 uploadAttachment 到 /yinian/documents
+ *   1. 拖入文件 → 走一样的 uploadAttachment (图片 /yinian/upload, 文档 /yinian/documents)
  *   2. 但不直接 createDeliverable (没端点), 改成 createLibraryItem 先入 KB,
  *      让用户后续在聊天里 @ reference
  *
@@ -19,6 +19,17 @@ import { uploadAttachment } from "../../lib/upload";
 import { createLibraryItem } from "../../lib/api";
 
 const MAX_BYTES = 50 * 1024 * 1024;
+
+/**
+ * image/* 判定 — file.type 为空时的扩展名兜底 (部分 Windows 拖拽场景 Chrome 不给 MIME).
+ * 注意不能按 `res.url` 有无判类型: 0.7.5 起图片走 /yinian/upload、文档走 /yinian/documents,
+ * **两个端点都返 url**, 按 url 判会把所有文档错标成 image.
+ */
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg|heic|ico)$/i;
+
+function isImageFile(file: File): boolean {
+  return file.type ? file.type.startsWith("image/") : IMAGE_EXT_RE.test(file.name);
+}
 
 export interface DeliveriesDropZoneProps {
   children: ReactNode;
@@ -40,13 +51,16 @@ export function DeliveriesDropZone({ children, onRouted }: DeliveriesDropZonePro
 
   const uploadAndRoute = useMutation({
     mutationFn: async (file: File) => {
+      // 按文件 MIME 判类型 (而非 res.url 有无), 决定上传端点 + KB type 字段
+      const isImage = isImageFile(file);
       const handle = uploadAttachment(file, {
+        mode: isImage ? "image" : "document",
         onProgress: (p) => setProgress(p.pct),
       });
       const res = await handle.promise;
       // 无 deliverables 直传端点 → 走 KB 入库, 后续在 chat 里 @ reference 用
       return createLibraryItem({
-        type: res.url ? "image" : "doc",
+        type: isImage ? "image" : "doc",
         title: stripExt(file.name) || "未命名",
         url: res.url || undefined,
         tags: ["from-deliveries"],

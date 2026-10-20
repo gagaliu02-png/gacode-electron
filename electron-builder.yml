@@ -25,7 +25,9 @@ directories:
   # 0.7.5 (ChatDetail PlusActionsSheet hotfix 2): 隔离输出目录
   # 0.7.5 (图片上传端点修复 hotfix — 图片误发 /yinian/documents 被 magic bytes 拒):
   #   - output 改 release-upload-fix-v1/ 绕 Search Indexer
-  output: release-upload-fix-v1
+  # 0.7.5 (上传消费端小 bug 修复 hotfix — DeliveriesDropZone 按 MIME 判 type +
+  #   ChatDetail 50MB 超限 toast 不显示): output 改 release-typefix-v1/
+  output: release-typefix-v1
 
 files:
   - dist/**/*

@@ -142,6 +142,10 @@ function streamingId(): string {
   return `streaming-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+// 附件上限 — 与 lib/upload.ts MAX_BYTES 对齐.
+// uploadAttachment 的 size 校验是**同步 throw**, 不在 promise 链里, 所以调用点必须前置拦截.
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
 // utils ─────────────────────────────────────────────────────
 function extractImageUrls(msg: ChatMessage): string[] {
   return msg.imageUrls ?? [];
@@ -891,24 +895,41 @@ export function ChatDetail() {
       }
       const mode = pendingUploadKindRef.current ?? deriveUploadMode(f);
       pendingUploadKindRef.current = null;
-      uploadAttachment(f, { mode })
-        .promise.then((res) => {
-          if (!res.url && !res.fileId) {
-            toast({ message: "未拿到附件信息", variant: "danger" });
-            return;
-          }
-          inputBarRef.current?.addAttachment({
-            url: res.url,
-            fileId: res.fileId,
-            name: f.name,
-          });
-        })
-        .catch((err) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (msg === "aborted" || msg.includes("aborted")) return;
-          // upload.ts 已按 mode 输出人话文案 ("图片上传失败: ..."), 这里不再二次加前缀
-          toast({ message: msg, variant: "danger" });
+      // uploadAttachment 的 50MB 校验是同步 throw (不在 promise 链内), 必须前置拦截,
+      // 否则异常冒出 handleFileChange 走不到 .catch → toast 不显示 (点了没反应).
+      if (f.size > MAX_ATTACHMENT_BYTES) {
+        toast({
+          message: `文件超过 50MB 上限 (${Math.round(f.size / 1024 / 1024)}MB)`,
+          variant: "danger",
         });
+        return;
+      }
+      try {
+        uploadAttachment(f, { mode })
+          .promise.then((res) => {
+            if (!res.url && !res.fileId) {
+              toast({ message: "未拿到附件信息", variant: "danger" });
+              return;
+            }
+            inputBarRef.current?.addAttachment({
+              url: res.url,
+              fileId: res.fileId,
+              name: f.name,
+            });
+          })
+          .catch((err) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg === "aborted" || msg.includes("aborted")) return;
+            // upload.ts 已按 mode 输出人话文案 ("图片上传失败: ..."), 这里不再二次加前缀
+            toast({ message: msg, variant: "danger" });
+          });
+      } catch (err) {
+        // 同步 throw 兜底 (uploadAttachment 在建 XHR 前的校验), 同样透传人话文案
+        toast({
+          message: err instanceof Error ? err.message : String(err),
+          variant: "danger",
+        });
+      }
     },
     [streamingAssistantId, toast],
   );
