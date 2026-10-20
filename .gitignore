@@ -53,3 +53,41 @@ screenshot-*.png
 typecheck-*.log
 dev-stage*.log
 build-*-stage*.log
+
+# ============================================================
+# 2026-10-20 收口（gagaOS 拍板）：打包产物 / 审计工具 / 构建缓存
+# ============================================================
+
+# TS build cache（tsc composite；typecheck / build 会重新生成）
+*.tsbuildinfo
+
+# electron-builder 输出目录
+#   已实测：22 个 release-*-v* 目录内只有 win-unpacked/ + *.exe + *.blockmap
+#           + latest.yml + builder-debug.yml，没有任何源码，可整目录忽略。
+#   注意：release-library-p0-v1/ 下 4 个历史误提交产物仍被 git 跟踪，
+#         .gitignore 不取消跟踪，本次保持原状（是否清理待 PM 决定）。
+release-*/
+out/
+
+# 功能对齐审计产物 + 一次性工具脚本（audit-interactive 系列）
+audit-*.html
+audit-*.json
+audit-*.template.html
+audit-items.json
+parse-audit.ps1
+validate-html*.mjs
+build-interactive.ps1
+
+# 临时对齐验证 sandbox（verify-table/ 自带 node_modules/ + dist/ + demo.tsx）
+verify-table/
+
+# 打包脚本误建文件（PowerShell 把完整路径当文件名写盘，文件名是 UTF-16LE 乱码）
+#   真实内容 = 39 字节 stage5-rcedit-stderr.log（8 个副本，仅时间戳不同）
+#   文件名 = ASCII 路径 D:\gaga\...\stage5-rcedit-stderr.log 被当 UTF-16LE 读回，
+#   所以文件里没有任何可匹配的 ASCII 子串；这里改用乱码公共前缀精确匹配。
+#   前缀 = U+3A44 U+675C U+6761 U+5C61 U+6167 U+6C63
+㩄杜条屡慧汣*
+
+# 审计 / worker 过程反思记录（不入仓；旧审计已过时，见 checklist §6）
+.feature-*.md
+.worker-*.md
