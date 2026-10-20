@@ -239,7 +239,7 @@ export function Register() {
             size="lg"
             loading={submitting}
             disabled={!agreeTos || !securityOk}
-            className="w-full"
+            className="w-full h-11 rounded-md bg-foreground text-background hover:bg-foreground/90 font-medium"
           >
             {submitting ? "注册中..." : "注册"}
           </Button>
