@@ -380,3 +380,33 @@
 > §5 总结 + PM 拍板 ①②③ 合并版待 PM 补。
 > **commit message 建议**：
 > `docs(electron): PC vs Web 页面对齐清单 v1 (路由表 + 高/中/低优先级差异 + 全局级 + 可执行对齐标准 + PM 拍板 ①②③)`
+
+---
+
+## §6 决策记录（gagaOS 2026-10-20 拍板）
+
+### 决策 50：撤回 PC-8 KaTeX + Mermaid，本轮不做
+
+**拍板对象**：清单 §4.3 「KaTeX / Mermaid 真组件（§7/§8，待补）」+ §ChatDetail 富渲染表 #7 #8
+
+**撤回理由**（证据 + 决策原文，1:1 转 gagaOS 口吻）：
+
+1. **实测证据**：gagaOS 当晚 `gacode-web` 全仓 grep `katex|mermaid` 零匹配；`yinian-android/app/src` grep 零匹配；PC 端只有占位文字。
+   → 「PC 对齐 web 的 KaTeX/Mermaid」前提不成立 — **web 端根本没有真组件**，本清单 §4.3 「Web 端状态: 真 KaTeX 组件（待核）」条目是错的。
+2. **方向逆**：gaga 给 PC 端主线「先把每一个 page 和 web 端对齐」。PC 单独加 web 没有的功能 = 主动制造新的端间差异，方向反了。
+3. **gaga 原话**：「markdown 这类优化型任务 PC 端都不参与」。
+4. **真硬前置在 server**：`messages.content` 不带 latex/mermaid 标记（清单 §send-blocker 第 10 项「疑似，待核」，本节后由 gagaOS 统一提单给 unified-api，P2）。
+5. **跨端契约**：PC highlight.js / rehype-highlight 已装但未启用（PC 退出 markdown 主线，本轮既不启用也不卸载）—— 这是 v2 docs 已有既定决策。
+
+**改派方向**：
+
+- gagaOS 统一给 unified-api 提需求：`messages.content` 补 latex / mermaid 渲染标记（unified-api 端 P2）
+- 等 server 有标记了，**web + PC 同批做**，那才是真「对齐」
+
+**本节溯源**：gagaOS 「决策 50」（PM 决策编号习惯），证据文件：gacode-web / yinian-android 全仓 grep；本节挂到本清单永久存档。
+
+**对其他 ChatDetail 富渲染项的影响**：
+
+- §ChatDetail 富渲染表 13 项里 #7 KaTeX / #8 Mermaid 撤回（待 server 标记）
+- 其余 #11/12/29/31/32/33/40 / 消息编辑 / 输入停止按钮 = 已实测 / 待核 / 一致 等独立项目，详见原表
+- 整体清单可信度已通过本决策反向验证：「实测先行，未实测的降级或撤回」原则
