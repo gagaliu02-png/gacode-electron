@@ -369,8 +369,11 @@ export function ChatDetail() {
       // 新一轮触发 → 清空旧 session 的 pending approvals (不再 stale)
       clearPendingApprovals();
 
+      // image 端点 (/yinian/upload) 不返 fileId; document 端点 (/yinian/documents)
+      // url + fileId 都有 → 按 fileId 有无分流, 否则文档会同时进 image_urls 和
+      // attached_file_ids, 被当图片重复投喂。
       const imageUrls = attachments
-        .filter((a) => !!a.url)
+        .filter((a) => !!a.url && !a.fileId)
         .map((a) => a.url as string);
       const fileIds = attachments
         .filter((a) => !!a.fileId)
@@ -903,7 +906,8 @@ export function ChatDetail() {
         .catch((err) => {
           const msg = err instanceof Error ? err.message : String(err);
           if (msg === "aborted" || msg.includes("aborted")) return;
-          toast({ message: `上传失败: ${msg}`, variant: "danger" });
+          // upload.ts 已按 mode 输出人话文案 ("图片上传失败: ..."), 这里不再二次加前缀
+          toast({ message: msg, variant: "danger" });
         });
     },
     [streamingAssistantId, toast],
