@@ -40,8 +40,12 @@ export function CategoryTabs({ active, onChange, counts }: CategoryTabsProps) {
     count: counts?.[t.key],
   }));
   return (
-    <div className="overflow-x-auto -mx-2 px-2">
+    <div className="overflow-x-auto scrollbar-none">
+      {/* PC-7 (2026-10-20 gagaOS 拍板): pill → underline — 复用 PC-6 (batch 5)
+         已经做好的 <Tabs variant="underline">, 不另起一套下划线实现.
+         外层 container 的 border-b 由 Tabs underline 变体自带, 调用方不要再叠. */}
       <Tabs
+        variant="underline"
         tabs={tabs}
         activeKey={active}
         onChange={(k) => onChange(k as NotificationCategory)}

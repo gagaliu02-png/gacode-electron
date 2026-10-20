@@ -46,7 +46,8 @@ export function NotificationItem({
       type="button"
       onClick={onClick}
       className={[
-        "w-full text-left flex items-stretch gap-3 rounded-md bg-bg-elevated p-4",
+        // PC-7: 卡片形态对齐 PC-6 LibraryCard — rounded-2xl + border + bg-bg-elevated
+        "w-full text-left flex items-stretch gap-3 rounded-2xl border border-border bg-bg-elevated p-4",
         "hover:bg-bg-sunken transition-colors duration-150",
       ].join(" ")}
     >

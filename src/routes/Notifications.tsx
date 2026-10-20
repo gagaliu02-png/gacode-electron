@@ -22,6 +22,11 @@
  *
  * 跟 CategoryTabs / NotificationItem / InfiniteScrollList / NotificationSettingsSheet 协作,
  * 这些组件在 src/components/notifications/ 下, 不动 electron/preload.ts / main.ts.
+ *
+ * PC-7 (2026-10-20 gagaOS 拍板): 通知卡片形态对齐 web — 复用 PC-6 Library 视觉语言
+ *   1. 卡片: rounded-2xl border border-border bg-bg-elevated (NotificationItem.tsx)
+ *   2. 分类 tab: 改用 <Tabs variant="underline"> (CategoryTabs.tsx), 不再是实心药丸
+ *   3. 空态: rounded-2xl border border-border bg-bg-elevated p-12 + 居中 icon
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -262,8 +267,9 @@ export function Notifications() {
         </div>
       </div>
 
-      {/* 分类 tab (notifications-6) */}
-      <div className="px-4 lg:px-8 py-2 border-b border-border">
+      {/* 分类 tab (notifications-6) — PC-7: 下划线变体 (跟 PC-6 Library 同款),
+          border-b 由 <Tabs variant="underline"> 自带, 这里不再叠一层 */}
+      <div className="px-4 lg:px-8 py-2">
         <CategoryTabs active={category} onChange={setCategory} />
       </div>
 
@@ -338,14 +344,15 @@ function EmptyState({ category }: { category: NotificationCategory }) {
     category === "all"
       ? "系统通知和消息提醒会出现在这里"
       : "这个分类还没有通知";
+  // PC-7: 空态对齐 PC-6 Library EmptyState — rounded-2xl + border + bg-bg-elevated
+  //   + p-12 + 居中 icon (无圆背景) + 标题 + 副文案.
+  //   (通知空态没有可执行的动作, 跟 web 一样不放行动按钮)
   return (
     <div className="h-full flex items-center justify-center">
-      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm">
-        <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-elevated flex items-center justify-center text-fg-muted">
-          <BellIcon />
-        </div>
-        <p className="text-base font-medium mb-1">还没有通知</p>
-        <p className="text-sm text-fg-muted">{text}</p>
+      <div className="rounded-2xl border border-border bg-bg-elevated p-12 text-center max-w-sm w-full">
+        <BellIcon className="w-12 h-12 mx-auto mb-4 text-fg-muted" />
+        <p className="text-base font-medium">还没有通知</p>
+        <p className="text-sm text-fg-muted mt-2">{text}</p>
       </div>
     </div>
   );
@@ -357,7 +364,7 @@ function SkeletonList() {
       {Array.from({ length: 3 }).map((_, i) => (
         <li
           key={i}
-          className="rounded-md bg-bg-elevated p-4 animate-pulse"
+          className="rounded-2xl bg-bg-elevated p-4 animate-pulse"
         >
           <div className="h-4 w-2/3 bg-bg-sunken rounded" />
           <div className="h-3 w-3/4 bg-bg-sunken rounded mt-2" />
@@ -371,9 +378,9 @@ function SkeletonList() {
 // icons
 // ────────────────────────────────────────────────────────────
 
-function BellIcon() {
+function BellIcon({ className }: { className?: string }) {
   return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
       <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
     </svg>
