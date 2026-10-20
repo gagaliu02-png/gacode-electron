@@ -12,6 +12,17 @@
  *        textarea, 不再是占位 chip (gagaOS 硬伤: 表情变成"附件")
  *     ⑤ AppShell 头部背景去掉, 跟 Home 同底色 (sidebar + main 视觉一体)
  *
+ * 0.7.6 P0 (Home MediaPicker 接线, ddcc6cd 留 bug): PlusSheet → 拍照 / 相册 / 文件
+ *   三条路径早期实现为 no-op (注释说"真正的 attachment 收集走 ChatInputBar 自己
+ *   的 AttachmentPicker"), 但 ChatInputBar 内置 picker 已删 (统一收进 `+` Sheet),
+ *   点完等于没反应 — 0.7.6 P0 接入真正的上传 + chip.
+ *
+ * 接线: MediaPicker 内部自带 file input (kind 自适配 capture / accept), `onCapture`
+ *   直接拿 File → uploadAttachment (mode 按 mediaKind: camera/gallery → image,
+ *   file → document) → inputBarRef.current.addAttachment(chip) — 跟 web 端
+ *   page.tsx MediaPicker → upload.startUpload(file) 模式一致, 不在 Home 端另起
+ *   3 个 hidden file input (那是 ChatDetail 的设计, 因为它不走 MediaPicker).
+ *
  * 提交流 (home-13 P0):
  *   1. ChatInputBar.onSubmit(text, attachments) → Home.handleSubmit
  *   2. 把 firstMessage + attachments(imageUrls / fileIds / names) 写到 sessionStorage
@@ -39,6 +50,7 @@ import { PlusSheet, type PlusAction } from "../components/home/PlusSheet";
 import { MediaPicker, type MediaKind } from "../components/home/MediaPicker";
 import { EmojiPicker } from "../components/home/EmojiPicker";
 import { LibraryPicker } from "../components/home/LibraryPicker";
+import { uploadAttachment, type UploadMode } from "../lib/upload";
 
 // 跨页携带 firstMessage + 附件信息的 sessionStorage key (跟 ChatDetail 共享).
 // ChatDetail 拿到 chatId mount 时, 读这两个 key 立即触发 send —
@@ -50,6 +62,20 @@ export interface HomeAttachments {
   imageUrls: string[];
   attachedFileIds: string[];
   attachedFileNames: Array<{ fileId: string; name: string }>;
+}
+
+// 附件上限 — 与 lib/upload.ts MAX_BYTES 对齐 (50MB).
+// uploadAttachment 的 size 校验是**同步 throw**, 不在 promise 链里, 必须前置拦截,
+// 否则异常从 handleMediaCapture 冒出 → .catch 走不到 → toast 不显示 (点了没反应).
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+/**
+ * mediaKind → upload mode 映射.
+ *   camera / gallery → image (两种都走 /yinian/upload 拿 URL)
+ *   file            → document (走 /yinian/documents 拿 fileId, 入库 + OCR)
+ */
+function pickUploadMode(kind: MediaKind): UploadMode {
+  return kind === "file" ? "document" : "image";
 }
 
 export function Home() {
@@ -165,11 +191,66 @@ export function Home() {
   }, []);
 
   // ────────────── attach 反馈 ──────────────
+  //
+  // 0.7.6 P0 — 清理双前缀: ChatInputBar 内部 drop / paste / retry 上传失败时调
+  //   onAttachmentError(msg), msg 已经走过 lib/upload.ts humanizeUploadError
+  //   (例如 "图片上传失败: file too large" / "文档上传失败: 只支持 PDF / ..."),
+  //   Home 不再二次加 "上传失败: " 前缀, 直接 toast. 跟 CollectSheet 上一轮修法一致.
   const handleAttachmentError = useCallback(
     (msg: string) => {
-      toast({ message: `上传失败: ${msg}`, variant: "danger" });
+      toast({ message: msg, variant: "danger" });
     },
     [toast],
+  );
+
+  // ────────────── MediaPicker.onCapture — 拍照 / 相册 / 文件 接线 ──────────────
+  //
+  // 0.7.6 P0 (Home MediaPicker 接线, ddcc6cd 留 bug): 早期实现是 no-op 空函数
+  //   (注释说"真正的 attachment 收集走 ChatInputBar 自己"), 但 ChatInputBar 内
+  //   置 picker 已删, 等于选完文件没反应. 这里改成:
+  //     1. 按 mediaKind 选 upload mode (camera/gallery → image, file → document)
+  //     2. 前置拦截 50MB (uploadAttachment 同步 throw 走不到 .catch)
+  //     3. uploadAttachment → 成功 → inputBarRef.current.addAttachment(chip)
+  //     4. 失败 → toast 用 humanizeUploadError 已输出的人话文案 (不再加前缀)
+  //
+  // 不另起 3 个 hidden file input (那是 ChatDetail 的设计, 因为它不走 MediaPicker):
+  //   MediaPicker 内部已自带 file input, capture / accept 按 kind 自适配,
+  //   onCapture 直接拿 File — 跟 web 端 page.tsx MediaPicker → upload.startUpload
+  //   模式一致, 简洁.
+  //
+  // mediaKind 从闭包取, 因为 handlePlusPick 是 setMediaKind 同步 + setMediaOpen(true) 80ms 后,
+  // onCapture 触发时 React 已因 setMediaKind 重渲过一次, 闭包里 mediaKind 是最新值.
+  const handleMediaCapture = useCallback(
+    async (file: File) => {
+      const mode = pickUploadMode(mediaKind);
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        toast({
+          message: `文件超过 50MB 上限 (${Math.round(file.size / 1024 / 1024)}MB)`,
+          variant: "danger",
+        });
+        return;
+      }
+      try {
+        const res = await uploadAttachment(file, { mode }).promise;
+        if (!res.url && !res.fileId) {
+          toast({ message: "未拿到附件信息", variant: "danger" });
+          return;
+        }
+        inputBarRef.current?.addAttachment({
+          url: res.url,
+          fileId: res.fileId,
+          name: file.name,
+          mime: file.type,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === "aborted" || msg.includes("aborted")) return;
+        // uploadAttachment 内部 humanizeUploadError 已输出人话 (例如 "图片上传失败: ..."),
+        // 这里直接透传, 不再加 "上传失败: " 前缀 — 跟 handleAttachmentError 同款.
+        toast({ message: msg, variant: "danger" });
+      }
+    },
+    [mediaKind, toast],
   );
 
   // ────────────── emoji / library 选中 ──────────────
@@ -238,14 +319,7 @@ export function Home() {
         open={mediaOpen}
         onClose={() => setMediaOpen(false)}
         kind={mediaKind}
-        onCapture={() => {
-          // ChatInputBar 内部的 AttachmentPicker 已独立处理 upload + chip ——
-          // 这里不需要再次接收 File. MediaPicker 只是给 user 一个走 PlusSheet 入口
-          // 触发的等价于 ChatInputBar 自身的 attachment 按钮.
-          // 简化处理: 关闭 sheet 后由 user 在 ChatInputBar 里直接操作即可.
-          // 真正的 attachment 收集仍走 ChatInputBar 自己的 AttachmentPicker,
-          // PlusSheet 路径目前是"快捷入口占位" (跟 web SheetActionMenu 同效).
-        }}
+        onCapture={handleMediaCapture}
       />
       <EmojiPicker
         open={emojiOpen}

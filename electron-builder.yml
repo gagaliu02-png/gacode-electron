@@ -14,6 +14,8 @@
 #     Search Indexer 锁住旧目录 EBUSY.
 # 0.7.6 (Home 5 项对齐 web — gaga 截图反馈 2026-10-20):
 #   - output 改 release-home-fix-v1/ 绕 Search Indexer
+# 0.7.6 P0 (Home MediaPicker 拍照/相册/文件 接线, ddcc6cd 留 bug):
+#   - output 改 release-home-media-fix-v1/ 绕 Search Indexer
 
 appId: com.gaga.gacode
 productName: Gacode
@@ -23,7 +25,7 @@ copyright: Copyright © 2026 gaga
 directories:
   buildResources: build
   # 0.7.6 (Home 5 项对齐 web — gaga 截图反馈 2026-10-20): 隔离输出目录
-  output: release-home-fix-v1
+  output: release-home-media-fix-v1
 
 files:
   - dist/**/*
