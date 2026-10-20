@@ -70,6 +70,10 @@ interface AuthContextValue {
     password: string;
     email?: string;
     displayName?: string;
+    /** 密保问题 1-20 字 (server registerSchema.required) */
+    securityQuestion: string;
+    /** 密保答案 1-10 字纯中文 */
+    securityAnswer: string;
   }) => Promise<User>;
   /** 调 /auth/logout + 清内存 + 清持久化文件 (失败也清, 跟 web 一致) */
   logout: () => Promise<void>;
@@ -324,6 +328,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       password: string;
       email?: string;
       displayName?: string;
+      /** 密保问题 1-20 字 (server required, 漏传 400) */
+      securityQuestion: string;
+      /** 密保答案 1-10 字纯中文 */
+      securityAnswer: string;
     }) => {
       const data = await authApi.register(input);
       // server 返 { user }, 但通常也会给 accessToken (跟 login 一致).

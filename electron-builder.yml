@@ -17,7 +17,7 @@
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.5
+buildVersion: 0.7.6
 copyright: Copyright © 2026 gaga
 
 directories:
@@ -27,7 +27,7 @@ directories:
   #   - output 改 release-upload-fix-v1/ 绕 Search Indexer
   # 0.7.5 (上传消费端小 bug 修复 hotfix — DeliveriesDropZone 按 MIME 判 type +
   #   ChatDetail 50MB 超限 toast 不显示): output 改 release-typefix-v1/
-  output: release-typefix-v1
+  output: release-register-fix-v1
 
 files:
   - dist/**/*

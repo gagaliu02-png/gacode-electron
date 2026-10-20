@@ -232,6 +232,13 @@ export interface RegisterInput {
   password: string;
   email?: string;
   displayName?: string;
+  /**
+   * 密保问题 — server `auth.service.js:47-50` 按字符数卡 1-20 字.
+   * registerSchema.required 之一 (2026-10-19 加), 漏传必 400 BAD_REQUEST.
+   */
+  securityQuestion: string;
+  /** 密保答案 — server 卡 1-10 字 + 纯中文 `/^[\u4e00-\u9fff]+$/`. */
+  securityAnswer: string;
 }
 
 export const authApi = {

@@ -11,7 +11,10 @@
 
 import { useRef, useState } from "react";
 import { uploadAttachment, deriveUploadMode } from "../../lib/upload";
-import type { UploadMode } from "../../lib/upload";
+import type { UploadAttachmentHandle, UploadMode } from "../../lib/upload";
+
+/** 附件上限 — 与 lib/upload.ts MAX_BYTES 对齐. */
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 export interface AttachmentPickerProps {
   mode: UploadMode;
@@ -44,12 +47,30 @@ export function AttachmentPicker({
 
   const handleFile = (file: File | null | undefined) => {
     if (!file) return;
+    // uploadAttachment 的 50MB 校验是同步 throw (不在 promise 链里), 必须前置拦截,
+    // 否则异常冒出 handleFile 走不到 .catch → onError 不触发 (选了超大文件没反应).
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      onError?.(
+        `文件超过 50MB 上限 (${Math.round(file.size / 1024 / 1024)}MB)`,
+      );
+      return;
+    }
     setUploading(true);
     onProgress?.(0);
-    const handle = uploadAttachment(file, {
-      mode: mode ?? deriveUploadMode(file),
-      onProgress: (p) => onProgress?.(p.pct),
-    });
+    let handle: UploadAttachmentHandle;
+    try {
+      handle = uploadAttachment(file, {
+        mode: mode ?? deriveUploadMode(file),
+        onProgress: (p) => onProgress?.(p.pct),
+      });
+    } catch (err) {
+      // 同步 throw (同上) 也要回报, 否则 uploading 卡在 true
+      onProgress?.(null);
+      setUploading(false);
+      const msg = err instanceof Error ? err.message : String(err);
+      onError?.(msg || "附件上传失败");
+      return;
+    }
     handle.promise
       .then((res) => {
         onProgress?.(null);
