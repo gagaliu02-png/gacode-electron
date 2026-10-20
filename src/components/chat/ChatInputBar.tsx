@@ -45,22 +45,67 @@ import {
 import { uploadAttachment, deriveUploadMode } from "../../lib/upload";
 import { extractSingleImage } from "../../lib/clipboard";
 import { SlashMenu, type SlashCommand } from "./SlashMenu";
+import { AttachmentChip } from "./AttachmentChip";
+import { UploadProgressBar } from "./UploadProgressBar";
+import { UploadErrorChip } from "./UploadErrorChip";
+
+/**
+ * 附件项 — 三态合一 (gaga 截图反馈 2026-10-20 §3)
+ *   旧实现: chips[] (done) + progress: number|null (uploading, 单根)
+ *   新实现: 统一 attachments[], 每项自带 status, 支持多文件并发上传 + 错误重试.
+ */
+export type AttachmentItem =
+  | {
+      id: string;
+      kind: "uploading";
+      name: string;
+      mime: string;
+      pct: number;
+      abort: () => void;
+      file: File;
+    }
+  | {
+      id: string;
+      kind: "done";
+      name: string;
+      mime: string;
+      url?: string;
+      fileId?: string;
+    }
+  | {
+      id: string;
+      kind: "error";
+      name: string;
+      mime: string;
+      errorMsg: string;
+      file: File;
+    };
 
 export interface PendingAttachment {
   /** image mode -> url, document mode -> fileId; mutually exclusive */
   url?: string;
   fileId?: string;
   name: string;
+  /**
+   * 文件 MIME (image/png 等). 用于渲染缩略图 vs FileText 占位.
+   * 0.7.6 引入 — 之前缺, AttachmentChip 缩略图条件全 false → 只显示 FileText 图标.
+   * ChatInputBar 内部上传会带上 file.type; ChatDetail 调 addAttachment 时建议也传.
+   */
+  mime?: string;
 }
 
 /**
  * 父组件 (ChatDetail) 通过 ref 调用的命令式 API:
- *   - insertEmoji(emoji): 把 emoji 插到 textarea 光标位置 (EmojiPicker 选中后用)
+ *   - insertEmoji(emoji): 把 emoji 插到 textarea 光标位置 (EmojiPicker 选中后用) —
+ *     等价 insertText 的别名, 保留兼容 ChatDetail.
+ *   - insertText(text): 通用文本插入 — Home 的 LibraryPicker 选中知识库条目后
+ *     注入 `@[library:id] title` marker (gaga 截图反馈 2026-10-20 §4).
  *   - addAttachment(att): 上传完成后把附件 chip 加到输入栏 (ChatDetail 走 file input 后用)
  *   - focus(): 让 textarea 拿回焦点 (EmojiPicker / KnowledgeAttachSheet 关闭后用)
  */
 export interface ChatInputBarHandle {
   insertEmoji: (text: string) => void;
+  insertText: (text: string) => void;
   addAttachment: (att: PendingAttachment) => void;
   focus: () => void;
 }
@@ -123,8 +168,9 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
     ref,
   ) {
     const [text, setText] = useState("");
-    const [chips, setChips] = useState<PendingAttachment[]>([]);
-    const [progress, setProgress] = useState<number | null>(null);
+    // 0.7.6 — 三态合一: uploading / done / error 共用一个 attachments 列表.
+    //   旧 chips+progress 模型只支持单文件上传, 不支持错误重试.
+    const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
     const [dragActive, setDragActive] = useState(false);
     const taRef = useRef<HTMLTextAreaElement | null>(null);
     // drag enter/leave counter: 嵌套 child element 多次触发时确保 stable
@@ -135,20 +181,38 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
 
     // 0.7.5 hotfix 2 — 命令式 handle: 暴露给 ChatDetail 让 EmojiPicker 选中后
     //   把 emoji 插到 cursor 位置, 让 file upload 完成后把 chip 加到输入栏.
+    // 0.7.6 — 新增 insertText (Home 的 LibraryPicker 选中后注入 `@[library:id] title` marker);
+    //         insertEmoji 现在是 insertText 的别名, 保留兼容 ChatDetail.
     useImperativeHandle(
       ref,
       () => ({
-        insertEmoji: (emoji: string) => insertEmojiAtCursor(emoji),
+        insertEmoji: (emoji: string) => insertTextAtCursor(emoji),
+        insertText: (text: string) => insertTextAtCursor(text),
         addAttachment: (att: PendingAttachment) => {
-          setChips((prev) =>
-            prev.some(
-              (x) =>
-                (att.url && x.url === att.url) ||
-                (att.fileId && x.fileId === att.fileId),
-            )
-              ? prev
-              : [...prev, att],
-          );
+          setAttachments((prev) => {
+            // 去重: 同 url / fileId 不重复加
+            if (
+              prev.some(
+                (x) =>
+                  (x.kind === "done" &&
+                    ((att.url && x.url === att.url) ||
+                      (att.fileId && x.fileId === att.fileId))),
+              )
+            ) {
+              return prev;
+            }
+            return [
+              ...prev,
+              {
+                id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                kind: "done",
+                name: att.name,
+                mime: att.mime ?? "",
+                url: att.url,
+                fileId: att.fileId,
+              },
+            ];
+          });
         },
         focus: () => {
           const ta = taRef.current;
@@ -226,34 +290,90 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
         : FILE_MIME_RE.test(file.name) && /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i.test(file.name)
         ? "image"
         : "document";
-      setProgress(0);
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // 立即插入 uploading 项, 支持多文件并发
+      const item: AttachmentItem = {
+        id,
+        kind: "uploading",
+        name: file.name,
+        mime: file.type ?? "",
+        pct: 0,
+        abort: () => {
+          /* 占位, 上传启动后会被覆盖成真 abort */
+        },
+        file,
+      };
+      setAttachments((prev) => [...prev, item]);
       const handle = uploadAttachment(file, {
         mode: mode ?? deriveUploadMode(file),
-        onProgress: (p) => setProgress(p.pct),
+        onProgress: (p) => {
+          setAttachments((prev) =>
+            prev.map((x) =>
+              x.id === id && x.kind === "uploading" ? { ...x, pct: p.pct } : x,
+            ),
+          );
+        },
       });
+      // 把真 abort 写到 item 上, X 按钮取消时调
+      setAttachments((prev) =>
+        prev.map((x) =>
+          x.id === id && x.kind === "uploading" ? { ...x, abort: handle.abort } : x,
+        ),
+      );
       handle.promise
         .then((res) => {
-          setProgress(null);
           if (!res.url && !res.fileId) {
-            onAttachmentError?.("未拿到附件信息");
+            setAttachments((prev) =>
+              prev.map((x) =>
+                x.id === id && x.kind === "uploading"
+                  ? {
+                      ...x,
+                      kind: "error",
+                      errorMsg: "未拿到附件信息",
+                    }
+                  : x,
+              ),
+            );
             return;
           }
-          setChips((prev) =>
-            prev.some(
-              (x) =>
-                (res.url && x.url === res.url) ||
-                (res.fileId && x.fileId === res.fileId),
-            )
-              ? prev
-              : [...prev, { name: file.name, url: res.url, fileId: res.fileId }],
+          setAttachments((prev) =>
+            prev.map((x) =>
+              x.id === id && x.kind === "uploading"
+                ? {
+                    kind: "done",
+                    id,
+                    name: file.name,
+                    mime: file.type ?? "",
+                    url: res.url,
+                    fileId: res.fileId,
+                  }
+                : x,
+            ),
           );
         })
         .catch((err) => {
-          setProgress(null);
           const msg = err instanceof Error ? err.message : String(err);
-          if (msg === "aborted" || msg.includes("aborted")) return;
-          onAttachmentError?.(msg);
+          // 主动 abort (用户点 X) → 静默移除条目, 不进 error chip
+          if (msg === "aborted" || msg.includes("aborted")) {
+            setAttachments((prev) => prev.filter((x) => x.id !== id));
+            return;
+          }
+          // 真错误 → 转 error chip + 可重试
+          setAttachments((prev) =>
+            prev.map((x) =>
+              x.id === id && x.kind === "uploading"
+                ? { ...x, kind: "error", errorMsg: msg }
+                : x,
+            ),
+          );
         });
+    };
+
+    // 重试某 error 项 — 复用 handleDroppedFile, 但先生成新 id (避免 id 冲突)
+    const retryAttachment = (item: Extract<AttachmentItem, { kind: "error" }>) => {
+      // 先移除 error 项, 再重新走 handleDroppedFile
+      setAttachments((prev) => prev.filter((x) => x.id !== item.id));
+      handleDroppedFile(item.file);
     };
 
     const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -268,10 +388,14 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
     const handleSend = () => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      const ok = onSubmit(trimmed, chips);
+      // 0.7.6 — 只把 done 状态传给 parent (跟 web 一致, 在飞 / 错误项不带过去).
+      const doneAtts: PendingAttachment[] = attachments
+        .filter((x): x is Extract<AttachmentItem, { kind: "done" }> => x.kind === "done")
+        .map((x) => ({ url: x.url, fileId: x.fileId, name: x.name, mime: x.mime }));
+      const ok = onSubmit(trimmed, doneAtts);
       if (ok !== false) {
         setText("");
-        setChips([]);
+        setAttachments([]);
       }
     };
 
@@ -316,7 +440,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
             setText(remaining + tpl);
           } else if (cmd === "clear") {
             setText(remaining);
-            setChips([]);
+            setAttachments([]);
           } else {
             // 0.7.5 hotfix 2 — image / file / camera / knowledge 由 ChatDetail
             //   通过 PlusActionsSheet 流程处理. ChatInputBar 内部不再触发
@@ -334,25 +458,36 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
       }
     }, [text, onSlashCommand, slashOpen]);
 
-    const removeChip = (idx: number) => {
-      setChips((prev) => prev.filter((_, i) => i !== idx));
+    const removeAttachment = (id: string) => {
+      setAttachments((prev) => prev.filter((x) => x.id !== id));
+    };
+
+    const cancelUpload = (item: Extract<AttachmentItem, { kind: "uploading" }>) => {
+      try {
+        item.abort();
+      } catch {
+        /* already aborted */
+      }
+      setAttachments((prev) => prev.filter((x) => x.id !== item.id));
     };
 
     // 0.7.5 hotfix 2 — 在 textarea 光标处插入 emoji. 由命令式 handle.insertEmoji 触发,
     //   ChatDetail 的 EmojiPicker 选中后调 ref.current.insertEmoji(emoji) 调到这里.
+    // 0.7.6 — 改名 insertTextAtCursor (并暴露为 handle.insertText), EmojiPicker 走 insertEmoji (alias).
+    //   Home 的 LibraryPicker 选中后调 insertText 注入 `@[library:id] title`.
     // 不破坏现有 selection.
-    const insertEmojiAtCursor = (emoji: string) => {
+    const insertTextAtCursor = (snippet: string) => {
       const ta = taRef.current;
       if (!ta) {
-        setText((prev) => prev + emoji);
+        setText((prev) => prev + snippet);
         return;
       }
       const start = ta.selectionStart ?? text.length;
       const end = ta.selectionEnd ?? text.length;
-      const next = text.slice(0, start) + emoji + text.slice(end);
+      const next = text.slice(0, start) + snippet + text.slice(end);
       setText(next);
-      // 把 cursor 移到 emoji 之后, focus 拿回 textarea.
-      const caret = start + emoji.length;
+      // 把 cursor 移到 snippet 之后, focus 拿回 textarea.
+      const caret = start + snippet.length;
       requestAnimationFrame(() => {
         ta.focus();
         ta.setSelectionRange(caret, caret);
@@ -362,36 +497,51 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
     return (
       <>
         <div className="bg-bg-elevated px-3 py-2.5">
-          {/* chips + progress */}
-          {(chips.length > 0 || progress !== null) && (
-            <div className="mb-2 flex flex-wrap items-center gap-1.5">
-              {chips.map((c, i) => (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-elevated text-xs"
-                >
-                  <PaperclipSmallIcon />
-                  <span className="truncate max-w-[160px]">{c.name}</span>
-                  <button
-                    type="button"
-                    aria-label="移除附件"
-                    onClick={() => removeChip(i)}
-                    className="text-fg-muted hover:text-danger transition-colors duration-150"
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              {progress !== null ? (
-                <div className="h-1.5 w-32 bg-bg-sunken rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-brand transition-[width] duration-150"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              ) : null}
+          {/* attachments — 三态合一 (0.7.6, 对齐 web)
+                uploading → UploadProgressBar (带文件名 + 取消)
+                done      → AttachmentChip  (缩略图 + 类型角标 + 文件名 + X)
+                error     → UploadErrorChip (重试 + 删除) */}
+          {attachments.length > 0 ? (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {attachments.map((it) => {
+                if (it.kind === "uploading") {
+                  return (
+                    <UploadProgressBar
+                      key={it.id}
+                      value={it.pct}
+                      fileName={it.name}
+                      onCancel={() => cancelUpload(it)}
+                    />
+                  );
+                }
+                if (it.kind === "done") {
+                  return (
+                    <AttachmentChip
+                      key={it.id}
+                      file={{
+                        name: it.name,
+                        type: it.mime,
+                        url: it.url,
+                      }}
+                      thumbnailUrl={it.mime?.startsWith("image/") ? it.url : undefined}
+                      onRemove={() => removeAttachment(it.id)}
+                    />
+                  );
+                }
+                // error
+                return (
+                  <div key={it.id} className="basis-full min-w-0">
+                    <UploadErrorChip
+                      fileName={it.name}
+                      errorMsg={it.errorMsg}
+                      onRetry={() => retryAttachment(it)}
+                      onRemove={() => removeAttachment(it.id)}
+                    />
+                  </div>
+                );
+              })}
             </div>
-          )}
+          ) : null}
 
           {/* input row */}
           <div className="flex items-end gap-2">
@@ -428,7 +578,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                     : "说点什么… (Enter 发送, Shift+Enter 换行 · 输入 / 触发命令菜单)"
                 }
                 disabled={isStreaming}
-                className="w-full resize-none bg-bg-sunken border border-border rounded-md px-3 py-2 text-sm leading-6 placeholder:text-fg-subtle focus:outline-none focus:border-brand disabled:opacity-70 max-h-32 overflow-y-auto"
+                className="w-full resize-none bg-bg-sunken border border-border rounded-md px-3 py-2 text-sm leading-6 placeholder:text-fg-subtle focus:outline-none focus:border-brand disabled:opacity-70 max-h-32 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               />
               {slashOpen && onSlashCommand ? (
                 <SlashMenu
@@ -440,7 +590,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                       setText(text.replace(/^\/[a-zA-Z]*\s?/, "") + tpl);
                     } else if (cmd === "clear") {
                       setText(text.replace(/^\/[a-zA-Z]*\s?/, ""));
-                      setChips([]);
+                      setAttachments([]);
                     } else {
                       // 清掉 '/' + cmd + 可选空格
                       setText(text.replace(/^\/[a-zA-Z]*\s?/, ""));
@@ -486,7 +636,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 type="button"
                 aria-label="发送消息"
                 onClick={handleSend}
-                disabled={!text.trim() && chips.length === 0}
+                disabled={!text.trim() && !attachments.some((x) => x.kind === "done")}
                 className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-md bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active disabled:opacity-40 disabled:pointer-events-none transition-colors duration-150"
               >
                 <SendIcon />
@@ -517,25 +667,6 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
 );
 
 // ─────────── icons (local; not pulling lucide-react) ───────────
-
-function PaperclipSmallIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="11"
-      height="11"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="text-fg-muted"
-    >
-      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-    </svg>
-  );
-}
 
 function PaperclipIcon() {
   return (

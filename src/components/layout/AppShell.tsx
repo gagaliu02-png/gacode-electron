@@ -27,6 +27,7 @@ import { getChats, listNotifications, type ChatSession } from "../../lib/api";
 
 const SIDEBAR_WIDTH = "w-64";
 const RECENT_DEFAULT_LIMIT = 5;
+const HOME_PATH = "/";
 
 // ────────────────────────────────────────────────────────────
 // helpers
@@ -108,6 +109,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const title = resolveTitle(location.pathname);
   const showBack = isSubRoute(location.pathname);
+  // 0.7.6 — gaga 截图反馈 §1: Home 页不要 header (跟 web 同款 — web Home 只有左
+  //   ☰ 按钮 + sticky transparent 背景, 不显示标题栏). electron 是桌面端 sidebar
+  //   已常驻, Home 不要 header 等价于"右半部分纯背景 + 内容", 跟 sidebar 同底色
+  //   视觉一体.
+  const showHeader = location.pathname !== HOME_PATH;
 
   // chats — sidebar 真实数据
   const { data: chatsData, isLoading: chatsLoading } = useQuery({
@@ -261,28 +267,33 @@ export function AppShell({ children }: { children: ReactNode }) {
           Main (header + outlet)
           ============================================================ */}
       <div className="flex flex-col flex-1 min-w-0">
-        <header
-          className="shrink-0 h-14 px-4 bg-bg-elevated flex items-center gap-2"
-        >
-          {showBack ? (
-            <button
-              type="button"
-              onClick={handleBack}
-              aria-label="返回"
-              className="w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated hover:text-fg transition-colors duration-150 inline-flex items-center justify-center"
-            >
-              <ArrowLeftIcon />
-            </button>
-          ) : (
+        {/* 0.7.6 — gaga 截图反馈 §1:
+            - header 背景从 bg-bg-elevated (#181818) 改成 bg-bg-base (#000000),
+              跟 sidebar 同底色, 左右视觉一体 (不再有"中间色带").
+            - Home 页直接不渲染 header (跟 web Home 一致, 只在 sticky 透明条上画左 ☰,
+              electron 是桌面端 sidebar 常驻, ☰ = sidebar, header 多余). */}
+        {showHeader ? (
+          <header className="shrink-0 h-14 px-4 bg-bg-base flex items-center gap-2">
+            {showBack ? (
+              <button
+                type="button"
+                onClick={handleBack}
+                aria-label="返回"
+                className="w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated hover:text-fg transition-colors duration-150 inline-flex items-center justify-center"
+              >
+                <ArrowLeftIcon />
+              </button>
+            ) : (
+              <span className="w-9 h-9" aria-hidden="true" />
+            )}
+            <h1 className="flex-1 text-base font-medium truncate min-w-0 text-center">
+              {title}
+            </h1>
+            {/* 阶段 2 右侧 slot 给 ChatDetail 用 "..."菜单 / ChatList 用 "新建对话" 等
+                父路由可自己用 fixed / absolutely 摆, 此处保留占位. */}
             <span className="w-9 h-9" aria-hidden="true" />
-          )}
-          <h1 className="flex-1 text-base font-medium truncate min-w-0 text-center">
-            {title}
-          </h1>
-          {/* 阶段 2 右侧 slot 给 ChatDetail 用 "..."菜单 / ChatList 用 "新建对话" 等
-              父路由可自己用 fixed / absolutely 摆, 此处保留占位. */}
-          <span className="w-9 h-9" aria-hidden="true" />
-        </header>
+          </header>
+        ) : null}
 
         <main className="flex-1 overflow-y-auto bg-bg-base">{children}</main>
       </div>
