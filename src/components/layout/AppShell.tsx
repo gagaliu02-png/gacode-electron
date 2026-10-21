@@ -280,7 +280,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             - Home 页直接不渲染 header (跟 web Home 一致, 只在 sticky 透明条上画左 ☰,
               electron 是桌面端 sidebar 常驻, ☰ = sidebar, header 多余). */}
         {showHeader ? (
-          <header className="shrink-0 h-14 px-4 bg-bg-base flex items-center gap-2">
+          <header className="shrink-0 h-14 px-4 bg-bg-base border-b border-border flex items-center gap-2">
             {showBack ? (
               <button
                 type="button"
