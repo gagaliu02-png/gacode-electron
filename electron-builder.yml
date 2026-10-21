@@ -16,16 +16,19 @@
 #   - output 改 release-home-fix-v1/ 绕 Search Indexer
 # 0.7.6 P0 (Home MediaPicker 拍照/相册/文件 接线, ddcc6cd 留 bug):
 #   - output 改 release-home-media-fix-v1/ 绕 Search Indexer
+# 0.7.7 (阶段 9 PC vs web 对齐: PC-1~PC-7 六个 batch, gagaOS 拍板):
+#   - output 改 release-align-v7/ 绕 Search Indexer 锁旧目录
+#   - buildVersion bump 0.7.7 (package.json 同步)
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.6
+buildVersion: 0.7.7
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
-  # 0.7.6 (Home 5 项对齐 web — gaga 截图反馈 2026-10-20): 隔离输出目录
-  output: release-home-media-fix-v1
+  # 0.7.7 (阶段 9 对齐 PC-1~PC-7): 隔离输出目录
+  output: release-align-v7
 
 files:
   - dist/**/*
