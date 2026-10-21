@@ -274,39 +274,46 @@ export function Home() {
     <div className="min-h-full flex flex-col bg-bg-base">
       {/* 中部: 居中 logo + 欢迎语
           0.7.6 — 删掉顶部 brand bar (gaga 截图反馈 §2: 重复), AppShell 的 sidebar
-          已有 G + gacode 标识, Home 再画一次是冗余. */}
-      <div className="flex-1 flex flex-col items-center justify-center px-4 lg:px-8 py-8">
+          已有 G + gacode 标识, Home 再画一次是冗余.
+          2026-10-21 对齐 web (docs/web-pc-alignment-map.md §1.1/§1.2):
+          - 留白 `py-8` → `pt-10 pb-6` (web `page.tsx:289` 原文, 顶部对齐非垂直居中)
+          - 头像 80px 多层容器 (bg-bg-elevated + border + 内联 SVG) → 72px 方角裸头像
+          - 删副标题 `Gacode PC · 想聊点啥直接输入,按 Enter 发送` (PC 独有, web 无此节点)
+          - 头像图资源: PC 仓内实测无 cody 图 (public/ 只有 fonts/), 且不引外部资源,
+            暂用纯文字占位 — 待 gagaOS 决定是否提供 cody_512.png (TODO: 换 <img src>) */}
+      <div className="flex-1 flex flex-col items-center justify-center px-4 lg:px-8 pt-10 pb-6">
         <div className="flex flex-col items-center gap-3 text-center">
           <div
             aria-hidden="true"
-            className="w-20 h-20 rounded-squircle bg-bg-elevated border border-border inline-flex items-center justify-center"
+            className="w-[72px] h-[72px] rounded-xl bg-bg-elevated flex items-center justify-center text-fg-muted text-2xl font-medium"
           >
-            <BigBrandMark />
+            cody
           </div>
           <h1 className="text-headline font-medium">
             HI 欢迎你,<span className="text-brand">{displayName}</span>
           </h1>
-          <p className="text-sm text-fg-muted">
-            Gacode PC · 想聊点啥直接输入,按 Enter 发送
-          </p>
         </div>
       </div>
 
       {/* 底部: ChatInputBar (含 `+` 按钮, 由 ChatInputBar 自己提供)
           0.7.6 — 删掉 Home 外层独立的 `+` 按钮 (gaga 截图反馈 §4 补充: 两个 +
           重复). 现在用 onPlusClick 把 `+` 触发传到 PlusSheet, ChatInputBar 内
-          置的 `+` 按钮负责 UI. ref 让 emoji / 知识库 选中后注入 textarea 文本. */}
-      <div className="px-4 lg:px-8 pb-4 pt-2">
-        <ChatInputBar
-          ref={inputBarRef}
-          isStreaming={false}
-          onStop={() => {
+          置的 `+` 按钮负责 UI. ref 让 emoji / 知识库 选中后注入 textarea 文本.
+          2026-10-21 对齐 web §1.1 (`page.tsx:360-361`): 外层补 `border-t border-border
+          p-4 bg-bg-base` 底分隔, 输入区限宽居中. */}
+      <div className="border-t border-border p-4 bg-bg-base">
+        <div className="max-w-2xl mx-auto w-full">
+          <ChatInputBar
+            ref={inputBarRef}
+            isStreaming={false}
+            onStop={() => {
               /* home 无流式 — no-op */
             }}
-          onSubmit={handleSubmit}
-          onAttachmentError={handleAttachmentError}
-          onPlusClick={() => setPlusOpen(true)}
-        />
+            onSubmit={handleSubmit}
+            onAttachmentError={handleAttachmentError}
+            onPlusClick={() => setPlusOpen(true)}
+          />
+        </div>
       </div>
 
       {/* ────────── Pickers / Sheet ────────── */}
@@ -332,44 +339,5 @@ export function Home() {
         onSelect={handleLibrarySelect}
       />
     </div>
-  );
-}
-
-// ────────────── icons (inline, 不引 lucide-react) ──────────────
-
-// 大号 brand mark — 用 inline SVG 做一个 squircle + G 字样, 跟 cody 风格一致.
-// 不引外部图片 / 不依赖 public 资源, 走 Tailwind 类名 + SVG.
-function BigBrandMark() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="56"
-      height="56"
-      viewBox="0 0 56 56"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      {/* squircle 背景 — brand-orange 主色, 跟 gagaOS BrandOrange #FF6B35 对齐 */}
-      <rect
-        x="0"
-        y="0"
-        width="56"
-        height="56"
-        rx="14"
-        fill="#FF6B35"
-      />
-      {/* G 字母 — 居中, 黑色描边对应 dark mode brand-on (#000000) */}
-      <text
-        x="28"
-        y="38"
-        textAnchor="middle"
-        fontFamily="var(--font-mono, ui-monospace)"
-        fontSize="30"
-        fontWeight="700"
-        fill="#000000"
-      >
-        G
-      </text>
-    </svg>
   );
 }
