@@ -281,6 +281,42 @@
     table-layout: auto;
     line-height: 1.4;
     font-size: 0.8125rem;
+
+    /* ── 列宽 clamp (2026-10-21, 对齐安卓 yinian-android@78541eb) ──────────
+       安卓 MarkdownTableCard.kt 的 clampColumnWidths: 列自然宽 clamp 到
+       [80dp, 240dp], 超上限的长内容在单元格里**折行**(不截断), 表格总宽因此有界。
+
+       下限 = 列不被压扁到不可读; 上限 = 封住"文字越长表格越宽"。
+
+       ### 单位换算依据 (**不是** 1dp ≈ 0.6px)
+       ① 同设备上 **1dp ≡ 1 CSS px**: Android dp = 物理px/(dpi/160), WebView DPR = dpi/160
+          ⇒ CSS px = 物理px/DPR = 物理px×160/dpi = dp。名义基线换算 (1dp=1/160",
+          1px=1/96" ⇒ 0.6) 只回答「同一物理长度等于多少 CSS px」, 不回答「同设备同内容
+          是否等宽」—— 后者才是两端观感一致要解决的问题。
+       ② 表格字号**已经**是 13px (= 0.8125rem), 与安卓 body 13sp **1:1**;
+          若列宽按 0.6 缩到 144px 而字号不缩, 每行字数比安卓少 ~40% —— 两端反而不一致。
+       ③ 折行点 = 列宽 ÷ 字号。1:1 时 (240px ÷ 13px) 与安卓 (240dp ÷ 13sp) 完全相同,
+          同一段文字在两端**同一位置**折行 —— 这是「观感一致」的可观测口径。
+       ④ 观感合理性: 240px − 24px padding = 216px ≈ 16 个中文字/行 (144px 只 ≈9 个, 过窄)。
+
+       ### 落地方式 (**实测**, 别凭 CSS 常识猜)
+       Chromium 下 `table-layout: auto` + `width: max-content` 的表格**会**认 td/th 的
+       min-width / max-width (CSS 2.1 规范其实不要求, 是浏览器既有实现) —— 实测:
+         长内容列封到 240.0px / 窄列抬到 80.0px / 同列 th≡td 仍等宽 / 表超容器仍横滑。
+       保留 `overflow-wrap: break-word` ⇒ 长 URL 仍在格内断行, 不撑爆列。
+
+       ⚠️ 已知: Firefox 对表格单元格 min/max-width 的支持历史上有与 Chromium 不一致的
+          情况; 本仓以 Chromium 为准 (PC = Electron / Chromium 内核)。
+          断言脚本 scripts/verify-md-table-colwidth.mjs 钉的就是 Chromium 实测值。 */
+    --md-table-col-min: 80px;
+    --md-table-col-max: 240px;
+  }
+
+  /* 列宽上下限 —— 同时作用于 th 与 td (表头同样要封顶, 否则长表头照样撑爆整列)。 */
+  .md-table-th,
+  .md-table-td {
+    min-width: var(--md-table-col-min);
+    max-width: var(--md-table-col-max);
   }
 
   /* 表头 — 浅灰背景 + 加粗, 阶段 3: 加粗下边框作为表头结束标记 */
