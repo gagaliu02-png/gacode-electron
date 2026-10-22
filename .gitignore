@@ -18,7 +18,14 @@ release-sidebar-fix/
 release-sidebar-fix-prev/
 
 # Internal helpers (build tooling, packaging wrappers, screenshot helpers)
+# 例外: 契约 §4.7 要求的跨端渲染回归断言必须入库, 否则 clone 下来 §4.7 形同虚设。
+#   纪律: 声明式例外, 不用 `git add -f` (隐性步骤, 忘一次就丢, 且 git log 看不出被跟踪过)。
+#   ⚠️ git 规则: 父目录被忽略时, 子文件的 `!` 例外不生效 (git 不进被忽略的目录找例外)。
+#      必须三级解锁 —— 先放行目录, 再用 `scripts/*` 重新忽略, 最后只豁免契约要求的文件。
 scripts/
+!scripts/
+scripts/*
+!scripts/verify-md-table-colwidth.mjs
 check-gacode.ps1
 
 # Intermediate icon-resize PNGs (only icon-source.png + icon-256.png + icon.ico committed)
