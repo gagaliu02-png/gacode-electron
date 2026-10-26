@@ -3,8 +3,8 @@
  *
  * 设计目标:
  *   - variant='pill' (默认, 向后兼容): inline-flex p-1 + active bg-brand, 跟旧 chip 一致
- *   - variant='underline' (新增, PC-6 Library 用): flex gap-6 + 底部 2px brand 下划线,
- *     跟 gacode-web Library Tabs 视觉对齐 (文字 + 下划线)
+ *   - variant='underline': 文字 + 底部内缩 12px 的 brand 下划线,
+ *     逐条对齐 gacode-web/src/components/ui/tabs.tsx (L-01 ~ L-05, 2026-10-26)
  *   - 自管 active key + onChange, 不耦合具体业务; 也可以做 controlled (activeKey/onChange)
  *
  * 用法:
@@ -55,13 +55,17 @@ export function Tabs({
   const active = (key: string) => key === activeKey;
 
   if (variant === "underline") {
-    // 下划线变体 — 文字 tab + 底部 2px brand 下划线
-    //   对齐 gacode-web Library Tabs: flex gap-6 + border-b 容器 + after 伪元素下划线
-    //   active: text-fg + after 下划线显示; inactive: text-fg-muted
+    // 下划线变体 — 文字 tab + 内缩 12px 的 2px brand 下划线
+    //   对齐 gacode-web/src/components/ui/tabs.tsx:55-88 (L-01 ~ L-05):
+    //   容器无 border-b (去线化) + gap-1 + 横向滚动;
+    //   按钮 px-4 py-2.5 / text-sm font-medium (全部态);
+    //   下划线 after:inset-x-3 + after:rounded-t;
+    //   未选中态补 hover:bg-accent。
     return (
       <div
         className={[
-          "flex gap-6 border-b border-border",
+          // L-01: 去掉 border-b, gap-6 → gap-1, 补横向滚动 (web TabsList 原串)
+          "flex items-center justify-start gap-1 overflow-x-auto scrollbar-none",
           className,
         ].join(" ")}
         role="tablist"
@@ -80,15 +84,20 @@ export function Tabs({
                 onChange(t.key);
               }}
               className={[
-                // pb-2 给下划线留 2px 高的位置; relative 让 after 定位到 button 内部
-                "relative pb-2 text-sm transition-colors duration-150",
-                "disabled:opacity-50 disabled:pointer-events-none",
-                "inline-flex items-center gap-1",
-                // after 伪元素: active 时 bg-brand, inactive 时 bg-transparent
-                "after:content-[''] after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:transition-colors",
+                // L-02 + L-05: px-4 py-2.5 / text-sm font-medium (font-medium 对全部态生效)
+                // gap-1 是 PC 独有 (label 与右侧 count 之间要留缝), web 无 count 元素
+                "relative inline-flex items-center justify-center whitespace-nowrap gap-1 px-4 py-2.5 text-sm font-medium transition-colors duration-150",
+                // L-02: disabled 两项顺序对齐 web
+                "disabled:pointer-events-none disabled:opacity-50",
+                // L-03: 下划线左右各内缩 12px + 顶部圆角
+                // ⚠️ 不写 after:bg-transparent: PC 无 tailwind-merge, 而产物里 .after\:bg-transparent
+                //   排在 .after\:bg-brand **之后** (CSS 顺序取胜者) ⇒ 会把选中态的品牌色下划线盖成透明。
+                //   web 的 inactive 分支同样不写 (after 背景默认就是透明) — 对齐 web。
+                "after:content-[''] after:absolute after:inset-x-3 after:bottom-0 after:h-[2px] after:rounded-t after:transition-colors",
+                // L-04: 未选中态补 hover:bg-accent
                 isActive
-                  ? "text-fg font-medium after:bg-brand"
-                  : "text-fg-muted hover:text-fg after:bg-transparent",
+                  ? "text-fg after:bg-brand"
+                  : "text-fg-muted hover:text-fg hover:bg-accent",
               ].join(" ")}
             >
               <span>{t.label}</span>

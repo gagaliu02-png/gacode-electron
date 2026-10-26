@@ -75,10 +75,6 @@ export function EditSheet({ open, item, onClose, onSaved }: EditSheetProps) {
   if (!open || !item) return null;
 
   const trimmedTitle = title.trim();
-  const noChange =
-    trimmedTitle === (item.title ?? "") &&
-    tagsRaw.trim() ===
-      (item.tags ?? []).join(", ");
 
   const submit = () => {
     if (!trimmedTitle) {
@@ -163,7 +159,7 @@ export function EditSheet({ open, item, onClose, onSaved }: EditSheetProps) {
             variant="default"
             size="md"
             loading={mutation.isPending}
-            disabled={!trimmedTitle || noChange}
+            disabled={!trimmedTitle}
             onClick={submit}
           >
             保存

@@ -11,6 +11,10 @@
  *   - sticky 在消息列表底部 + ChatInputBar 上方 (Web 是这样; Electron 这边
  *     把它放在 ChatInput 之上, 不挤压消息列表滚动区)
  *
+ * 视觉 1:1 对齐 web: 外层 `mx-auto max-w-3xl w-full px-4 pb-2` + 内层
+ *   `rounded-xl border border-red-500/40 bg-red-500/5 shadow-lg p-3` 卡片,
+ *   标题行 / 工具列表 (带风险等级 badge) / detail / 4 按钮等宽 grid.
+ *
  * 数据契约 (ApprovalRequest): 跟 api.ts submitApprovalDecision / sse.ts 解析
  * 出来的 approval_request rich_events 形状一致. ChatDetail 在 onChunk 里识别
  * type='approval_request' 累加进 store, type='approval_granted'/'approval_denied'
@@ -19,6 +23,7 @@
 
 import { useState } from "react";
 import { submitApprovalDecision, type ApprovalAction } from "../../lib/api";
+import { AlertTriangleIcon } from "../ui/Glyphs";
 
 export interface ApprovalRequest {
   /** local key — store 内去重 (同 server-pendingId 不重复 push) */
@@ -37,6 +42,27 @@ export interface ApprovalBannerProps {
   /** 触发时清空 parent 端 pendingApprovals 列表 (整张 banner 立刻消失) */
   onClear: () => void;
   onError?: (msg: string) => void;
+}
+
+// 风险等级 badge — 对齐 web ApprovalBanner.tsx:32-36
+const RISK_STYLES = {
+  high: { badge: "bg-red-500/20 text-red-600", label: "高风险" },
+  medium: { badge: "bg-orange-500/20 text-orange-600", label: "中风险" },
+  low: { badge: "bg-green-500/20 text-green-600", label: "低风险" },
+} as const;
+
+function RiskBadge({ level }: { level: ApprovalRequest["riskLevel"] }) {
+  const style = RISK_STYLES[level] ?? RISK_STYLES.medium;
+  return (
+    <span
+      className={[
+        "inline-flex shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium",
+        style.badge,
+      ].join(" ")}
+    >
+      {style.label}
+    </span>
+  );
 }
 
 export function ApprovalBanner({
@@ -73,119 +99,103 @@ export function ApprovalBanner({
     }
   };
 
-  // 取最高风险等级作为 banner 颜色基调
-  const topRisk = requests.reduce<"high" | "medium" | "low">(
-    (acc, r) => (rank(r.riskLevel) > rank(acc) ? r.riskLevel : acc),
-    "low",
-  );
-
   return (
     <div
-      role="alert"
-      aria-live="polite"
-      className={[
-        "shrink-0 mx-3 mb-2 rounded-md border bg-bg-elevated shadow-dialog",
-        "p-3 space-y-2",
-        topRisk === "high"
-          ? "border-danger/50"
-          : topRisk === "medium"
-            ? "border-warning/50"
-            : "border-border",
-      ].join(" ")}
+      role="region"
+      aria-label="待审批工具调用"
+      className="mx-auto max-w-3xl w-full px-4 pb-2"
       data-testid="approval-banner"
     >
-      <div className="flex items-center gap-2">
-        <span
-          aria-hidden="true"
-          className={[
-            "inline-block w-2 h-2 rounded-full",
-            topRisk === "high"
-              ? "bg-danger"
-              : topRisk === "medium"
-                ? "bg-warning"
-                : "bg-success",
-          ].join(" ")}
-        />
-        <p className="text-sm font-medium">
-          {requests.length === 1
-            ? "工具需要你的授权"
-            : `${requests.length} 个工具正在等待你的授权`}
-        </p>
+      <div className="rounded-xl border border-red-500/40 bg-red-500/5 shadow-lg p-3">
+        {/* 标题行 — 对齐 web ApprovalBanner.tsx:69-75 */}
+        <div className="flex items-center gap-2 mb-2">
+          <AlertTriangleIcon className="w-5 h-5 text-red-500 shrink-0" />
+          <span className="text-sm font-semibold text-red-600">
+            {requests.length > 1 ? `待审批 (${requests.length})` : "待审批"}
+          </span>
+          <span className="text-xs text-fg-muted">工具调用需要你确认</span>
+        </div>
+
+        {/* 工具列表 (紧凑 1 行 / approval, 对齐 web ApprovalBanner.tsx:78-97) */}
+        <div className="space-y-1">
+          {requests.map((req) => {
+            // 标题去掉 tool name 前缀, 避免重复显示
+            const trimmedTitle = (req.title || "")
+              .replace(new RegExp(`^${req.tool}\\s+`), "")
+              .trim();
+            return (
+              <div key={req.id} className="flex items-center gap-2 text-sm">
+                <span className="text-red-500 w-3 shrink-0 text-center">•</span>
+                <span className="font-medium w-[86px] truncate shrink-0">
+                  {req.tool}
+                </span>
+                <span className="flex-1 truncate text-fg-muted text-xs">
+                  {trimmedTitle || req.tool}
+                </span>
+                <RiskBadge level={req.riskLevel} />
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 第一条 detail — 折叠 hint (对齐 web ApprovalBanner.tsx:100-106, 截断 180 字) */}
+        {requests[0]?.detail ? (
+          <div className="mt-2 px-2 py-1 rounded bg-bg-elevated/60 text-xs text-fg-muted line-clamp-3">
+            {requests[0].detail.length > 180
+              ? `${requests[0].detail.slice(0, 180)}…`
+              : requests[0].detail}
+          </div>
+        ) : null}
+
+        {/* 4 按钮横排等宽 — 对齐 web ApprovalBanner.tsx:109 */}
+        <div className="grid grid-cols-4 gap-1.5 mt-3">
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => void handleAction("deny", requests[0])}
+            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs border border-red-500/60 text-red-600 hover:bg-red-500/10 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            data-testid="approval-deny"
+          >
+            拒绝
+          </button>
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => void handleAction("once", requests[0])}
+            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            data-testid="approval-once"
+          >
+            同意一次
+          </button>
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => void handleAction("session", requests[0])}
+            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            data-testid="approval-session"
+          >
+            本次会话
+          </button>
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => void handleAction("always", requests[0])}
+            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-brand text-brand-on shadow hover:bg-brand/90 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            data-testid="approval-always"
+          >
+            永久
+          </button>
+        </div>
+
+        {/* 注: 只对列表里第一条 approval 调决策 (跟 web ApprovalBanner + Android
+             同款). gaclaw 收到后会 cancel 整个 batch 的 _waiters, 所以"任一按钮
+             触发 → 整批清空"语义在 server 侧保证. */}
+        {requests.length > 1 ? (
+          <p className="text-[11px] text-fg-subtle pt-0.5">
+            多个工具共用同一个决策 (任选其一即可)
+          </p>
+        ) : null}
       </div>
-
-      {/* 工具列表 — 每条 tool name + 标题, 紧凑 1 行 */}
-      <ul className="space-y-1 text-xs">
-        {requests.map((req) => (
-          <li key={req.id} className="flex items-center gap-2">
-            <span className="font-mono text-fg truncate">{req.tool}</span>
-            <span className="text-fg-muted truncate flex-1">{req.title}</span>
-          </li>
-        ))}
-      </ul>
-
-      {/* 第一条 detail — 折叠 hint (跟 web ApprovalBanner.tsx:99-109 同款) */}
-      {requests[0]?.detail ? (
-        <pre className="font-mono text-[11px] text-fg-muted whitespace-pre-wrap break-words leading-relaxed bg-bg-sunken/40 rounded px-2 py-1.5 max-h-24 overflow-y-auto">
-          {requests[0].detail.length > 600
-            ? requests[0].detail.slice(0, 600) + "…"
-            : requests[0].detail}
-        </pre>
-      ) : null}
-
-      {/* 4 个决策按钮 — 顺序对齐 Android ApprovalBanner.kt */}
-      <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 pt-1">
-        <button
-          type="button"
-          disabled={!!busy}
-          onClick={() => void handleAction("deny", requests[0])}
-          className="flex-1 min-w-[80px] h-9 rounded-md border border-danger/60 bg-danger-soft/40 text-danger text-sm hover:bg-danger-soft/70 active:opacity-80 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
-          data-testid="approval-deny"
-        >
-          拒绝
-        </button>
-        <button
-          type="button"
-          disabled={!!busy}
-          onClick={() => void handleAction("once", requests[0])}
-          className="flex-1 min-w-[80px] h-9 rounded-md bg-bg-sunken text-fg text-sm hover:bg-bg-sunken/70 active:opacity-80 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
-          data-testid="approval-once"
-        >
-          同意一次
-        </button>
-        <button
-          type="button"
-          disabled={!!busy}
-          onClick={() => void handleAction("session", requests[0])}
-          className="flex-1 min-w-[80px] h-9 rounded-md bg-bg-sunken text-fg text-sm hover:bg-bg-sunken/70 active:opacity-80 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
-          data-testid="approval-session"
-        >
-          本次会话
-        </button>
-        <button
-          type="button"
-          disabled={!!busy}
-          onClick={() => void handleAction("always", requests[0])}
-          className="flex-1 min-w-[80px] h-9 rounded-md bg-brand text-brand-on text-sm hover:bg-brand-hover active:bg-brand-active transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
-          data-testid="approval-always"
-        >
-          永久允许
-        </button>
-      </div>
-
-      {/* 注: 只对列表里第一条 approval 调决策 (跟 web ApprovalBanner.tsx + Android
-           同款). gaclaw 收到后会 cancel 整个 batch 的 _waiters, 所以"任一按钮
-           触发 → 整批清空"语义在 server 侧保证. */}
-      {requests.length > 1 ? (
-        <p className="text-[11px] text-fg-subtle pt-0.5">
-          多个工具共用同一个决策 (任选其一即可)
-        </p>
-      ) : null}
     </div>
   );
-}
-
-function rank(r: "high" | "medium" | "low"): number {
-  if (r === "high") return 2;
-  if (r === "medium") return 1;
-  return 0;
 }

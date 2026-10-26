@@ -38,7 +38,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { useAuth } from "../lib/auth";
 import { createChat, type LibraryItem } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
 import {
@@ -79,7 +78,6 @@ function pickUploadMode(kind: MediaKind): UploadMode {
 }
 
 export function Home() {
-  const { user } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -93,8 +91,6 @@ export function Home() {
   // 0.7.6 — ChatInputBar 命令式 handle ref. EmojiPicker / LibraryPicker 选中后
   //   通过 ref 调 insertEmoji / insertText 注入 textarea, 不再用占位 chip.
   const inputBarRef = useRef<ChatInputBarHandle>(null);
-
-  const displayName = user?.displayName || user?.username || "访客";
 
   // ────────────── createChat mutation ──────────────
   const createMutation = useMutation({
@@ -170,21 +166,21 @@ export function Home() {
     switch (action) {
       case "camera":
         setMediaKind("camera");
-        setTimeout(() => setMediaOpen(true), 80);
+        setTimeout(() => setMediaOpen(true), 100);
         break;
       case "gallery":
         setMediaKind("gallery");
-        setTimeout(() => setMediaOpen(true), 80);
+        setTimeout(() => setMediaOpen(true), 100);
         break;
       case "file":
         setMediaKind("file");
-        setTimeout(() => setMediaOpen(true), 80);
+        setTimeout(() => setMediaOpen(true), 100);
         break;
       case "emoji":
-        setTimeout(() => setEmojiOpen(true), 80);
+        setTimeout(() => setEmojiOpen(true), 100);
         break;
       case "library":
-        setTimeout(() => setLibraryOpen(true), 80);
+        setTimeout(() => setLibraryOpen(true), 100);
         break;
       // "template" 已在 PlusSheet 内 toast 占位, 这里不会再收到
     }
@@ -264,14 +260,18 @@ export function Home() {
     setEmojiOpen(false);
   }, []);
 
-  const handleLibrarySelect = useCallback((item: LibraryItem) => {
-    inputBarRef.current?.insertText(`@[library:${item.id}] ${item.title}`);
+  // 知识库多选确认 — 对齐 web Home 的多选形态 (align-d-home.md H-51).
+  //   逐条注入 `@[library:id] title` marker 到 textarea (insertLibraryMarker 带分隔符).
+  const handleLibraryConfirm = useCallback((items: LibraryItem[]) => {
+    for (const item of items) {
+      inputBarRef.current?.insertLibraryMarker?.(item.id, item.title);
+    }
     setLibraryOpen(false);
   }, []);
 
   // ────────────── 渲染 ──────────────
   return (
-    <div className="min-h-full flex flex-col bg-bg-base">
+    <div className="min-h-screen flex flex-col bg-background">
       {/* 中部: 居中 logo + 欢迎语
           0.7.6 — 删掉顶部 brand bar (gaga 截图反馈 §2: 重复), AppShell 的 sidebar
           已有 G + gacode 标识, Home 再画一次是冗余.
@@ -281,19 +281,20 @@ export function Home() {
           - 删副标题 `Gacode PC · 想聊点啥直接输入,按 Enter 发送` (PC 独有, web 无此节点)
           - 头像图资源: PC 仓内实测无 cody 图 (public/ 只有 fonts/), 且不引外部资源,
             暂用纯文字占位 — 待 gagaOS 决定是否提供 cody_512.png (TODO: 换 <img src>) */}
-      <div className="flex-1 flex flex-col items-center justify-center px-4 lg:px-8 pt-10 pb-6">
-        <div className="flex flex-col items-center gap-3 text-center">
+      <div className="pt-10 pb-6 px-4 text-center">
+        <div className="flex flex-col items-center gap-4 text-center">
           <div
             aria-hidden="true"
-            className="w-[72px] h-[72px] rounded-xl bg-bg-elevated flex items-center justify-center text-fg-muted text-2xl font-medium"
+            className="w-16 h-16 rounded-squircle bg-bg-elevated flex items-center justify-center text-fg-muted text-2xl font-medium"
           >
             cody
           </div>
           <h1 className="text-headline font-medium">
-            HI 欢迎你,<span className="text-brand">{displayName}</span>
+            HI 我是 <span className="text-primary">cody</span> 很高兴遇见你
           </h1>
         </div>
       </div>
+      <div className="flex-1" />
 
       {/* 底部: ChatInputBar (含 `+` 按钮, 由 ChatInputBar 自己提供)
           0.7.6 — 删掉 Home 外层独立的 `+` 按钮 (gaga 截图反馈 §4 补充: 两个 +
@@ -301,8 +302,8 @@ export function Home() {
           置的 `+` 按钮负责 UI. ref 让 emoji / 知识库 选中后注入 textarea 文本.
           2026-10-21 对齐 web §1.1 (`page.tsx:360-361`): 外层补 `border-t border-border
           p-4 bg-bg-base` 底分隔, 输入区限宽居中. */}
-      <div className="border-t border-border p-4 bg-bg-base">
-        <div className="max-w-2xl mx-auto w-full">
+      <div className="border-t border-border p-4 bg-background">
+        <div className="max-w-3xl mx-auto w-full">
           <ChatInputBar
             ref={inputBarRef}
             isStreaming={false}
@@ -336,7 +337,7 @@ export function Home() {
       <LibraryPicker
         open={libraryOpen}
         onClose={() => setLibraryOpen(false)}
-        onSelect={handleLibrarySelect}
+        onConfirm={handleLibraryConfirm}
       />
     </div>
   );

@@ -37,6 +37,7 @@ import { useToast } from "../components/ui/Toast";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { Tabs } from "../components/ui/Tabs";
 import { DeliveriesDropZone } from "../components/deliveries/DeliveriesDropZone";
 import {
   DeliveriesMultiSelectToolbar,
@@ -236,31 +237,18 @@ export function Deliveries() {
     >
       <div className="min-h-full flex flex-col">
         {/* 顶部操作栏 */}
-        <div className="sticky top-0 z-10 bg-bg-base">
-          <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full space-y-2 py-2">
+        <div className="sticky top-0 z-20 bg-bg-base/95 backdrop-blur pt-2 pb-4">
+          <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full space-y-2">
             {/* Row 1: tabs (左) + 排序 / 刷新 (右) */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex-1 min-w-0 overflow-x-auto">
-                <div className="inline-flex p-1 rounded-md bg-bg-elevated gap-1">
-                  {TAB_DEFS.map((t) => {
-                    const active = tab === t.key;
-                    return (
-                      <button
-                        key={t.key}
-                        type="button"
-                        onClick={() => setTab(t.key)}
-                        className={[
-                          "px-3 py-1 text-sm rounded transition-colors duration-150",
-                          active
-                            ? "bg-brand text-brand-on shadow-sm"
-                            : "text-fg-muted hover:text-fg",
-                        ].join(" ")}
-                      >
-                        {t.label}
-                      </button>
-                    );
-                  })}
-                </div>
+                {/* D-01: pill 药丸 → underline 下划线 (复用 PC <Tabs variant="underline">) */}
+                <Tabs
+                  variant="underline"
+                  tabs={TAB_DEFS.map((t) => ({ key: t.key, label: t.label }))}
+                  activeKey={tab}
+                  onChange={(k) => setTab(k as TabKey)}
+                />
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <SortMenu value={sort} onChange={setSort} />
@@ -291,7 +279,7 @@ export function Deliveries() {
         </div>
 
         {/* 列表 */}
-        <div className="flex-1 px-4 lg:px-8 max-w-5xl mx-auto w-full py-4">
+        <div className="flex-1 overflow-y-auto px-4 lg:px-8 max-w-5xl mx-auto w-full py-2">
           {isLoading ? (
             <SkeletonGrid />
           ) : sortedItems.length === 0 ? (
@@ -398,7 +386,7 @@ function DocumentSplitGrid({
             <h3 className="text-xs uppercase text-fg-subtle mb-2 tracking-wide">
               PDF 预览 ({pdfs.length})
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {pdfs.map((d) => (
                 <PdfCard
                   key={d.id}
@@ -420,7 +408,7 @@ function DocumentSplitGrid({
             <h3 className="text-xs uppercase text-fg-subtle mb-2 tracking-wide">
               其它文档 ({others.length})
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {others.map((d) => (
                 <DeliveryCard
                   key={d.id}
@@ -444,7 +432,7 @@ function DocumentSplitGrid({
     );
   }
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {items.map((d) => (
         <DeliveryCard
           key={d.id}

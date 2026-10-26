@@ -14,6 +14,7 @@
 
 import { useMemo, useState } from "react";
 import { BottomSheet } from "../ui/BottomSheet";
+import { SearchFieldIcon } from "../ui/Glyphs";
 
 type EmojiCategory = "smileys" | "gestures" | "symbols";
 
@@ -100,7 +101,6 @@ export interface EmojiPickerProps {
   /** 选中 emoji 字符串; parent 拼到 textarea */
   onSelect: (emoji: string) => void;
 }
-
 export function EmojiPicker({ open, onClose, onSelect }: EmojiPickerProps) {
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<EmojiCategory>("smileys");
@@ -125,16 +125,19 @@ export function EmojiPicker({ open, onClose, onSelect }: EmojiPickerProps) {
   return (
     <BottomSheet open={open} title="选择表情" onClose={handleClose}>
       {/* 顶部搜索 + 分类 */}
-      <div className="px-1 pt-1 pb-3 border-b border-border space-y-2">
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="搜索表情 (例如: 笑 / heart)"
-          className="w-full rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle px-3 py-2 text-sm outline-none focus:border-brand focus:border"
-        />
+      <div className="px-4 pt-5 pb-3 border-b border-border space-y-3">
+        <div className="relative">
+          <SearchFieldIcon />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜索表情 (例如: 笑 / heart)"
+            className="w-full pl-9 pr-3 py-2 rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle outline-none focus:ring-1 focus:ring-brand"
+          />
+        </div>
         {!search && (
-          <div className="flex gap-2">
+          <div className="flex gap-2 mt-3">
             {CATEGORIES.map((c) => {
               const active = c.key === activeCategory;
               return (
@@ -158,7 +161,7 @@ export function EmojiPicker({ open, onClose, onSelect }: EmojiPickerProps) {
       </div>
 
       {/* emoji 网格 */}
-      <div className="py-3">
+      <div className="px-4 py-3">
         {filtered.length === 0 ? (
           <div className="text-center text-fg-muted py-8 text-sm">
             没有匹配的表情
@@ -169,7 +172,13 @@ export function EmojiPicker({ open, onClose, onSelect }: EmojiPickerProps) {
               <button
                 key={e.emoji + e.keywords[0]}
                 type="button"
-                onClick={() => onSelect(e.emoji)}
+                onClick={() => {
+                  // A2-D1-37 (对齐 web `chat/EmojiPicker.tsx:186-189`):
+                  //   web 选中 emoji 后 `handleOpenChange(false)` 关掉面板;
+                  //   PC 的关闭入口是 `handleClose` (清 search + onClose).
+                  onSelect(e.emoji);
+                  handleClose();
+                }}
                 aria-label={e.keywords[0]}
                 className="w-10 h-10 rounded-md text-2xl hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center"
               >

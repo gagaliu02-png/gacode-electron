@@ -80,7 +80,7 @@ export function PlusSheet({ open, onClose, onPick }: PlusSheetProps) {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.8"
+              strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
             >
@@ -100,7 +100,7 @@ export function PlusSheet({ open, onClose, onPick }: PlusSheetProps) {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.8"
+              strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
             >
@@ -121,7 +121,7 @@ export function PlusSheet({ open, onClose, onPick }: PlusSheetProps) {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.8"
+              strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
             >
@@ -144,7 +144,7 @@ export function PlusSheet({ open, onClose, onPick }: PlusSheetProps) {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.8"
+              strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
             >
@@ -166,14 +166,14 @@ export function PlusSheet({ open, onClose, onPick }: PlusSheetProps) {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.8"
+              strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
             >
-              <path d="m21 16-4 4-4-4" />
-              <path d="M17 20V4" />
-              <path d="m3 8 4-4 4 4" />
-              <path d="M7 4v16" />
+              <path d="m16 6 4 14" />
+              <path d="M12 6v14" />
+              <path d="M8 8v12" />
+              <path d="M4 4v16" />
             </svg>
           }
         />
@@ -188,7 +188,7 @@ export function PlusSheet({ open, onClose, onPick }: PlusSheetProps) {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.8"
+              strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
             >

@@ -85,8 +85,14 @@ export function DropdownMenu({
         <div
           role="menu"
           className={[
-            "absolute z-50 mt-1 min-w-[160px] rounded-md",
-            "bg-bg-elevated shadow-dialog animate-fade-in py-1",
+            // 对齐 gacode-web/src/components/ui/dropdown-menu.tsx:143-152
+            //   "absolute z-50 min-w-[12rem] overflow-hidden rounded-md border border-border
+            //    bg-bg-elevated p-1 text-fg shadow-elevation-3" + "animate-fade-in" + "top-full"
+            //   align: end → right-0 / start → left-0
+            //   sideOffset: web 默认 4px, PC 用 mt-1 (4px) 等价
+            "absolute z-50 min-w-[12rem] overflow-hidden rounded-md border border-border bg-bg-elevated p-1 text-fg shadow-elevation-3",
+            "animate-fade-in",
+            "top-full mt-1",
             align === "right" ? "right-0" : "left-0",
           ].join(" ")}
         >
@@ -101,12 +107,16 @@ export function DropdownMenu({
                 it.onClick();
               }}
               className={[
-                "w-full text-left text-sm px-3 py-2",
-                "transition-colors duration-150",
+                // 对齐 web dropdown-menu.tsx:180-186
+                "relative flex w-full cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors",
                 "disabled:opacity-50 disabled:pointer-events-none",
+                // ⚠️ PC 无 tailwind-merge: web 靠 cn() 让「后写的赢」(destructive 的 danger-soft 底色生效),
+                //   PC 只能靠 CSS 产物顺序 —— 实测产物里 .bg-accent 早于 .bg-danger-soft
+                //   (25495 < 27210) ⇒ danger-soft 赢, 与 web 效果一致。
+                //   这里仍把两套 hover 拆成互斥分支: 不依赖调色板顺序, 也不会被将来新增 token 翻盘。
                 it.destructive
-                  ? "text-danger hover:bg-danger-soft/30"
-                  : "text-fg hover:bg-bg-sunken",
+                  ? "text-danger hover:bg-danger-soft focus:bg-danger-soft"
+                  : "text-fg hover:bg-accent focus:bg-accent",
               ].join(" ")}
             >
               {it.render ?? it.label}

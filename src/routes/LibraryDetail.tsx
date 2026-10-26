@@ -75,7 +75,7 @@ export function LibraryDetail() {
     mutationFn: () => deleteLibraryItem(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["library"] });
-      toast({ message: "已删除", variant: "success" });
+      toast({ message: "已删除", variant: "default" });
       navigate("/library", { replace: true });
     },
     onError: (err) => {
@@ -187,7 +187,7 @@ export function LibraryDetail() {
         <header className="space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs px-2 py-0.5 rounded bg-bg-elevated text-fg-muted">
-              {TYPE_LABEL[item.type] || item.type}
+              {TYPE_LABEL[item.type] || TYPE_LABEL_OTHER}
             </span>
             <span className="text-xs text-fg-subtle font-mono">#{item.id}</span>
             <span className="text-xs text-fg-subtle">·</span>
@@ -197,9 +197,7 @@ export function LibraryDetail() {
             {/* library-id-10: 同步状态徽章 */}
             <SyncStatusBadge status={deriveSyncStatus(item)} />
           </div>
-          <h1 className="text-xl font-medium text-fg break-all">
-            {item.title || "(无标题)"}
-          </h1>
+          <h1 className="text-2xl font-semibold text-fg break-words">{item.title || "未命名"}</h1>
         </header>
 
         {/* 元信息 */}
@@ -453,3 +451,4 @@ const TYPE_LABEL: Record<string, string> = {
   link: "链接",
   text: "文本",
 };
+const TYPE_LABEL_OTHER = "其他";

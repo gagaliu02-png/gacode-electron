@@ -28,6 +28,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { formatDistanceToNow } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import {
   autoTitleChat,
   createChat,
@@ -39,8 +41,22 @@ import {
 } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
 import { Button } from "../components/ui/Button";
+import { Card, CardContent } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+// A1-D4-01 / A1-D4-02 / A2-D4-01: 删除确认 + 重命名 改用底部 Sheet
+//   (复用现有 components/ui/BottomSheet — 它已是 web `SheetContent` 的等价物).
+import { BottomSheet } from "../components/ui/BottomSheet";
+import {
+  CheckCheckIcon,
+  CloseIcon,
+  MessageSquarePlusIcon,
+  MoreVertIcon,
+  PencilIcon,
+  PinRowIcon,
+  SearchIcon,
+  TrashIcon,
+} from "../components/ui/Glyphs";
 
 const SEARCH_DEBOUNCE_MS = 200;
 const AUTOTITLE_DELAY_MS = 800;
@@ -86,8 +102,11 @@ export function ChatList() {
       scheduleAutoTitle(chat.id);
     },
     onError: (err) => {
+      // A1-D2-24 (对齐 web `chat/page.tsx:88-94`): 创建失败 toast 分
+      //   title / description 两段 (PC 的 Toast 已支持两段式).
       toast({
-        message: `创建失败: ${err instanceof Error ? err.message : String(err)}`,
+        title: "创建失败",
+        description: String((err as Error)?.message || err),
         variant: "danger",
       });
     },
@@ -138,6 +157,24 @@ export function ChatList() {
       });
     },
   });
+
+  /** 提交重命名 — 对齐 web `chat/page.tsx:151-163` submitRename:
+   *  空标题 → toast 报错不提交; 标题跟原标题相同 → 直接关闭; 否则调 renameMutation.
+   *  (原逻辑内联在 ConfirmDialog.onConfirm 与 Input 的 Enter 两处, 这里抽成
+   *   同一个函数, 按钮 / 回车两条路径共用同一套判定.) */
+  const submitRename = () => {
+    if (!renameForId) return;
+    const trimmed = renameDraft.trim();
+    if (!trimmed) {
+      toast({ message: "标题不能为空", variant: "danger" });
+      return;
+    }
+    if (trimmed === renameForId.title) {
+      setRenameForId(null);
+      return;
+    }
+    renameMutation.mutate({ id: renameForId.id, title: trimmed });
+  };
 
   // ────────────── 置顶乐观更新 ──────────────
   const pinMutation = useMutation({
@@ -204,7 +241,22 @@ export function ChatList() {
     });
   };
 
-  const allSelected = sortedChats.length > 0 && multiSelectIds.size === sortedChats.length;
+  /** 退出多选 — 对齐 web useChatStore.exitMultiSelect (web `src/lib/store.ts:224-225`):
+   *  清空勾选集合 + 退出多选模式. PC 的多选栏由 `multiSelectIds.size > 0` 派生,
+   *  清空即等于退出模式 —— 跟 web `toggleSelected` 空集自动退模式 (store.ts:218-221) 同语义. */
+  const exitMultiSelect = () => {
+    setMultiSelectIds(new Set());
+  };
+
+  /** 全选 — 对齐 web useChatStore.selectAll (web `src/lib/store.ts:226-229`): 选中当前列表全部 */
+  const selectAll = () => {
+    setMultiSelectIds(new Set(sortedChats.map((c) => c.id)));
+  };
+
+  // A1-D3-06 — 全选判定口径对齐 web `chat/page.tsx:181-182`:
+  //   web 用未排序的 chats (语义 =「所有对话都选中」), PC 原来用 sortedChats
+  //   (语义 =「当前可见的都选中」). 1:1 还原 → 口径改成 chats.
+  const allSelected = chats.length > 0 && multiSelectIds.size === chats.length;
 
   // 关闭菜单当 click outside
   useEffect(() => {
@@ -225,8 +277,10 @@ export function ChatList() {
 
   return (
     <div className="min-h-full flex flex-col">
-      {/* 顶 Header — 搜索 (折叠药丸) + 计数 + 新建按钮 */}
-      <div className="px-4 lg:px-8 pt-4 flex items-center justify-between gap-4">
+      {/* 页面根容器 — 对齐 web `chat/page.tsx:185` `px-4 lg:px-8 py-6 max-w-3xl mx-auto` */}
+      <div className="px-4 lg:px-8 py-6 max-w-3xl mx-auto flex-1 w-full">
+      {/* 顶 Header — 搜索 (折叠药丸) + 计数 */}
+      <div className="flex items-center justify-between gap-4">
         <div className="text-sm text-fg-muted shrink-0">
           {pinnedCount > 0 ? `${pinnedCount} 条置顶 · 共 ${sortedChats.length}` : `共 ${sortedChats.length} 条对话`}
         </div>
@@ -266,40 +320,90 @@ export function ChatList() {
             <SearchIcon className="w-5 h-5" />
           </button>
         </div>
-        <Button
-          variant="default"
-          size="md"
-          loading={createMutation.isPending}
-          onClick={() => createMutation.mutate({})}
-        >
-          + 新建对话
-        </Button>
       </div>
 
       {/* 错误态 */}
       {error ? (
-        <div className="px-4 lg:px-8 py-4">
+        <div className="py-4">
           <div className="rounded-md bg-danger-soft/30 px-4 py-3 text-sm">
             加载失败:{error instanceof Error ? error.message : String(error)}
           </div>
         </div>
       ) : null}
 
-      {/* 列表 */}
-      <div className="px-4 lg:px-8 py-4 flex-1">
+      {/* 多选模式 top bar — 对齐 web `chat/page.tsx:187-224`
+          (web 是顶部 sticky bar, 不是底部; PC 的 main 自身是滚动容器,
+           header 在 main 之外不重叠, 故 sticky 偏移取 top-0 而非 top-14) */}
+      {multiSelectIds.size > 0 ? (
+        <div className="sticky top-0 z-30 -mx-4 lg:-mx-8 px-4 lg:px-8 mb-4 py-2 bg-bg-elevated border-b border-border flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setMultiSelectIds(new Set())}
+            className="inline-flex items-center justify-center w-8 h-8 rounded hover:bg-bg-sunken"
+            aria-label="退出多选"
+          >
+            <CloseIcon className="w-5 h-5" />
+          </button>
+          <span className="flex-1 text-sm font-medium">
+            已选 {multiSelectIds.size} 项
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              // A1-D3-05 — 对齐 web `chat/page.tsx:203-205`:
+              //   `allSelected ? exitMultiSelect() : selectAll()`
+              if (allSelected) {
+                exitMultiSelect();
+              } else {
+                selectAll();
+              }
+            }}
+            className="gap-1.5"
+          >
+            <CheckCheckIcon className="w-4 h-4" />
+            {allSelected ? "清空" : "全选"}
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            loading={deleteMutation.isPending}
+            onClick={() => setConfirmOpen(true)}
+            className="gap-1.5"
+          >
+            <TrashIcon className="w-4 h-4" />
+            删除 ({multiSelectIds.size})
+          </Button>
+        </div>
+      ) : null}
+
+      {/* 新建对话按钮 — 对齐 web `chat/page.tsx:227-237` (页内大按钮) */}
+      <div className="mb-6">
+        <Button
+          variant="default"
+          size="lg"
+          onClick={() => createMutation.mutate({})}
+          disabled={createMutation.isPending || multiSelectIds.size > 0}
+          className="w-full lg:w-auto gap-2"
+        >
+          <MessageSquarePlusIcon className="w-5 h-5" />
+          {createMutation.isPending ? "创建中..." : "新建对话"}
+        </Button>
+      </div>
+
+      {/* 列表 — 对齐 web `chat/page.tsx:239-264` (space-y-3 包裹标题 + grid gap-3 列表) */}
+      <div className="space-y-3">
+        <h2 className="text-lg font-semibold mb-4">历史对话</h2>
         {isLoading ? (
           <SkeletonList />
         ) : sortedChats.length === 0 ? (
           searchDebounced ? (
             <SearchEmpty keyword={searchDebounced} onClear={() => setSearchInput("")} />
           ) : (
-            <EmptyState
-              onCreate={() => createMutation.mutate({})}
-              isPending={createMutation.isPending}
-            />
+            <EmptyState />
           )
         ) : (
-          <ul className="space-y-2 max-w-3xl">
+          <ul className="grid gap-3">
             {sortedChats.map((c) => (
               <li key={c.id}>
                 <ChatRow
@@ -341,56 +445,37 @@ export function ChatList() {
           </ul>
         )}
       </div>
+      </div>
 
-      {/* 多选模式 bottom bar */}
-      {multiSelectIds.size > 0 ? (
-        <div className="sticky bottom-0 z-30 bg-bg-elevated px-4 lg:px-8 py-3 flex items-center gap-3">
-          <span className="text-sm">
-            已选 <strong>{multiSelectIds.size}</strong> 条
-          </span>
-          <div className="flex-1" />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setMultiSelectIds(new Set())}
-          >
-            取消
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              if (allSelected) setMultiSelectIds(new Set());
-              else setMultiSelectIds(new Set(sortedChats.map((c) => c.id)));
-            }}
-          >
-            {allSelected ? "清空" : "全选"}
-          </Button>
-          <Button
-            variant="danger"
-            size="sm"
-            loading={deleteMutation.isPending}
-            onClick={() => setConfirmOpen(true)}
-          >
-            删除 ({multiSelectIds.size})
-          </Button>
-        </div>
-      ) : null}
-
-      {/* 批量删除确认弹窗 */}
-      {confirmOpen ? (
-        <ConfirmDialog
-          title={`确认删除 ${multiSelectIds.size} 条对话?`}
-          message="此操作不可恢复,对话中的消息也会被删除。"
-          confirmLabel="确认删除"
-          confirmVariant="danger"
-          loading={deleteMutation.isPending}
-          onCancel={() => setConfirmOpen(false)}
-          onConfirm={() =>
-            deleteMutation.mutate(Array.from(multiSelectIds))
-          }
-        />
-      ) : null}
+      {/* 批量删除确认 — 底部 Sheet (A1-D4-01, 对齐 web `chat/page.tsx:279-310`) */}
+      <BottomSheet
+        open={confirmOpen}
+        title={`确认删除 ${multiSelectIds.size} 条对话？`}
+        onClose={() => setConfirmOpen(false)}
+        footer={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmOpen(false)}
+              disabled={deleteMutation.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => deleteMutation.mutate(Array.from(multiSelectIds))}
+              loading={deleteMutation.isPending}
+              className="gap-2"
+            >
+              确认删除
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-muted">
+          此操作不可恢复，对话中的消息将被永久删除。
+        </p>
+      </BottomSheet>
 
       {/* 单条删除确认弹窗 — chat-6 (替换 window.confirm) */}
       {singleDelete ? (
@@ -405,24 +490,37 @@ export function ChatList() {
         />
       ) : null}
 
-      {/* 重命名弹窗 */}
-      {renameForId ? (
-        <ConfirmDialog
-          title="重命名对话"
-          message=""
-          confirmLabel="保存"
-          loading={renameMutation.isPending}
-          onCancel={() => setRenameForId(null)}
-          onConfirm={() => {
-            const trimmed = renameDraft.trim();
-            if (!trimmed || trimmed === renameForId.title) {
-              setRenameForId(null);
-              return;
-            }
-            renameMutation.mutate({ id: renameForId.id, title: trimmed });
-          }}
-        >
+      {/* 重命名 — 底部 Sheet (A1-D4-02, 对齐 web `chat/page.tsx:314-358`) */}
+      <BottomSheet
+        open={renameForId !== null}
+        title="重命名对话"
+        onClose={() => setRenameForId(null)}
+        footer={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => setRenameForId(null)}
+              disabled={renameMutation.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={submitRename}
+              disabled={!renameDraft.trim()}
+              loading={renameMutation.isPending}
+              className="gap-2"
+            >
+              保存
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-muted">
+          修改后服务端会保留自定义标题 (不会在下次自动生成时覆盖).
+        </p>
+        <div className="px-4 pb-2 mt-2">
           <Input
+            data-testid="rename-input"
             value={renameDraft}
             onChange={(e) => setRenameDraft(e.target.value)}
             placeholder="输入新标题"
@@ -430,17 +528,13 @@ export function ChatList() {
             autoFocus
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                const trimmed = renameDraft.trim();
-                if (trimmed && trimmed !== renameForId.title) {
-                  renameMutation.mutate({ id: renameForId.id, title: trimmed });
-                } else {
-                  setRenameForId(null);
-                }
+                e.preventDefault();
+                submitRename();
               }
             }}
           />
-        </ConfirmDialog>
-      ) : null}
+        </div>
+      </BottomSheet>
     </div>
   );
 }
@@ -543,14 +637,14 @@ function ChatRow({
 
       {/* pin icon column (visible only if pinned) */}
       {chat.pinned ? (
-        <PinIcon className="shrink-0 text-brand" />
+        <PinRowIcon className="shrink-0 text-brand" />
       ) : null}
 
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">
+        <div className="font-medium truncate">
           {chat.title || "新对话"}
         </div>
-        <div className="text-xs text-fg-muted mt-0.5">{relative}</div>
+        <div className="text-sm text-fg-muted mt-1">{relative}</div>
       </div>
 
       {/* ⋮ 菜单按钮 (not in multi-select) */}
@@ -573,7 +667,7 @@ function ChatRow({
               className="absolute right-0 top-9 z-40 min-w-[160px] rounded-md bg-bg-elevated shadow-elevation-3 py-1 animate-fade-in"
             >
               <MenuItem
-                icon={<PinIcon className="text-fg-muted" />}
+                icon={<PinRowIcon className="text-fg-muted" />}
                 label={chat.pinned ? "取消置顶" : "置顶"}
                 onClick={() => {
                   onTogglePin();
@@ -635,31 +729,20 @@ function MenuItem({
 
 // ────────────── empty / skeleton ──────────────
 
-function EmptyState({
-  onCreate,
-  isPending,
-}: {
-  onCreate: () => void;
-  isPending: boolean;
-}) {
+// 空态 — 对齐 web `chat/page.tsx:266-274`:
+//   <Card><CardContent className="p-8 text-center text-muted-foreground">
+//   PC 侧用共享 `components/ui/Card.tsx` (A1-D3-07): Card base = rounded-lg border
+//   bg-card text-card-foreground shadow; CardContent base = p-6, 调用方 p-8 在
+//   tailwind 产物里排在 p-6 之后 → 覆盖生效.
+function EmptyState() {
   return (
-    <div className="h-full flex items-center justify-center">
-      <div className="rounded-md bg-bg-sunken p-8 text-center max-w-sm">
-        <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-elevated flex items-center justify-center text-fg-muted">
-          <ChatBubblePlus />
-        </div>
-        <p className="text-base font-medium mb-1">还没有对话</p>
-        <p className="text-sm text-fg-muted mb-4">点下面的按钮开始第一次会话</p>
-        <Button
-          variant="default"
-          size="lg"
-          onClick={onCreate}
-          loading={isPending}
-        >
-          + 新建对话
-        </Button>
-      </div>
-    </div>
+    <Card>
+      <CardContent className="p-8 text-center text-muted-foreground">
+        <MessageSquarePlusIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+        <div className="text-lg font-medium mb-2">暂无对话</div>
+        <div className="text-sm">开始新对话，开启与 AI 的交流之旅</div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -690,15 +773,9 @@ function SearchEmpty({
 
 function SkeletonList() {
   return (
-    <div className="space-y-2 max-w-3xl">
+    <div className="space-y-3">
       {Array.from({ length: 3 }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-md bg-bg-sunken px-3 py-3 animate-pulse"
-        >
-          <div className="h-4 w-2/3 bg-bg-elevated rounded" />
-          <div className="h-3 w-1/3 bg-bg-elevated rounded mt-2" />
-        </div>
+        <div key={i} className="animate-pulse rounded-md bg-muted h-24 w-full" />
       ))}
     </div>
   );
@@ -706,134 +783,15 @@ function SkeletonList() {
 
 // ────────────── helpers ──────────────
 
+// 相对时间 — 对齐 web `chat/page.tsx:413-416`:
+//   formatDistanceToNow(new Date(updatedAt), { addSuffix: true, locale: zhCN })
+// 文案: 「大约 1 分钟前」/「大约 2 小时前」/「10月20日」
 function formatRelative(iso: string): string {
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return "";
-  const diff = Date.now() - t;
-  const min = 60 * 1000;
-  const hour = 60 * min;
-  const day = 24 * hour;
-  if (diff < min) return "刚刚";
-  if (diff < hour) return `${Math.floor(diff / min)} 分钟前`;
-  if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
-  if (diff < 7 * day) return `${Math.floor(diff / day)} 天前`;
-  return new Date(t).toLocaleDateString();
-}
-
-// ────────────── icons ──────────────
-
-function PinIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className={className}
-    >
-      <line x1="12" y1="17" x2="12" y2="22" />
-      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h0a3 3 0 0 0-3-3v0a3 3 0 0 0-3 3v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-    </svg>
-  );
-}
-
-function MoreVertIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="5" r="1.4" />
-      <circle cx="12" cy="12" r="1.4" />
-      <circle cx="12" cy="19" r="1.4" />
-    </svg>
-  );
-}
-
-function PencilIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className={className}
-    >
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-    </svg>
-  );
-}
-
-function TrashIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className={className}
-    >
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-    </svg>
-  );
-}
-
-function ChatBubblePlus() {
-  return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      <line x1="12" y1="8" x2="12" y2="14" />
-      <line x1="9" y1="11" x2="15" y2="11" />
-    </svg>
-  );
-}
-
-function SearchIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className={className}
-    >
-      <circle cx="11" cy="11" r="8" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
-  );
+  try {
+    const t = new Date(iso);
+    if (Number.isNaN(t.getTime())) return "";
+    return formatDistanceToNow(t, { addSuffix: true, locale: zhCN });
+  } catch {
+    return "";
+  }
 }

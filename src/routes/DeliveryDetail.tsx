@@ -71,6 +71,7 @@ export function DeliveryDetail() {
     mutationFn: () => deleteDeliverable(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["deliveries"] });
+      queryClient.removeQueries({ queryKey: ["delivery", id] });
       toast({ message: "已删除", variant: "success" });
       navigate("/deliveries", { replace: true });
     },
@@ -113,7 +114,7 @@ export function DeliveryDetail() {
 
   return (
     <div className="min-h-full px-4 lg:px-8 py-6">
-      <div className="max-w-3xl mx-auto space-y-5">
+      <div className="max-w-2xl mx-auto w-full space-y-5">
         {/* 头部 */}
         <header className="space-y-2">
           <div className="flex items-center gap-2">
@@ -131,7 +132,7 @@ export function DeliveryDetail() {
               <span className="text-xs text-fg-subtle">· AI 生成</span>
             )}
           </div>
-          <h1 className="text-xl font-medium text-fg break-all">
+          <h1 className="text-lg font-semibold text-fg leading-snug break-words">
             {item.title || "(无标题)"}
           </h1>
         </header>

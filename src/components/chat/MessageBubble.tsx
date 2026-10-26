@@ -28,6 +28,8 @@
  */
 
 import type { ReactNode } from "react";
+import { formatDistanceToNow } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import { Markdown } from "../../lib/markdown";
 import { RichEventBubble, type RichEvent } from "./RichEventBubble";
 import { MessageMenu, type MessageAction } from "./MessageMenu";
@@ -110,6 +112,8 @@ function UserBubble({
   // image 用 `<a target="_blank">` 让 Electron 主进程 setWindowOpenHandler
   // 自动接 shell.openExternal. file chip 加 onClick -> window.gacode.openWithSystem
   // (远程 url 路径). 失败时 console.warn, 不阻断 UI.
+  const timeAgo = createdAt ? formatAgo(createdAt) : "";
+
   const handleOpenUrl = (url: string) => {
     if (typeof window === "undefined") return;
     const w = window as unknown as {
@@ -211,10 +215,25 @@ function UserBubble({
           </div>
         ) : null}
 
-        {/* 文字气泡 */}
+        {/* 文字气泡 — 对齐 web MessageBubble.tsx:359-372:
+            底色 bg-primary (brand 橙) + 黑字 text-primary-foreground,
+            右下角 4px 小圆角 (rounded-br-[4px]), 主圆角 16px.
+            时间戳在气泡**内** (web footer 行) — 橙底上必须是深色字才看得见. */}
         {content ? (
-          <div className="rounded-md bg-brand-container text-brand-on-container px-3.5 py-2 text-sm whitespace-pre-wrap break-words leading-relaxed">
+          <div className="rounded-[16px] rounded-br-[4px] bg-primary text-primary-foreground px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap break-words">
             {content}
+            {timeAgo ? (
+              <div className="mt-1 flex items-center gap-1 justify-end">
+                <span className="text-[10px] text-primary-foreground/50">
+                  {timeAgo}
+                </span>
+              </div>
+            ) : null}
+          </div>
+        ) : timeAgo ? (
+          /* 无文字 (纯图片/附件) 时时间戳单独一行, 用页面可读的弱化色 */
+          <div className="mt-1 flex items-center gap-1 justify-end">
+            <span className="text-[10px] text-muted-foreground">{timeAgo}</span>
           </div>
         ) : null}
 
@@ -278,6 +297,7 @@ function AssistantBubble({
   const hasRichEvents = !!richEvents && richEvents.length > 0;
   const hasCallTree = !!callTree && callTree.length > 0;
   const hasContent = !!content && content.trim().length > 0;
+  const timeAgo = createdAt ? formatAgo(createdAt) : "";
 
   if (recalled) {
     return (
@@ -298,7 +318,7 @@ function AssistantBubble({
 
   return (
     <div className="flex justify-start items-start gap-1.5">
-      <div className="max-w-[85%] space-y-1">
+      <div className="max-w-[80%] space-y-1">
         {/* chat-id-40: 引用块 (assistant 也可能引用 user 消息) */}
         {quotedContent ? (
           <QuoteReplyBlock
@@ -318,15 +338,22 @@ function AssistantBubble({
             ))
           : null}
 
-        {/* Markdown 正文 */}
+        {/* Markdown 正文 — 对齐 web MessageBubble.tsx:372:
+            bg-background + border border-border, 左下角 4px 小圆角 (rounded-bl-[4px]).
+            时间戳在气泡**内**的 footer 行 (web MessageBubble.tsx:494-510). */}
         {hasContent ? (
-          <div className="rounded-md bg-bg-sunken px-3.5 py-2.5 text-fg text-sm">
+          <div className="rounded-[16px] rounded-bl-[4px] bg-background border border-border text-foreground px-4 py-3 text-sm leading-relaxed shadow-sm">
             <Markdown>{content}</Markdown>
             {showCursor ? (
               <span
                 aria-hidden="true"
-                className="inline-block w-1.5 h-4 bg-fg-muted ml-0.5 align-middle animate-pulse"
+                className="inline-block w-2 h-3 bg-current animate-pulse rounded-sm"
               />
+            ) : null}
+            {timeAgo ? (
+              <div className="mt-1 flex items-center gap-1 justify-start">
+                <span className="text-[10px] text-muted-foreground">{timeAgo}</span>
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -391,7 +418,7 @@ function RecalledPlaceholder({
     <div
       role="note"
       data-testid="msg-recalled-placeholder"
-      className="rounded-md bg-bg-sunken/60 text-fg-muted border border-border px-3 py-1.5 text-xs italic flex items-center gap-1.5"
+      className="rounded-[8px] bg-muted/60 text-muted-foreground border border-border px-3 py-1.5 text-xs italic flex items-center gap-1.5"
     >
       <span>{text}</span>
       {ago ? <span className="opacity-70 not-italic">· {ago}</span> : null}
@@ -399,20 +426,14 @@ function RecalledPlaceholder({
   );
 }
 
+// 相对时间 — 对齐 web MessageBubble.tsx:335-337:
+//   formatDistanceToNow(new Date(createdAt), { addSuffix: true, locale: zhCN })
+// 文案: 「大约 1 分钟前」/「大约 2 小时前」/「10月20日」
 function formatAgo(iso: string): string {
   try {
-    const t = new Date(iso).getTime();
-    if (!Number.isFinite(t)) return "";
-    const dt = Date.now() - t;
-    if (dt < 0) return "";
-    const sec = Math.floor(dt / 1000);
-    if (sec < 60) return `${sec} 秒前`;
-    const min = Math.floor(sec / 60);
-    if (min < 60) return `${min} 分钟前`;
-    const hr = Math.floor(min / 60);
-    if (hr < 24) return `${hr} 小时前`;
-    const day = Math.floor(hr / 24);
-    return `${day} 天前`;
+    const t = new Date(iso);
+    if (Number.isNaN(t.getTime())) return "";
+    return formatDistanceToNow(t, { addSuffix: true, locale: zhCN });
   } catch {
     return "";
   }

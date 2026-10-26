@@ -45,9 +45,12 @@ export function AttachmentChip({
   return (
     <div
       className={[
-        // 0.7.6 (gaga 截图反馈): 输入区底板去掉后, chip 背景跟页面都是 bg-bg-base (#000)
-        // 就看不见了 — 改用 bg-bg-elevated (#181818) 往上抬一层, 靠色阶跟背景区分.
-        "inline-flex items-center gap-2 px-3 py-2 rounded-md bg-bg-elevated max-w-full",
+        // 对齐 web `chat/AttachmentChip.tsx:55`:
+        //   "inline-flex items-center gap-2 px-3 py-2 rounded-md bg-bg-base shadow-sm max-w-full"
+        // 2026-10-26: PC 之前用 bg-bg-elevated (#181818) 抬一层 — 现在输入条外层卡片
+        //   恢复成 web 的 bg-bg-elevated (align-d-home H-19), chip 回到 web 的
+        //   bg-bg-base + shadow-sm (H-13). 两者必须同批, 否则 chip 在黑底上消失.
+        "inline-flex items-center gap-2 px-3 py-2 rounded-md bg-bg-base shadow-sm max-w-full",
         className ?? "",
       ].join(" ")}
     >

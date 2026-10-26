@@ -3,36 +3,34 @@
  *
  * 复用 components/home/LibraryPicker.tsx (0.7.2 Home worker 建的) — 不自己
  * 重写 picker. LibraryPicker 已经有 BottomSheet + 类型 tab + 搜索 + 列表,
- * 单选回调. 这里只是薄壳:
- *   - open / onClose 包装一个 BottomSheet
- *   - 选中 item → onPick(item) → parent 关闭 sheet + 把 atom id 加到下一次
- *     submit 的 knowledgeRefs 数组里
+ * 且已支持多选 (`onConfirm`).
  *
- * ⚠️ LibraryPicker 的 onSelect 单选 — 我们需要「可挂多条」语义, 用 chip 累加.
- *   这里包一层: KnowledgeAttachSheet 内部用 single-select 模式, 把每次选中
- *   通过 onPick 推给 parent. parent 维护累积 ids 数组 + 渲染 chip 行.
+ * 语义对齐 web (chat/[id] 多选挂载知识库):
+ *   - 单选 `onSelect` → 选中即关, 只能挂一条
+ *   - 多选 `onConfirm` → 勾选若干条, 点底部「完成 (N)」一次性回调全部
+ *   chat 域走**多选**语义 (web 同款), parent 逐条累积到 knowledgeRefs.
+ *
+ * ⚠️ LibraryPicker 自己就渲染了一个 BottomSheet (带标题栏 + 底部「完成」按钮),
+ *   所以这里**不再**套一层 BottomSheet — 否则会出现两层 fixed 遮罩叠在一起.
  */
 
 import { LibraryPicker } from "../home/LibraryPicker";
-import { BottomSheet } from "../ui/BottomSheet";
 import type { LibraryItem } from "../../lib/api";
 
 export interface KnowledgeAttachSheetProps {
   open: boolean;
   onClose: () => void;
-  /** 单选回调 — parent 把 item.id 追加到 knowledgeRefs. */
-  onPick: (item: LibraryItem) => void;
+  /** 多选确认回调 — parent 逐条把 item.id 追加到 knowledgeRefs. */
+  onConfirm: (items: LibraryItem[]) => void;
 }
 
 export function KnowledgeAttachSheet({
   open,
   onClose,
-  onPick,
+  onConfirm,
 }: KnowledgeAttachSheetProps) {
   if (!open) return null;
   return (
-    <BottomSheet open={open} title="挂载知识库" onClose={onClose}>
-      <LibraryPicker open={open} onClose={onClose} onSelect={onPick} />
-    </BottomSheet>
+    <LibraryPicker open={open} onClose={onClose} onConfirm={onConfirm} />
   );
 }

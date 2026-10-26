@@ -72,11 +72,11 @@ export function MessageList({
   const lastDistanceFromBottom = useRef<number>(0);
 
   // 自动滚到底 — 在 messages 改变时
+  // 对齐 web MessageList.tsx:55-57 — `scrollIntoView({ behavior: "smooth" })`.
+  // PC 的 autoFollow (用户上滚 80px 阈值停自动滚) 是 PC 增强 → 保留不动.
   useLayoutEffect(() => {
     if (!autoFollow) return;
-    const el = scrollerRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, autoFollow]);
 
   // 用户滚动 → 判断是否处于"主动向上"  (阈值 80px)
@@ -110,48 +110,51 @@ export function MessageList({
     <div className="relative h-full">
       <div
         ref={scrollerRef}
-        className="h-full overflow-y-auto px-4 py-6 space-y-3"
+        className="h-full overflow-y-auto p-4"
         aria-label="消息列表"
       >
-        {messages.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-fg-muted text-sm">
-            暂无消息 — 在底部输入框开始你的第一条消息
-          </div>
-        ) : null}
+        {/* 消息内容容器 — 对齐 web MessageList.tsx:79 `max-w-3xl mx-auto space-y-4` */}
+        <div className="max-w-3xl mx-auto space-y-4">
+          {messages.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-fg-muted text-sm">
+              暂无消息 — 在底部输入框开始你的第一条消息
+            </div>
+          ) : null}
 
-        {messages.map((m) => (
-          <MessageBubble
-            key={m.id}
-            messageId={m.id}
-            role={m.role}
-            content={m.content}
-            richEvents={m.richEvents}
-            imageUrls={m.imageUrls}
-            attachedFileIds={m.attachedFileIds}
-            attachedFileNames={m.attachedFileNames}
-            isStreaming={
-              !!streamingAssistantId &&
-              m.id === streamingAssistantId &&
-              m.role === "assistant"
-            }
-            createdAt={m.createdAt}
-            recalled={m.recalled}
-            recalledAt={m.recalledAt}
-            knowledgeRefs={m.knowledgeRefs}
-            quotedMessageId={m.quotedMessageId}
-            quotedContent={m.quotedContent}
-            streamingSince={m.streamingSince ?? null}
-            toolTotalMs={m.toolTotalMs ?? null}
-            callTree={m.callTree}
-            onAction={
-              onMessageAction
-                ? (action, ok) => onMessageAction(m, action, ok)
-                : undefined
-            }
-          />
-        ))}
+          {messages.map((m) => (
+            <MessageBubble
+              key={m.id}
+              messageId={m.id}
+              role={m.role}
+              content={m.content}
+              richEvents={m.richEvents}
+              imageUrls={m.imageUrls}
+              attachedFileIds={m.attachedFileIds}
+              attachedFileNames={m.attachedFileNames}
+              isStreaming={
+                !!streamingAssistantId &&
+                m.id === streamingAssistantId &&
+                m.role === "assistant"
+              }
+              createdAt={m.createdAt}
+              recalled={m.recalled}
+              recalledAt={m.recalledAt}
+              knowledgeRefs={m.knowledgeRefs}
+              quotedMessageId={m.quotedMessageId}
+              quotedContent={m.quotedContent}
+              streamingSince={m.streamingSince ?? null}
+              toolTotalMs={m.toolTotalMs ?? null}
+              callTree={m.callTree}
+              onAction={
+                onMessageAction
+                  ? (action, ok) => onMessageAction(m, action, ok)
+                  : undefined
+              }
+            />
+          ))}
 
-        <div ref={bottomRef} aria-hidden="true" />
+          <div ref={bottomRef} aria-hidden="true" />
+        </div>
       </div>
 
       {/* "跳到底" 浮动按钮 — 用户向上滚时显示 */}

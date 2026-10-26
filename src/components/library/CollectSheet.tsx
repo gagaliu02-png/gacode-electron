@@ -174,7 +174,7 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
       if (!refId) throw new Error("上传未返回 URL");
       const created: LibraryItem = await createLibraryItem({
         type: kind === "image" ? "image" : "doc",
-        title: stripExt(file.name) || "未命名",
+        title: file.name || "未命名",
         url: refId,
       });
       toast({ message: `已保存到知识库: ${created.title}`, variant: "success" });
@@ -267,7 +267,7 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
               label="点击选择文件"
               hint="支持 PDF / DOCX / XLSX / TXT / MD 等文档"
               inputRef={fileInputRef}
-              accept=".pdf,.doc,.docx,.txt,.md,.zip,.csv,.xlsx,.xls,.json"
+              accept=".pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp"
               onPick={(f) => handleFilePicked(f, "file")}
               uploading={uploading}
               progress={progress}
@@ -306,10 +306,10 @@ function TextTab({
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="在这里输入内容..."
-        rows={6}
+        placeholder="输入链接 (https://...) 或文本内容..."
+        rows={4}
         autoFocus
-        className="w-full rounded-md bg-bg-sunken px-4 py-3 text-base placeholder:text-fg-subtle focus:outline-none focus:ring-2 focus:ring-brand/40 resize-none"
+        className="w-full rounded-xl bg-muted/50 px-4 py-3 text-base placeholder:text-fg-subtle focus:outline-none focus:ring-1 focus:ring-brand resize-none"
       />
       <div className="flex justify-end gap-2">
         <Button variant="ghost" size="md" onClick={onCancel} disabled={pending}>

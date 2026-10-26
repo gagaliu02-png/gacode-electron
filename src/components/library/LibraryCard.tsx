@@ -46,11 +46,19 @@ export function LibraryCard({
   onEdit,
   onDelete,
 }: LibraryCardProps) {
+  // L-32 (2026-10-26): 类型图标按类型上色 — 对齐 web library/page.tsx:117-128
+  //   image=cyan / doc=yellow / link=green / 其它(含 text)=muted, 尺寸统一 20px
+  const typeIconClass =
+    item.type === "image" ? "text-brand-cyan" :
+    item.type === "doc" ? "text-brand-yellow" :
+    item.type === "link" ? "text-brand-green" :
+    "text-fg-muted";
+
   const Icon =
     item.type === "image" ? ImageIcon :
     item.type === "doc" ? FileTextIcon :
     item.type === "link" ? LinkIcon :
-    TextIcon;
+    FileTextIcon;
 
   // 长按 500ms 触发多选 — 跟 ChatList ChatRow 同一个 timer 模式.
   const timerRef = useRef<number | null>(null);
@@ -136,8 +144,8 @@ export function LibraryCard({
         </span>
       ) : null}
 
-      <div className="shrink-0 w-9 h-9 rounded bg-bg-sunken flex items-center justify-center text-fg-muted">
-        <Icon />
+      <div className="shrink-0 w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
+        <Icon className={["w-5 h-5", typeIconClass].join(" ")} />
       </div>
 
       <div className="flex-1 min-w-0 space-y-1">
@@ -149,9 +157,7 @@ export function LibraryCard({
             #{item.id}
           </span>
         </div>
-        <h3 className="text-sm font-medium text-fg line-clamp-2 break-all">
-          {item.title || "(无标题)"}
-        </h3>
+        <div className="text-sm font-medium truncate">{item.title || "未命名"}</div>
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-xs text-fg-subtle">
             {formatRelative(item.createdAt)}
@@ -176,9 +182,9 @@ export function LibraryCard({
               <button
                 type="button"
                 aria-label="更多操作"
-                className="w-8 h-8 rounded-full text-fg-muted hover:bg-bg-base hover:text-fg inline-flex items-center justify-center"
+                className="shrink-0 w-8 h-8 rounded-full text-fg-muted hover:bg-bg-sunken hover:text-fg transition-colors duration-150 inline-flex items-center justify-center"
               >
-                <MoreVertIcon />
+                <MoreVertIcon className="w-4 h-4" />
               </button>
             }
             items={[
@@ -216,11 +222,14 @@ function formatRelative(iso: string): string {
 
 // ────────────────────────────────────────────────────────────
 // Icons
+//   L-32: 这 4 个类型图标改成接收 className (尺寸 + 颜色由调用点传),
+//   svg 自身用 width/height=100% (Tailwind 的 w-5 h-5 才生效),
+//   stroke="currentColor" 保证继承调用点给的 text-* 颜色。
 // ────────────────────────────────────────────────────────────
 
-function ImageIcon() {
+function ImageIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <circle cx="9" cy="9" r="2" />
       <path d="m21 15-5-5L5 21" />
@@ -228,9 +237,9 @@ function ImageIcon() {
   );
 }
 
-function FileTextIcon() {
+function FileTextIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
       <polyline points="14 2 14 8 20 8" />
       <line x1="16" y1="13" x2="8" y2="13" />
@@ -239,28 +248,18 @@ function FileTextIcon() {
   );
 }
 
-function LinkIcon() {
+function LinkIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
       <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
     </svg>
   );
 }
 
-function TextIcon() {
+function MoreVertIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="4 7 4 4 20 4 20 7" />
-      <line x1="9" y1="20" x2="15" y2="20" />
-      <line x1="12" y1="4" x2="12" y2="20" />
-    </svg>
-  );
-}
-
-function MoreVertIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <circle cx="12" cy="5" r="1.5" fill="currentColor" stroke="none" />
       <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
       <circle cx="12" cy="19" r="1.5" fill="currentColor" stroke="none" />

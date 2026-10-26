@@ -42,7 +42,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { uploadAttachment, deriveUploadMode } from "../../lib/upload";
+import {
+  uploadAttachment,
+  deriveUploadMode,
+  type UploadMode,
+} from "../../lib/upload";
 import { extractSingleImage } from "../../lib/clipboard";
 import { SlashMenu, type SlashCommand } from "./SlashMenu";
 import { AttachmentChip } from "./AttachmentChip";
@@ -71,6 +75,9 @@ export type AttachmentItem =
       mime: string;
       url?: string;
       fileId?: string;
+      /** 显式上传模式 — image 走 /yinian/upload 拿 url, document 走 /yinian/documents 拿 fileId.
+       *  跟 web buildFirstMessage 按 mode 分流对齐 (2026-10-16 M-doc bug). */
+      mode: UploadMode;
     }
   | {
       id: string;
@@ -92,6 +99,11 @@ export interface PendingAttachment {
    * ChatInputBar 内部上传会带上 file.type; ChatDetail 调 addAttachment 时建议也传.
    */
   mime?: string;
+  /**
+   * 显式上传模式 — image 走 /yinian/upload 拿 url, document 走 /yinian/documents 拿 fileId.
+   * 跟 web buildFirstMessage 按 mode 分流对齐 (2026-10-16 M-doc bug).
+   */
+  mode?: UploadMode;
 }
 
 /**
@@ -106,8 +118,20 @@ export interface PendingAttachment {
 export interface ChatInputBarHandle {
   insertEmoji: (text: string) => void;
   insertText: (text: string) => void;
+  /**
+   * 插入知识库 marker `@[library:id] title` — 跟 web Home 的 onSelect 一致:
+   * 插入位置前若不是空白, 自动补一个空格分隔 (避免跟正文粘连).
+   * 跟 insertText 分开: emoji 不应该多空格.
+   */
+  insertLibraryMarker: (id: string, title: string) => void;
   addAttachment: (att: PendingAttachment) => void;
   focus: () => void;
+  /**
+   * 清空文本 + 附件 — Home 在 createChat 成功后调用.
+   * 提交失败 (onSubmit 返回 false) 时 ChatInputBar 不会自行清空,
+   * 附件得以保留, 用户可以重试 (F-03).
+   */
+  clear: () => void;
 }
 
 export interface ChatInputBarProps {
@@ -122,6 +146,24 @@ export interface ChatInputBarProps {
   onSubmit: (text: string, attachments: PendingAttachment[]) => boolean | void;
   /** Attachment upload failed (parent usually toasts) */
   onAttachmentError?: (msg: string) => void;
+  /**
+   * 提交前提示 (上传中拦截 / 部分失败仍可发送).
+   * message 已含全部信息, variant 由 parent 决定 (PC Toast 无 title/description 双字段).
+   */
+  onSubmitNotice?: (message: string, variant: "default" | "warning") => void;
+  /**
+   * textarea placeholder — 不传时按 web 默认推导:
+   * 流式 "AI 正在回复..." / 空闲 "说点什么… (Enter 发送，Shift+Enter 换行)".
+   * Home 传 "说点什么…" (web Home 传的就是这个).
+   */
+  placeholder?: string;
+  /**
+   * 底部 caption — 默认 "AI 生成内容请核实重要信息" (web ChatInputBar 默认值).
+   * 流式期间自动切成 "生成中 · 点击停止按钮中断".
+   */
+  caption?: string;
+  /** 整体禁用 (e.g. 创建中) — 卡片降透明度 + textarea/发送按钮禁用 */
+  disabled?: boolean;
   /**
    * 阶段 8 chat-id-19 — 重新生成按钮 callback.
    * canRerun=true 时, 右侧主按钮 (send/stop slot) 切换成 rerun 图标,
@@ -160,6 +202,10 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
       onStop,
       onSubmit,
       onAttachmentError,
+      onSubmitNotice,
+      placeholder,
+      caption = "AI 生成内容请核实重要信息",
+      disabled = false,
       canRerun = false,
       onRerun,
       onSlashCommand,
@@ -168,6 +214,11 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
     ref,
   ) {
     const [text, setText] = useState("");
+    // 命令式 handle (insertEmoji / insertText / insertLibraryMarker) 通过 ref 调用,
+    //   useImperativeHandle 的 deps 是 [] → 闭包里的 text 永远是**首次渲染**的值.
+    //   这里用 ref 兜住最新文本, 插入位置/分隔符才正确.
+    const textRef = useRef(text);
+    textRef.current = text;
     // 0.7.6 — 三态合一: uploading / done / error 共用一个 attachments 列表.
     //   旧 chips+progress 模型只支持单文件上传, 不支持错误重试.
     const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
@@ -188,6 +239,27 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
       () => ({
         insertEmoji: (emoji: string) => insertTextAtCursor(emoji),
         insertText: (text: string) => insertTextAtCursor(text),
+        insertLibraryMarker: (id: string, title: string) => {
+          const ta = taRef.current;
+          const marker = `@[library:${id}] ${title}`;
+          const cur = textRef.current;
+          if (!ta) {
+            setText((prev) => prev + marker);
+            return;
+          }
+          const start = ta.selectionStart ?? cur.length;
+          const end = ta.selectionEnd ?? cur.length;
+          const before = cur.slice(0, start);
+          // 跟 web Home onSelect 一致: 前面不是空白就补一个空格分隔
+          const sep = before && !before.endsWith(" ") && !before.endsWith("\n") ? " " : "";
+          const next = before + sep + marker + cur.slice(end);
+          setText(next);
+          const caret = start + sep.length + marker.length;
+          requestAnimationFrame(() => {
+            ta.focus();
+            ta.setSelectionRange(caret, caret);
+          });
+        },
         addAttachment: (att: PendingAttachment) => {
           setAttachments((prev) => {
             // 去重: 同 url / fileId 不重复加
@@ -210,6 +282,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 mime: att.mime ?? "",
                 url: att.url,
                 fileId: att.fileId,
+                mode: att.mode ?? (att.fileId ? "document" : "image"),
               },
             ];
           });
@@ -218,6 +291,10 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
           const ta = taRef.current;
           if (!ta) return;
           ta.focus();
+        },
+        clear: () => {
+          setText("");
+          setAttachments([]);
         },
       }),
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -346,6 +423,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                     mime: file.type ?? "",
                     url: res.url,
                     fileId: res.fileId,
+                    mode,
                   }
                 : x,
             ),
@@ -387,12 +465,41 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
 
     const handleSend = () => {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      const hasDoneAttachment = attachments.some((x) => x.kind === "done");
+      const hasUploading = attachments.some((x) => x.kind === "uploading");
+      const hasError = attachments.some((x) => x.kind === "error");
+
+      // F-02 / H-15 — 上传中点发送: 弹提示并 return, 附件**不**清空 (否则用户以为发出去了)
+      if (hasUploading) {
+        onAttachmentError?.("附件还在上传中, 请稍候几秒再发送");
+        return;
+      }
+
+      // F-01 / H-17 — 「有附件、无文字」也允许提交 (web page.tsx:217 同款)
+      if (!trimmed && !hasDoneAttachment) return;
+
       // 0.7.6 — 只把 done 状态传给 parent (跟 web 一致, 在飞 / 错误项不带过去).
       const doneAtts: PendingAttachment[] = attachments
         .filter((x): x is Extract<AttachmentItem, { kind: "done" }> => x.kind === "done")
-        .map((x) => ({ url: x.url, fileId: x.fileId, name: x.name, mime: x.mime }));
+        .map((x) => ({
+          url: x.url,
+          fileId: x.fileId,
+          name: x.name,
+          mime: x.mime,
+          mode: x.mode,
+        }));
+
+      // H-16 — 部分附件失败仍可发送, 给个 warning 提示 (失败项不带走)
+      if (hasError) {
+        onSubmitNotice?.(
+          "部分附件上传失败, 已移除失败项, 正在发送其余内容",
+          "warning",
+        );
+      }
+
       const ok = onSubmit(trimmed, doneAtts);
+      // F-03 — 提交失败 (onSubmit 返回 false) 时**不**清空文本 / 附件,
+      //   让用户可以原地重试 (清空时机交给 parent 的 createChat 成功回调).
       if (ok !== false) {
         setText("");
         setAttachments([]);
@@ -482,9 +589,10 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
         setText((prev) => prev + snippet);
         return;
       }
-      const start = ta.selectionStart ?? text.length;
-      const end = ta.selectionEnd ?? text.length;
-      const next = text.slice(0, start) + snippet + text.slice(end);
+      const cur = textRef.current;
+      const start = ta.selectionStart ?? cur.length;
+      const end = ta.selectionEnd ?? cur.length;
+      const next = cur.slice(0, start) + snippet + cur.slice(end);
       setText(next);
       // 把 cursor 移到 snippet 之后, focus 拿回 textarea.
       const caret = start + snippet.length;
@@ -496,70 +604,83 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
 
     return (
       <>
-        {/* 0.7.6 (gaga 截图反馈): 输入区不再垫底板 — 首页是 bg-bg-base (#000),
-            再叠一层 bg-bg-elevated 会多出一条横贯的色带 (跟 Home 右半区"不要区隔"冲突).
-            附件 chip / input 自身有底色, 靠它们跟页面背景区分即可. */}
-        <div className="px-4 pb-4 pt-2">
+        {/* 对齐 web `ChatInputBar.tsx:82` — 根节点只是 `w-full` 容器, 底边线 / 内边距 /
+            背景由页面层提供 (web chat 详情页 = ChatInput.tsx:64 `border-t border-border
+            p-4 bg-background`; web Home = page.tsx 同款).
+            PC 之前在这里垫了 `px-4 pb-4 pt-2`, 跟 Home 页自己那层 p-4 叠成双倍内边距. */}
+        <div className="w-full">
           {/* attachments — 三态合一 (0.7.6, 对齐 web)
                 uploading → UploadProgressBar (带文件名 + 取消)
                 done      → AttachmentChip  (缩略图 + 类型角标 + 文件名 + X)
                 error     → UploadErrorChip (重试 + 删除) */}
           {attachments.length > 0 ? (
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {attachments.map((it) => {
-                if (it.kind === "uploading") {
+            <div className="mx-auto max-w-3xl w-full">
+              <div className="flex flex-wrap gap-2 pb-2">
+                {attachments.map((it) => {
+                  if (it.kind === "uploading") {
+                    return (
+                      <UploadProgressBar
+                        key={it.id}
+                        value={it.pct}
+                        fileName={it.name}
+                        onCancel={() => cancelUpload(it)}
+                      />
+                    );
+                  }
+                  if (it.kind === "done") {
+                    return (
+                      <AttachmentChip
+                        key={it.id}
+                        file={{
+                          name: it.name,
+                          type: it.mime,
+                          url: it.url,
+                        }}
+                        thumbnailUrl={it.mime?.startsWith("image/") ? it.url : undefined}
+                        onRemove={() => removeAttachment(it.id)}
+                      />
+                    );
+                  }
+                  // error
                   return (
-                    <UploadProgressBar
-                      key={it.id}
-                      value={it.pct}
-                      fileName={it.name}
-                      onCancel={() => cancelUpload(it)}
-                    />
+                    <div key={it.id} className="basis-full min-w-0">
+                      <UploadErrorChip
+                        fileName={it.name}
+                        errorMsg={it.errorMsg}
+                        onRetry={() => retryAttachment(it)}
+                        onRemove={() => removeAttachment(it.id)}
+                      />
+                    </div>
                   );
-                }
-                if (it.kind === "done") {
-                  return (
-                    <AttachmentChip
-                      key={it.id}
-                      file={{
-                        name: it.name,
-                        type: it.mime,
-                        url: it.url,
-                      }}
-                      thumbnailUrl={it.mime?.startsWith("image/") ? it.url : undefined}
-                      onRemove={() => removeAttachment(it.id)}
-                    />
-                  );
-                }
-                // error
-                return (
-                  <div key={it.id} className="basis-full min-w-0">
-                    <UploadErrorChip
-                      fileName={it.name}
-                      errorMsg={it.errorMsg}
-                      onRetry={() => retryAttachment(it)}
-                      onRemove={() => removeAttachment(it.id)}
-                    />
-                  </div>
-                );
-              })}
+                })}
+              </div>
             </div>
           ) : null}
 
-          {/* input row */}
-          <div className="flex items-end gap-2">
+          {/* input row — web 形态: 外层卡片 (bg-bg-elevated) 包一个**无边框** textarea
+              (web ChatInputBar.tsx:84-119). PC 之前是 textarea 自带底色 + 边框. */}
+          <div
+            className={[
+              "bg-bg-elevated rounded-md px-4 py-3 flex items-end gap-2",
+              "border transition-colors duration-150",
+              "focus-within:border-border",
+              isStreaming ? "border-brand/40" : "border-transparent",
+              disabled && !isStreaming ? "opacity-60" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
             {/* 0.7.5 hotfix 2 (gaga 反馈 2026-10-20) — 附件入口统一收在 `+` 按钮.
                  只在 parent 提供 onPlusClick 时显示; Home 等无 PlusActionsSheet 场景
                  不显示 (Home 自己的 + button 在 ChatInputBar 之外, 不受影响). */}
             {onPlusClick ? (
               <button
                 type="button"
-                aria-label="添加附件"
-                title="添加附件"
-                disabled={isStreaming}
+                aria-label="附件"
+                title="附件"
                 onClick={onPlusClick}
                 data-testid="chat-plus-button"
-                className="shrink-0 h-9 w-9 rounded-md bg-bg-sunken text-fg-muted hover:bg-bg-elevated hover:text-fg disabled:opacity-50 disabled:pointer-events-none inline-flex items-center justify-center transition-colors duration-150"
+                className="shrink-0 w-9 h-9 rounded-full text-fg-muted hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center"
               >
                 <PlusGlyph />
               </button>
@@ -576,12 +697,13 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
                 placeholder={
-                  isStreaming
-                    ? "正在流式生成… 完成后再发下一条"
-                    : "说点什么… (Enter 发送, Shift+Enter 换行 · 输入 / 触发命令菜单)"
+                  placeholder ??
+                  (isStreaming
+                    ? "AI 正在回复..."
+                    : "说点什么… (Enter 发送，Shift+Enter 换行)")
                 }
-                disabled={isStreaming}
-                className="w-full resize-none bg-bg-sunken border border-border rounded-md px-3 py-2 text-sm leading-6 placeholder:text-fg-subtle focus:outline-none focus:border-brand disabled:opacity-70 max-h-32 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                disabled={isStreaming || disabled}
+                className="w-full bg-transparent text-fg placeholder:text-fg-subtle outline-none text-base leading-6 resize-none max-h-32 py-2 disabled:opacity-60 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               />
               {slashOpen && onSlashCommand ? (
                 <SlashMenu
@@ -619,7 +741,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 type="button"
                 aria-label="停止生成"
                 onClick={onStop}
-                className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-md bg-danger text-white hover:bg-danger/90 active:opacity-80 transition-colors duration-150"
+                className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-danger text-white hover:bg-danger/90 transition-colors duration-150"
               >
                 <StopIcon />
               </button>
@@ -629,7 +751,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 aria-label="重新生成最后一条回复"
                 title="重新生成最后一条回复"
                 onClick={onRerun}
-                className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-md bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active transition-colors duration-150"
+                className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-brand text-brand-on hover:bg-brand-hover transition-colors duration-150"
                 data-testid="rerun-button"
               >
                 <RerunIcon />
@@ -637,15 +759,36 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
             ) : (
               <button
                 type="button"
-                aria-label="发送消息"
+                aria-label="发送"
                 onClick={handleSend}
-                disabled={!text.trim() && !attachments.some((x) => x.kind === "done")}
-                className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-md bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active disabled:opacity-40 disabled:pointer-events-none transition-colors duration-150"
+                disabled={
+                  disabled ||
+                  (!text.trim() && !attachments.some((x) => x.kind === "done"))
+                }
+                className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-brand text-brand-on hover:bg-brand-hover transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <SendIcon />
               </button>
             )}
           </div>
+
+          {/* 底部 caption — 对齐 web ChatInputBar.tsx:165-177 */}
+          <p
+            className={[
+              "mt-2 text-xs text-center flex items-center justify-center gap-1.5",
+              isStreaming ? "text-brand" : "text-fg-muted opacity-50",
+            ].join(" ")}
+          >
+            {isStreaming ? (
+              <span
+                className="inline-block w-1.5 h-1.5 rounded-full bg-brand animate-pulse"
+                aria-hidden="true"
+              />
+            ) : null}
+            <span>
+              {isStreaming ? "生成中 · 点击停止按钮中断" : caption}
+            </span>
+          </p>
         </div>
 
         {/* 全屏 drag 高亮 — 阶段 4 */}
@@ -689,6 +832,7 @@ function PaperclipIcon() {
   );
 }
 
+// 发送按钮图标 — 对齐 web lucide `ArrowUp` (w-4 h-4, strokeWidth 2)
 function SendIcon() {
   return (
     <svg
@@ -698,12 +842,12 @@ function SendIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="m22 2-7 20-4-9-9-4Z" />
-      <path d="M22 2 11 13" />
+      <path d="m5 12 7-7 7 7" />
+      <path d="M12 19V5" />
     </svg>
   );
 }
@@ -744,17 +888,17 @@ function RerunIcon() {
   );
 }
 
-// 0.7.5 hotfix 2 — `+` 按钮 icon. 跟 Home 的 PlusIcon 同款, 但 inline 进来.
+// 0.7.5 hotfix 2 — `+` 按钮 icon. 对齐 web lucide `Plus` (w-5 h-5 = 20px, strokeWidth 2)
 function PlusGlyph() {
   return (
     <svg
       aria-hidden="true"
-      width="18"
-      height="18"
+      width="20"
+      height="20"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >

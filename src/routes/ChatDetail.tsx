@@ -124,6 +124,7 @@ import {
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
+import { MoreIcon, PlusIcon } from "../components/ui/Glyphs";
 
 // 0.7.5 ChatDetail P1 增量 — 新组件
 import { ChatTopBanner } from "../components/chat/ChatTopBanner";
@@ -272,7 +273,11 @@ export function ChatDetail() {
   // 0.7.5 增量 — model 选择 (chat-id-31) / 知识库挂载 (chat-id-30) /
   //   流式起始时间戳 (chat-id-20) / call tree (chat-id-12) / phases 合并 (chat-id-35)
   const [activeModel, setActiveModel] = useState<string>("gawen");
-  const [pendingKnowledgeRefs, setPendingKnowledgeRefs] = useState<string[]>([]);
+  /** 已挂载知识库条目 (id + 标题) — 对齐 web attachedKnowledgeRefs
+      (web `src/app/(main)/chat/[id]/page.tsx:279-281`) */
+  const [pendingKnowledgeRefs, setPendingKnowledgeRefs] = useState<
+    Array<{ id: string; title: string }>
+  >([]);
   // 0.7.5 chat-id-20/12: 流式起始时间戳 + call tree 节点 (走 React state 渲染)
   const [streamingCallTree, setStreamingCallTree] = useState<CallTreeNode[]>([]);
   const [streamingSinceState, setStreamingSinceState] = useState<number | null>(null);
@@ -591,6 +596,8 @@ export function ChatDetail() {
     },
   });
 
+  // 置顶 mutation — header ⋮ 菜单按 web 只保留「重命名 / 删除会话」两项,
+  // 这里保留 hook 供 chat 列表页 / 后续入口复用 (web 对标: Header.tsx:227-239).
   const pinMutation = useMutation({
     mutationFn: (next: boolean) => setSessionPin(chatId!, next),
     onSuccess: (updated) => {
@@ -764,9 +771,9 @@ export function ChatDetail() {
 
   const title = currentChat?.title || "新对话";
   const isStreaming = !!streamingAssistantId;
-  const pinned = !!currentChat?.pinned;
 
   // Header ⋮ DropdownMenu items — 阶段 8 chat-id-1
+  // 对齐 web `Header.tsx:227-239`: 只有「重命名 / 删除会话」两项.
   const headerMenuItems: DropdownMenuItem[] = [
     {
       label: "重命名",
@@ -776,20 +783,7 @@ export function ChatDetail() {
       },
     },
     {
-      label: pinned ? "取消固定" : "固定到顶部",
-      onClick: () => pinMutation.mutate(!pinned),
-      disabled: pinMutation.isPending,
-    },
-    {
-      label: "复制会话 ID",
-      onClick: () => {
-        void navigator.clipboard.writeText(chatId).then(() => {
-          toast({ message: "已复制会话 ID", variant: "success" });
-        });
-      },
-    },
-    {
-      label: "删除对话",
+      label: "删除会话",
       destructive: true,
       onClick: () => setConfirmDeleteOpen(true),
     },
@@ -800,15 +794,40 @@ export function ChatDetail() {
   //   ChatInputBar 内部持有). 选中 item.id 累积到 pendingKnowledgeRefs
   //   (chip 提示 user 已挂载, 跟 web 同款). PlusActionsSheet → knowledge action
   //   → setKnowledgeOpen(true) → KnowledgeAttachSheet onPick → 这里.
-  const handleKnowledgePick = useCallback(
-    (item: LibraryItem) => {
-      setPendingKnowledgeRefs((prev) =>
-        prev.includes(item.id) ? prev : [...prev, item.id],
-      );
-      toast({ message: `已挂载: ${item.title || "未命名"}`, variant: "default" });
+  /** 多选确认 — web 语义: 点「完成 (N)」一次性回传本次勾选的 items */
+  const handleKnowledgeConfirm = useCallback(
+    (items: LibraryItem[]) => {
+      setPendingKnowledgeRefs((prev) => {
+        const next = [...prev];
+        for (const it of items) {
+          if (!next.some((r) => r.id === it.id)) {
+            next.push({ id: it.id, title: it.title || "" });
+          }
+        }
+        return next;
+      });
+      // A2-D3-02 — 把知识库 marker 注入输入框 (server 未识别 knowledge_refs 时的兜底通道)
+      //   对齐 web `src/app/(main)/chat/[id]/page.tsx:1124-1129` (chatInputRef.insertText
+      //   → 多个 marker 换行分隔, 用户后续可在输入框编辑).
+      //   PC 的 ChatInputBar handle 暴露 insertText (与 insertEmoji 同实现, 按光标插入)。
+      if (items.length > 0) {
+        const markerText = items
+          .map((it) => `@[library:${it.id}] ${it.title || "未命名"}`)
+          .join("\n");
+        inputBarRef.current?.insertText(markerText);
+      }
+      toast({
+        message: `已挂载 ${items.length} 条知识库`,
+        variant: "default",
+      });
     },
     [toast],
   );
+
+  /** 移除一条已挂载的知识库引用 */
+  const handleRemoveAttachedRef = useCallback((id: string) => {
+    setPendingKnowledgeRefs((prev) => prev.filter((r) => r.id !== id));
+  }, []);
 
   // ────────────── 0.7.5 hotfix 2 — PlusActionsSheet 派发 + 文件上传 ──────────────
   // 选中 PlusActionsSheet 某项 → handlePlusAction(kind):
@@ -1023,9 +1042,10 @@ export function ChatDetail() {
 
   return (
     <div className="h-full flex flex-col bg-bg-base">
-      {/* 头部 — 阶段 8 chat-id-1: 重命名 + 完整 ⋮ 菜单 + 0.7.5 chat-id-31 ModelChips */}
-      <div className="shrink-0 h-12 bg-bg-elevated px-4 flex items-center justify-between gap-2">
-        <div className="flex-1 min-w-0 truncate font-medium text-sm" title={title}>
+      {/* 头部 — 阶段 8 chat-id-1: 重命名 + 完整 ⋮ 菜单 + 0.7.5 chat-id-31 ModelChips
+          对齐 web `Header.tsx:174` — h-14 sticky + border-b + bg-background */}
+      <div className="shrink-0 h-14 px-4 bg-background border-b border-border flex items-center gap-2">
+        <div className="flex-1 truncate font-medium min-w-0" title={title}>
           {title}
         </div>
         {/* chat-id-31: 顶部 model 切换 chips */}
@@ -1034,6 +1054,16 @@ export function ChatDetail() {
           onChange={setActiveModel}
           disabled={isStreaming}
         />
+        {/* 对齐 web Header.tsx:204-212 — 右侧「+ 新建聊天」圆形按钮 */}
+        <button
+          type="button"
+          aria-label="新建聊天"
+          disabled={createChatMutation.isPending}
+          onClick={() => createChatMutation.mutate()}
+          className="w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated transition-colors duration-150 inline-flex items-center justify-center disabled:opacity-50"
+        >
+          <PlusIcon className="w-5 h-5" />
+        </button>
         <DropdownMenu
           trigger={
             <button
@@ -1066,8 +1096,19 @@ export function ChatDetail() {
       {/* 消息区 */}
       <div className="flex-1 min-h-0">
         {historyQuery.isLoading ? (
-          <div className="h-full flex items-center justify-center text-fg-muted text-sm">
-            加载历史消息…
+          <div className="max-w-3xl mx-auto space-y-4">
+            <div className="flex justify-start">
+              <div className="animate-pulse rounded-2xl bg-muted h-20 w-3/4" />
+            </div>
+            <div className="flex justify-end">
+              <div className="animate-pulse rounded-2xl bg-muted h-16 w-1/2" />
+            </div>
+            <div className="flex justify-start">
+              <div className="animate-pulse rounded-2xl bg-muted h-24 w-2/3" />
+            </div>
+            <div className="flex justify-start">
+              <div className="animate-pulse rounded-2xl bg-muted h-12 w-1/3" />
+            </div>
           </div>
         ) : (
           <MessageList
@@ -1095,34 +1136,58 @@ export function ChatDetail() {
       {/* 0.7.5 chat-id-29: Session 交付物缩略条 (卡片跳交付详情 — chat-id-32) */}
       <DeliverableStrip items={deliverablesQuery.data?.items ?? []} />
 
-      {/* gagaOS §② — 知识库挂载 chip (原 leftSlot 内, 跟 📚 按钮对应) */}
+      {/* gagaOS §② — 知识库挂载 chip — 对齐 web chat/[id]/page.tsx:1311-1331:
+          brand-cyan 描边 chip + 逐条可移除 */}
       {pendingKnowledgeRefs.length > 0 ? (
-        <div className="shrink-0 px-3 py-1.5 bg-bg-elevated border-t border-border">
-          <span
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-bg-sunken text-[11px] text-fg-muted"
-            title={`已挂载 ${pendingKnowledgeRefs.length} 条知识库`}
-          >
-            📚 已挂载 ×{pendingKnowledgeRefs.length}
-          </span>
+        <div className="mx-auto max-w-3xl w-full px-4 pb-2">
+          <div className="flex flex-wrap gap-2">
+            {pendingKnowledgeRefs.map((r) => (
+              <span
+                key={r.id}
+                data-testid="attached-knowledge-ref"
+                data-ref-id={r.id}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-brand-cyan/40 bg-brand-cyan/10 text-xs text-brand-cyan"
+                title={r.title || r.id}
+              >
+                <span className="font-medium">📚</span>
+                <span className="max-w-[160px] truncate">{r.title || r.id}</span>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveAttachedRef(r.id)}
+                  aria-label={`移除已挂载条目 ${r.title || r.id}`}
+                  data-testid="attached-knowledge-ref-remove"
+                  className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded text-brand-cyan/70 hover:text-brand-cyan hover:bg-brand-cyan/20 transition-colors"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
         </div>
       ) : null}
 
       {/* 输入栏 — chat-id-19 加 canRerun + onRerun. 0.7.5 hotfix 2 — 单一 `+` 按钮
           替代原本 4 个 inline 附件按钮. `+` → onPlusClick → ChatDetail 弹 PlusActionsSheet.
-          ChatInputBar 通过 ref 暴露 insertEmoji / addAttachment / focus. */}
-      <ChatInputBar
-        ref={inputBarRef}
-        isStreaming={isStreaming}
-        canRerun={canRerun}
-        onRerun={handleRerun}
-        onStop={handleStop}
-        onSubmit={handleSubmit}
-        onPlusClick={() => setPlusOpen(true)}
-        onSlashCommand={handleSlashCommand}
-        onAttachmentError={(msg) =>
-          toast({ message: `上传失败: ${msg}`, variant: "danger" })
-        }
-      />
+          ChatInputBar 通过 ref 暴露 insertEmoji / addAttachment / focus.
+          外层容器对齐 web ChatInput.tsx:63-84 — 底边线 + p-4 + bg-background, 内部限宽居中. */}
+      <div className="border-t border-border p-4 bg-background">
+        <div className="max-w-3xl mx-auto">
+          <ChatInputBar
+            ref={inputBarRef}
+            isStreaming={isStreaming}
+            canRerun={canRerun}
+            onRerun={handleRerun}
+            onStop={handleStop}
+            onSubmit={handleSubmit}
+            onPlusClick={() => setPlusOpen(true)}
+            onSlashCommand={handleSlashCommand}
+            onAttachmentError={(msg) =>
+              toast({ message: `上传失败: ${msg}`, variant: "danger" })
+            }
+            onSubmitNotice={(message, variant) => toast({ message, variant })}
+          />
+        </div>
+      </div>
 
       {/* 0.7.5 hotfix 2 — `+` 按钮触发 6 项 action sheet (image / document / emoji /
           knowledge / camera / template). 选中 → handlePlusAction(kind) 派发. */}
@@ -1152,7 +1217,7 @@ export function ChatDetail() {
           setKnowledgeOpen(false);
           inputBarRef.current?.focus();
         }}
-        onPick={handleKnowledgePick}
+        onConfirm={handleKnowledgeConfirm}
       />
 
       {/* 0.7.5 hotfix 2 — 三个隐藏 file input, 触发走 handleFileChange.
@@ -1194,8 +1259,8 @@ export function ChatDetail() {
       {/* 删除对话二次确认 */}
       {confirmDeleteOpen ? (
         <ConfirmDialog
-          title="删除对话"
-          message={`确认删除对话 "${title}"? 此操作无法撤销。`}
+          title="删除会话?"
+          message={`将删除「${title || "新对话"}」及其全部消息, 此操作不可撤销.`}
           confirmLabel="删除"
           cancelLabel="取消"
           confirmVariant="danger"
@@ -1211,8 +1276,8 @@ export function ChatDetail() {
       {/* 重命名对话框 */}
       {renameOpen ? (
         <ConfirmDialog
-          title="重命名对话"
-          message="为这个对话设置一个新标题。"
+          title="重命名会话"
+          message="修改当前对话的标题, 影响侧边栏列表和顶部标题显示。"
           confirmLabel="保存"
           cancelLabel="取消"
           loading={renameMutation.isPending}
@@ -1247,29 +1312,6 @@ export function ChatDetail() {
 }
 
 // ────────────────────────────────────────────────────────────
-// icons — local; 不引 lucide-react, 跟项目其它组件保持一致
-// ────────────────────────────────────────────────────────────
-
-function MoreIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="5" r="1.4" />
-      <circle cx="12" cy="12" r="1.4" />
-      <circle cx="12" cy="19" r="1.4" />
-    </svg>
-  );
-}
-
 // gagaOS 2026-10-20 §B — PlusActionsSheet 已重新引入, 由 ChatDetail 自管, 通过
 //   inputBarRef + onPlusClick 跟 ChatInputBar 协同. PlusGlyph 现在住在 ChatInputBar
 //   内部 (`+` 按钮的图标), 不再在 ChatDetail 这边.

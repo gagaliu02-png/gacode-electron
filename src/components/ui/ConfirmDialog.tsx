@@ -1,16 +1,18 @@
 /**
- * components/ui/ConfirmDialog.tsx — 阶段 3 通用二次确认弹窗
+ * components/ui/ConfirmDialog.tsx — 通用二次确认弹窗
  *
  * 设计目标:
  *   - 跟 ChatList 里 inline 的 ConfirmDialog 形状一致 (footer 按钮 + 可选 children 输入区)
  *   - 但抽出到共享位置, 让 Library / Deliveries / Profile / ProfileEdit /
  *     ProfileChangePassword 几个新页面直接 import 复用, 不重复实现
- *   - 居中 + 黑色遮罩 + slide-in-from-bottom 动画, 跟 gacode-web AlertDialog
- *     视觉对齐
+ *   - 视觉逐条对齐 gacode-web/src/components/ui/alert-dialog.tsx (2026-10-26, C2-20):
+ *     居中 modal + 黑色遮罩 (backdrop-blur) + rounded-2xl + shadow-2xl + 边框 +
+ *     max-w-md + p-6 + ESC 关闭 + 锁 body 滚动 + 淡入动画
+ *   - 按钮高度 h-9 (由 Button 的 size="md" 提供 — 见 Button.tsx 的 size 档位)
  *   - 不引 Radix AlertDialog, 边界遵守
  */
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Button } from "./Button";
 
 export interface ConfirmDialogProps {
@@ -37,24 +39,42 @@ export function ConfirmDialog({
   onConfirm,
   children,
 }: ConfirmDialogProps) {
+  // ESC 关闭 + 锁 body 滚动 — 对齐 web alert-dialog.tsx:58-70
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onCancel]);
+
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center px-4"
     >
       <div
-        className="absolute inset-0 bg-black/60 animate-fade-in"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in"
         onClick={onCancel}
         aria-hidden="true"
       />
-      <div className="relative w-full max-w-sm rounded-md bg-bg-elevated shadow-dialog p-5 animate-slide-in-from-bottom">
-        <h2 className="text-base font-medium mb-1">{title}</h2>
-        {message ? <p className="text-sm text-fg-muted mb-4">{message}</p> : null}
-        {children ? <div className="mb-4">{children}</div> : null}
-        <div className="flex items-center justify-end gap-2">
-          <Button variant="ghost" size="md" onClick={onCancel} disabled={loading}>
+      <div className="pointer-events-auto relative w-full max-w-md rounded-2xl bg-bg-elevated text-fg shadow-2xl border border-fg-muted/10 p-6 space-y-4 animate-fade-in">
+        <div className="space-y-2">
+          <h2 className="m-0 text-lg font-semibold text-fg">{title}</h2>
+          {message ? (
+            <p className="m-0 text-sm text-fg-muted leading-relaxed">{message}</p>
+          ) : null}
+        </div>
+        {children ? <div>{children}</div> : null}
+        <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 pt-2">
+          <Button variant="outline" size="md" onClick={onCancel} disabled={loading}>
             {cancelLabel}
           </Button>
           <Button

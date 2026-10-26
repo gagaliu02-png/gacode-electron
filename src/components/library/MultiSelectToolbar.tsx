@@ -42,31 +42,32 @@ export function MultiSelectToolbar({
 
   return (
     <>
-      <div className="sticky bottom-0 z-30 bg-bg-elevated border-t border-border px-4 py-3 flex items-center gap-3">
-        <span className="text-sm">
-          已选 <strong>{selectedCount}</strong> 条
-        </span>
-        <div className="flex-1" />
-        <Button variant="ghost" size="sm" onClick={onCancel}>
-          取消
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onToggleSelectAll}
-          disabled={totalVisible === 0}
-        >
-          {allSelected ? "取消全选" : "全选"}
-        </Button>
-        <Button
-          variant="danger"
-          size="sm"
-          disabled={selectedCount === 0 || deletePending}
-          loading={deletePending}
-          onClick={onConfirmDelete}
-        >
-          {deletePending ? "删除中" : `删除 (${selectedCount})`}
-        </Button>
+      <div className="sticky bottom-0 z-30 bg-bg-base/95 backdrop-blur shadow-[0_-2px_10px_rgba(0,0,0,0.4)]">
+        <div className="px-4 lg:px-8 max-w-3xl mx-auto w-full py-3 flex items-center justify-between gap-2">
+          <span className="text-sm">
+            已选 <strong>{selectedCount}</strong> 条
+          </span>
+          {/* L-47 收尾 (2026-10-26): 删掉 flex-1 占位 —— 改成 web 的 justify-between 之后,
+              占位会把两侧撑开, justify-between 就不生效了。「已选 N 条」保留 (L-52 另批处理) */}
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            取消
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onToggleSelectAll}
+          >
+            {allSelected ? "取消全选" : "全选"}
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            disabled={selectedCount === 0 || deletePending}
+            onClick={onConfirmDelete}
+          >
+            {deletePending ? <SpinnerIcon className="w-4 h-4 animate-spin" /> : `删除 ${selectedCount} 项`}
+          </Button>
+        </div>
       </div>
 
       {confirmOpen ? (
@@ -83,5 +84,25 @@ export function MultiSelectToolbar({
         />
       ) : null}
     </>
+  );
+}
+
+// SpinnerIcon — 删除 pending 态转圈 (web 用 lucide Loader2, 16px)
+function SpinnerIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
   );
 }

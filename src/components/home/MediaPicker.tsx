@@ -8,8 +8,8 @@
  *               Electron Chromium 在 macOS 调起相机; Windows desktop 通常弹
  *               带 image filter 的 file dialog (capture 属性被忽略), 仍能选图.
  *  - gallery  → <input type="file" accept="image/*"> 系统文件选择 (image filter)
- *  - file     → <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv">
- *               走 server mime 白名单 (跟 web MediaPicker 的 FILE_ACCEPT 对齐)
+ *  - file     → <input type="file" accept=".pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp">
+ *               走 server mime 白名单 (对齐 web Home 实际生效的 accept, 见 align-d-home.md H-36)
  *
  * 容器复用 BottomSheet — 不引 Radix Sheet.
  */
@@ -28,8 +28,9 @@ export interface MediaPickerProps {
   onCapture: (file: File) => void;
 }
 
-// 文件 accept — 对齐 web MediaPicker FILE_ACCEPT (web/android 共用 mime 白名单).
-const FILE_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv";
+// 文件 accept — 对齐 web Home 实际生效值 (web `page.tsx:110` 传给 MediaPicker 的那串;
+// web 组件内置的 FILE_ACCEPT 被 Home 传参架空, 见 align-d-home.md H-36).
+const FILE_ACCEPT = ".pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp";
 
 interface KindMeta {
   title: string;
@@ -90,6 +91,15 @@ export function MediaPicker({ open, onClose, kind, onCapture }: MediaPickerProps
           <span className="text-sm">打开{meta.title}</span>
         </button>
         <p className="text-xs text-fg-muted text-center">{meta.hint}</p>
+
+        {/* 底部「取消」— 对齐 web MediaPicker (`MediaPicker.tsx:241-247`) */}
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-white/60 hover:text-white/80 text-sm mt-4 transition-colors"
+        >
+          取消
+        </button>
 
         {/* 隐藏的 file input — 点击按钮 / sheet 完成均 click 触发 */}
         <input

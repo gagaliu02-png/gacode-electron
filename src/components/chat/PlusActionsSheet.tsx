@@ -88,9 +88,14 @@ const ACTIONS: PlusActionItem[] = [
 ];
 
 export function PlusActionsSheet({ open, onClose, onAction }: PlusActionsSheetProps) {
+  // A2-D1-30 (对齐 web `SheetActionMenu.tsx:70-75`):
+  //   web 的 SheetContent **没有标题栏** (动作直接铺在 sheet 里)
+  //   → PC 传 `title={undefined}`, 不渲染 BottomSheet 内置标题栏.
+  //   网格 className 照抄 web (`gap-3 py-5 px-4`), 列数保持 3:
+  //   PC 有 6 个动作 (web 只有 4 个), 改 4 列会排成 2 行半.
   return (
-    <BottomSheet open={open} title="添加附件" onClose={onClose}>
-      <div className="grid grid-cols-3 gap-y-5 gap-x-2 py-4" data-testid="plus-actions-sheet">
+    <BottomSheet open={open} title={undefined} onClose={onClose}>
+      <div className="grid grid-cols-3 gap-3 py-5 px-4" data-testid="plus-actions-sheet">
         {ACTIONS.map((a) => (
           <button
             key={a.kind}
@@ -127,7 +132,7 @@ function ImageIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
@@ -147,7 +152,7 @@ function DocumentIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
@@ -169,7 +174,7 @@ function EmojiIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
@@ -190,7 +195,7 @@ function KnowledgeIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
@@ -209,7 +214,7 @@ function CameraIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
@@ -228,7 +233,7 @@ function TemplateIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.8"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
     >

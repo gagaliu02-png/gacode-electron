@@ -28,7 +28,7 @@
  *   7. FAB: 缺则补 fixed bottom-right + (对齐 web L568)
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -63,7 +63,7 @@ const TYPE_CHIPS: Array<{ key: TypeFilter; label: string }> = [
   { key: "link", label: "链接" },
 ];
 
-const PAGE_SIZE = 24;
+const PAGE_SIZE = 30;
 
 export function Library() {
   const navigate = useNavigate();
@@ -77,6 +77,11 @@ export function Library() {
   const [tagFilter, setTagFilter] = useState<string | undefined>(undefined);
   const [sort, setSort] = useState<LibrarySort>("newest");
   const [page, setPage] = useState(1);
+
+  /** 累积的列表项 — web 端用 setItems 累加分页结果, PC 需自持一份 */
+  const [items, setItems] = useState<LibraryItem[]>([]);
+  /** 已消费过的 data 快照 — placeholderData 回填上一页时避免同一页被累加两次 */
+  const consumedDataRef = useRef<Awaited<ReturnType<typeof listLibrary>> | null>(null);
 
   // 采集 Sheet
   const [collectOpen, setCollectOpen] = useState(false);
@@ -104,7 +109,7 @@ export function Library() {
   // server tag 参数 — listLibrary 接受 `tag` (单 tag), 与本地 tagFilter 同步
   const serverTag = useMemo(() => tagFilter, [tagFilter]);
 
-  const { data, isLoading, isFetching, refetch } = useQuery({
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: ["library", { type, tag: serverTag, keyword, page }],
     queryFn: () =>
       listLibrary({
@@ -117,9 +122,35 @@ export function Library() {
     placeholderData: (prev) => prev,
   });
 
+  // web 端 setItems 累积语义: 第 1 页替换, 第 2 页起追加
+  useEffect(() => {
+    if (!data) return;
+    // placeholderData 回填上一页数据时 data 引用不变 → 跳过, 避免同一页被累加两次
+    if (consumedDataRef.current === data) return;
+    consumedDataRef.current = data;
+    if (page === 1) {
+      setItems(data.items ?? []);
+    } else {
+      setItems((cur) => [...cur, ...(data.items ?? [])]);
+    }
+  }, [data, page]);
+
+  // 服务端重过滤后, 剔除已不存在的选中 id (web 端同款)
+  // ⚠️ L-25 收尾 (2026-10-26): 必须用**累积**的 items 裁剪, 不能用 data.items (当前页) ——
+  //   PC 列表是累积的 (点「加载更多」会追加第 2 页), 用当前页会把第 1 页的选中清掉。
+  useEffect(() => {
+    const nextIds = new Set(items.map((it) => String(it.id)));
+    setSelectedIds((cur) => {
+      if (cur.size === 0) return cur;
+      const filtered = new Set<string>();
+      cur.forEach((id) => { if (nextIds.has(id)) filtered.add(id); });
+      return filtered;
+    });
+  }, [items]);
+
   // 客户端二次过滤 (server modality='file' 包了 doc+link, 这里拆开) + 客户端排序
   const filteredItems: LibraryItem[] = useMemo(() => {
-    const raw = data?.items ?? [];
+    const raw = items;
     const t = type === "all"
       ? raw
       : raw.filter((it) => it.type === type);
@@ -131,18 +162,20 @@ export function Library() {
       return (a.title || "").localeCompare(b.title || "", "zh-Hans-CN");
     });
     return sorted;
-  }, [data?.items, type, sort]);
+  }, [items, type, sort]);
 
   const hasMore = data?.hasMore ?? false;
 
   const handleRefresh = () => {
     setPage(1);
-    refetch();
+    queryClient.invalidateQueries({ queryKey: ["library"] });
+    toast({ message: "已刷新", variant: "default" });
   };
 
   // ────── 切 type/tag/keyword/sort → 重置分页 + 退出多选 ──────
   const resetFilters = () => {
     setPage(1);
+    setItems([]);
     setSelectedIds(new Set());
   };
 
@@ -248,9 +281,9 @@ export function Library() {
     >
       <div className="min-h-full flex flex-col">
         {/* 顶部操作栏 */}
-        <div className="sticky top-0 z-10 bg-bg-base">
+        <div className="sticky top-0 z-20 bg-bg-base/95 backdrop-blur pt-2 pb-4">
           {/* PC-6: 容器宽度对齐 web (max-w-3xl) — 跟 web L421/481/493 一致 */}
-          <div className="px-4 lg:px-8 max-w-3xl mx-auto w-full space-y-2 py-2">
+          <div className="px-4 lg:px-8 max-w-3xl mx-auto w-full space-y-2">
             {/* Row 1: Tabs (左, 下划线变体 — 对齐 web) + [+ 新建] (中) + 排序 + 搜索 + 刷新 (右) */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex-1 min-w-0 overflow-x-auto scrollbar-none">
@@ -310,7 +343,7 @@ export function Library() {
                  → 产物里 .rounded-full (pos=34692) 早于 .rounded-md (pos=34952),
                  需 `!rounded-full` 强制覆盖 */}
             {showSearch ? (
-              <div className="relative pt-1">
+              <div className="relative pt-2">
                 <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted pointer-events-none z-10" />
                 <Input
                   type="search"
@@ -321,7 +354,7 @@ export function Library() {
                   }}
                   placeholder="搜索标题或标签..."
                   autoFocus
-                  className="pl-9 py-2 text-sm bg-muted/50 border-0 !rounded-full"
+                  className="pl-9 !py-2 !text-sm bg-muted/50 border-0 focus:border-transparent !rounded-full focus-visible:ring-1 focus-visible:ring-brand"
                 />
               </div>
             ) : null}
@@ -342,7 +375,7 @@ export function Library() {
           {isLoading ? (
             <SkeletonGrid />
           ) : filteredItems.length === 0 ? (
-            <EmptyState onCreateClick={() => setCollectOpen(true)} />
+            <EmptyState onCreateClick={() => setCollectOpen(true)} search={keyword} />
           ) : (
             <>
               {/* PC-6: 单列行列表 + space-y-3 (item 3) — 对齐 web L516 */}
@@ -361,7 +394,7 @@ export function Library() {
                   />
                 ))}
               </div>
-              {hasMore ? (
+              {!keyword.trim() && hasMore ? (
                 <div className="flex justify-center mt-4">
                   <Button
                     variant="ghost"
@@ -379,22 +412,20 @@ export function Library() {
       </div>
 
       {/* PC-6: FAB — 右下角 + 按钮 (item 7)
-          对齐 web L564-572: fixed bottom-6 right-6 z-30 w-14 h-14
-          rounded-full bg-brand text-brand-on shadow-lg hover:bg-brand/90
+          对齐 web CreateFab (FAB_CLASS): fixed bottom-5 right-5 z-40 w-[52px] h-[52px]
+          rounded-lg bg-brand text-brand-on + 橙色辉光阴影 + hover 上浮 / active 缩放
           多选模式隐藏 (避免与底部 toolbar 重复入口), 跟 web L563 一致 */}
       {!isInMultiSelect ? (
         <button
           type="button"
           aria-label="采集内容"
+          title="采集内容"
           onClick={() => setCollectOpen(true)}
           className={[
-            "fixed bottom-6 right-6 z-30 w-14 h-14 rounded-full",
-            "bg-brand text-brand-on shadow-lg",
-            "hover:bg-brand/90 transition-colors duration-150",
-            "inline-flex items-center justify-center",
+            "fixed bottom-5 right-5 z-40 w-[52px] h-[52px] rounded-lg bg-brand text-brand-on grid place-items-center shadow-[0_8px_24px_rgba(255,107,53,0.4)] hover:bg-brand-hover hover:-translate-y-px active:scale-[0.96] transition-all duration-150",
           ].join(" ")}
         >
-          <FabPlusIcon />
+          <FabPlusIcon className="w-[22px] h-[22px]" />
         </button>
       ) : null}
 
@@ -416,9 +447,9 @@ export function Library() {
       {/* 单条删除二次确认 */}
       {pendingSingleDelete ? (
         <ConfirmDialog
-          title="删除这条知识?"
+          title="确定要删除这条吗?"
           message={`「${pendingSingleDelete.title || "未命名"}」 将从知识库移除, 此操作不可撤销。`}
-          confirmLabel="确认删除"
+          confirmLabel="删除"
           confirmVariant="danger"
           loading={singleDeleteMutation.isPending}
           onCancel={() => setPendingSingleDelete(null)}
@@ -453,14 +484,14 @@ export function Library() {
 //         (无圆背景, 跟 web 一致) + 标题 + 副文案 + 行动按钮
 // ────────────────────────────────────────────────────────────
 
-function EmptyState({ onCreateClick }: { onCreateClick: () => void }) {
+function EmptyState({ onCreateClick, search }: { onCreateClick: () => void; search: string }) {
   return (
     <div className="h-full flex items-center justify-center">
       <div className="rounded-2xl border border-border bg-bg-elevated p-12 text-center max-w-sm w-full">
         <LibraryIcon className="w-12 h-12 mx-auto text-fg-muted mb-4" />
-        <p className="text-base font-medium">还没有知识库</p>
-        <p className="text-sm text-fg-muted mt-2">
-          拖入文件入库,或点击下方按钮手动添加
+        <p className="text-base font-medium mb-1 text-fg">{search ? "未找到匹配项" : "暂无知识库内容"}</p>
+        <p className="text-sm">
+          {search ? `没有标题或标签包含 "${search}" 的内容` : "上传图片 / 文档 / 链接后将自动同步到这里"}
         </p>
         <div className="mt-4">
           <Button
@@ -481,20 +512,8 @@ function EmptyState({ onCreateClick }: { onCreateClick: () => void }) {
 function SkeletonGrid() {
   return (
     <div className="space-y-3">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-2xl bg-bg-elevated p-4 animate-pulse"
-        >
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded bg-bg-sunken" />
-            <div className="flex-1 space-y-2">
-              <div className="h-3 w-12 bg-bg-sunken rounded" />
-              <div className="h-4 w-3/4 bg-bg-sunken rounded" />
-              <div className="h-3 w-1/4 bg-bg-sunken rounded" />
-            </div>
-          </div>
-        </div>
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="h-20 w-full rounded-2xl bg-card animate-pulse" />
       ))}
     </div>
   );
@@ -527,18 +546,19 @@ function LibraryIcon({ className = "" }: { className?: string }) {
   );
 }
 
-// FabPlusIcon — FAB 用, 比顶部 + 新建按钮稍大的 + (对齐 web L568-571 w-7 h-7)
-function FabPlusIcon() {
+// FabPlusIcon — FAB 用 (web CreateFab: ICON_CLASS = "w-[22px] h-[22px]", strokeWidth 2.2)
+function FabPlusIcon({ className = "" }: { className?: string }) {
   return (
     <svg
-      width="28"
-      height="28"
+      width="100%"
+      height="100%"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="2.2"
       strokeLinecap="round"
       strokeLinejoin="round"
+      className={className}
     >
       <line x1="12" y1="5" x2="12" y2="19" />
       <line x1="5" y1="12" x2="19" y2="12" />
@@ -548,7 +568,7 @@ function FabPlusIcon() {
 
 function RefreshIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
       <path d="M21 3v5h-5" />
       <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
