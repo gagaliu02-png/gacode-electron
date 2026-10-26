@@ -9,7 +9,7 @@
 > **PC 端 className 约束**：PC 仓无 tailwind-merge / clsx / cva，`className` 是数组尾部字符串追加 → 同名冲突类由 CSS 源码顺序决定，需显式处理（例：`rounded-full` 输给 base `rounded-md` → 写 `!rounded-full`）
 > **web 端 cn 语义**：`cn = twMerge(clsx(...))`（`src/lib/utils.ts:4-6`）→ 本清单给出的 className 均为 **twMerge 后最终生效串**
 > **PC `file:line` 口径（2026-10-26 修正）**：本清单的 PC 行号取 **2026-10-26 实现批快照**（该批改动现已进入 HEAD）。同仓有其它 worker 并行改 `src/**`，行号会继续漂移 ⇒ **定位以「锚点函数名 / 代码串」为准**，行号仅作参考。
-> **本轮全量核实（179/179 条）快照时刻**：`gacode-electron` HEAD = `eadf42868eed53181543e2ccdecb0d2f3105b19f`（2026-10-26 20:30 (GMT+8)）；`src/` 工作区**干净（无未提交改动）**。该时刻 179 条的判定 + PC 行号已**逐条按内容锚点重抓**（正文每条的「当前 PC 源码」代码块 = 锚点现场抓取结果，代码块与行号同源自洽）；**web 侧行号未动**。详见 §十二。
+> **本轮全量核实（179/179 条）快照时刻**：`gacode-electron` HEAD = `6e462191a99fa01ec9aa50248e6b9eecd662ee50`（2026-10-26 20:42 (GMT+8)）；`src/` 工作区**另有未提交改动（本快照已一并计入）**。该时刻 179 条的判定 + PC 行号已**逐条按内容锚点重抓**（正文每条的「当前 PC 源码」代码块 = 锚点现场抓取结果，代码块与行号同源自洽）；**web 侧行号未动**。详见 §十二。
 
 > **标题口径（2026-10-26 补充）**：条目标题已统一改成**中性检查项**（只写「比什么」，不再断言 PC 当前是什么状态）。**当前真实状态一律以该条的「判定」列 + 「当前 PC 源码」代码块 + §十二 为准**；标题里出现的 className / 文案是 web 侧口径（web 是真相源，本轮未改）。
 
@@ -21,9 +21,9 @@
 - [A2 · chat 详情页](#a2--chat-详情页) — web `src/app/(main)/chat/[id]/page.tsx` ↔ PC `src/routes/ChatDetail.tsx`
 - [A3 · 侧边栏](#a3--侧边栏) — web `src/components/layout/Drawer.tsx` + `Header.tsx` ↔ PC `src/components/layout/AppShell.tsx`
 - [A4 · 对话项组件](#a4--对话项组件) — web `src/components/chat/ChatItem.tsx` ↔ PC `AppShell.tsx` 内部
-- [A5 · 聊天子组件](#a5--聊天子组件) — 气泡 / 列表 / 输入条 / 表情 / 资料库 / 附件 / 审批 / 执行时间线 / 流式错误 / Sheet 动作菜单
+- [A5 · 聊天子组件映射总表](#a5--聊天子组件映射总表) — 气泡 / 列表 / 输入条 / 表情 / 资料库 / 附件 / 审批 / 执行时间线 / 流式错误 / Sheet 动作菜单
 - [结构级差异 · 需 gaga 拍](#结构级差异--需-gaga-拍)
-- [十二、全量核实回写（2026-10-26）](#十二全量核实回写2026-10-26) — 179 条逐条读源码核实 + 已落地清单（173 条）+ 剩余未落地（1 条）+ 待 PM 拍板残余微差
+- [十二、全量核实回写（2026-10-26）](#十二全量核实回写2026-10-26) — 179 条逐条读源码核实 + 已落地清单（173 条）+ 剩余未落地（1 条）+ 残余微差（①~⑤ 用户可感知项，待 gaga 勾选）
 
 ---
 
@@ -829,7 +829,7 @@ destructive: "bg-destructive text-destructive-foreground shadow-sm hover:bg-dest
 
 **PC 现状**
 ```tsx
-// Button.tsx:30-31
+// Button.tsx:38
 danger:
   "bg-danger text-white hover:bg-danger/90 active:bg-danger/80 shadow",
 ```
@@ -1483,7 +1483,7 @@ onClick={() =>
 
 **PC 现状（已落地）**
 ```tsx
-// ChatList.tsx:245-253
+// ChatList.tsx:244-254
 /** 退出多选 — 对齐 web useChatStore.exitMultiSelect (web `src/lib/store.ts:224-225`):
  *  清空勾选集合 + 退出多选模式. PC 的多选栏由 `multiSelectIds.size > 0` 派生,
  *  清空即等于退出模式 —— 跟 web `toggleSelected` 空集自动退模式 (store.ts:218-221) 同语义. */
@@ -1496,7 +1496,7 @@ const selectAll = () => {
   setMultiSelectIds(new Set(sortedChats.map((c) => c.id)));
 };
 
-// ChatList.tsx:352-360
+// ChatList.tsx:355-363
 onClick={() => {
   // A1-D3-05 — 对齐 web `chat/page.tsx:203-205`:
   //   `allSelected ? exitMultiSelect() : selectAll()`
@@ -1867,7 +1867,7 @@ useEffect(() => {
 
 **PC 现状（已落地）**
 ```tsx
-// AppShell.tsx:56-63
+// AppShell.tsx:60-67
 function resolveTitle(pathname: string): string {
   if (pathname === "/") return "首页";
   // 0.7.7 — /chat/* 不再渲染外层 header (ChatDetail 自管 h-12 header).
@@ -1922,7 +1922,7 @@ web `src/app/(main)/chat/[id]/page.tsx`（1422 行）+ `src/components/chat/Chat
 | 项 | 值 |
 |---|---|
 | web | `src/components/chat/ChatInput.tsx:64` |
-| PC | `src/routes/ChatDetail.tsx:1307` |
+| PC | `src/routes/ChatDetail.tsx:1309` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -1930,7 +1930,7 @@ web `src/app/(main)/chat/[id]/page.tsx`（1422 行）+ `src/components/chat/Chat
 // ChatInput.tsx:64
 <div className="border-t border-border p-4 bg-background">
 ```
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1307`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1309`）
 
 ```tsx
       <div className="border-t border-border p-4 bg-background">
@@ -2718,7 +2718,7 @@ className={cn(
 | 项 | 值 |
 |---|---|
 | web | `src/app/(main)/chat/[id]/page.tsx:1311-1331` |
-| PC | `src/routes/ChatDetail.tsx:1275-1301` |
+| PC | `src/routes/ChatDetail.tsx:1277-1303` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -2746,7 +2746,7 @@ className={cn(
   </button>
 </span>
 ```
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1275-1301`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1277-1303`）
 
 ```tsx
       {pendingKnowledgeRefs.length > 0 ? (
@@ -2810,7 +2810,7 @@ className={cn(
 | 项 | 值 |
 |---|---|
 | web | `src/components/chat/MessageList.tsx:60-75` |
-| PC | `src/routes/ChatDetail.tsx:1231-1245` |
+| PC | `src/routes/ChatDetail.tsx:1233-1247` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -2831,7 +2831,7 @@ className={cn(
   </div>
 </div>
 ```
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1231-1245`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1233-1247`）
 
 ```tsx
         {historyQuery.isLoading ? (
@@ -3229,7 +3229,7 @@ function formatAgo(iso: string): string {
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:174` |
-| PC | `src/routes/ChatDetail.tsx:1180` |
+| PC | `src/routes/ChatDetail.tsx:1182` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -3237,7 +3237,7 @@ function formatAgo(iso: string): string {
 // Header.tsx:174
 <header className="sticky top-0 z-30 flex items-center h-14 px-4 border-b bg-background gap-2">
 ```
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1180`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1182`）
 
 ```tsx
       <div className="shrink-0 h-14 px-4 bg-background border-b border-border flex items-center gap-2">
@@ -3252,7 +3252,7 @@ function formatAgo(iso: string): string {
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:197-199` |
-| PC | `src/routes/ChatDetail.tsx:1181` |
+| PC | `src/routes/ChatDetail.tsx:1183` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -3262,7 +3262,7 @@ function formatAgo(iso: string): string {
   {title ?? headerTitle}
 </div>
 ```
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1181`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1183`）
 
 ```tsx
         <div className="flex-1 truncate font-medium min-w-0" title={title}>
@@ -3277,7 +3277,7 @@ function formatAgo(iso: string): string {
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:204-212` |
-| PC | `src/routes/ChatDetail.tsx:1193` |
+| PC | `src/routes/ChatDetail.tsx:1195` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -3294,7 +3294,7 @@ function formatAgo(iso: string): string {
 </button>
 ```
 
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1193`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1195`）
 
 ```tsx
           aria-label="新建聊天"
@@ -3309,7 +3309,7 @@ function formatAgo(iso: string): string {
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:222-242` |
-| PC | `src/routes/ChatDetail.tsx:910-923` |
+| PC | `src/routes/ChatDetail.tsx:912-925` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -3329,7 +3329,7 @@ function formatAgo(iso: string): string {
 </DropdownMenuItem>
 ```
 
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:910-923`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:912-925`）
 
 ```tsx
   const headerMenuItems: DropdownMenuItem[] = [
@@ -3358,7 +3358,7 @@ function formatAgo(iso: string): string {
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:251-254` |
-| PC | `src/routes/ChatDetail.tsx:1413-1414` |
+| PC | `src/routes/ChatDetail.tsx:1415-1416` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -3369,7 +3369,7 @@ function formatAgo(iso: string): string {
   修改当前对话的标题, 影响 Drawer 列表和顶部标题显示。
 </AlertDialogDescription>
 ```
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1413-1414`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1415-1416`）
 
 ```tsx
           title="重命名会话"
@@ -3386,7 +3386,7 @@ function formatAgo(iso: string): string {
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:295-298` |
-| PC | `src/routes/ChatDetail.tsx:1396-1397` |
+| PC | `src/routes/ChatDetail.tsx:1398-1399` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -3397,7 +3397,7 @@ function formatAgo(iso: string): string {
   将删除「{headerTitle || "新对话"}」及其全部消息, 此操作不可撤销.
 </AlertDialogDescription>
 ```
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1396-1397`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1398-1399`）
 
 ```tsx
           title="删除会话?"
@@ -3413,7 +3413,7 @@ function formatAgo(iso: string): string {
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:283` |
-| PC | `src/routes/ChatDetail.tsx:1413-1439` |
+| PC | `src/routes/ChatDetail.tsx:1415-1441` |
 | 判定 | 已一致（PM 拍板不改，PC 现状即目标） |
 
 **web 源码**
@@ -3421,7 +3421,7 @@ function formatAgo(iso: string): string {
 // Header.tsx:283
 {renameMutation.isPending ? "保存中..." : "保存"}
 ```
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1413-1439`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1415-1441`）
 
 ```tsx
           title="重命名会话"
@@ -3681,10 +3681,10 @@ function RiskBadge({ level }: { level: ApprovalRequest["riskLevel"] }) {
 | 项 | 值 |
 |---|---|
 | web | `src/app/(main)/chat/[id]/page.tsx:1316`（`title={r.title || r.id}`） |
-| PC | `src/routes/ChatDetail.tsx:1284` |
+| PC | `src/routes/ChatDetail.tsx:1286` |
 | 判定 | 已一致 |
 
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:1284`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:1286`）
 
 ```tsx
                 title={r.title || r.id}
@@ -3699,7 +3699,7 @@ function RiskBadge({ level }: { level: ApprovalRequest["riskLevel"] }) {
 | 项 | 值 |
 |---|---|
 | web | `src/app/(main)/chat/[id]/page.tsx:1124-1129` |
-| PC | `src/routes/ChatDetail.tsx:947-955` |
+| PC | `src/routes/ChatDetail.tsx:949-957` |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -3711,7 +3711,7 @@ const markerText = items
 chatInputRef.current?.insertText(markerText);
 ```
 
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:947-955`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:949-957`）
 
 ```tsx
         const markerText = items
@@ -3727,7 +3727,7 @@ chatInputRef.current?.insertText(markerText);
 
 **PC 现状（已落地）**
 ```tsx
-// ChatDetail.tsx:809-818
+// ChatDetail.tsx:944-953
       // A2-D3-02 — 把知识库 marker 注入输入框 (server 未识别 knowledge_refs 时的兜底通道)
       //   对齐 web `src/app/(main)/chat/[id]/page.tsx:1124-1129` (chatInputRef.insertText
       //   → 多个 marker 换行分隔, 用户后续可在输入框编辑).
@@ -4063,7 +4063,7 @@ export function BottomSheet({
 | 项 | 值 |
 |---|---|
 | web | `src/components/chat/ExecutionTimeline.tsx:1-159` |
-| PC | `src/components/chat/MessageBubble.tsx:457` + `src/routes/ChatDetail.tsx:295` + `src/routes/ChatDetail.tsx:299` |
+| PC | `src/components/chat/MessageBubble.tsx:457` + `src/routes/ChatDetail.tsx:297` + `src/routes/ChatDetail.tsx:301` |
 | 判定 | 已一致（M3 批已提交） |
 
 **web 源码（折叠头）**
@@ -4168,12 +4168,12 @@ const USER_MARKDOWN_WRAPPER_CLASS =
 | 项 | 值 |
 |---|---|
 | web | `src/app/(main)/chat/[id]/page.tsx:925-1032` |
-| PC | `src/routes/ChatDetail.tsx:754` + `src/components/chat/MessageMenu.tsx:96` |
+| PC | `src/routes/ChatDetail.tsx:756` + `src/components/chat/MessageMenu.tsx:96` |
 | 判定 | 已一致 |
 
 **说明**：web 的 `recallMutation` / `deleteMutation` / `saveToKnowledgeMutation` + `handleRecall` / `handleDelete` / `handleSaveToKnowledge` / `canRecallFor`，PC 在 `MessageMenu.tsx` 内直接调 api 并通过 `onActionDone` 回调父层 → 能力等价。**改动量**：0 行
 
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:754`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:756`）
 
 ```tsx
   const handleMessageAction = useCallback(
@@ -4188,7 +4188,7 @@ const USER_MARKDOWN_WRAPPER_CLASS =
 | 项 | 值 |
 |---|---|
 | web | `src/components/chat/MessageBubble.tsx:164-198` + `:311-333` |
-| PC | `src/components/chat/MessageBubble.tsx:407` + `src/components/chat/MessageBubble.tsx:87` + `src/routes/ChatDetail.tsx:429` |
+| PC | `src/components/chat/MessageBubble.tsx:407` + `src/components/chat/MessageBubble.tsx:87` + `src/routes/ChatDetail.tsx:431` |
 | 判定 | 已一致（M3 批已提交） |
 
 **web 源码**
@@ -4216,7 +4216,7 @@ const markdownContent = isUser
 
 | # | 项 | web | PC | 说明 |
 |---|---|---|---|---|
-| A2-OK-01 | 页面根容器 `flex flex-col h-full` | `page.tsx:1204` | `ChatDetail.tsx:1177` | 一致（PC 多 `bg-bg-base`） |
+| A2-OK-01 | 页面根容器 `flex flex-col h-full` | `page.tsx:1204` | `ChatDetail.tsx:1179` | 一致（PC 多 `bg-bg-base`） |
 | A2-OK-02 | 停止按钮 `aria-label="停止生成"` | `ChatInputBar.tsx:134` | `ChatInputBar.tsx:742` | 一致 |
 | A2-OK-03 | 发送按钮 `aria-label="发送"` | `ChatInputBar.tsx:147` | `ChatInputBar.tsx:762`（PC 已改成「发送」，与 web 一致） |
 | A2-OK-04 | textarea `max-h-32` | `ChatInputBar.tsx:116` | `ChatInputBar.tsx:706` | 一致 |
@@ -5140,14 +5140,14 @@ const togglePin = async (chatId: string) => {
 
 **PC 现状（已落地）**
 ```tsx
-// AppShell.tsx:483-488
+// AppShell.tsx:493-498
           <div className={pinned.length > 0 ? "mt-2" : ""}>
             <div className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-fg-muted">
               <ClockIcon />
               <span className="flex-1">最近</span>
               <span className="text-xs">{recent.length}</span>
             </div>
-// AppShell.tsx:517-521
+// AppShell.tsx:527-531
             ) : (
               <div className="text-sm text-fg-muted px-3 py-4 text-center opacity-70">
                 暂无对话
@@ -5714,7 +5714,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:248-315`（`AlertDialog`） |
-| PC | `src/routes/ChatDetail.tsx:1396` / `:1413`（`ConfirmDialog`） |
+| PC | `src/routes/ChatDetail.tsx:1398` / `:1415`（`ConfirmDialog`） |
 | 判定 | 形态不同 |
 
 **改造影响面**
@@ -5744,7 +5744,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:62` + `(main)/layout.tsx`（挂载点） |
-| PC | `src/components/layout/AppShell.tsx:156`（`showHeader` 条件）+ `src/routes/ChatDetail.tsx:1180`（chat 详情自管 header） |
+| PC | `src/components/layout/AppShell.tsx:156`（`showHeader` 条件）+ `src/routes/ChatDetail.tsx:1182`（chat 详情自管 header） |
 | 判定 | 形态不同 |
 
 **改造影响面**
@@ -5907,14 +5907,14 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 >
 > **⚠️ M3 批已提交（并发 worker）**：A2-D4-02 / A2-D4-03 / A2-D4-04 / A2-D4-06 这 4 条在本快照时刻**已随提交 `b29207f`（markdown 全栈自研接线）落地**（判定已改「已一致」）。若该提交被回退或改判，这 4 条要**重新打回**「缺失 / 形态不同」—— 详见 §十二.4 ⑧。
 >
-> **注**：原表 10 条里 8 条已落地（A1-D4-01 / A1-D4-02 → 改用 `BottomSheet`；A3-D2-01 → Cody 图已接；A1-D2-19 → 已加 `disabled={!renameDraft.trim()}`；A1-D2-17 → `Button loading` 已渲染 spinner；A2-D1-30 → 已去标题栏 + `grid-cols-3 gap-3 py-5 px-4`），故整表重排。
+> **注**：原表 10 条里 **9 条**已落地（A1-D4-01 / A1-D4-02 → 改用 `BottomSheet`；A3-D2-01 → Cody 图已接；A1-D2-19 → 已加 `disabled={!renameDraft.trim()}`；A1-D2-17 → `Button loading` 已渲染 spinner；A2-D1-30 → 已去标题栏 + `grid-cols-3 gap-3 py-5 px-4`），故整表重排。
 
 ---
 
 ## 十二、全量核实回写（2026-10-26）
 
 > **背景**：本清单写于实现批之前，正文判定严重过时 —— A 域 179 条里绝大多数**实际已一致**，但正文仍标着「缺失 / 形态不同」。2026-10-26 做**逐条读源码核实（179/179）**，把「判定」列 + PC 侧 `file:line` 全部回写成当前源码的真实状态。
-> **快照时刻**：`gacode-electron` HEAD = `eadf42868eed53181543e2ccdecb0d2f3105b19f`（2026-10-26 20:30 (GMT+8)）；`src/` 工作区**干净（无未提交改动）**。
+> **快照时刻**：`gacode-electron` HEAD = `6e462191a99fa01ec9aa50248e6b9eecd662ee50`（2026-10-26 20:42 (GMT+8)）；`src/` 工作区**另有未提交改动（本快照已一并计入）**。
 > ⚠️ 同仓有其它 worker 并行改 `src/**`，行号会继续漂移 ⇒ **定位以「锚点函数名 / 代码串」为准**，行号仅作参考。正文每条的「当前 PC 源码」代码块就是按锚点现场抓出来的原始行 —— 代码块与行号永远自洽。
 
 ---
@@ -5930,7 +5930,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 
 ### 12.2 已落地条目清单（173 条 · 判定 = 已一致）
 
-> PC 列为**快照时刻**的真实 `file:line`（HEAD `eadf428`，`src/` 工作区干净（无未提交改动））。
+> PC 列为**快照时刻**的真实 `file:line`（HEAD `6e46219`，`src/` 工作区另有未提交改动（本快照已一并计入））。
 
 **A1 · 62 条**
 
@@ -6003,7 +6003,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 
 | 条号 | PC 侧 file:line（快照） | 备注 |
 |---|---|---|
-| A2-D1-01 | `src/routes/ChatDetail.tsx:1307` | — |
+| A2-D1-01 | `src/routes/ChatDetail.tsx:1309` | — |
 | A2-D1-02 | `src/components/chat/ChatInputBar.tsx:664-674` | — |
 | A2-D1-03 | `src/components/chat/ChatInputBar.tsx:706` | — |
 | A2-D1-04 | `src/components/chat/ChatInputBar.tsx:706` | — |
@@ -6029,9 +6029,9 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | A2-D1-24 | `src/components/chat/ApprovalBanner.tsx:144-146` | — |
 | A2-D1-25 | `src/components/chat/ChatInputBar.tsx:617-618` | — |
 | A2-D1-26 | `src/components/chat/AttachmentChip.tsx:53` | — |
-| A2-D1-27 | `src/routes/ChatDetail.tsx:1275-1301` | — |
+| A2-D1-27 | `src/routes/ChatDetail.tsx:1277-1303` | — |
 | A2-D1-28 | `src/components/chat/MessageList.tsx:131` | — |
-| A2-D1-29 | `src/routes/ChatDetail.tsx:1231-1245` | — |
+| A2-D1-29 | `src/routes/ChatDetail.tsx:1233-1247` | — |
 | A2-D1-30 | `src/components/chat/PlusActionsSheet.tsx:109` | — |
 | A2-D1-31 | `src/components/chat/PlusActionsSheet.tsx:137-155` | 6 个自绘图标统一 24×24 / `strokeWidth="2"`（= web lucide `w-6 h-6` 默认 strokeWidth 2） |
 | A2-D1-32 | `src/components/chat/PlusActionsSheet.tsx:116` | — |
@@ -6045,19 +6045,19 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | A2-D1-40 | `src/components/chat/MessageBubble.tsx:542-550` | — |
 | A2-D1-41 | `src/components/chat/MessageMenu.tsx:253` | — |
 | A2-D1-42 | `src/components/chat/MessageMenu.tsx:233` | — |
-| A2-D2-01 | `src/routes/ChatDetail.tsx:1180` | — |
-| A2-D2-02 | `src/routes/ChatDetail.tsx:1181` | — |
-| A2-D2-03 | `src/routes/ChatDetail.tsx:1193` | — |
-| A2-D2-04 | `src/routes/ChatDetail.tsx:910-923` | PC `DropdownMenu` 不支持分隔线（`ui/DropdownMenu.tsx` 的 `DropdownMenuItem` 无 separator 字段），web 有 `DropdownMenuSeparator` ⇒ 残余微差见 §十三 |
-| A2-D2-05 | `src/routes/ChatDetail.tsx:1413-1414` | web 文案「影响 Drawer 列表和顶部标题显示。」vs PC「影响侧边栏列表和顶部标题显示。」⇒ 语义等价（Drawer = 侧边栏） |
-| A2-D2-06 | `src/routes/ChatDetail.tsx:1396-1397` | — |
-| A2-D2-07 | `src/routes/ChatDetail.tsx:1413-1439` | PM 拍板：通用 `ConfirmDialog` 不加页面专属的「保存中...」文案 |
+| A2-D2-01 | `src/routes/ChatDetail.tsx:1182` | — |
+| A2-D2-02 | `src/routes/ChatDetail.tsx:1183` | — |
+| A2-D2-03 | `src/routes/ChatDetail.tsx:1195` | — |
+| A2-D2-04 | `src/routes/ChatDetail.tsx:912-925` | PC `DropdownMenu` 不支持分隔线（`ui/DropdownMenu.tsx` 的 `DropdownMenuItem` 无 separator 字段），web 有 `DropdownMenuSeparator` ⇒ 残余微差见 §十三 |
+| A2-D2-05 | `src/routes/ChatDetail.tsx:1415-1416` | web 文案「影响 Drawer 列表和顶部标题显示。」vs PC「影响侧边栏列表和顶部标题显示。」⇒ 语义等价（Drawer = 侧边栏） |
+| A2-D2-06 | `src/routes/ChatDetail.tsx:1398-1399` | — |
+| A2-D2-07 | `src/routes/ChatDetail.tsx:1415-1441` | PM 拍板：通用 `ConfirmDialog` 不加页面专属的「保存中...」文案 |
 | A2-D2-08 | `src/components/chat/ApprovalBanner.tsx:48-66` + `src/components/chat/ApprovalBanner.tsx:135` | — |
 | A2-D2-09 | `src/components/chat/ApprovalBanner.tsx:166` | — |
 | A2-D2-10 | `src/components/chat/ApprovalBanner.tsx:157` | — |
 | A2-D2-11 | `src/components/chat/ApprovalBanner.tsx:184` | — |
-| A2-D3-01 | `src/routes/ChatDetail.tsx:1284` | — |
-| A2-D3-02 | `src/routes/ChatDetail.tsx:947-955` | — |
+| A2-D3-01 | `src/routes/ChatDetail.tsx:1286` | — |
+| A2-D3-02 | `src/routes/ChatDetail.tsx:949-957` | — |
 | A2-D3-03 | `src/components/chat/MessageMenu.tsx:165` + `src/components/chat/MessageMenu.tsx:187` + `src/components/chat/MessageMenu.tsx:201` | — |
 | A2-D3-04 | `src/components/chat/MessageMenu.tsx:63-75` | — |
 | A2-D3-05 | `src/components/ui/BottomSheet.tsx:119` | — |
@@ -6066,11 +6066,11 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | A2-D3-08 | `src/components/chat/MessageList.tsx:127` | — |
 | A2-D3-09 | `src/components/chat/ChatInputBar.tsx:679-690` | PC 的 `+` 按钮**不接** `disabled`，停止按钮同样不接 disabled |
 | A2-D4-01 | `src/components/ui/BottomSheet.tsx:71-147` | PC **未**新建 `ui/Sheet.tsx`；`BottomSheet` 已具备 web `SheetContent` 的底部形态 + ESC + 滚动锁 + X 关闭 |
-| A2-D4-02 | `src/components/chat/MessageBubble.tsx:457` + `src/routes/ChatDetail.tsx:295` + `src/routes/ChatDetail.tsx:299` | 组件已**挂载**到 assistant 气泡正文上方（对齐 web `MessageBubble.tsx:396-398`）；数据通路在 `ChatDetail.tsx`：`streamingPhases` state + `streamingPhasesRef` 累积（`chunk.reasoning` → `type:"thinking"`、tool 事件 → `type:"tool"`）。⚠️ 此条由并发 worker 的 **M3 批**落地，已随提交 `b29207f` 进入 HEAD |
+| A2-D4-02 | `src/components/chat/MessageBubble.tsx:457` + `src/routes/ChatDetail.tsx:297` + `src/routes/ChatDetail.tsx:301` | 组件已**挂载**到 assistant 气泡正文上方（对齐 web `MessageBubble.tsx:396-398`）；数据通路在 `ChatDetail.tsx`：`streamingPhases` state + `streamingPhasesRef` 累积（`chunk.reasoning` → `type:"thinking"`、tool 事件 → `type:"tool"`）。⚠️ 此条由并发 worker 的 **M3 批**落地，已随提交 `b29207f` 进入 HEAD |
 | A2-D4-03 | `src/components/chat/MessageBubble.tsx:128-129` + `src/components/chat/MessageBubble.tsx:325` | 反色 class 已抄 web `MessageBubble.tsx:340-342`，并用 `!` 前缀压过 `globals.css` 末尾 M2 段未分层的 `.md-inline-code` / `.md-code-run` / `.md-link` 规则。⚠️ M3 批已随提交 `b29207f` 进入 HEAD |
 | A2-D4-04 | `src/components/chat/MessageBubble.tsx:326` + `src/components/chat/MessageBubble.tsx:323` | user 气泡正文已改走 `<Markdown>`；外层同时去掉 `whitespace-pre-wrap`（段落间距交回 `.md-para`）。⚠️ M3 批已随提交 `b29207f` 进入 HEAD |
-| A2-D4-05 | `src/routes/ChatDetail.tsx:754` + `src/components/chat/MessageMenu.tsx:96` | — |
-| A2-D4-06 | `src/components/chat/MessageBubble.tsx:407` + `src/components/chat/MessageBubble.tsx:87` + `src/routes/ChatDetail.tsx:429` | 工具函数 `stripUrlQuery` / `normalizeUrls` / `stripReferencedImageUrls` 已抄 web `MessageBubble.tsx:141-198`（剥 `![alt](URL)` / `[text](URL)` / 裸 URL 三形态，URL 比较先剥 `?exp=…&sig=…`）；父层 `ChatDetail.tsx` 算 `userImageUrls` 并集并下传给 `MessageList` → `MessageBubble`。⚠️ M3 批已随提交 `b29207f` 进入 HEAD |
+| A2-D4-05 | `src/routes/ChatDetail.tsx:756` + `src/components/chat/MessageMenu.tsx:96` | — |
+| A2-D4-06 | `src/components/chat/MessageBubble.tsx:407` + `src/components/chat/MessageBubble.tsx:87` + `src/routes/ChatDetail.tsx:431` | 工具函数 `stripUrlQuery` / `normalizeUrls` / `stripReferencedImageUrls` 已抄 web `MessageBubble.tsx:141-198`（剥 `![alt](URL)` / `[text](URL)` / 裸 URL 三形态，URL 比较先剥 `?exp=…&sig=…`）；父层 `ChatDetail.tsx` 算 `userImageUrls` 并集并下传给 `MessageList` → `MessageBubble`。⚠️ M3 批已随提交 `b29207f` 进入 HEAD |
 
 **A3 · 29 条**
 
@@ -6152,15 +6152,17 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 
 ---
 
-### 12.4 本次核实新发现的残余微差（**待 PM 拍板 / 需知悉，本轮未擅自改口径**）
+### 12.4 本次核实新发现的残余微差（**口径已定稿 · ①~⑤ 为用户可感知的视觉差异，待 gaga 勾选是否补齐**）
+
+> **口径说明**：①~⑤ 都是**用户肉眼能看出来的视觉差异**（分隔线 / 图标配色 / 面板高度 / 按钮间距 / 列数），按「行为等价」口径判为「已一致」；按 gaga「最细颗粒度、1:1 还原 web」的要求，这 5 条**是否补齐待 gaga 勾选**（已随收尾报告报出）。⑥⑦ 属结构等价 / 文案语义等价（`Drawer` = 侧边栏、`sticky top-0` 因 PC 滚动容器不同而结构等价），**不补**。
 
 | # | 相关条目 | 残余差 | 现状处理 |
 |---|---|---|---|
-| ① | A2-D2-04 | PC `ui/DropdownMenu.tsx` 的 `DropdownMenuItem` **无 separator 字段**，web 的 Header ⋮ 菜单在「重命名 / 删除会话」之间有 `DropdownMenuSeparator` | 判定改「已一致」（**项数**已一致：2 项），分隔线要不要补 → PM 拍 |
-| ② | A5-D3-02 | 类型 tab + 搜索框已齐；但 PC 的类型图标（`Glyphs.tsx` 的 `ImageTypeIcon` / `DocTypeIcon` / `LinkTypeIcon` / `TextTypeIcon`）**不设颜色类**，继承 `currentColor`；web 分别用 `text-brand-cyan` / `text-brand` / `text-cron` / `text-fg-muted` | 主体判定改「已一致」，图标配色要不要补 → PM 拍 |
-| ③ | A2-OK-16 | web 三个 sheet 最大高各不相同（EmojiPicker `max-h-[70vh]` / LibraryPicker `max-h-[80vh]` / 通用 `sheet.tsx` `max-h-[85vh]`），PC `BottomSheet` 只有单一 `max-h-[85vh]` base | 已按 `BottomSheet` base 记「已一致」；要不要 per-call-site 覆盖 → PM 拍 |
-| ④ | A1-D2-05 / A1-D2-06 | PC `Button` base 比 web 多 `gap-2` + `duration-150`（**超集**，不改 web 已有视觉）；PC variant 名 `danger` ↔ web `destructive` | 已按「等价 / 超集」记「已一致」；要不要改名 → PM 拍 |
-| ⑤ | A2-D1-30 | PC 的 `+` 附件 Sheet 是 **6 项**（web 4 项），列数保持 3（web `grid-cols-4`） | 已按「PC 6 项 ⇒ 3 列」记「已一致」；要不要对齐 4 列 → PM 拍 |
+| ① | A2-D2-04 | PC `ui/DropdownMenu.tsx` 的 `DropdownMenuItem` **无 separator 字段**，web 的 Header ⋮ 菜单在「重命名 / 删除会话」之间有 `DropdownMenuSeparator` | 判定改「已一致」（**项数**已一致：2 项），分隔线要不要补 → **待 gaga 勾选**（用户可感知的视觉差异） |
+| ② | A5-D3-02 | 类型 tab + 搜索框已齐；但 PC 的类型图标（`Glyphs.tsx` 的 `ImageTypeIcon` / `DocTypeIcon` / `LinkTypeIcon` / `TextTypeIcon`）**不设颜色类**，继承 `currentColor`；web 分别用 `text-brand-cyan` / `text-brand` / `text-cron` / `text-fg-muted` | 主体判定改「已一致」，图标配色要不要补 → **待 gaga 勾选**（用户可感知的视觉差异） |
+| ③ | A2-OK-16 | web 三个 sheet 最大高各不相同（EmojiPicker `max-h-[70vh]` / LibraryPicker `max-h-[80vh]` / 通用 `sheet.tsx` `max-h-[85vh]`），PC `BottomSheet` 只有单一 `max-h-[85vh]` base | 已按 `BottomSheet` base 记「已一致」；要不要 per-call-site 覆盖 → **待 gaga 勾选**（用户可感知的视觉差异） |
+| ④ | A1-D2-05 / A1-D2-06 | PC `Button` base 比 web 多 `gap-2` + `duration-150`（**超集**，不改 web 已有视觉）；PC variant 名 `danger` ↔ web `destructive` | 已按「等价 / 超集」记「已一致」；要不要改名 → **待 gaga 勾选**（用户可感知的视觉差异） |
+| ⑤ | A2-D1-30 | PC 的 `+` 附件 Sheet 是 **6 项**（web 4 项），列数保持 3（web `grid-cols-4`） | 已按「PC 6 项 ⇒ 3 列」记「已一致」；要不要对齐 4 列 → **待 gaga 勾选**（用户可感知的视觉差异） |
 | ⑥ | A1-D1-17 | web 多选栏 `sticky top-14`（贴在全局 header 之下），PC `sticky top-0`（PC 的 main 自身是滚动容器、header 在 main 之外不重叠） | 已按「结构等价」记「已一致」 |
 | ⑦ | A2-D2-05 | web 文案「影响 **Drawer** 列表和顶部标题显示。」vs PC「影响**侧边栏**列表和顶部标题显示。」 | 已按「语义等价（Drawer = 侧边栏）」记「已一致」 |
 | ⑧ | **A2-D4-02 / A2-D4-03 / A2-D4-04 / A2-D4-06** | 这 4 条在**本次快照时刻**已由**并发 worker 的 M3 批**落地并**随提交 `b29207f`（markdown 全栈自研接线）进入 HEAD**：`ExecutionTimeline` 已挂载到 assistant 气泡 + `ChatDetail.tsx` 有 `streamingPhases` 数据通路；user 气泡已走 `<Markdown>` + 反色 wrapper class；`stripReferencedImageUrls` 已抄进 PC 且父层已算 `userImageUrls` 下传 | 判定已改「已一致（M3 批已提交）」。**若 `b29207f` 被回退 / 改判，这 4 条要重新打回「缺失 / 形态不同」** —— 本轮不擅自拍板 |
@@ -6174,10 +6176,10 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 3. **自洽校验**：1 + 0 + 173 + 5 + 0 = **179** ✓；逐条解析正文 `| 判定 | … |` 行（**只统计 179 个条目块内的行**，`结构级差异 · 需 gaga 拍` 的 S-01~S-08 与「改动量汇总」表自身的 `| 判定 |` 行不计入）的归并结果与上表**完全一致**，无未归类判定值。
 4. **档位分布不变**：D1 92 / D2 52 / D3 25 / D4 10 = 179 ✓（档位 = 条目所在小节，判定改成「已一致」的条目仍留在原小节，便于回溯）。
 5. **PC `file:line` 全量刷新**：179 条的 PC 侧行号按内容锚点重抓（脚本现场抓取，代码块与行号同源）；web 侧行号未动。
-6. **Top10 重排**：由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条里 8 条已落地 → 整表重排（见上）。
+6. **Top10 重排**：由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条里 **9 条**已落地 → 整表重排（见上）。
 7. **PC 多出项按口径保留**：A2-D2-12 / A2-D2-13 / A2-D2-14 / A4-D3-01 原判定已是「PC 多出」，保留；**A3-D1-06**（侧栏 active 高亮，web 的 `DrawerNavItem` 无 active 分支）原被误记为「形态不同」，本次按五桶口径归入「PC 多出」—— **不是改口径，是把已有口径落到正确的桶**。
 8. **条目标题中性化**：初稿标题写的是「PC 现状 vs web 目标」的差异陈述（如「空态描述文案缺失」「PC `Button` base 与 web 不一致」），判定回写后会与「已一致」自相矛盾 ⇒ 已把 163 条标题改成**中性检查项**（只写「比什么」，不断言 PC 当前状态），并在头部加了「标题口径」说明；**条目 ID / 条数 / 分档全部不变**。
-9. **M3 批口径更新**：并发 worker 的 M3 批（markdown 全栈自研接线）已随提交 `b29207f` 进入 HEAD，工作区 `src/` 干净（无未提交改动） ⇒ A2-D4-02 / 03 / 04 / 06 的判定后缀由「M3 批在途 · 工作区未提交」改为「**M3 批已提交**」（§12.4 ⑧ 同步更新）。
+9. **M3 批口径更新**：并发 worker 的 M3 批（markdown 全栈自研接线）已随提交 `b29207f` 进入 HEAD，工作区 `src/` 另有未提交改动（本快照已一并计入） ⇒ A2-D4-02 / 03 / 04 / 06 的判定后缀由「M3 批在途 · 工作区未提交」改为「**M3 批已提交**」（§12.4 ⑧ 同步更新）。
 
 ## 附：本次文档修正的复算记录
 
@@ -6186,7 +6188,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 3. **自洽校验**：1 + 0 + 173 + 5 + 0 = **179** = 条目总数 ✓。
 4. **档位分布不变**：D1 92 / D2 52 / D3 25 / D4 10 = 179 ✓（档位 = 条目所在小节，判定改成「已一致」的条目仍留在原小节）。
 5. **PC `file:line` 全量刷新**：179 条的 PC 侧行号按内容锚点重抓；web 侧行号未动。
-6. **改动量 Top10 已重排**：口径由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条中 8 条已落地 → 整表重排（见上表）。
+6. **改动量 Top10 已重排**：口径由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条中 **9 条**已落地 → 整表重排（见上表）。
 7. **条目标题中性化**：163 条标题由「PC 现状 vs web 目标」的差异陈述改为中性检查项，避免与新判定自相矛盾；ID / 条数 / 分档不变（详见 §十二.5 第 8 条）。
 8. **M3 批已提交**：`b29207f`（markdown 全栈自研接线）已进 HEAD ⇒ A2-D4-02 / 03 / 04 / 06 的判定后缀改为「M3 批已提交」（§12.4 ⑧）。
 
