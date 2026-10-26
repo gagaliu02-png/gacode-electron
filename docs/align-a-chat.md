@@ -8,9 +8,11 @@
 > **不列入**：PC 有、web 没有的功能（gaga 指示：先 1:1 还原 web，不讨论 PC 增强）
 > **PC 端 className 约束**：PC 仓无 tailwind-merge / clsx / cva，`className` 是数组尾部字符串追加 → 同名冲突类由 CSS 源码顺序决定，需显式处理（例：`rounded-full` 输给 base `rounded-md` → 写 `!rounded-full`）
 > **web 端 cn 语义**：`cn = twMerge(clsx(...))`（`src/lib/utils.ts:4-6`）→ 本清单给出的 className 均为 **twMerge 后最终生效串**
-> **PC `file:line` 口径（2026-10-26 修正）**：本清单的 PC 行号取 **2026-10-26 实现批工作区快照**（该批改动当时尚未提交）。同仓有其它 worker 并行改 `src/**`，行号会继续漂移 ⇒ **定位以「锚点函数名 / 代码串」为准**，行号仅作参考。2026-10-26 本轮修正的 11 条（见 §十二）已逐条核对过行号与锚点一致。
+> **PC `file:line` 口径（2026-10-26 修正）**：本清单的 PC 行号取 **2026-10-26 实现批快照**（该批改动现已进入 HEAD）。同仓有其它 worker 并行改 `src/**`，行号会继续漂移 ⇒ **定位以「锚点函数名 / 代码串」为准**，行号仅作参考。
+> **本轮全量核实（179/179 条）快照时刻**：`gacode-electron` HEAD = `eadf42868eed53181543e2ccdecb0d2f3105b19f`（2026-10-26 20:30 (GMT+8)）；`src/` 工作区**干净（无未提交改动）**。该时刻 179 条的判定 + PC 行号已**逐条按内容锚点重抓**（正文每条的「当前 PC 源码」代码块 = 锚点现场抓取结果，代码块与行号同源自洽）；**web 侧行号未动**。详见 §十二。
 
 > **标题口径（2026-10-26 补充）**：条目标题已统一改成**中性检查项**（只写「比什么」，不再断言 PC 当前是什么状态）。**当前真实状态一律以该条的「判定」列 + 「当前 PC 源码」代码块 + §十二 为准**；标题里出现的 className / 文案是 web 侧口径（web 是真相源，本轮未改）。
+
 ---
 
 ## 目录
@@ -21,7 +23,7 @@
 - [A4 · 对话项组件](#a4--对话项组件) — web `src/components/chat/ChatItem.tsx` ↔ PC `AppShell.tsx` 内部
 - [A5 · 聊天子组件](#a5--聊天子组件) — 气泡 / 列表 / 输入条 / 表情 / 资料库 / 附件 / 审批 / 执行时间线 / 流式错误 / Sheet 动作菜单
 - [结构级差异 · 需 gaga 拍](#结构级差异--需-gaga-拍)
-- [十二、实现回改清单（2026-10-26 实现批回写）](#十二实现回改清单2026-10-26-实现批回写) — 本轮实现批已落地条目 + 7 处文档修正说明
+- [十二、全量核实回写（2026-10-26）](#十二全量核实回写2026-10-26) — 179 条逐条读源码核实 + 已落地清单（173 条）+ 剩余未落地（1 条）+ 待 PM 拍板残余微差
 
 ---
 
@@ -1888,23 +1890,23 @@ function resolveTitle(pathname: string): string {
 
 | # | 项 | web | PC | 说明 |
 |---|---|---|---|---|
-| A1-OK-01 | 长按 500ms 触发多选 | `page.tsx:52` `LONG_PRESS_MS = 500` | `ChatList.tsx:499` `}, 500);` | 时长一致 |
-| A1-OK-02 | 长按用 mouse/touch 事件（非 pointer） | `page.tsx:421-426` | `ChatList.tsx:513-518` | 事件集一致（mousedown/mouseup/mouseleave/touchstart/touchend/touchcancel） |
-| A1-OK-03 | 长按触发后屏蔽随后的 click | `page.tsx:408-411`（`triggeredRef`） | `ChatList.tsx:519-521`（`triggeredRef`） | 一致 |
-| A1-OK-04 | 多选模式下点击项 = toggle 而非跳转 | `page.tsx:167-173` | `ChatList.tsx:309-315` | 一致 |
-| A1-OK-05 | 多选模式下隐藏 ⋮ 菜单 | `page.tsx:454` | `ChatList.tsx:557` | 一致 |
-| A1-OK-06 | 标题为空回退「新对话」 | `page.tsx:448` | `ChatList.tsx:551` | 一致 |
-| A1-OK-07 | 重命名 Input `maxLength={120}` | `page.tsx:335` | `ChatList.tsx:453` | 一致 |
-| A1-OK-08 | 重命名 Input `autoFocus` | `page.tsx:334` | `ChatList.tsx:476` | 一致 |
-| A1-OK-09 | 重命名 Input 回车提交 | `page.tsx:327-332` | `ChatList.tsx:431-440` | 一致（PC 少了 `e.preventDefault()`，无表单 → 行为等价） |
-| A1-OK-10 | 重命名 toast「已重命名」 | `page.tsx:132` | `ChatList.tsx:131` | 文案一致 |
-| A1-OK-11 | 批量删除成功 toast「已删除 N 条对话」 | `page.tsx:101` | `ChatList.tsx:106` | 文案一致 |
-| A1-OK-12 | 创建成功后 invalidate `["chats"]` + 跳详情 | `page.tsx:84-87` | `ChatList.tsx:81-87` | 一致（PC 多一步 `scheduleAutoTitle`，属 PC 增强，不在本清单） |
-| A1-OK-13 | 长按后进入多选时同时选中该项 | `page.tsx:175-179`（`enterMultiSelect(chatId)`） | `ChatList.tsx:316-322`（`next.add(c.id)`） | 行为一致 |
+| A1-OK-01 | 长按 500ms 触发多选 | `page.tsx:52` `LONG_PRESS_MS = 500` | `ChatList.tsx:595` `}, 500);` | 时长一致 |
+| A1-OK-02 | 长按用 mouse/touch 事件（非 pointer） | `page.tsx:421-426` | `ChatList.tsx:609-614` | 事件集一致（mousedown/mouseup/mouseleave/touchstart/touchend/touchcancel） |
+| A1-OK-03 | 长按触发后屏蔽随后的 click | `page.tsx:408-411`（`triggeredRef`） | `ChatList.tsx:588`（`triggeredRef`） | 一致 |
+| A1-OK-04 | 多选模式下点击项 = toggle 而非跳转 | `page.tsx:167-173` | `ChatList.tsx:415` | 一致 |
+| A1-OK-05 | 多选模式下隐藏 ⋮ 菜单 | `page.tsx:454` | `ChatList.tsx:653` | 一致 |
+| A1-OK-06 | 标题为空回退「新对话」 | `page.tsx:448` | `ChatList.tsx:647` | 一致 |
+| A1-OK-07 | 重命名 Input `maxLength={120}` | `page.tsx:335` | `ChatList.tsx:529` | 一致 |
+| A1-OK-08 | 重命名 Input `autoFocus` | `page.tsx:334` | `ChatList.tsx:529` | 一致 |
+| A1-OK-09 | 重命名 Input 回车提交 | `page.tsx:327-332` | `ChatList.tsx:532-537` | 一致（PC 少了 `e.preventDefault()`，无表单 → 行为等价） |
+| A1-OK-10 | 重命名 toast「已重命名」 | `page.tsx:132` | `ChatList.tsx:150` | 文案一致 |
+| A1-OK-11 | 批量删除成功 toast「已删除 N 条对话」 | `page.tsx:101` | `ChatList.tsx:125` | 文案一致 |
+| A1-OK-12 | 创建成功后 invalidate `["chats"]` + 跳详情 | `page.tsx:84-87` | `ChatList.tsx:98-100` | 一致（PC 多一步 `scheduleAutoTitle`，属 PC 增强，不在本清单） |
+| A1-OK-13 | 长按后进入多选时同时选中该项 | `page.tsx:175-179`（`enterMultiSelect(chatId)`） | `ChatList.tsx:423`（`next.add(c.id)`） | 行为一致 |
 | A1-OK-14 | 删除按钮文案「删除 (N)」 | `page.tsx:221` | `ChatList.tsx:375` | 一致 |
-| A1-OK-15 | 全选/清空按钮文案切换 | `page.tsx:209` | `ChatList.tsx:367` | 一致 |
-| A1-OK-16 | 列表行 `data-chat-id` 之外的无障碍标签 `aria-label="对话操作"` | `page.tsx:468` | `ChatList.tsx:561` | 一致 |
-| A1-OK-17 | 删除 mutation 成功后 `invalidateQueries(["chats"])` | `page.tsx:104` | `ChatList.tsx:104` | 一致 |
+| A1-OK-15 | 全选/清空按钮文案切换 | `page.tsx:209` | `ChatList.tsx:365` | 一致 |
+| A1-OK-16 | 列表行 `data-chat-id` 之外的无障碍标签 `aria-label="对话操作"` | `page.tsx:468` | `ChatList.tsx:657` | 一致 |
+| A1-OK-17 | 删除 mutation 成功后 `invalidateQueries(["chats"])` | `page.tsx:104` | `ChatList.tsx:122` | 一致 |
 
 ---
 
@@ -3770,7 +3772,7 @@ chatInputRef.current?.insertText(markerText);
 | 项 | 值 |
 |---|---|
 | web | `src/app/(main)/chat/[id]/page.tsx:1025-1032` |
-| PC | `src/components/chat/MessageMenu.tsx:63-75` |
+| PC | `src/components/chat/MessageMenu.tsx:63` |
 | 判定 | 已一致 |
 
 **说明**：web `canRecallFor` 每次 render 用 `Date.now()` 重算；PC `canRecallMessage(messageId, createdAt, recalledOrDeleted)` 默认 `now = Date.now()` → 语义一致。**改动量**：0 行
@@ -4062,7 +4064,7 @@ export function BottomSheet({
 |---|---|
 | web | `src/components/chat/ExecutionTimeline.tsx:1-159` |
 | PC | `src/components/chat/MessageBubble.tsx:457` + `src/routes/ChatDetail.tsx:295` + `src/routes/ChatDetail.tsx:299` |
-| 判定 | 已一致（M3 批在途 · 工作区未提交） |
+| 判定 | 已一致（M3 批已提交） |
 
 **web 源码（折叠头）**
 ```tsx
@@ -4096,7 +4098,7 @@ const summary =
 
 **怎么改**
 - 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
-- 备注：组件已**挂载**到 assistant 气泡正文上方（对齐 web `MessageBubble.tsx:396-398`）；数据通路在 `ChatDetail.tsx`：`streamingPhases` state + `streamingPhasesRef` 累积（`chunk.reasoning` → `type:"thinking"`、tool 事件 → `type:"tool"`）。⚠️ 此条由并发 worker 的 **M3 批**在**工作区未提交**状态下落地
+- 备注：组件已**挂载**到 assistant 气泡正文上方（对齐 web `MessageBubble.tsx:396-398`）；数据通路在 `ChatDetail.tsx`：`streamingPhases` state + `streamingPhasesRef` 累积（`chunk.reasoning` → `type:"thinking"`、tool 事件 → `type:"tool"`）。⚠️ 此条由并发 worker 的 **M3 批**落地，已随提交 `b29207f` 进入 HEAD
 
 ---
 
@@ -4105,7 +4107,7 @@ const summary =
 |---|---|
 | web | `src/components/chat/MessageBubble.tsx:340-342` |
 | PC | `src/components/chat/MessageBubble.tsx:128-129` + `src/components/chat/MessageBubble.tsx:325` |
-| 判定 | 已一致（M3 批在途 · 工作区未提交） |
+| 判定 | 已一致（M3 批已提交） |
 
 **web 源码**
 ```tsx
@@ -4130,7 +4132,7 @@ const USER_MARKDOWN_WRAPPER_CLASS =
 
 **怎么改**
 - 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
-- 备注：反色 class 已抄 web `MessageBubble.tsx:340-342`，并用 `!` 前缀压过 `globals.css` 末尾 M2 段未分层的 `.md-inline-code` / `.md-code-run` / `.md-link` 规则。⚠️ M3 批在工作区未提交状态下落地
+- 备注：反色 class 已抄 web `MessageBubble.tsx:340-342`，并用 `!` 前缀压过 `globals.css` 末尾 M2 段未分层的 `.md-inline-code` / `.md-code-run` / `.md-link` 规则。⚠️ M3 批已随提交 `b29207f` 进入 HEAD
 
 ---
 
@@ -4139,7 +4141,7 @@ const USER_MARKDOWN_WRAPPER_CLASS =
 |---|---|
 | web | `src/components/chat/MessageBubble.tsx:401-405` |
 | PC | `src/components/chat/MessageBubble.tsx:326` + `src/components/chat/MessageBubble.tsx:323` |
-| 判定 | 已一致（M3 批在途 · 工作区未提交） |
+| 判定 | 已一致（M3 批已提交） |
 
 **web 源码**
 ```tsx
@@ -4158,7 +4160,7 @@ const USER_MARKDOWN_WRAPPER_CLASS =
 
 **怎么改**
 - 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
-- 备注：user 气泡正文已改走 `<Markdown>`；外层同时去掉 `whitespace-pre-wrap`（段落间距交回 `.md-para`）。⚠️ M3 批在工作区未提交状态下落地
+- 备注：user 气泡正文已改走 `<Markdown>`；外层同时去掉 `whitespace-pre-wrap`（段落间距交回 `.md-para`）。⚠️ M3 批已随提交 `b29207f` 进入 HEAD
 
 ---
 
@@ -4187,7 +4189,7 @@ const USER_MARKDOWN_WRAPPER_CLASS =
 |---|---|
 | web | `src/components/chat/MessageBubble.tsx:164-198` + `:311-333` |
 | PC | `src/components/chat/MessageBubble.tsx:407` + `src/components/chat/MessageBubble.tsx:87` + `src/routes/ChatDetail.tsx:429` |
-| 判定 | 已一致（M3 批在途 · 工作区未提交） |
+| 判定 | 已一致（M3 批已提交） |
 
 **web 源码**
 ```tsx
@@ -4206,7 +4208,7 @@ const markdownContent = isUser
 
 **怎么改**
 - 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
-- 备注：工具函数 `stripUrlQuery` / `normalizeUrls` / `stripReferencedImageUrls` 已抄 web `MessageBubble.tsx:141-198`（剥 `![alt](URL)` / `[text](URL)` / 裸 URL 三形态，URL 比较先剥 `?exp=…&sig=…`）；父层 `ChatDetail.tsx` 算 `userImageUrls` 并集并下传给 `MessageList` → `MessageBubble`。⚠️ M3 批在工作区未提交状态下落地
+- 备注：工具函数 `stripUrlQuery` / `normalizeUrls` / `stripReferencedImageUrls` 已抄 web `MessageBubble.tsx:141-198`（剥 `![alt](URL)` / `[text](URL)` / 裸 URL 三形态，URL 比较先剥 `?exp=…&sig=…`）；父层 `ChatDetail.tsx` 算 `userImageUrls` 并集并下传给 `MessageList` → `MessageBubble`。⚠️ M3 批已随提交 `b29207f` 进入 HEAD
 
 ---
 
@@ -4214,23 +4216,23 @@ const markdownContent = isUser
 
 | # | 项 | web | PC | 说明 |
 |---|---|---|---|---|
-| A2-OK-01 | 页面根容器 `flex flex-col h-full` | `page.tsx:1204` | `ChatDetail.tsx:1025` | 一致（PC 多 `bg-bg-base`） |
-| A2-OK-02 | 停止按钮 `aria-label="停止生成"` | `ChatInputBar.tsx:134` | `ChatInputBar.tsx:620` | 一致 |
-| A2-OK-03 | 发送按钮 `aria-label="发送"` | `ChatInputBar.tsx:147` | `ChatInputBar.tsx:640`（PC 是「发送消息」）→ 文案差 2 字，见 A2-D1-05 同批改 |
-| A2-OK-04 | textarea `max-h-32` | `ChatInputBar.tsx:116` | `ChatInputBar.tsx:584` | 一致 |
-| A2-OK-05 | 附件 chip 文件名 `truncate max-w-[180px]` | `AttachmentChip.tsx:83` | `AttachmentChip.tsx:82` | 一致 |
-| A2-OK-06 | 附件 chip 类型角标 `text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-sunken text-fg-muted tracking-wide` | `AttachmentChip.tsx:76` | `AttachmentChip.tsx:74` | 逐字一致 |
-| A2-OK-07 | 附件 chip X 按钮 `w-6 h-6 rounded-full` | `AttachmentChip.tsx:92` | `AttachmentChip.tsx:93` | 逐字一致 |
-| A2-OK-08 | 附件 chip 缩略图 `w-8 h-8 rounded object-cover shrink-0` | `AttachmentChip.tsx:65` | `AttachmentChip.tsx:60` | 逐字一致 |
+| A2-OK-01 | 页面根容器 `flex flex-col h-full` | `page.tsx:1204` | `ChatDetail.tsx:1177` | 一致（PC 多 `bg-bg-base`） |
+| A2-OK-02 | 停止按钮 `aria-label="停止生成"` | `ChatInputBar.tsx:134` | `ChatInputBar.tsx:742` | 一致 |
+| A2-OK-03 | 发送按钮 `aria-label="发送"` | `ChatInputBar.tsx:147` | `ChatInputBar.tsx:762`（PC 已改成「发送」，与 web 一致） |
+| A2-OK-04 | textarea `max-h-32` | `ChatInputBar.tsx:116` | `ChatInputBar.tsx:706` | 一致 |
+| A2-OK-05 | 附件 chip 文件名 `truncate max-w-[180px]` | `AttachmentChip.tsx:83` | `AttachmentChip.tsx:8` | 一致 |
+| A2-OK-06 | 附件 chip 类型角标 `text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-sunken text-fg-muted tracking-wide` | `AttachmentChip.tsx:76` | `AttachmentChip.tsx:77` | 逐字一致 |
+| A2-OK-07 | 附件 chip X 按钮 `w-6 h-6 rounded-full` | `AttachmentChip.tsx:92` | `AttachmentChip.tsx:9` | 逐字一致 |
+| A2-OK-08 | 附件 chip 缩略图 `w-8 h-8 rounded object-cover shrink-0` | `AttachmentChip.tsx:65` | `AttachmentChip.tsx:63` | 逐字一致 |
 | A2-OK-09 | 消息 ⋮ 按钮 `w-7 h-7 rounded-full` | `MessageBubble.tsx:548` | `MessageMenu.tsx:253` | 逐字一致 |
 | A2-OK-10 | 撤回窗口常量 120000ms | `MessageBubble.tsx:54` | `MessageMenu.tsx:37` | 一致 |
 | A2-OK-11 | 撤回菜单 disabled 文案 | `MessageBubble.tsx:562` | `MessageMenu.tsx:233` | 一致 |
-| A2-OK-12 | 保存知识库 fallback：截断 30 字 + `tags:["from-chat"]` | `page.tsx:962-969` | `MessageMenu.tsx:154-164` | 一致 |
-| A2-OK-13 | 表情网格 `grid grid-cols-8 gap-1` + 按钮 `w-10 h-10 rounded-md text-2xl` | `EmojiPicker.tsx:181,191` | `home/EmojiPicker.tsx:167,174` | 一致 |
-| A2-OK-14 | 表情分类 tab `px-3 py-1 rounded-full text-xs` | `EmojiPicker.tsx:161` | `home/EmojiPicker.tsx:146` | 一致 |
-| A2-OK-15 | 表情选中空态「没有匹配的表情」 | `EmojiPicker.tsx:177-179` | `home/EmojiPicker.tsx:163-165` | 一致 |
-| A2-OK-16 | 表情面板 `max-h-[70vh]` / PC `BottomSheet` `max-h-[80vh]` | `EmojiPicker.tsx:133` | `BottomSheet.tsx:49` | 差 10vh → 见 A2-D3-05 |
-| A2-OK-17 | 流式期间 textarea 禁用 | `ChatInputBar.tsx:112` `disabled={disabled}` ← `ChatInput.tsx:73` ← `page.tsx:1352` `disabled={isSending}` | `ChatInputBar.tsx:583` `disabled={isStreaming}` | 一致（两侧流式中输入框均不可打字；web `ChatInputBar.tsx:71-73` 的「Enter 触发 onAbort」分支因 textarea 被禁用而实际不可达，PC 亦无此路径 → 无行为差异） |
+| A2-OK-12 | 保存知识库 fallback：截断 30 字 + `tags:["from-chat"]` | `page.tsx:962-969` | `MessageMenu.tsx:158-164` | 一致 |
+| A2-OK-13 | 表情网格 `grid grid-cols-8 gap-1` + 按钮 `w-10 h-10 rounded-md text-2xl` | `EmojiPicker.tsx:181,191` | `home/EmojiPicker.tsx:170,183` | 一致 |
+| A2-OK-14 | 表情分类 tab `px-3 py-1 rounded-full text-xs` | `EmojiPicker.tsx:161` | `home/EmojiPicker.tsx:149` | 一致 |
+| A2-OK-15 | 表情选中空态「没有匹配的表情」 | `EmojiPicker.tsx:177-179` | `home/EmojiPicker.tsx:167` | 一致 |
+| A2-OK-16 | 表情面板最大高：web `max-h-[70vh]` / PC `BottomSheet` base `max-h-[85vh]` | `EmojiPicker.tsx:133` | `BottomSheet.tsx:29` | PC 已是 web `sheet.tsx` 的 `85vh`；web 三个 sheet 各不相同（70/80/85vh）⇒ 残余差见 §十二.4 ③ |
+| A2-OK-17 | 流式期间 textarea 禁用 | `ChatInputBar.tsx:112` `disabled={disabled}` ← `ChatInput.tsx:73` ← `page.tsx:1352` `disabled={isSending}` | `ChatInputBar.tsx:705` `disabled={isStreaming || disabled}` | 一致（两侧流式中输入框均不可打字；web `ChatInputBar.tsx:71-73` 的「Enter 触发 onAbort」分支因 textarea 被禁用而实际不可达，PC 亦无此路径 → 无行为差异） |
 
 ---
 
@@ -5175,15 +5177,15 @@ const togglePin = async (chatId: string) => {
 
 | # | 项 | web | PC | 说明 |
 |---|---|---|---|---|
-| A3-OK-01 | 侧栏宽度 | `Drawer.tsx:172` `w-80` | `AppShell.tsx:28` `w-64` | **按 gaga 拍板保留 PC 256px 常驻侧栏**，不改成 w-80；此项记为「已拍板保留」，不列入结构级差异 |
-| A3-OK-02 | 顶栏 brand 文字 `flex-1 font-medium truncate` | `Drawer.tsx:188` | `AppShell.tsx:189` | 逐字一致 |
-| A3-OK-03 | 未读角标 99+ 封顶 | `notifications.ts:495-498` | `AppShell.tsx:199` | 等价 |
-| A3-OK-04 | 「置顶」分组头文案 + 计数 | `Drawer.tsx:242-243` | `AppShell.tsx:421-422` | 一致（`置顶` + 数量） |
-| A3-OK-05 | 「最近」分组头文案 + 计数 | `Drawer.tsx:275-276` | `AppShell.tsx:369-370` | 一致 |
-| A3-OK-06 | 最近默认显示 5 条 | `Drawer.tsx:99` `slice(0, 5)` | `AppShell.tsx:29` `RECENT_DEFAULT_LIMIT = 5` | 一致 |
-| A3-OK-07 | 侧栏「最近」与「置顶」互斥分组 | `Drawer.tsx:97-98` | `AppShell.tsx:132-133` | 一致 |
-| A3-OK-08 | 登出文案「登出」 | `Drawer.tsx:358` | `AppShell.tsx:268` | 一致 |
-| A3-OK-09 | 置顶默认展开 | `Drawer.tsx:55` `useState(true)` | `AppShell.tsx:326` `useState(true)` | 一致 |
+| A3-OK-01 | 侧栏宽度 | `Drawer.tsx:172` `w-80` | `AppShell.tsx:52` `w-64` | **按 gaga 拍板保留 PC 256px 常驻侧栏**，不改成 w-80；此项记为「已拍板保留」，不列入结构级差异 |
+| A3-OK-02 | 顶栏 brand 文字 `flex-1 font-medium truncate` | `Drawer.tsx:188` | `AppShell.tsx:294` | 逐字一致 |
+| A3-OK-03 | 未读角标 99+ 封顶 | `notifications.ts:495-498` | `AppShell.tsx:304` | 等价 |
+| A3-OK-04 | 「置顶」分组头文案 + 计数 | `Drawer.tsx:242-243` | `AppShell.tsx:470` | 一致（`置顶` + 数量） |
+| A3-OK-05 | 「最近」分组头文案 + 计数 | `Drawer.tsx:275-276` | `AppShell.tsx:496` | 一致 |
+| A3-OK-06 | 最近默认显示 5 条 | `Drawer.tsx:99` `slice(0, 5)` | `AppShell.tsx:53` `RECENT_DEFAULT_LIMIT = 5` | 一致 |
+| A3-OK-07 | 侧栏「最近」与「置顶」互斥分组 | `Drawer.tsx:97-98` | `AppShell.tsx:185` | 一致 |
+| A3-OK-08 | 登出文案「登出」 | `Drawer.tsx:358` | `AppShell.tsx:390` | 一致 |
+| A3-OK-09 | 置顶默认展开 | `Drawer.tsx:55` `useState(true)` | `AppShell.tsx:452` `useState(true)` | 一致 |
 
 ---
 
@@ -5540,10 +5542,10 @@ import type { KeyboardEvent } from "react";
 
 | # | 项 | web | PC | 说明 |
 |---|---|---|---|---|
-| A4-OK-01 | 标题为空回退「新对话」 | `ChatItem.tsx:52` | `AppShell.tsx:451` | 一致 |
-| A4-OK-02 | 条目圆角 `rounded-md`（16px） | `ChatItem.tsx:47` | `AppShell.tsx:444` | 一致 |
-| A4-OK-03 | 条目 padding `px-3 py-2` | `ChatItem.tsx:47` | `AppShell.tsx:444` | 一致 |
-| A4-OK-04 | 条目容器 `w-full text-left` | `ChatItem.tsx:47` | `AppShell.tsx:444` | 一致 |
+| A4-OK-01 | 标题为空回退「新对话」 | `ChatItem.tsx:52` | `ChatItem.tsx:79` | 一致 |
+| A4-OK-02 | 条目圆角 `rounded-md`（16px） | `ChatItem.tsx:47` | `ChatItem.tsx:72` | 一致 |
+| A4-OK-03 | 条目 padding `px-3 py-2` | `ChatItem.tsx:47` | `ChatItem.tsx:72` | 一致 |
+| A4-OK-04 | 条目容器 `w-full text-left` | `ChatItem.tsx:47` | `ChatItem.tsx:72` | 一致 |
 
 ---
 
@@ -5553,18 +5555,18 @@ web `src/components/chat/*` ↔ PC `src/components/chat/*`（同名件）+ PC �
 
 | web 组件 | web 行数 | PC 对应 | PC 行数 | 判定 | 关联条目 |
 |---|---|---|---|---|---|
-| `MessageBubble.tsx` | 596 | `src/components/chat/MessageBubble.tsx` | 492 | 形态不同（多处） | A2-D1-10 ~ A2-D1-15、A2-D1-38 ~ A2-D1-40、A2-D4-03 ~ A2-D4-04、A2-D4-06 |
-| `MessageList.tsx` | 103 | `src/components/chat/MessageList.tsx` | 165 | 形态不同 | A2-D1-28、A2-D1-29、A2-D3-07、A2-D3-08 |
-| `ChatInputBar.tsx` | 174 | `src/components/chat/ChatInputBar.tsx` | 752 | 形态不同 | A2-D1-01 ~ A2-D1-09 |
+| `MessageBubble.tsx` | 596 | `src/components/chat/MessageBubble.tsx` | — | 已一致 | A2-D1-10 ~ A2-D1-15、A2-D1-38 ~ A2-D1-40、A2-D4-02 ~ A2-D4-04、A2-D4-06（其中 A2-D4-02/03/04/06 由 M3 批 `b29207f` 落地） |
+| `MessageList.tsx` | 103 | `src/components/chat/MessageList.tsx` | — | 已一致 | A2-D1-28、A2-D3-07、A2-D3-08（A2-D1-29 的加载态在 `ChatDetail.tsx`，已一致） |
+| `ChatInputBar.tsx` | 174 | `src/components/chat/ChatInputBar.tsx` | — | 已一致 | A2-D1-02 ~ A2-D1-09（A2-D1-01 的外层容器在 `ChatDetail.tsx`，已一致） |
 | `ChatInput.tsx`（chat 详情薄壳） | 87 | 无独立文件（内联在 `ChatInputBar`） | — | 已一致（能力等价） | A2-D1-08 |
-| `EmojiPicker.tsx` | 203 | `src/components/home/EmojiPicker.tsx` | 184 | 形态不同 | A2-D1-34 ~ A2-D1-37 |
-| `LibraryPicker.tsx` | 327 | `src/components/home/LibraryPicker.tsx` + `src/components/chat/KnowledgeAttachSheet.tsx` | — | 形态不同（多选 vs 单选） | 见 A5-D3-01 |
-| `AttachmentChip.tsx` | 100 | `src/components/chat/AttachmentChip.tsx` | 145 | 形态不同 | A2-D1-26 |
-| `ApprovalBanner.tsx` | 141 | `src/components/chat/ApprovalBanner.tsx` | 185 | 形态不同 | A2-D1-20 ~ A2-D1-24、A2-D2-08 ~ A2-D2-11 |
-| `ExecutionTimeline.tsx` | 155 | PC 缺失（只有 `ExecutionTiming.tsx`） | 72 | 缺失 | A2-D4-02 |
-| `StreamingErrorBanner.tsx` | 166 | `src/components/chat/StreamingErrorBanner.tsx` | 76 | 形态不同 | A2-D1-15 ~ A2-D1-19 |
-| `SheetActionMenu.tsx` | 97 | `src/components/chat/PlusActionsSheet.tsx` | 248 | 形态不同 | A2-D1-30、A2-D1-31、A2-D3-05、A2-D3-06 |
-| `ChatItem.tsx` | 79 | `src/components/layout/AppShell.tsx` 内联 | — | 形态不同 | A4 全部条目 |
+| `EmojiPicker.tsx` | 203 | `src/components/home/EmojiPicker.tsx` | — | 已一致 | A2-D1-34 ~ A2-D1-37 |
+| `LibraryPicker.tsx` | 327 | `src/components/home/LibraryPicker.tsx` + `src/components/chat/KnowledgeAttachSheet.tsx` | — | 已一致（多选 + 「完成 (N)」+ 类型 tab + 搜索） | A5-D3-01、A5-D3-02 |
+| `AttachmentChip.tsx` | 100 | `src/components/chat/AttachmentChip.tsx` | — | 已一致 | A2-D1-26 |
+| `ApprovalBanner.tsx` | 141 | `src/components/chat/ApprovalBanner.tsx` | — | 已一致 | A2-D1-20 ~ A2-D1-24、A2-D2-08 ~ A2-D2-11（A2-D2-12 是 PC 多出，不列入） |
+| `ExecutionTimeline.tsx` | 155 | `src/components/chat/ExecutionTimeline.tsx`（组件本体已建 **且已挂载**到 assistant 气泡） | — | 已一致（M3 批 `b29207f`） | A2-D4-02 |
+| `StreamingErrorBanner.tsx` | 166 | `src/components/chat/StreamingErrorBanner.tsx` | — | 已一致 | A2-D1-15 ~ A2-D1-19 |
+| `SheetActionMenu.tsx` | 97 | `src/components/chat/PlusActionsSheet.tsx` | — | 已一致（以 `BottomSheet` 承接 web `Sheet`） | A2-D1-30、A2-D1-31、A2-D3-05、A2-D3-06、A2-D4-01 |
+| `ChatItem.tsx` | 79 | `src/components/chat/ChatItem.tsx`（已抽成独立组件，`AppShell.tsx` 两处调用） | — | 已一致 | A4-D1-01 ~ A4-D1-05、A4-D2-01 ~ A4-D2-06、A4-D3-02（A4-D3-01 是 PC 多出，不列入） |
 | `RichEventBubble.tsx` | — | `src/components/chat/RichEventBubble.tsx` | — | **不在本次范围** | — |
 
 ### A5 · D3 档 · 补状态与交互
@@ -5696,7 +5698,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 
 | # | 项 | web | PC | 说明 |
 |---|---|---|---|---|
-| A5-OK-01 | 表情数据 60 个 + 3 分类 | `EmojiPicker.tsx:30-99` | `home/EmojiPicker.tsx:26-92` | 逐条一致 |
+| A5-OK-01 | 表情数据 60 个 + 3 分类 | `EmojiPicker.tsx:30-99` | `home/EmojiPicker.tsx:27-90` | 逐条一致 |
 | A5-OK-02 | 表情搜索命中规则（keywords + emoji 本身） | `EmojiPicker.tsx:113-121` | `home/EmojiPicker.tsx:109-117` | 一致 |
 | A5-OK-13 | 附件 chip 扩展名解析（无点 → `?`，最多 4 字符） | `AttachmentChip.tsx:37-41` | `AttachmentChip.tsx:30-34` | 一致 |
 
@@ -5712,7 +5714,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:248-315`（`AlertDialog`） |
-| PC | `src/routes/ChatDetail.tsx:1195-1238`（`ConfirmDialog`） |
+| PC | `src/routes/ChatDetail.tsx:1396` / `:1413`（`ConfirmDialog`） |
 | 判定 | 形态不同 |
 
 **改造影响面**
@@ -5727,7 +5729,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/app/(main)/chat/page.tsx:279-310`、`:314-358`（`Sheet side="bottom"`） |
-| PC | `src/routes/ChatList.tsx:381-443`（`ConfirmDialog`） |
+| PC | `src/routes/ChatList.tsx:450` / `:494`（**已改用 `BottomSheet`**，与 web `Sheet side="bottom"` 对齐；单条删除仍走 `ConfirmDialog`，属 PC 多出） |
 | 判定 | 形态不同 |
 
 **改造影响面**
@@ -5742,7 +5744,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:62` + `(main)/layout.tsx`（挂载点） |
-| PC | `src/components/layout/AppShell.tsx:121-123`（`showHeader` 条件）+ `ChatDetail.tsx:1027`（chat 详情自管 header） |
+| PC | `src/components/layout/AppShell.tsx:156`（`showHeader` 条件）+ `src/routes/ChatDetail.tsx:1180`（chat 详情自管 header） |
 | 判定 | 形态不同 |
 
 **改造影响面**
@@ -5759,10 +5761,15 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/components/ui/sheet.tsx:1-176`（`Sheet` / `SheetContent` / `SheetHeader` / `SheetTitle` / `SheetDescription` / `SheetFooter`） |
-| PC | PC 缺失（只有 `src/components/ui/BottomSheet.tsx`，形态不同） |
-| 判定 | 缺失 |
+| PC | `src/components/ui/BottomSheet.tsx:71`（**等价承接** web `Sheet` / `SheetContent`：底部形态 + ESC + 滚动锁 + X 关闭） |
+| 判定 | 已一致（以 `BottomSheet` 承接 web `Sheet`；**未**新建 `ui/Sheet.tsx`） |
 
-**改造影响面**
+**现状（2026-10-26 全量核实）**
+- PC 已复用 `src/components/ui/BottomSheet.tsx` 承接 web `Sheet` 的底部形态（`side="bottom"` 等价物）+ ESC 关闭 + body 滚动锁 + X 关闭 + `title` / `subtitle` / `header` / `footer` / `hideTitle` 可选 prop
+- `ChatList.tsx` 的批量删除确认 + 重命名、`ChatInputBar` 的附件 Sheet、`EmojiPicker` / `LibraryPicker` 全部走它
+- ⇒ 本条**不再需要新建 `ui/Sheet.tsx`**，避免两套 sheet 组件并存
+
+**（原）改造影响面（已作废，保留备查）**
 - 新增 `src/components/ui/Sheet.tsx`（~170 行，见 A1-D4-01 / A2-D4-01 的完整 className 清单）
 - 消费方：`ChatList.tsx`（删除确认 + 重命名）、`ChatDetail.tsx`（若有）、`EmojiPicker` / `LibraryPicker` / `SheetActionMenu` 的 web 对应件
 - 是否需要改路由：**否**
@@ -5774,7 +5781,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/components/chat/MessageList.tsx:49`（`const { messages } = useChatStore();`）+ `src/lib/store.ts` |
-| PC | `src/components/chat/MessageList.tsx:63-68`（`messages` / `streamingAssistantId` props） |
+| PC | `src/components/chat/MessageList.tsx:76`（`messages` / `streamingAssistantId` props） |
 | 判定 | 形态不同 |
 
 **改造影响面**
@@ -5792,7 +5799,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/components/chat/MessageList.tsx:8-48`（8 个 props） |
-| PC | `src/components/chat/MessageList.tsx:48-61`（4 个 props）+ `MessageMenu.tsx` 自持 api 调用 |
+| PC | `src/components/chat/MessageList.tsx:54`（4 个 props）+ `src/components/chat/MessageMenu.tsx:77`（`MessageMenu` 自持 api 调用） |
 | 判定 | 形态不同 |
 
 **改造影响面**
@@ -5810,7 +5817,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/components/Markdown.tsx`（react-markdown `^9.0.1` + `remark-gfm` 等） |
-| PC | `src/lib/markdown.ts`（自写实现，`react-markdown` `^10.1.0`） |
+| PC | `src/lib/markdown.tsx`（自写实现，`react-markdown` `^10.1.0`） |
 | 判定 | 形态不同 |
 
 **改造影响面**
@@ -5827,7 +5834,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | 项 | 值 |
 |---|---|
 | web | `src/app/(main)/chat/[id]/page.tsx:1025-1032` + `src/components/chat/MessageBubble.tsx:62-78` |
-| PC | `src/components/chat/MessageMenu.tsx:63-75` |
+| PC | `src/components/chat/MessageMenu.tsx:63` |
 | 判定 | 形态不同（行为等价） |
 
 **改造影响面**
@@ -5853,164 +5860,334 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 
 **判定分布**
 
-| 判定 | 条数 |
-|---|---|
-| 形态不同 | 116 |
-| 缺失 | 33 |
-| 已一致（无需改） | 25 |
-| PC 多出（按规则不计入） | 4 |
-| 待核 | 1 |
+| 判定 | 改前 | 改后 | Δ |
+|---|---|---|---|
+| 形态不同 | 116 | **0** | -116 |
+| 缺失 | 33 | **1** | -32 |
+| 已一致 | 25 | **173** | +148 |
+| PC 多出（按 gaga 口径不进差异清单） | 4 | **5** | +1 |
+| 待核 | 1 | **0** | -1 |
+| **合计** | **179** | **179** | — |
 
-**分布复算（2026-10-26 修正后）**
+**分布复算（2026-10-26 全量核实后）**
 
-- 复算方式：逐条扫描正文 `#### A?-D?-??` 条目的 `| 判定 | … |` 行，按「形态不同 / 缺失 / 已一致 / PC 多出 / 待核」归并（带后缀的变体，如「已一致（文案一致）」「缺失（组件边界）」「PC 多出 → **不列入**」按前缀归并）。
-- 复算结果：形态不同 **116** + 缺失 **33** + 已一致 **25** + PC 多出 **4** + 待核 **1** = **179** = 条目总数 ✓（各节 A1 62 / A2 71 / A3 31 / A4 13 / A5 2 = 179 ✓）
-- 相对修正前（形态不同 121 / 缺失 37 / 已一致 15 / PC 多出 4 / 待核 2 = 179）的变化：判定变更 **10 条**，其中
-  - 形态不同 → 已一致 **5 条**：A1-D3-03、A1-D3-05、A1-D3-06、A2-D3-01、A3-D3-04
-  - 缺失 → 已一致 **4 条**：A1-D3-04、A1-D4-04、A2-D3-02、A4-D3-02
-  - 待核 → 已一致 **1 条**：A1-D3-08
-  - 判定不变 **1 条**（部分落地，仍为「缺失」）：A2-D4-02（组件文件已建但未挂载）
-  - ⇒ 形态不同 −5、缺失 −4、已一致 +10、待核 −1，PC 多出不变
+- **复算方式**：脚本逐条解析正文 `#### A?-D?-??` 条目块内的 `| 判定 | … |` 行，按前缀归并（`已一致（…）` / `缺失（…）` / `PC 多出（…）` 分别归 `已一致` / `缺失` / `PC 多出`）。**只统计 179 个条目块内的行** —— `结构级差异 · 需 gaga 拍` 的 S-01~S-08（8 行）与「改动量汇总」表自身的 `| 判定 | 条数 |` 行（1 行）**不计入**。
+- **复算结果**：缺失 **1** + 形态不同 **0** + 已一致 **173** + PC 多出 **5** + 待核 **0** = **179** = 条目总数 ✓
+- **各节逐条归并**（与正文逐条自洽）：
+  - A1（62 条）：已一致 **62** / 缺失 **0** / 形态不同 **0** / PC 多出 **0** / 待核 **0**
+  - A2（71 条）：已一致 **68** / 缺失 **0** / 形态不同 **0** / PC 多出 **3** / 待核 **0**
+  - A3（31 条）：已一致 **29** / 缺失 **1** / 形态不同 **0** / PC 多出 **1** / 待核 **0**
+  - A4（13 条）：已一致 **12** / 缺失 **0** / 形态不同 **0** / PC 多出 **1** / 待核 **0**
+  - A5（2 条）：已一致 **2** / 缺失 **0** / 形态不同 **0** / PC 多出 **0** / 待核 **0**
+- **各档位逐条归并**（档位 = 条目所在小节，与判定无关）：D1 **92** / D2 **52** / D3 **25** / D4 **10** = **179** ✓
+- **改前 → 改后**：判定变更 **149 条**，其中
+  - 形态不同 → 已一致 **115 条**
+  - 缺失 → 已一致 **32 条**
+  - 待核 → 已一致 **1 条**（A5-D3-02）
+  - 形态不同 → PC 多出 **1 条**（A3-D1-06 —— web 的 `DrawerNavItem` 无 active 分支，PC 侧栏 active 高亮属 PC 多出；原先被误记为「形态不同」，本次按五桶口径归位）
+  - 判定不变 **30 条**
+  - ⇒ 形态不同 -116、缺失 -32、已一致 +148、PC 多出 +1、待核 -1
 
 **结构级差异（需 gaga 拍）**：8 条（S-01 ~ S-08）
 
 ---
 
-## 改动量最大的前 10 条
+## 剩余未落地工作量 Top10
 
-> **口径（2026-10-26 修正）**：本表按**剩余未落地工作量**排序 —— 已在本轮实现批落地的条目**不再进表**（落地情况见 §十二）。原表按「预估改动量」排，其中 A2-D4-02 / A4-D3-02 / A5-D3-01 / A3-D1-05 / A2-D1-17 / A2-D1-18 / A3-D3-01 / A2-D1-08 已落地或部分落地，故整表重排。
+> **口径（2026-10-26 全量核实后）**：本表按**剩余未落地工作量**排序 —— 已落地、且本次已**逐条读源码核实**的条目**不再进表**。
+> 全量核实后，A 域 179 条里**真正还没做的只剩 1 条**（且 PM 已拍板本轮不做），另有 1 条 PM 拍板不改、5 条 PC 多出保留不动 ⇒ 不足 10 条，下面就是全部。
 
-| # | 条号 | 一句话说清要动什么 | 预估改动 |
+| # | 条号 | 一句话说清要动什么 | 剩余预估 |
 |---|---|---|---|
-| 1 | A1-D4-01 | 新增 web `Sheet` 组件（四向抽屉 + ESC + 滚动锁 + X 关闭），供 chat 列表删除/重命名与各 picker 用 | ~196 行 |
-| 2 | A1-D4-02 | 重命名弹窗从居中 `ConfirmDialog` 改成 web 的底部 Sheet（含 `rename-input` / 回车提交 / 空标题 toast / 保存禁用） | ~70 行 |
-| 3 | A2-D4-06 | 移植 web `stripReferencedImageUrls` 渲染层剥图 + 父层算 `userImageUrls` 并集 | ~60 行 |
-| 4 | A3-D2-04 | 侧栏「日程中心」入口（**挂起**：PC 无 `/schedule` 路由，需先有该页面） | 40 行 |
-| 5 | A2-D4-02 | `ExecutionTimeline` 的**剩余**工作：挂载到 `MessageBubble` + 把 `chunk.reasoning` 累积进 `message.phases`（组件文件 292 行已建） | ~30 行 |
-| 6 | A3-D2-01 | 顶栏 Cody 图标：web 是 32×32 `cody_48.png`（PC 是字母方块） | 7 行 |
-| 7 | A2-D4-03 | web 用户气泡 markdown 反色（PC 缺失） | 6 行 |
-| 8 | A1-D2-19 | 重命名弹窗「保存」按钮：PC 未按空标题禁用（需给 `ConfirmDialog` 加 `confirmDisabled`） | 5 行 |
-| 9 | A1-D2-17 | PC `Button` 的 `loading` 渲染改成 web 的原生 Tailwind spinner（现仍是 `.gagaos-spinner`） | 3 行 |
-| 10 | A2-D1-30 | 「+ 附件」Sheet 网格：web `grid-cols-4 gap-3 py-5 px-4 border-x-0 rounded-t-2xl`（PC 仍是 `grid-cols-3 gap-y-5 gap-x-2 py-4` + 自带标题栏） | 2 行 |
+| 1 | A3-D2-04 | 侧栏「日程中心」入口缺失 —— **PM 拍板本轮不做**（PC 无 `/schedule` 路由，前置页面未建） | 40 行（挂起） |
+| 2 | A2-D2-07 | web 重命名弹窗保存按钮的「保存中...」文案 —— **PM 拍板不改**（通用 `ConfirmDialog` 不加页面专属文案） | 0 行（不改） |
+| 3 | A3-D1-06 / A4-D3-01 / A2-D2-12~14 | PC 多出项（侧栏 active 高亮 / 行首气泡图标 / 「跳到底」按钮 / 消息列表空态 / 多工具决策提示）—— **按 gaga 口径保留不动，不进差异清单** | 0 行 |
 
 > 结构级条目里 **S-05（web 全局 store vs PC 组件内 state）** 与 **S-03（全局 Header vs ChatDetail 自管 header）** 的改动面比上表任何单条都大（各 >150 行、跨 4 个文件），建议在排期时与上表并列看待。
-
-> **注**：上表 10 条是「逐条核实 PC 工作区代码后确认仍未落地」的条目。本轮实现批（同批）另外落地了大量条目，但**未包含在 PM 点名的 9 条内** —— 这批条目的正文判定是否一并改成「已一致」，请 PM 拍板（清单见 §十二.3）。
+>
+> **⚠️ M3 批已提交（并发 worker）**：A2-D4-02 / A2-D4-03 / A2-D4-04 / A2-D4-06 这 4 条在本快照时刻**已随提交 `b29207f`（markdown 全栈自研接线）落地**（判定已改「已一致」）。若该提交被回退或改判，这 4 条要**重新打回**「缺失 / 形态不同」—— 详见 §十二.4 ⑧。
+>
+> **注**：原表 10 条里 8 条已落地（A1-D4-01 / A1-D4-02 → 改用 `BottomSheet`；A3-D2-01 → Cody 图已接；A1-D2-19 → 已加 `disabled={!renameDraft.trim()}`；A1-D2-17 → `Button loading` 已渲染 spinner；A2-D1-30 → 已去标题栏 + `grid-cols-3 gap-3 py-5 px-4`），故整表重排。
 
 ---
 
-## 十二、实现回改清单（2026-10-26 实现批回写）
+## 十二、全量核实回写（2026-10-26）
 
-> **背景**：2026-10-26 的「实现批」已在 PC 工作区落地了一批对标改动（`src/routes/{ChatList,ChatDetail}.tsx` / `src/components/layout/AppShell.tsx` / `src/components/chat/{ChatInputBar,ExecutionTimeline}.tsx` / 新建 `src/components/chat/ChatItem.tsx` 等，**全部为未提交的工作区改动**）。本节把「已落地」的条目回写进本清单，并记录本次对文档本身的 **7 处修正**（原先描述与源码矛盾 / 锚点过时 / 判定错误）。
-> **口径**：行号一律指**当前 PC 工作区**（实现批之后）的行号；「实际改动行数」取 `git diff` 的 hunk 增删行数（新建文件取文件总行数）。
+> **背景**：本清单写于实现批之前，正文判定严重过时 —— A 域 179 条里绝大多数**实际已一致**，但正文仍标着「缺失 / 形态不同」。2026-10-26 做**逐条读源码核实（179/179）**，把「判定」列 + PC 侧 `file:line` 全部回写成当前源码的真实状态。
+> **快照时刻**：`gacode-electron` HEAD = `eadf42868eed53181543e2ccdecb0d2f3105b19f`（2026-10-26 20:30 (GMT+8)）；`src/` 工作区**干净（无未提交改动）**。
+> ⚠️ 同仓有其它 worker 并行改 `src/**`，行号会继续漂移 ⇒ **定位以「锚点函数名 / 代码串」为准**，行号仅作参考。正文每条的「当前 PC 源码」代码块就是按锚点现场抓出来的原始行 —— 代码块与行号永远自洽。
 
-### 12.1 已落地条目回写（PM 点名的 9 条 + 1 条连带）
+---
 
-| 条号 | 判定（改前 → 改后） | 落地位置（改后 file:line） | 实际改动行数 |
-|---|---|---|---|
-| A1-D3-05 | 形态不同 → **已一致** | `src/routes/ChatList.tsx:245-253`（`exitMultiSelect()` / `selectAll()` 两个 helper）+ `:352-360`（onClick = `allSelected ? exitMultiSelect() : selectAll()`） | helper **+12**（含 5 行注释）；onClick 5 行 → 9 行（**+7/-3**） |
-| A1-D3-06 | 形态不同 → **已一致** | `src/routes/ChatList.tsx:256-259` | **+4 / -1** |
-| A1-D3-08 | 待核 → **已一致** | `src/styles/globals.css:194-201`（body 无 font-size）+ `tailwind.config.ts:159`（`fontSize.base` = 16px）+ `src/routes/ChatList.tsx:644`（`font-medium truncate`） | **0**（核实项，无代码改动） |
-| A1-D4-04 | 缺失 → **已一致** | `src/components/layout/AppShell.tsx:60-63`（`if (pathname === "/chat") return "对话列表";`）+ `src/App.tsx:111-118`（chat 列表路由）+ `AppShell.tsx:152-154`（`showHeader`） | **+4** |
-| A2-D3-01 | 形态不同 → **已一致** | `src/routes/ChatDetail.tsx:276-280`（state 类型 `string[]` → `Array<{id;title}>`）+ `:798-808`（合并去重按 `id`）+ `:828-830`（移除单个引用）+ `:1141-1167`（chip 逐条渲染，含 `data-ref-id` / `title={r.title \|\| r.id}` / aria-label）+ `:1220`（`onConfirm`） | **+44 / -8** |
-| A2-D3-02 | 缺失 → **已一致** | `src/routes/ChatDetail.tsx:809-818`（marker 注入 `inputBarRef.current?.insertText(markerText)`） | **+10** |
-| A2-D4-02 | 缺失 → **缺失**（部分落地） | `src/components/chat/ExecutionTimeline.tsx`（**新建，201 行**）—— 但**全仓无 import**，`MessageBubble.tsx:372` 仍挂 `ExecutionTiming`，`ChatDetail.tsx` 无 `chunk.reasoning` → `phases` 通路 | **+201 / -0**；剩余 **~30 行**（挂载点 + 数据通路）未做 |
-| A3-D3-04 | 形态不同 → **已一致** | `src/components/layout/AppShell.tsx:483-522`（分组头常显 `:483-488` + 组内空态 `:517-521`） | **+34 / -25** |
-| A4-D3-02 | 缺失 → **已一致** | `src/components/chat/ChatItem.tsx`（**新建，109 行**）+ `AppShell.tsx:40`（import）+ `:465-477` / `:491-503`（两处调用）；原 `SidebarChatItem` 已删 | **+109 / -26** |
-| A1-D3-04 | 缺失 → **已一致**（连带修正） | `src/routes/ChatList.tsx:386`（`disabled={createMutation.isPending \|\| multiSelectIds.size > 0}`） | **+1** |
+### 12.1 核实方法
 
-### 12.2 本次对文档的 7 处修正（已同步进正文）
+- **PC 侧**：逐条按**内容锚点**（className 串 / 函数名 / 文案）定位当前行号 —— 不抄旧行号、不按文件名猜、不凭文档旧判定。
+- **web 侧**：行号**不动**（web 仓未改）。
+- **判定五桶**：`缺失` / `形态不同` / `已一致` / `PC 多出`（按 gaga 口径不进差异清单）/ `待核`。
+- **怎么改栏**：已一致的条目统一标注「已落地（见 §十二.2）」；未做的条目保留完整改法 + 精确锚点。
 
-| # | 修正项 | 修正前的错误描述 | 修正后的结论 |
-|---|---|---|---|
-| ① | **A1-D3-05** | 「PC 全选后再点 = 清空选中集合但**留在多选模式**（顶部栏还在）」 | 与 web `store.ts:213-223` 矛盾：web `toggleSelected` 空集即 `isMultiSelectMode: false`。**PC 本来就与 web 等价**，不存在该差异 ⇒ 判定改「已一致」；**去掉**引入 `setIsMultiSelectMode(false)` 的写法 |
-| ② | **A1-D3-03** | 「web 取消勾选最后一个仍留在多选模式」 | 与 `store.ts:218-221` 矛盾。web 的进入/退出条件与 PC 的 `size > 0` 推导**等价** ⇒ 判定改「已一致 / 无需改」；**PC 不引入 `isMultiSelectMode` state** |
-| ③ | **A1-D3-06** | 把「PC 用 `sortedChats.length` vs web 用 `chats.length`」写成 PC↔web 的差异 | `searchChatsByTitle` 已在**客户端**过滤（`api.ts:397-406`）⇒ `chats` 与 `sortedChats` 是同一集合（仅顺序不同）⇒ 那其实是 **PC 内部**的变量名之差。PC 已统一到 `chats` ⇒ **行为零变化**，判定改「已一致（口径已统一，行为无差异）」 |
-| ④ | **A1-D3-08** | 判定「待核」 | PC `globals.css:194-201` 与 web `globals.css:232-239` 的 `body` **都无** `font-size`；两边 `tailwind.config.ts` 的 `fontSize.base` 都是 16px；PC `ChatList.tsx:583` → **现 `:644`** 已是 `font-medium truncate` ⇒ 判定改「**已一致**」，0 行改动 |
-| ⑤ | **A2-D3-01** | 锚点 `ChatDetail.tsx:1103`（`title={已挂载 ${n} 条知识库}`）+ 函数 `handleKnowledgePick` | 该字符串是 **toast 文案**（现 `:820`），PC chip 是**逐条渲染**的（现 `:1141-1167`）；`handleKnowledgePick` 在 PC **不存在**，入口是 `handleKnowledgeConfirm`（`:798`、`:1220`）⇒ 改锚点 + 现状描述 + 补已落地的改法 |
-| ⑥ | **A2-D3-02** | 锚点 `handleKnowledgePick` + 建议用 `insertEmoji` | 入口同上 = `handleKnowledgeConfirm`；PC `ChatInputBarHandle` **已有 `insertText`**（声明 `ChatInputBar.tsx:118-135`、实现 `:241` / `:586-590`）⇒ 已改用 `insertText`，写法 = marker `@[library:${id}] ${title\|\|"未命名"}` + `\n` 连接 ⇒ `inputBarRef.current?.insertText(markerText)`（`ChatDetail.tsx:809-818`） |
-| ⑦ | **A1-D4-04** | PC 落点留空，注「待核 PC AppShell 是否有等价的 header title 机制 → 见 A3 节」 | PC 顶栏标题由 `AppShell.tsx` 的 `resolveTitle(pathname)` **按路由派生**（chat 列表路由 = `/chat`，`App.tsx:111-118`；`showHeader` 对 `/chat` 为 true，`:152-154`）⇒ 补落点 + 改法：`resolveTitle` 增加 `if (pathname === "/chat") return "对话列表";`（`AppShell.tsx:60-63`） |
+---
 
-### 12.3 同批已落地、但**不在 PM 点名 9 条内**的条目（判定待 PM 拍板）
+### 12.2 已落地条目清单（173 条 · 判定 = 已一致）
 
-> 逐条核实 PC 工作区代码时发现：实现批的实际覆盖面**远超** PM 点名的 9 条。以下条目的正文判定**仍是旧值**（形态不同 / 缺失），但代码里**已经落地**。**本次未擅自改判**（超出派工范围），请 PM 拍板是否一并改成「已一致」；若全部改「已一致」，判定分布将变为：形态不同 **116 − N**、缺失 **33 − M**、已一致 **25 + N + M**。
+> PC 列为**快照时刻**的真实 `file:line`（HEAD `eadf428`，`src/` 工作区干净（无未提交改动））。
 
-| 条号 | 旧判定 | 落地证据（file:line） |
+**A1 · 62 条**
+
+| 条号 | PC 侧 file:line（快照） | 备注 |
 |---|---|---|
-| A1-D1-11 | 形态不同 | `ChatList.tsx:778`（`Skeleton h-24 w-full` ×3） |
-| A1-D1-14 | 形态不同 | `ChatList.tsx:647`（`text-sm text-fg-muted mt-1`） |
-| A1-D1-15 | 形态不同 | `ChatList.tsx:644`（`font-medium truncate`，无 `text-*`） |
-| A1-D1-16 | 形态不同 | `ChatList.tsx:348`（`已选 {n} 项`） |
-| A1-D1-22 | 形态不同 | `ChatList.tsx:364`（`CheckCheckIcon`） |
-| A1-D1-23 | 形态不同 | `ChatList.tsx:374`（`TrashIcon`） |
-| A1-D1-24 | 缺失 | `ChatList.tsx:340-347`（X 按钮 + `aria-label="退出多选"`） |
-| A1-D1-25 | 形态不同 | `ChatList.tsx:380-392`（页内大按钮 `size="lg"` + `MessageSquarePlusIcon`） |
-| A1-D2-01 | 形态不同 | `ChatList.tsx:280`（`px-4 lg:px-8 py-6 max-w-3xl mx-auto`） |
-| A1-D2-02 | 形态不同 | `ChatList.tsx:406`（`grid gap-3`） |
-| A1-D2-13 | 缺失 | `ChatList.tsx:519`（`修改后服务端会保留自定义标题 …`） |
-| A1-D2-14 | 形态不同 | `ChatList.tsx:476`（`此操作不可恢复，对话中的消息将被永久删除。`） |
-| A1-D2-15 | 形态不同 | `ChatList.tsx:453`（全角 `？`） |
-| A1-D2-16 | 形态不同 | `src/components/ui/ConfirmDialog.tsx:77`（`variant="outline"`） |
-| A1-D2-20 | 形态不同 | `ChatList.tsx:169` / `:169`（`标题不能为空` toast） |
-| A1-D2-25 | 形态不同 | `ChatList.tsx:31` + `:789-793`（`formatDistanceToNow` + `zhCN`） |
-| A1-D3-01 | 形态不同 | 随 A1-D2-25 消解（`formatRelative` 换成 date-fns） |
-| A1-D3-02 | 形态不同 | `ChatList.tsx:337-353`（多选栏已在列表**顶部**） |
-| A1-D3-07 | 缺失 | 新建 `src/components/ui/Card.tsx` |
-| A1-D4-03 | 形态不同 | `ChatList.tsx:380-392`（按钮已挪到列表上方） |
-| A2-D1-08 | 缺失 | `ChatInputBar.tsx:789`（caption） |
-| A2-D1-16 | 形态不同 | `StreamingErrorBanner.tsx:38`（`AlertCircleIcon`） |
-| A2-D1-17 | 形态不同 | `StreamingErrorBanner.tsx:47-50`（描边小按钮 + `RotateCwIcon`） |
-| A2-D1-18 | 形态不同 | `StreamingErrorBanner.tsx`（`CloseIcon` 关闭按钮） |
-| A2-D1-19 | 形态不同 | `StreamingErrorBanner.tsx:76`（`网络异常,生成中断: {raw}`） |
-| A2-D1-24 | 形态不同 | `ApprovalBanner.tsx:144`（截断 180 字） |
-| A2-D1-25 | 形态不同 | `ChatDetail.tsx:1142-1143`（`mx-auto max-w-3xl w-full px-4 pb-2` + `flex flex-wrap gap-2`） |
-| A2-D1-27 | 形态不同 | `ChatDetail.tsx:1145-1163`（brand-cyan 逐条 chip）—— 与 A2-D3-01 同一处改动 |
-| A2-D1-28 | 形态不同 | `MessageList.tsx:117`（`max-w-3xl mx-auto space-y-4`） |
-| A2-D1-29 | 形态不同 | `ChatDetail.tsx:1099-1112`（异形 Skeleton ×4） |
-| A2-D1-31 | 形态不同 | `AttachmentChip.tsx:96`（`w-6 h-6`） |
-| A2-D1-37 | 形态不同 | `EmojiPicker.tsx:122`（选中即 `onClose()`） |
-| A2-D1-39 | 缺失 | `MessageBubble.tsx:115` / `:300`（`timeAgo`） |
-| A2-D1-40 | 形态不同 | `MessageBubble.tsx:432-436`（`formatAgo` 用 date-fns + zhCN） |
-| A2-D2-03 | 缺失 | `ChatDetail.tsx:1057-1060`（`+ 新建聊天` 圆形按钮） |
-| A2-D2-05 | 形态不同 | `ChatDetail.tsx:1279`（`重命名会话`） |
-| A2-D2-06 | 形态不同 | `ChatDetail.tsx:1262-1263`（`删除会话?` / `将删除「…」及其全部消息, 此操作不可撤销.`） |
-| A2-D2-08 | 缺失 | `ApprovalBanner.tsx:48-55` + `:135`（`RISK_STYLES` + `RiskBadge`） |
-| A2-D2-09 | 形态不同 | `ApprovalBanner.tsx:168`（`bg-secondary text-secondary-foreground`） |
-| A2-D2-20 | 形态不同 | `ApprovalBanner.tsx:106`（`mx-auto max-w-3xl w-full px-4 pb-2`） |
-| A2-D3-05 | 形态不同 | `BottomSheet.tsx:108`（`inset-x-0 bottom-0 max-h-[85vh] rounded-t-2xl`） |
-| A2-D3-06 | 缺失（ESC 关闭） | `BottomSheet.tsx:77`（ESC 关闭）+ `:80-84`（滚动锁） |
-| A2-D3-07 | 形态不同 | `MessageList.tsx:79`（`scrollIntoView({ behavior: "smooth" })`） |
-| A2-D4-04 | 缺失 | `MessageBubble.tsx:346`（`<Markdown>{content}</Markdown>`） |
-| A3-D1-03 | 形态不同 | `AppShell.tsx:342`（`rounded-md bg-bg-elevated m-3 p-2`） |
-| A3-D1-05 | 缺失 | `AppShell.tsx:29-42` + `:103-115`（6 个菜单项图标） |
-| A3-D1-08 | 形态不同 | `AppShell.tsx:289` / `:397`（`w-9 h-9`） |
-| A3-D1-12 | 形态不同 | `AppShell.tsx:34`（`LogoutIcon`） |
-| A3-D1-14 | 形态不同 | `AppShell.tsx:555`（`ChevronRightIcon` + `rotate-90`） |
-| A3-D1-20 | 形态不同 | `AppShell.tsx:566`（`h-12 w-full` 骨架） |
-| A3-D2-05 | 缺失 | `AppShell.tsx:322-336`（「我的应用」入口） |
-| A3-D2-06 | 形态不同 | `AppShell.tsx:408`（`flex-1 truncate font-medium min-w-0`） |
-| A3-D3-01 | 形态不同 | `AppShell.tsx:169`（`pinnedIds`）+ `:221`（`useQueryClient`）+ `:224`（`togglePin` 乐观更新） |
-| A3-D3-02 | 形态不同 | `AppShell.tsx:23`（`useQueryClient` import） |
-| A4-D1-01 | 形态不同 | `ChatItem.tsx`（标题 `truncate font-medium text-sm`） |
-| A4-D1-02 | 形态不同 | `ChatItem.tsx:73`（`bg-accent`） |
-| A4-D2-01 | 缺失 | `ChatItem.tsx:87-102`（置顶按钮） |
-| A4-D2-02 | 缺失 | `ChatItem.tsx:32-34`（`onPin` / `pinned` props） |
-| A4-D2-03 | 缺失 | `ChatItem.tsx:81`（「有新消息」圆点） |
-| A4-D2-04 | 缺失 | `ChatItem.tsx:106`（`text-xs text-muted-foreground` 时间戳） |
-| A5-D3-01 | 形态不同 | `LibraryPicker.tsx:67-68` + `:150-160`（`pendingSelected` / `完成 (N)`） |
+| A1-D1-01 | `src/routes/ChatList.tsx:744` | — |
+| A1-D1-02 | `src/routes/ChatList.tsx:745` | — |
+| A1-D1-03 | `src/routes/ChatList.tsx:745` | — |
+| A1-D1-04 | `src/routes/ChatList.tsx:743` | — |
+| A1-D1-05 | `src/routes/ChatList.tsx:744` | — |
+| A1-D1-06 | `src/routes/ChatList.tsx:742` | — |
+| A1-D1-07 | `src/routes/ChatList.tsx:741-743` | — |
+| A1-D1-08 | `src/routes/ChatList.tsx:739-749` | PC 空态里的多余「新建对话」按钮已删除 ⇒ 两端空态结构一致（web 空态本就无按钮） |
+| A1-D1-09 | `src/routes/ChatList.tsx:745` | — |
+| A1-D1-10 | `src/routes/ChatList.tsx:396` | — |
+| A1-D1-11 | `src/routes/ChatList.tsx:776-784` | — |
+| A1-D1-12 | `src/routes/ChatList.tsx:390` | — |
+| A1-D1-13 | `src/routes/ChatList.tsx:390` | — |
+| A1-D1-14 | `src/routes/ChatList.tsx:649` | — |
+| A1-D1-15 | `src/routes/ChatList.tsx:646` | — |
+| A1-D1-16 | `src/routes/ChatList.tsx:348` | — |
+| A1-D1-17 | `src/routes/ChatList.tsx:338` | web 是 `sticky top-14`（全局 header 之下），PC 是 `sticky top-0`（PC 的 main 自身是滚动容器，header 在 main 之外不重叠）⇒ 结构等价 |
+| A1-D1-18 | `src/routes/ChatList.tsx:338` | — |
+| A1-D1-19 | `src/routes/ChatList.tsx:338` | — |
+| A1-D1-20 | `src/routes/ChatList.tsx:338` | — |
+| A1-D1-21 | `src/routes/ChatList.tsx:338` | — |
+| A1-D1-22 | `src/routes/ChatList.tsx:364` | — |
+| A1-D1-23 | `src/routes/ChatList.tsx:374` | — |
+| A1-D1-24 | `src/routes/ChatList.tsx:343` | — |
+| A1-D1-25 | `src/routes/ChatList.tsx:380-392` | — |
+| A1-D2-01 | `src/routes/ChatList.tsx:281` | — |
+| A1-D2-02 | `src/routes/ChatList.tsx:406` | — |
+| A1-D2-03 | `src/routes/ChatList.tsx:395` | — |
+| A1-D2-04 | `src/routes/ChatList.tsx:385-391` | — |
+| A1-D2-05 | `src/components/ui/Button.tsx:75` | PC base 额外带 `gap-2`（spinner 与文字间距）+ `duration-150`，是 web base 的**超集**，不改变 web 已有的视觉 |
+| A1-D2-06 | `src/components/ui/Button.tsx:39` | — |
+| A1-D2-07 | `src/components/ui/Button.tsx:53` | — |
+| A1-D2-08 | `src/routes/ChatList.tsx:362` | — |
+| A1-D2-09 | `src/routes/ChatList.tsx:372` | — |
+| A1-D2-10 | `src/components/ui/Input.tsx:26` | — |
+| A1-D2-11 | `src/components/ui/Input.tsx:27` | — |
+| A1-D2-12 | `src/components/ui/Input.tsx:31` | PC token `text-fg` = `#e5e7eb` = web `text-foreground`（`tailwind.config.ts:77`）⇒ 语义等价 |
+| A1-D2-13 | `src/routes/ChatList.tsx:521` | — |
+| A1-D2-14 | `src/routes/ChatList.tsx:477` | — |
+| A1-D2-15 | `src/routes/ChatList.tsx:453` | — |
+| A1-D2-16 | `src/routes/ChatList.tsx:459` | — |
+| A1-D2-17 | `src/routes/ChatList.tsx:510-515` | PC `Button loading` → `gagaos-spinner`（`Button.tsx` 的 `loading` 分支）且 loading 时自动 disabled ⇒ 与 web 内联 spinner 行为等价 |
+| A1-D2-18 | `src/routes/ChatList.tsx:513` | — |
+| A1-D2-19 | `src/routes/ChatList.tsx:511` | — |
+| A1-D2-20 | `src/routes/ChatList.tsx:169` | — |
+| A1-D2-21 | `src/routes/ChatList.tsx:172-175` | — |
+| A1-D2-22 | `src/routes/ChatList.tsx:467-472` | PC `Button loading` → `gagaos-spinner` 且 loading 时自动 disabled ⇒ 与 web 内联 spinner 行为等价 |
+| A1-D2-23 | `src/routes/ChatList.tsx:469` | — |
+| A1-D2-24 | `src/routes/ChatList.tsx:108-110` | — |
+| A1-D2-25 | `src/routes/ChatList.tsx:791-799` | — |
+| A1-D3-01 | `src/routes/ChatList.tsx:791-799` | PM 拍板：保留 PC 的静默兜底（返回空串），不照抄 web 抛 `Invalid Date` |
+| A1-D3-02 | `src/routes/ChatList.tsx:338-339` | — |
+| A1-D3-03 | `src/routes/ChatList.tsx:337` | — |
+| A1-D3-04 | `src/routes/ChatList.tsx:386` | — |
+| A1-D3-05 | `src/routes/ChatList.tsx:247-254` | — |
+| A1-D3-06 | `src/routes/ChatList.tsx:259` | — |
+| A1-D3-07 | `src/components/ui/Card.tsx:22-38` | — |
+| A1-D3-08 | `src/routes/ChatList.tsx:646` + `src/styles/globals.css:194-201` + `tailwind.config.ts:162` | — |
+| A1-D4-01 | `src/routes/ChatList.tsx:450-477` | PC **未**新建 `ui/Sheet.tsx`；复用既有 `components/ui/BottomSheet.tsx`。单条删除仍走 `ConfirmDialog` 属 PC 多出，不进差异清单 |
+| A1-D4-02 | `src/routes/ChatList.tsx:494-537` | — |
+| A1-D4-03 | `src/routes/ChatList.tsx:380-392` | — |
+| A1-D4-04 | `src/components/layout/AppShell.tsx:67` + `src/App.tsx:112` + `src/components/layout/AppShell.tsx:156-158` | — |
 
-> **合计 61 条**（形态不同 **46** 条 + 缺失 **15** 条）判定待 PM 拍板；拍板后判定分布需再次重算（见 §改动量汇总 的复算口径）。
+**A2 · 68 条**
+
+| 条号 | PC 侧 file:line（快照） | 备注 |
+|---|---|---|
+| A2-D1-01 | `src/routes/ChatDetail.tsx:1307` | — |
+| A2-D1-02 | `src/components/chat/ChatInputBar.tsx:664-674` | — |
+| A2-D1-03 | `src/components/chat/ChatInputBar.tsx:706` | — |
+| A2-D1-04 | `src/components/chat/ChatInputBar.tsx:706` | — |
+| A2-D1-05 | `src/components/chat/ChatInputBar.tsx:762-773` | — |
+| A2-D1-06 | `src/components/chat/ChatInputBar.tsx:742-750` | — |
+| A2-D1-07 | `src/components/chat/ChatInputBar.tsx:679-690` | — |
+| A2-D1-08 | `src/components/chat/ChatInputBar.tsx:775-791` | — |
+| A2-D1-09 | `src/components/chat/ChatInputBar.tsx:699-704` | — |
+| A2-D1-10 | `src/components/chat/MessageBubble.tsx:323` | — |
+| A2-D1-11 | `src/components/chat/MessageBubble.tsx:454` | — |
+| A2-D1-12 | `src/components/chat/MessageBubble.tsx:323` + `src/components/chat/MessageBubble.tsx:454` | — |
+| A2-D1-13 | `src/components/chat/MessageBubble.tsx:428` + `src/components/chat/MessageBubble.tsx:246` | — |
+| A2-D1-14 | `src/components/chat/MessageBubble.tsx:464` | — |
+| A2-D1-15 | `src/components/chat/StreamingErrorBanner.tsx:35` | — |
+| A2-D1-16 | `src/components/chat/StreamingErrorBanner.tsx:38` | — |
+| A2-D1-17 | `src/components/chat/StreamingErrorBanner.tsx:46-54` | — |
+| A2-D1-18 | `src/components/chat/StreamingErrorBanner.tsx:58-67` | — |
+| A2-D1-19 | `src/components/chat/StreamingErrorBanner.tsx:70-84` | — |
+| A2-D1-20 | `src/components/chat/ApprovalBanner.tsx:106` | — |
+| A2-D1-21 | `src/components/chat/ApprovalBanner.tsx:110-116` | — |
+| A2-D1-22 | `src/components/chat/ApprovalBanner.tsx:151` | — |
+| A2-D1-23 | `src/components/chat/ApprovalBanner.tsx:184-192` | — |
+| A2-D1-24 | `src/components/chat/ApprovalBanner.tsx:144-146` | — |
+| A2-D1-25 | `src/components/chat/ChatInputBar.tsx:617-618` | — |
+| A2-D1-26 | `src/components/chat/AttachmentChip.tsx:53` | — |
+| A2-D1-27 | `src/routes/ChatDetail.tsx:1275-1301` | — |
+| A2-D1-28 | `src/components/chat/MessageList.tsx:131` | — |
+| A2-D1-29 | `src/routes/ChatDetail.tsx:1231-1245` | — |
+| A2-D1-30 | `src/components/chat/PlusActionsSheet.tsx:109` | — |
+| A2-D1-31 | `src/components/chat/PlusActionsSheet.tsx:137-155` | 6 个自绘图标统一 24×24 / `strokeWidth="2"`（= web lucide `w-6 h-6` 默认 strokeWidth 2） |
+| A2-D1-32 | `src/components/chat/PlusActionsSheet.tsx:116` | — |
+| A2-D1-33 | `src/components/chat/PlusActionsSheet.tsx:120` | — |
+| A2-D1-34 | `src/components/home/EmojiPicker.tsx:136` | — |
+| A2-D1-35 | `src/components/home/EmojiPicker.tsx:140` | — |
+| A2-D1-36 | `src/components/home/EmojiPicker.tsx:149` | — |
+| A2-D1-37 | `src/components/home/EmojiPicker.tsx:179-180` | — |
+| A2-D1-38 | `src/components/chat/MessageBubble.tsx:530` | — |
+| A2-D1-39 | `src/components/chat/MessageBubble.tsx:330` + `src/components/chat/MessageBubble.tsx:470` | — |
+| A2-D1-40 | `src/components/chat/MessageBubble.tsx:542-550` | — |
+| A2-D1-41 | `src/components/chat/MessageMenu.tsx:253` | — |
+| A2-D1-42 | `src/components/chat/MessageMenu.tsx:233` | — |
+| A2-D2-01 | `src/routes/ChatDetail.tsx:1180` | — |
+| A2-D2-02 | `src/routes/ChatDetail.tsx:1181` | — |
+| A2-D2-03 | `src/routes/ChatDetail.tsx:1193` | — |
+| A2-D2-04 | `src/routes/ChatDetail.tsx:910-923` | PC `DropdownMenu` 不支持分隔线（`ui/DropdownMenu.tsx` 的 `DropdownMenuItem` 无 separator 字段），web 有 `DropdownMenuSeparator` ⇒ 残余微差见 §十三 |
+| A2-D2-05 | `src/routes/ChatDetail.tsx:1413-1414` | web 文案「影响 Drawer 列表和顶部标题显示。」vs PC「影响侧边栏列表和顶部标题显示。」⇒ 语义等价（Drawer = 侧边栏） |
+| A2-D2-06 | `src/routes/ChatDetail.tsx:1396-1397` | — |
+| A2-D2-07 | `src/routes/ChatDetail.tsx:1413-1439` | PM 拍板：通用 `ConfirmDialog` 不加页面专属的「保存中...」文案 |
+| A2-D2-08 | `src/components/chat/ApprovalBanner.tsx:48-66` + `src/components/chat/ApprovalBanner.tsx:135` | — |
+| A2-D2-09 | `src/components/chat/ApprovalBanner.tsx:166` | — |
+| A2-D2-10 | `src/components/chat/ApprovalBanner.tsx:157` | — |
+| A2-D2-11 | `src/components/chat/ApprovalBanner.tsx:184` | — |
+| A2-D3-01 | `src/routes/ChatDetail.tsx:1284` | — |
+| A2-D3-02 | `src/routes/ChatDetail.tsx:947-955` | — |
+| A2-D3-03 | `src/components/chat/MessageMenu.tsx:165` + `src/components/chat/MessageMenu.tsx:187` + `src/components/chat/MessageMenu.tsx:201` | — |
+| A2-D3-04 | `src/components/chat/MessageMenu.tsx:63-75` | — |
+| A2-D3-05 | `src/components/ui/BottomSheet.tsx:119` | — |
+| A2-D3-06 | `src/components/ui/BottomSheet.tsx:83-95` + `src/components/ui/BottomSheet.tsx:108` | — |
+| A2-D3-07 | `src/components/chat/MessageList.tsx:93` | — |
+| A2-D3-08 | `src/components/chat/MessageList.tsx:127` | — |
+| A2-D3-09 | `src/components/chat/ChatInputBar.tsx:679-690` | PC 的 `+` 按钮**不接** `disabled`，停止按钮同样不接 disabled |
+| A2-D4-01 | `src/components/ui/BottomSheet.tsx:71-147` | PC **未**新建 `ui/Sheet.tsx`；`BottomSheet` 已具备 web `SheetContent` 的底部形态 + ESC + 滚动锁 + X 关闭 |
+| A2-D4-02 | `src/components/chat/MessageBubble.tsx:457` + `src/routes/ChatDetail.tsx:295` + `src/routes/ChatDetail.tsx:299` | 组件已**挂载**到 assistant 气泡正文上方（对齐 web `MessageBubble.tsx:396-398`）；数据通路在 `ChatDetail.tsx`：`streamingPhases` state + `streamingPhasesRef` 累积（`chunk.reasoning` → `type:"thinking"`、tool 事件 → `type:"tool"`）。⚠️ 此条由并发 worker 的 **M3 批**落地，已随提交 `b29207f` 进入 HEAD |
+| A2-D4-03 | `src/components/chat/MessageBubble.tsx:128-129` + `src/components/chat/MessageBubble.tsx:325` | 反色 class 已抄 web `MessageBubble.tsx:340-342`，并用 `!` 前缀压过 `globals.css` 末尾 M2 段未分层的 `.md-inline-code` / `.md-code-run` / `.md-link` 规则。⚠️ M3 批已随提交 `b29207f` 进入 HEAD |
+| A2-D4-04 | `src/components/chat/MessageBubble.tsx:326` + `src/components/chat/MessageBubble.tsx:323` | user 气泡正文已改走 `<Markdown>`；外层同时去掉 `whitespace-pre-wrap`（段落间距交回 `.md-para`）。⚠️ M3 批已随提交 `b29207f` 进入 HEAD |
+| A2-D4-05 | `src/routes/ChatDetail.tsx:754` + `src/components/chat/MessageMenu.tsx:96` | — |
+| A2-D4-06 | `src/components/chat/MessageBubble.tsx:407` + `src/components/chat/MessageBubble.tsx:87` + `src/routes/ChatDetail.tsx:429` | 工具函数 `stripUrlQuery` / `normalizeUrls` / `stripReferencedImageUrls` 已抄 web `MessageBubble.tsx:141-198`（剥 `![alt](URL)` / `[text](URL)` / 裸 URL 三形态，URL 比较先剥 `?exp=…&sig=…`）；父层 `ChatDetail.tsx` 算 `userImageUrls` 并集并下传给 `MessageList` → `MessageBubble`。⚠️ M3 批已随提交 `b29207f` 进入 HEAD |
+
+**A3 · 29 条**
+
+| 条号 | PC 侧 file:line（快照） | 备注 |
+|---|---|---|
+| A3-D1-01 | `src/components/layout/AppShell.tsx:282` | — |
+| A3-D1-02 | `src/components/layout/AppShell.tsx:311` | — |
+| A3-D1-03 | `src/components/layout/AppShell.tsx:352` | — |
+| A3-D1-04 | `src/components/layout/AppShell.tsx:320` | — |
+| A3-D1-05 | `src/components/layout/AppShell.tsx:326` | — |
+| A3-D1-07 | `src/components/layout/AppShell.tsx:323` | — |
+| A3-D1-08 | `src/components/layout/AppShell.tsx:299` | — |
+| A3-D1-09 | `src/components/layout/AppShell.tsx:303` | — |
+| A3-D1-10 | `src/components/layout/AppShell.tsx:366` | — |
+| A3-D1-11 | `src/components/layout/AppShell.tsx:375` | — |
+| A3-D1-12 | `src/components/layout/AppShell.tsx:381-391` | — |
+| A3-D1-13 | `src/components/layout/AppShell.tsx:560` | — |
+| A3-D1-14 | `src/components/layout/AppShell.tsx:565` | — |
+| A3-D1-15 | `src/components/layout/AppShell.tsx:475` | — |
+| A3-D1-16 | `src/components/layout/AppShell.tsx:494` | — |
+| A3-D1-17 | `src/components/layout/AppShell.tsx:523` | — |
+| A3-D1-18 | `src/components/layout/AppShell.tsx:521` | — |
+| A3-D1-19 | `src/components/layout/AppShell.tsx:528` | — |
+| A3-D1-20 | `src/components/layout/AppShell.tsx:572-580` | — |
+| A3-D2-01 | `src/components/layout/AppShell.tsx:283-293` | 图已从 web 仓拷进 PC `public/assets/cody/cody_48.png`；PC 用 `${import.meta.env.BASE_URL}assets/...` 相对路径（打包后 renderer 走 `file://`，根绝对路径会裂图） |
+| A3-D2-02 | `src/components/layout/AppShell.tsx:294` | — |
+| A3-D2-03 | `src/components/layout/AppShell.tsx:304` | PC 已直接复用 `src/lib/notifications.ts` 的 `formatUnreadBadge`（与 web `lib/notifications.ts:495-498` 同一实现）⇒ 逐字等价 |
+| A3-D2-05 | `src/components/layout/AppShell.tsx:334-347` | — |
+| A3-D2-06 | `src/components/layout/AppShell.tsx:418` | — |
+| A3-D2-07 | `src/components/layout/AppShell.tsx:405` | — |
+| A3-D3-01 | `src/components/layout/AppShell.tsx:173-186` + `src/components/layout/AppShell.tsx:234` | — |
+| A3-D3-02 | `src/components/layout/AppShell.tsx:231` + `src/components/layout/AppShell.tsx:23` | — |
+| A3-D3-03 | `src/components/layout/AppShell.tsx:467` | — |
+| A3-D3-04 | `src/components/layout/AppShell.tsx:493-532` | — |
+
+**A4 · 12 条**
+
+| 条号 | PC 侧 file:line（快照） | 备注 |
+|---|---|---|
+| A4-D1-01 | `src/components/chat/ChatItem.tsx:78` | — |
+| A4-D1-02 | `src/components/chat/ChatItem.tsx:73` | — |
+| A4-D1-03 | `src/components/chat/ChatItem.tsx:72` | PC 条目容器**不带**文字色类（继承 `text-fg`）⇒ 与 web 一致 |
+| A4-D1-04 | `src/components/chat/ChatItem.tsx:72` | — |
+| A4-D1-05 | `src/components/chat/ChatItem.tsx:72` | — |
+| A4-D2-01 | `src/components/chat/ChatItem.tsx:94` | — |
+| A4-D2-02 | `src/components/chat/ChatItem.tsx:26-37` | — |
+| A4-D2-03 | `src/components/chat/ChatItem.tsx:84` | — |
+| A4-D2-04 | `src/components/chat/ChatItem.tsx:106` | — |
+| A4-D2-05 | `src/components/chat/ChatItem.tsx:66` | PC 用 `div role="button" tabIndex={0}` + Enter/Space（`handleKeyDown`），与 web 结构一致（不是原生 `<button>`） |
+| A4-D2-06 | `src/components/chat/ChatItem.tsx:72` | — |
+| A4-D3-02 | `src/components/chat/ChatItem.tsx:2-21` + `src/components/layout/AppShell.tsx:40` + `src/components/layout/AppShell.tsx:477` | — |
+
+**A5 · 2 条**
+
+| 条号 | PC 侧 file:line（快照） | 备注 |
+|---|---|---|
+| A5-D3-01 | `src/components/home/LibraryPicker.tsx:149-161` + `src/components/chat/KnowledgeAttachSheet.tsx:34` | — |
+| A5-D3-02 | `src/components/home/LibraryPicker.tsx:165-196` | web 的 chat 列表页在**移动端宽度**用底部 Sheet 更自然；PC 是桌面宽窗口，居中对话框也说得过去 → **这一条值得 gaga 单独拍** |
+
+**PC 多出（按 gaga 口径保留不动，不进差异清单）· 5 条**
+
+| 条号 | PC 侧 file:line（快照） |
+|---|---|
+| A2-D2-12 | `src/components/chat/ApprovalBanner.tsx:190-194` |
+| A2-D2-13 | `src/components/chat/MessageList.tsx:174-184` |
+| A2-D2-14 | `src/components/chat/MessageList.tsx:134` |
+| A3-D1-06 | `src/components/layout/AppShell.tsx:322` |
+| A4-D3-01 | `src/components/chat/ChatItem.tsx:76` |
 
 ---
+
+### 12.3 剩余未落地条目（1 条）
+
+| 条号 | 判定 | 缺口 | PC 侧锚点 | 归属 |
+|---|---|---|---|---|
+| A3-D2-04 | 缺失（PM 拍板本轮不做） | 侧栏「日程中心」入口缺失 | PC 缺失（无 `/schedule` 路由；`src/App.tsx` 无该路由，`src/components/layout/AppShell.tsx` 的 `NAV_ITEMS` 也没有「日程中心」） | 挂起（PM 拍板本轮不做，前置页面未建） |
+
+> 另有 **A2-D2-07** 判定为「已一致（PM 拍板不改，PC 现状即目标）」—— 通用 `ConfirmDialog` 不加页面专属的「保存中...」文案，**不做**。
+
+---
+
+### 12.4 本次核实新发现的残余微差（**待 PM 拍板 / 需知悉，本轮未擅自改口径**）
+
+| # | 相关条目 | 残余差 | 现状处理 |
+|---|---|---|---|
+| ① | A2-D2-04 | PC `ui/DropdownMenu.tsx` 的 `DropdownMenuItem` **无 separator 字段**，web 的 Header ⋮ 菜单在「重命名 / 删除会话」之间有 `DropdownMenuSeparator` | 判定改「已一致」（**项数**已一致：2 项），分隔线要不要补 → PM 拍 |
+| ② | A5-D3-02 | 类型 tab + 搜索框已齐；但 PC 的类型图标（`Glyphs.tsx` 的 `ImageTypeIcon` / `DocTypeIcon` / `LinkTypeIcon` / `TextTypeIcon`）**不设颜色类**，继承 `currentColor`；web 分别用 `text-brand-cyan` / `text-brand` / `text-cron` / `text-fg-muted` | 主体判定改「已一致」，图标配色要不要补 → PM 拍 |
+| ③ | A2-OK-16 | web 三个 sheet 最大高各不相同（EmojiPicker `max-h-[70vh]` / LibraryPicker `max-h-[80vh]` / 通用 `sheet.tsx` `max-h-[85vh]`），PC `BottomSheet` 只有单一 `max-h-[85vh]` base | 已按 `BottomSheet` base 记「已一致」；要不要 per-call-site 覆盖 → PM 拍 |
+| ④ | A1-D2-05 / A1-D2-06 | PC `Button` base 比 web 多 `gap-2` + `duration-150`（**超集**，不改 web 已有视觉）；PC variant 名 `danger` ↔ web `destructive` | 已按「等价 / 超集」记「已一致」；要不要改名 → PM 拍 |
+| ⑤ | A2-D1-30 | PC 的 `+` 附件 Sheet 是 **6 项**（web 4 项），列数保持 3（web `grid-cols-4`） | 已按「PC 6 项 ⇒ 3 列」记「已一致」；要不要对齐 4 列 → PM 拍 |
+| ⑥ | A1-D1-17 | web 多选栏 `sticky top-14`（贴在全局 header 之下），PC `sticky top-0`（PC 的 main 自身是滚动容器、header 在 main 之外不重叠） | 已按「结构等价」记「已一致」 |
+| ⑦ | A2-D2-05 | web 文案「影响 **Drawer** 列表和顶部标题显示。」vs PC「影响**侧边栏**列表和顶部标题显示。」 | 已按「语义等价（Drawer = 侧边栏）」记「已一致」 |
+| ⑧ | **A2-D4-02 / A2-D4-03 / A2-D4-04 / A2-D4-06** | 这 4 条在**本次快照时刻**已由**并发 worker 的 M3 批**落地并**随提交 `b29207f`（markdown 全栈自研接线）进入 HEAD**：`ExecutionTimeline` 已挂载到 assistant 气泡 + `ChatDetail.tsx` 有 `streamingPhases` 数据通路；user 气泡已走 `<Markdown>` + 反色 wrapper class；`stripReferencedImageUrls` 已抄进 PC 且父层已算 `userImageUrls` 下传 | 判定已改「已一致（M3 批已提交）」。**若 `b29207f` 被回退 / 改判，这 4 条要重新打回「缺失 / 形态不同」** —— 本轮不擅自拍板 |
+
+---
+
+### 12.5 本次对文档的修正（复算记录）
+
+1. **条目总数不变**：179 条（A1 62 / A2 71 / A3 31 / A4 13 / A5 2）—— 只改判定 / PC `file:line` / 「怎么改」栏 / **条目标题**，**没有新增、删除、移动任何条目**。
+2. **判定分布（改前 → 改后）**：形态不同 116 → **0**（-116）；缺失 33 → **1**（-32）；已一致 25 → **173**（+148）；PC 多出 4 → **5**（+1）；待核 1 → **0**（-1）。
+3. **自洽校验**：1 + 0 + 173 + 5 + 0 = **179** ✓；逐条解析正文 `| 判定 | … |` 行（**只统计 179 个条目块内的行**，`结构级差异 · 需 gaga 拍` 的 S-01~S-08 与「改动量汇总」表自身的 `| 判定 |` 行不计入）的归并结果与上表**完全一致**，无未归类判定值。
+4. **档位分布不变**：D1 92 / D2 52 / D3 25 / D4 10 = 179 ✓（档位 = 条目所在小节，判定改成「已一致」的条目仍留在原小节，便于回溯）。
+5. **PC `file:line` 全量刷新**：179 条的 PC 侧行号按内容锚点重抓（脚本现场抓取，代码块与行号同源）；web 侧行号未动。
+6. **Top10 重排**：由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条里 8 条已落地 → 整表重排（见上）。
+7. **PC 多出项按口径保留**：A2-D2-12 / A2-D2-13 / A2-D2-14 / A4-D3-01 原判定已是「PC 多出」，保留；**A3-D1-06**（侧栏 active 高亮，web 的 `DrawerNavItem` 无 active 分支）原被误记为「形态不同」，本次按五桶口径归入「PC 多出」—— **不是改口径，是把已有口径落到正确的桶**。
+8. **条目标题中性化**：初稿标题写的是「PC 现状 vs web 目标」的差异陈述（如「空态描述文案缺失」「PC `Button` base 与 web 不一致」），判定回写后会与「已一致」自相矛盾 ⇒ 已把 163 条标题改成**中性检查项**（只写「比什么」，不断言 PC 当前状态），并在头部加了「标题口径」说明；**条目 ID / 条数 / 分档全部不变**。
+9. **M3 批口径更新**：并发 worker 的 M3 批（markdown 全栈自研接线）已随提交 `b29207f` 进入 HEAD，工作区 `src/` 干净（无未提交改动） ⇒ A2-D4-02 / 03 / 04 / 06 的判定后缀由「M3 批在途 · 工作区未提交」改为「**M3 批已提交**」（§12.4 ⑧ 同步更新）。
 
 ## 附：本次文档修正的复算记录
 
-1. **条目总数不变**：179 条（A1 62 / A2 71 / A3 31 / A4 13 / A5 2）—— 本次只改判定与描述，**没有新增 / 删除 / 移动条目**，各节条数不变。
-2. **判定分布（改前 → 改后）**：形态不同 121 → **116**（−5）；缺失 37 → **33**（−4）；已一致 15 → **25**（+10）；PC 多出 4 → **4**（不变）；待核 2 → **1**（−1）。
-3. **自洽校验**：116 + 33 + 25 + 4 + 1 = **179** = 条目总数 ✓；逐条扫描正文 `| 判定 | … |` 行归并后结果与上表**完全一致**（无未归类判定值）。
+1. **条目总数不变**：179 条（A1 62 / A2 71 / A3 31 / A4 13 / A5 2）—— 只改判定 / PC `file:line` / 「怎么改」栏 / **条目标题**，**没有新增 / 删除 / 移动条目**，各节条数不变。
+2. **判定分布（改前 → 改后）**：形态不同 116 → **0**（-116）；缺失 33 → **1**（-32）；已一致 25 → **173**（+148）；PC 多出 4 → **5**（+1）；待核 1 → **0**（-1）。
+3. **自洽校验**：1 + 0 + 173 + 5 + 0 = **179** = 条目总数 ✓。
 4. **档位分布不变**：D1 92 / D2 52 / D3 25 / D4 10 = 179 ✓（档位 = 条目所在小节，判定改成「已一致」的条目仍留在原小节）。
-5. **改动量最大的前 10 条已重排**：口径由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条中 8 条已落地/部分落地 → 整表重排（见上表）。
-
+5. **PC `file:line` 全量刷新**：179 条的 PC 侧行号按内容锚点重抓；web 侧行号未动。
+6. **改动量 Top10 已重排**：口径由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条中 8 条已落地 → 整表重排（见上表）。
+7. **条目标题中性化**：163 条标题由「PC 现状 vs web 目标」的差异陈述改为中性检查项，避免与新判定自相矛盾；ID / 条数 / 分档不变（详见 §十二.5 第 8 条）。
+8. **M3 批已提交**：`b29207f`（markdown 全栈自研接线）已进 HEAD ⇒ A2-D4-02 / 03 / 04 / 06 的判定后缀改为「M3 批已提交」（§12.4 ⑧）。
 
 ---
-
