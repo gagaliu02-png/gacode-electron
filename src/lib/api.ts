@@ -864,6 +864,20 @@ export function buildNotificationStreamUrl(): string {
 export interface LibraryItem {
   id: string;
   type: "image" | "doc" | "link" | "text";
+  /**
+   * 原始模态 — server **真实出参** (unified-api/src/modules/yinian/library.routes.js:131
+   *   `modality: atom.modality`; 详情端点 /yinian/memories/:id 也带, yinian.service.js:63).
+   *
+   * ⚠️ 为什么需要它: `type` 是被压扁过一档的值 (MODALITY_TO_WEB_TYPE,
+   *    library.routes.js:82-88: text→link / file→doc / audio|video→doc),
+   *    所以 `type === "link"` 分不清「纯文本正文」和「真链接」,
+   *    `type === "doc"` 分不清「文档」和「音频/视频」—— 原始模态只有 modality 保留。
+   *
+   * 2026-10-26: 补上本字段 (只加类型声明, 不改任何运行时逻辑)。
+   *    ⚠️ web 侧 `gacode-web/src/lib/api.ts:1089-1099` 的 LibraryItem **没有**声明
+   *       modality ⇒ 这是「服务端真实出参, 但两端类型都没写」, 本批只补 PC 一侧。
+   */
+  modality?: "text" | "image" | "file" | "audio" | "video";
   title: string;
   url?: string;
   tags?: string[];
@@ -897,12 +911,93 @@ export async function listLibrary(params: {
   }>(`/yinian/library${qs ? `?${qs}` : ""}`);
 }
 
-export function getLibraryItem(
+// ─────────── Library 详情 (GET /yinian/memories/:id) ───────────
+//
+// B-21 (2026-10-26): 知识库详情数据源改成**与 web 同端点**。
+//
+//   web 运行时实际调的 URL (事实源):
+//     gacode-web/src/app/(main)/library/[id]/page.tsx:118   getMemoryAtomMapped(id)
+//       → gacode-web/src/lib/library-api.ts:211-213         rawGetMemoryAtom(id).then(mapAtomToDto)
+//       → gacode-web/src/lib/api.ts:1223-1225               request(`/yinian/memories/${id}`)
+//   ⚠️ web 的 `gacode-web/src/lib/api.ts:1184-1195` **也**叫 getLibraryItem, 但它是
+//      「list + id 过滤」的兜底 (它自己的注释 :1181-1183 明说「后端 unified-api 暂无
+//      GET /library/:id, 临时走 list」), 详情页**没有**用它 ⇒ 它不是详情数据源。
+//
+//   server 注册行 (安全核查证据 —— 这个端点确实存在, 不是坏的领先实现):
+//     unified-api/src/modules/yinian/yinian.routes.js:385
+//       fastify.get('/memories/:id', { preHandler: fastify.requireAuth }, async (req) => {
+//         const data = await yinianService.getMemoryAtom(userId, req.params.id);
+//     (归属校验在 service 里: yinian.service.js:209-215, 非本人 → 404)
+//   ⇒ 端点在 ⇒ 按 B-21 把 PC 改成同 URL。
+//   (另一个端点 GET /yinian/library/:id 也存在 ——
+//    unified-api/src/modules/yinian/library.routes.js:479 —— 但 web 详情页不用它。)
+//
+//   ⚠️ 该端点出参是 **snake_case** (server atomToApi, yinian.service.js:46-71):
+//      { id, user_id, content, metadata, tags, modality, raw_ref, status,
+//        error_msg, created_at, updated_at }
+//      ⇒ 必须做 snake→camel 运行时映射, 否则 content / url / createdAt 全是
+//        undefined (web 踩过这个坑, 见 gacode-web/src/lib/api.ts:1197-1205)。
+//
+
+/** GET /yinian/memories/:id 的 wire 形状 (server atomToApi 出参) */
+interface MemoryAtomWire {
+  id: string;
+  content?: string;
+  metadata?: { title?: string; tags?: string[] } | null;
+  tags?: string[];
+  modality?: string;
+  raw_ref?: string | null;
+  created_at?: string;
+}
+
+/**
+ * DB modality → web type — 与 server 端 MODALITY_TO_WEB_TYPE 同款
+ * (unified-api/src/modules/yinian/library.routes.js:82-88)
+ */
+const MODALITY_TO_WEB_TYPE: Record<string, LibraryItem["type"]> = {
+  image: "image",
+  file: "doc",
+  text: "link",
+  audio: "doc",
+  video: "doc",
+};
+
+/** 详情条目 — LibraryItem + 正文 (list DTO 不带 content) */
+export type LibraryItemDetail = LibraryItem & { content?: string };
+
+/**
+ * wire (snake_case) → LibraryItemDetail (camelCase).
+ *
+ * 对齐 web 的 mapAtomToDto (gacode-web/src/lib/library-api.ts:111-130), 但**没有照抄
+ * web 的一个已知漏洞**: web 的 mapAtomToDto 读 `raw.title` —— wire 上根本没有 title
+ * 字段 (标题在 metadata.title 里, server 的 libraryItemToDto 也是读 meta.title,
+ * library.routes.js:132) ⇒ web 详情页标题恒为「未命名」(web 自己的注释
+ * gacode-web/src/lib/library-api.ts:117 明说这是「已知 UX 漏洞」)。
+ * PC 这里读 metadata.title, 保住 PC 现有的标题显示 (不引入回归)。
+ */
+function mapMemoryAtomToLibraryItem(raw: MemoryAtomWire): LibraryItemDetail {
+  const meta = raw.metadata ?? {};
+  return {
+    id: raw.id,
+    type: MODALITY_TO_WEB_TYPE[raw.modality ?? ""] ?? "link",
+    modality: raw.modality as LibraryItem["modality"],
+    title: typeof meta.title === "string" ? meta.title : "",
+    url: raw.raw_ref ?? undefined,
+    tags: Array.isArray(raw.tags) ? raw.tags : [],
+    createdAt: raw.created_at ?? "",
+    content: raw.content,
+  };
+}
+
+export async function getLibraryItem(
   id: string,
   withContent = false,
-): Promise<LibraryItem> {
-  const qs = withContent ? "?withContent=true" : "";
-  return request<LibraryItem>(`/yinian/library/${id}${qs}`);
+): Promise<LibraryItemDetail> {
+  const raw = await request<MemoryAtomWire>(`/yinian/memories/${id}`);
+  const item = mapMemoryAtomToLibraryItem(raw);
+  // withContent=false 时不带正文 (list DTO 语义: 正文按需开启)
+  if (!withContent) delete item.content;
+  return item;
 }
 
 export function deleteLibraryItem(id: string): Promise<{ success: true }> {
@@ -1369,7 +1464,7 @@ export function deleteAccount(): Promise<{
 }
 
 // =========================================================================
-// ChatDetail P1 (v0.7.5) — autoTitleSession + listSessionDeliverables + models
+// ChatDetail P1 (v0.7.5) — autoTitleSession + models
 //
 // autoTitleSession:
 //   server 端 POST /yinian/sessions/:id/auto-title (unified-api yinian.routes.js:464-470)
@@ -1385,16 +1480,6 @@ export function autoTitleSession(id: string): Promise<AutoTitleResult> {
   return request<AutoTitleResult>(`/yinian/sessions/${id}/auto-title`, {
     method: "POST",
   });
-}
-
-// listSessionDeliverables — chat-id-29 / chat-id-32
-//   server 端 GET /yinian/deliverables?sessionId=:id (unified-api deliverables.routes.js)
-//   拿当前 session 内所有交付物 (image / web / document), 给 DeliverableStrip 用.
-export function listSessionDeliverables(
-  sessionId: string,
-  pageSize = 20,
-): Promise<DeliverableListResponse> {
-  return listDeliverables({ sessionId, pageSize });
 }
 
 // listAvailableModels — chat-id-31

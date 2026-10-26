@@ -435,6 +435,7 @@ export function DeliveryDetail() {
           cancelLabel="取消"
           confirmVariant="danger"
           loading={deleteMutation.isPending}
+          loadingStyle="text-only"
           onCancel={() => setDeleteOpen(false)}
           onConfirm={() => deleteMutation.mutate()}
         />

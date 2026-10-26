@@ -5,8 +5,11 @@
  *   —— web 有什么 PC 必须有什么; PC 多出 web 没有的直接删.
  *
  * 数据: useQuery(["library-item", id], () => getLibraryItem(id, true))
- * 端点: GET /yinian/library/:id?withContent=true — server 返 LibraryItem,
- * withContent=true 时额外带 content 字段.
+ * 端点: GET /yinian/memories/:id (B-21 · 2026-10-26 改成与 web 详情页同端点 —
+ *   web: library/[id]/page.tsx:118 → library-api.ts:211-213 → api.ts:1223-1225;
+ *   server 注册行: unified-api/src/modules/yinian/yinian.routes.js:385)
+ *   该端点出参是 snake_case, snake→camel 映射在 src/lib/api.ts 的
+ *   mapMemoryAtomToLibraryItem 里 (PC 侧映射, 不依赖 web 的 library-api.ts).
  *
  * 本批对齐清单 (web 行号 → 本文件):
  *   - 顶栏 sticky + 返回 + 类型图标/标题 + 编辑/删除      web:263-298
@@ -32,9 +35,9 @@
  *     (grep web library/page.tsx: 无 引用 / createChat / sessionStorage).
  *   - 「返回列表」按钮 —— web 用顶栏返回箭头代替.
  *   - 元信息 InfoRow 面板 (URL / 标签 两行) —— web 是「链接/附件区」+「标签区」两块.
- *   - 同步状态徽章 SyncStatusBadge (library-id-10) —— web 详情页没有.
+ *   - 同步状态徽章 (library-id-10) —— web 详情页没有.
  *   - 「打开网页 / 打开文件」系统应用 IPC (library-id-8) —— web 详情页只给外链.
- *   - LibraryMarkdownTableCard —— 内容区改成 web 的容器形态, 直接用 lib/markdown.
+ *   - 表格专用渲染卡 —— 内容区改成 web 的容器形态, 直接用 lib/markdown.
  *
  * Tailwind: PC (v3.4.19) 与 web (v4 @theme) 的颜色/圆角/字号 token **完全同值**
  *   (web globals.css:121-175 ↔ PC tailwind.config.ts:140-173) ⇒ class 名可逐字照抄.
@@ -56,18 +59,36 @@ import { Button } from "../components/ui/Button";
 import { Badge } from "../components/ui/Badge";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { ErrorBoundary } from "../components/ui/ErrorBoundary";
 import { Markdown } from "../lib/markdown";
 import {
   ArrowLeftIcon,
   CloseIcon,
+  ExternalLinkIcon,
   FileTextIcon,
   ImageIcon,
   LinkTypeIcon,
+  LoaderCircleIcon,
   PencilIcon,
+  SaveIcon,
+  TagIcon,
   TrashIcon,
 } from "../components/ui/Glyphs";
 
 export function LibraryDetail() {
+  // B-22 (2026-10-26): 详情页包 ErrorBoundary — 对齐 web
+  //   library/[id]/page.tsx:86-92:
+  //     <ErrorBoundary title="详情加载失败" description="条目可能已被删除, 返回列表重试">
+  //       <LibraryDetailPageInner />
+  //     </ErrorBoundary>
+  return (
+    <ErrorBoundary title="详情加载失败" description="条目可能已被删除, 返回列表重试">
+      <LibraryDetailInner />
+    </ErrorBoundary>
+  );
+}
+
+function LibraryDetailInner() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -95,11 +116,11 @@ export function LibraryDetail() {
     }
   }, [editing, item]);
 
-  // 正文 — server ?withContent=true 才带这个字段 (web 走 /memories/:id 一定带).
+  // 正文 — 详情端点 GET /yinian/memories/:id 一定带 content 字段
+  //   (跟 web 同端点, web library/[id]/page.tsx:118)。
   // ⚠️ B-13: 判定用「content 存在」, **不用** item.type === "text"
   //    (server 的 type 值域恒为 image|doc|link ⇒ "text" 是死条件).
-  const content = (item as (LibraryItem & { content?: string }) | undefined)
-    ?.content;
+  const content = item?.content;
 
   // 相对时间 (web:150-161) — date-fns + zhCN (PC 已装 date-fns ^4.4.0)
   const time = useMemo(() => {
@@ -127,7 +148,6 @@ export function LibraryDetail() {
       toast({ title: "已更新", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["library-item", id] });
       queryClient.invalidateQueries({ queryKey: ["library"] });
-      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
       setEditing(false);
     },
     onError: (err) => {
@@ -176,7 +196,7 @@ export function LibraryDetail() {
           label={<span className="text-sm text-fg-muted">加载中...</span>}
         />
         <div className="flex-1 flex items-center justify-center">
-          <LoaderIcon className="w-6 h-6 animate-spin text-fg-muted" />
+          <LoaderCircleIcon size={24} className="w-6 h-6 animate-spin text-fg-muted" />
         </div>
       </div>
     );
@@ -287,7 +307,7 @@ export function LibraryDetail() {
               </Button>
               <Button size="sm" onClick={handleSaveEdit} disabled={saving}>
                 {saving ? (
-                  <LoaderIcon className="w-4 h-4 animate-spin" />
+                  <LoaderCircleIcon size={16} className="w-4 h-4 animate-spin" />
                 ) : (
                   <>
                     <SaveIcon className="w-4 h-4 mr-1" />
@@ -323,7 +343,7 @@ export function LibraryDetail() {
               className="inline-flex items-center gap-1 text-sm text-brand hover:underline break-all"
             >
               <span className="break-all">{item.url}</span>
-              <ExternalLinkIcon className="w-3.5 h-3.5 shrink-0" />
+              <ExternalLinkIcon size={14} className="w-3.5 h-3.5 shrink-0" />
             </a>
           </div>
         )}
@@ -332,7 +352,7 @@ export function LibraryDetail() {
         {!editing && (
           <div className="space-y-2">
             <div className="text-xs text-fg-muted flex items-center gap-1">
-              <TagIcon className="w-3.5 h-3.5" />
+              <TagIcon size={14} className="w-3.5 h-3.5" />
               标签
             </div>
             {item.tags && item.tags.length > 0 ? (
@@ -365,7 +385,8 @@ export function LibraryDetail() {
         )}
       </div>
 
-      {/* 删除二次确认 (web:427-450) */}
+      {/* 删除二次确认 (web:427-450)
+          pending 形态 = spinner-only (web:442-446 `deleting ? <Loader2/> : "删除"`) */}
       {deleteOpen ? (
         <ConfirmDialog
           title="确定要删除这条吗?"
@@ -373,6 +394,7 @@ export function LibraryDetail() {
           confirmLabel="删除"
           confirmVariant="danger"
           loading={deleteMutation.isPending}
+          loadingStyle="spinner-only"
           onCancel={() => setDeleteOpen(false)}
           onConfirm={() => deleteMutation.mutate()}
         />
@@ -447,91 +469,8 @@ function typeLabel(type: LibraryItem["type"]): string {
 }
 
 // ────────────────────────────────────────────────────────────
-// 内联 svg (PC 仓无 lucide-react; Glyphs.tsx 里没有这几个图形)
-//   路径取自 lucide 对应图标, 尺寸由 className 控制 (跟 LibraryCard 同套路)
+// 内联 svg —— 已全部收编进 src/components/ui/Glyphs.tsx (2026-10-26)
+//   loader-2 → LoaderCircleIcon / save → SaveIcon /
+//   external-link → ExternalLinkIcon / tag → TagIcon
+//   (path 与共享版逐字相同; 调用处按原 className 显式传 size)
 // ────────────────────────────────────────────────────────────
-
-/** lucide `loader-2` */
-function LoaderIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  );
-}
-
-/** lucide `save` */
-function SaveIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
-      <path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" />
-      <path d="M7 3v4a1 1 0 0 0 1 1h7" />
-    </svg>
-  );
-}
-
-/** lucide `external-link` */
-function ExternalLinkIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="M15 3h6v6" />
-      <path d="M10 14 21 3" />
-      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-    </svg>
-  );
-}
-
-/** lucide `tag` */
-function TagIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
-      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
-    </svg>
-  );
-}

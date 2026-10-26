@@ -17,7 +17,6 @@
  *       - 多选 + 批量删除底栏 (web 无多选)
  *       - PDF / 其它文档分组卡 (web 文档 tab 是统一 grid)
  *       - 卡片「重新下载」按钮 (web ⋮ 菜单只剩「删除」)
- *       - 拖拽文件入 KB 的 DeliveriesDropZone (web 无拖放)
  *       - 详情页的「收藏」「分享到对话」(见 DeliveryDetail.tsx)
  *
  * 卡片点击行为 (web:421-425 / 500-504): 点卡片 = 在新标签打开交付物原链接,
@@ -41,6 +40,7 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Card, CardContent } from "../components/ui/Card";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { Tabs } from "../components/ui/Tabs";
 import {
   FileTextIcon,
   GlobeIcon,
@@ -59,14 +59,20 @@ import {
 
 // =========================================================================
 // tab — 跟 web 一致 (全部 / 图片 / 网站 / 文档)
+//   web: gacode-web/src/app/(main)/deliveries/page.tsx:69-77 (TAB_DEFS)
+//        + :198-207 (<Tabs><TabsList><TabsTrigger>)
+//
+// ⚠️ 图标的 `mr-1.5` 间距**不在这里写** —— 共享 <Tabs variant="underline">
+//   的 icon 插槽自带 `mr-1.5` 外层容器 (Tabs.tsx:124), 跟 web 的
+//   `<t.icon className="w-4 h-4 mr-1.5" />` 等价, 重复写会变成 12px.
 // =========================================================================
 type TabKey = "all" | "image" | "web" | "document";
 
 const TAB_DEFS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
-  { key: "all", label: "全部", icon: <LayoutGridIcon className="w-4 h-4 mr-1.5" /> },
-  { key: "image", label: "图片", icon: <ImageIcon className="w-4 h-4 mr-1.5" /> },
-  { key: "web", label: "网站", icon: <GlobeIcon className="w-4 h-4 mr-1.5" /> },
-  { key: "document", label: "文档", icon: <FileTextIcon className="w-4 h-4 mr-1.5" /> },
+  { key: "all", label: "全部", icon: <LayoutGridIcon className="w-4 h-4" /> },
+  { key: "image", label: "图片", icon: <ImageIcon className="w-4 h-4" /> },
+  { key: "web", label: "网站", icon: <GlobeIcon className="w-4 h-4" /> },
+  { key: "document", label: "文档", icon: <FileTextIcon className="w-4 h-4" /> },
 ];
 
 const PAGE_SIZE = 30;
@@ -151,7 +157,15 @@ export function Deliveries() {
         <div className="px-4 lg:px-8 max-w-5xl mx-auto w-full">
           <div className="flex items-center justify-between gap-2 py-2">
             <div className="flex-1 min-w-0 overflow-x-auto scrollbar-none">
-              <DeliveriesTabs value={tab} onChange={setTab} />
+              {/* 共享 <Tabs variant="underline"> — 文字 + brand 下划线 + tab 图标
+                  (web:198-207 的 <Tabs><TabsList><TabsTrigger> 等价物;
+                   共享组件的 underline 变体已带 icon 插槽, Tabs.tsx:24-25 / :120-127) */}
+              <Tabs
+                variant="underline"
+                tabs={TAB_DEFS.map((t) => ({ key: t.key, label: t.label, icon: t.icon }))}
+                activeKey={tab}
+                onChange={(k) => setTab(k as TabKey)}
+              />
             </div>
             <div className="flex items-center gap-1 shrink-0">
               <button
@@ -261,58 +275,11 @@ export function Deliveries() {
           cancelLabel="取消"
           confirmVariant="danger"
           loading={deleteMutation.isPending}
+          loadingStyle="text-only"
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
         />
       ) : null}
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────
-// DeliveriesTabs — 横向 tab (web TabsList + TabsTrigger)
-// web: gacode-web/src/components/ui/tabs.tsx:44-96 + deliveries/page.tsx:198-207
-//
-// ⚠️ 为什么不复用 PC 的 <Tabs variant="underline">:
-//   PC 共享 Tabs 组件 (`src/components/ui/Tabs.tsx`) 目前不支持 tab 图标,
-//   而 web 的 4 个 tab 都带图标 (web:69-77)。该共享文件不在本批独占改动范围,
-//   故此处按 web 的 DOM 本地实现一份; 将来共享组件支持 icon 后可换回去。
-// ────────────────────────────────────────────────────────────
-function DeliveriesTabs({
-  value,
-  onChange,
-}: {
-  value: TabKey;
-  onChange: (key: TabKey) => void;
-}) {
-  return (
-    <div
-      className="flex items-center justify-start gap-1 overflow-x-auto scrollbar-none"
-      role="tablist"
-    >
-      {TAB_DEFS.map((t) => {
-        const active = value === t.key;
-        return (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onChange(t.key)}
-            className={[
-              "relative inline-flex items-center justify-center whitespace-nowrap px-4 py-2.5 text-sm font-medium transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              "disabled:pointer-events-none disabled:opacity-50",
-              active
-                ? "text-fg after:absolute after:inset-x-3 after:bottom-0 after:h-[2px] after:rounded-t after:bg-brand"
-                : "text-fg-muted hover:text-fg hover:bg-accent",
-            ].join(" ")}
-          >
-            {t.icon}
-            {t.label}
-          </button>
-        );
-      })}
     </div>
   );
 }

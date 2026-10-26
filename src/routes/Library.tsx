@@ -33,11 +33,28 @@
  *   - L-17: 空态卡改 web 形态 (border-0 + bg-card + rounded-2xl + p-10, 去 max-w-sm / 去垂直居中)
  *   - L-18: 空态图标 LibraryIcon → lucide Construction
  *   - L-23: 「加载更多」改纯文字按钮 (web library/page.tsx:552-568)
+ *   - L-13: 刷新时先清空列表再拉 (web library/page.tsx:224-229 setItems([]))
  *   - L-27: ErrorBoundary 包裹列表页 (web library/page.tsx:130-136)
  *   - L-28: 多选时全局标题显示「已选 N 项」(AppShell 页面级标题覆写)
  *   - L-51/L-74/L-75: 删除确认弹窗标题 / 描述逗号 / pending 态 (spinner-only)
  *   - 口径: 删掉 web 没有的 PC 多余项 —— 顶部「+ 新建」按钮 / SortMenu 排序 /
  *           TagFilter 标签过滤行 / 空态里的「+ 新建条目」按钮
+ *
+ * 2026-10-26 · 组件意识收编 (icon 重复实现 → 共享 Glyphs.tsx):
+ *   - 本地内联 svg 里 4 个与共享 Glyphs 逐字同款的收编走共享导出:
+ *     layout-grid → LayoutGridIcon / construction → ConstructionIcon /
+ *     loader-2 → LoaderCircleIcon / search → SearchFieldIcon
+ *   - 图标形状对齐 web (2026-10-26 第二批): 本地剩下 2 个也收编走共享导出 ——
+ *     FabPlusIcon (手写 `<line>` + sw2.2) → PlusIcon (lucide `plus`, 22px / sw2.2,
+ *       对齐 web `components/common/CreateFab.tsx:54` 的
+ *       `<Plus className="w-[22px] h-[22px]" strokeWidth={2.2} />`) /
+ *     RefreshIcon (末条 `M3 21v-5h5` ≠ lucide `M8 16H3v5`) → RefreshCwIcon
+ *       (对齐 web `library/page.tsx:464` 的 `<RefreshCw className="w-5 h-5" />`)
+ *     ⇒ 本文件的本地图标清零。
+ *   - 圆药丸搜索按钮改用共享的**裸**版 <SearchBareIcon> ⇒ 去掉 5 个
+ *     `!important` 类 (PC 无 tailwind-merge, `!` 硬压是脆的)。
+ *   - 清理 3 处 `["library-tags"]` invalidate (CollectSheet ×2 / EditSheet ×1) ——
+ *     TagFilter 已删 ⇒ 该 queryKey 在 src/** 里已无任何 query 定义 ⇒ invalidate 是 no-op
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -55,9 +72,15 @@ import { ErrorBoundary } from "../components/ui/ErrorBoundary";
 import { useToast } from "../components/ui/Toast";
 import { Tabs } from "../components/ui/Tabs";
 import {
+  ConstructionIcon,
   FileTextIcon as FileTextTabIcon,
   ImageIcon as ImageTabIcon,
+  LayoutGridIcon,
   LibraryTypeIcon,
+  LoaderCircleIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SearchBareIcon,
   SearchFieldIcon,
   TypeIcon as TypeTabIcon,
 } from "../components/ui/Glyphs";
@@ -86,7 +109,7 @@ const TYPE_TABS: Array<{
   /** 传给服务端的 modality; undefined = 不过滤 */
   serverType: string | undefined;
 }> = [
-  { key: "all", label: "全部", icon: <LayoutGridIcon className="w-4 h-4" />, serverType: undefined },
+  { key: "all", label: "全部", icon: <LayoutGridIcon size={16} className="w-4 h-4" />, serverType: undefined },
   { key: "text", label: "文本", icon: <TypeTabIcon size={16} className="w-4 h-4" />, serverType: "text" },
   { key: "image", label: "图片", icon: <ImageTabIcon size={16} className="w-4 h-4" />, serverType: "image" },
   { key: "file", label: "文档", icon: <FileTextTabIcon size={16} className="w-4 h-4" />, serverType: "file" },
@@ -157,6 +180,9 @@ function LibraryInner() {
   // web 端 setItems 累积语义: 第 1 页替换, 第 2 页起追加
   useEffect(() => {
     if (!data) return;
+    // 拉取中不消费 — placeholderData 会把上一页的 data 回填进来
+    //   (点「加载更多」/ 切 tab 时), 这时消费会把同一页累加两次.
+    if (isFetching) return;
     // placeholderData 回填上一页数据时 data 引用不变 → 跳过, 避免同一页被累加两次
     if (consumedDataRef.current === data) return;
     consumedDataRef.current = data;
@@ -165,7 +191,7 @@ function LibraryInner() {
     } else {
       setItems((cur) => [...cur, ...(data.items ?? [])]);
     }
-  }, [data, page]);
+  }, [data, page, isFetching]);
 
   // 服务端重过滤后, 剔除已不存在的选中 id (web 端同款)
   // ⚠️ L-25 收尾 (2026-10-26): 必须用**累积**的 items 裁剪, 不能用 data.items (当前页) ——
@@ -197,6 +223,15 @@ function LibraryInner() {
 
   const handleRefresh = () => {
     setPage(1);
+    // L-13: 刷新时先清空列表再拉 (web library/page.tsx:224-229 —
+    //   setPage(1) → setItems([]) → invalidateQueries → toast)
+    setItems([]);
+    // ⚠️ 清空后必须让「刷新回来的同一份 data」能重新入列 ——
+    //   react-query 的结构共享 (structuralSharing) 会把「内容没变」的响应
+    //   复用成**同一个 data 引用** ⇒ consumedDataRef 守卫会当成重复消费跳过,
+    //   结果列表清空后不回来 (空白列表). ⇒ 这里重置守卫, 由累积 effect 的
+    //   isFetching 依赖触发重跑 (拉取中不消费, 拉完再消费).
+    consumedDataRef.current = null;
     queryClient.invalidateQueries({ queryKey: ["library"] });
     toast({ message: "已刷新", variant: "default" });
   };
@@ -240,7 +275,6 @@ function LibraryInner() {
     mutationFn: (id: string) => deleteLibraryItem(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["library"] });
-      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
       toast({ message: "已删除", variant: "success" });
       setPendingSingleDelete(null);
     },
@@ -257,7 +291,6 @@ function LibraryInner() {
     mutationFn: (ids: string[]) => batchDeleteLibraryItems(ids),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ["library"] });
-      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
       if (res.failed.length === 0) {
         toast({
           message: `已删除 ${res.succeeded.length} 条`,
@@ -299,7 +332,6 @@ function LibraryInner() {
             message: `已入库: ${r.file.name}`,
             variant: "success",
           });
-          queryClient.invalidateQueries({ queryKey: ["library-tags"] });
         } else {
           toast({
             message: `入库失败: ${r.msg ?? "未知"}`,
@@ -346,7 +378,15 @@ function LibraryInner() {
                       : "text-fg-muted hover:bg-bg-elevated",
                   ].join(" ")}
                 >
-                  <SearchIcon className="w-5 h-5" />
+                  {/* lucide `search` (20px / sw2) — 复用共享 Glyphs 的裸版 <SearchBareIcon>
+                      (path 与 web `library/page.tsx:455` 的 lucide Search 逐字相同:
+                       circle 11,11 r8 + `m21 21-4.3-4.3`)。
+                      ⚠️ 用「裸」版而不是 `SearchFieldIcon`: 后者内联了输入框前缀
+                      专用的定位/尺寸/颜色类 (absolute left-3 top-1/2 -translate-y-1/2
+                      w-4 h-4 text-fg-muted) ⇒ 在这个圆药丸按钮里只能靠 5 个
+                      `!important` 类硬压 (PC 无 tailwind-merge ⇒ 脆)。
+                      裸版 className 原样透传 ⇒ 调用点只写自己需要的尺寸/颜色。 */}
+                  <SearchBareIcon className="w-5 h-5" />
                 </button>
                 <button
                   type="button"
@@ -355,7 +395,11 @@ function LibraryInner() {
                   disabled={isFetching}
                   className="shrink-0 w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated transition-colors duration-150 inline-flex items-center justify-center disabled:opacity-50"
                 >
-                  <RefreshIcon className={isFetching ? "animate-spin" : ""} />
+                  {/* lucide `refresh-cw` (20px / sw2) — 共享 <RefreshCwIcon>
+                      (web `library/page.tsx:464` 的 <RefreshCw className="w-5 h-5" /> 同款) */}
+                  <RefreshCwIcon
+                    className={["w-5 h-5", isFetching ? "animate-spin" : ""].filter(Boolean).join(" ")}
+                  />
                 </button>
               </div>
             </div>
@@ -421,7 +465,7 @@ function LibraryInner() {
                       className="inline-flex items-center gap-2 text-sm text-fg-muted hover:text-fg disabled:opacity-50"
                     >
                       {isFetching ? (
-                        <SpinnerIcon className="w-4 h-4 animate-spin" />
+                        <LoaderCircleIcon size={16} className="w-4 h-4 animate-spin" />
                       ) : (
                         /* lucide `library` — 复用共享 Glyphs 的 LibraryTypeIcon
                            (web library/page.tsx:563 同款 path) */
@@ -451,7 +495,10 @@ function LibraryInner() {
             "fixed bottom-5 right-5 z-40 w-[52px] h-[52px] rounded-lg bg-brand text-brand-on grid place-items-center shadow-[0_8px_24px_rgba(255,107,53,0.4)] hover:bg-brand-hover hover:-translate-y-px active:scale-[0.96] transition-all duration-150",
           ].join(" ")}
         >
-          <FabPlusIcon className="w-[22px] h-[22px]" />
+          {/* lucide `plus` (22px / sw2.2) — 共享 <PlusIcon>
+              (web `components/common/CreateFab.tsx:54` 的
+               <Plus className="w-[22px] h-[22px]" strokeWidth={2.2} /> 同款) */}
+          <PlusIcon size={22} strokeWidth={2.2} className="w-[22px] h-[22px]" />
         </button>
       ) : null}
 
@@ -550,88 +597,13 @@ function SkeletonGrid() {
 }
 
 // ────────────────────────────────────────────────────────────
-// Icons
-//   PC 仓没有 lucide-react ⇒ 内联 svg, path 取自 web 用的 lucide-react v0.407.0
-//   (逐字照抄), svg 用 width/height="100%" ⇒ tailwind 的 w-4 / w-5 / w-12 生效
+// Icons — 本文件**不再保留**本地图标 (2026-10-26)
+//   共享 Glyphs.tsx 已有同款 (path 逐字相同) 的导出, 一律 import 复用:
+//     · layout-grid  → LayoutGridIcon
+//     · construction → ConstructionIcon
+//     · loader-2     → LoaderCircleIcon
+//     · search       → SearchFieldIcon (输入框前缀) / SearchBareIcon (圆药丸按钮)
+//     · refresh-cw   → RefreshCwIcon   (改前本地末条是 `M3 21v-5h5`, lucide 是 `M8 16H3v5`)
+//     · plus         → PlusIcon        (改前本地是 `<line>` 手写 + sw2.2)
+//   (组件意识: 禁止重复实现 — 同款图形只在 Glyphs.tsx 里存在一份)
 // ────────────────────────────────────────────────────────────
-
-/** lucide `layout-grid` (tab「全部」) */
-function LayoutGridIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect width="7" height="7" x="3" y="3" rx="1" />
-      <rect width="7" height="7" x="14" y="3" rx="1" />
-      <rect width="7" height="7" x="14" y="14" rx="1" />
-      <rect width="7" height="7" x="3" y="14" rx="1" />
-    </svg>
-  );
-}
-
-/** lucide `construction` (空态图标, web library/page.tsx:515) */
-function ConstructionIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="2" y="6" width="20" height="8" rx="1" />
-      <path d="M17 14v7" />
-      <path d="M7 14v7" />
-      <path d="M17 3v3" />
-      <path d="M7 3v3" />
-      <path d="M10 14 2.3 6.3" />
-      <path d="m14 6 7.7 7.7" />
-      <path d="m8 6 8 8" />
-    </svg>
-  );
-}
-
-/** lucide `loader-2` (转圈, web 用 Loader2) */
-function SpinnerIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  );
-}
-
-/** FabPlusIcon — FAB 用 (web CreateFab: ICON_CLASS = "w-[22px] h-[22px]", strokeWidth 2.2) */
-function FabPlusIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
-    </svg>
-  );
-}
-
-function RefreshIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-      <path d="M21 3v5h-5" />
-      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-      <path d="M3 21v-5h5" />
-    </svg>
-  );
-}
-
-/**
- * lucide `search` — 搜索按钮 (20px, web library/page.tsx:455 `w-5 h-5`)
- * ⚠️ 搜索框内的前缀图标复用共享 Glyphs 的 <SearchFieldIcon> (16px, 同样 path)
- */
-function SearchIcon({ className = "", size = 20 }: { className?: string; size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <circle cx="11" cy="11" r="8" />
-      <path d="m21 21-4.3-4.3" />
-    </svg>
-  );
-}
