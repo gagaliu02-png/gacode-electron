@@ -278,6 +278,8 @@ export function ChatDetail() {
       createdAt: m.createdAt,
       recalled: m.recalled ?? false,
       recalledAt: m.recalledAt ?? null,
+      // 历史消息的思考/工具时间线 (M5 批): api.getHistory 已把服务端 phases_json 解析成 ExecutionPhase[]
+      phases: m.phases,
     }));
     return list;
   }, [historyQuery.data]);

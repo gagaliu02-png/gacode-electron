@@ -33,6 +33,11 @@
  *   - body 默认 JSON, 不处理 FormData (阶段 3 才需要)
  */
 
+// A2-D4-02 · ExecutionPhase —— 思考 / 工具时间线的数据模型.
+//   类型定义在 `components/chat/ExecutionTimeline.tsx` (组件已定稿, 不可改),
+//   这里用 `import type` 引进来 —— 编译期擦除, 不会给 lib 引入运行时依赖.
+import type { ExecutionPhase } from "../components/chat/ExecutionTimeline";
+
 const API_BASE = "https://www.gaga.sale/api/v1";
 
 /**
@@ -329,6 +334,12 @@ export interface ChatMessage {
   attachedFileIds?: string[];
   attachedFileNames?: Array<{ fileId: string; name: string }>;
   phasesJson?: string | null;
+  /**
+   * A2-D4-02 · 思考 / 工具时间线 —— server 落库的 `phases_json` 解析结果.
+   *   解析逻辑见本文件私有 helper `parsePhasesJson`.
+   *   缺失 / 脏数据 ⇒ undefined (不是空数组, 免得渲出空 timeline 容器).
+   */
+  phases?: ExecutionPhase[];
   /** 阶段 8: 是否已撤回 (server 返 recalled=true 时不再走 modify, 但保留以渲占位) */
   recalled?: boolean;
   /** 阶段 8: 撤回时间, ISO; 当 recalled=true 时必返. UI 用它显示占位文案 */
@@ -471,6 +482,70 @@ export function deleteSessions(ids: string[]): Promise<{ ok: true; deletedCount:
 
 // ─────────── History (messages) ───────────
 
+/**
+ * A2-D4-02 · 解析 server 落库的 `phases_json` → `ExecutionPhase[]`.
+ *
+ * 数据源 (跟 web 同端点同字段): `GET /yinian/sessions/:id/messages` 返回体里
+ *   每条 message 带 `phases_json` (JSON **字符串**, 不是已解析的数组):
+ *     [{ type: 'thinking', text?: string, ts?: number },
+ *      { type: 'tool', event: {…}, ts?: number }, ...]
+ *   对照 web `gacode-web/src/lib/api.ts:445-495` (parsePhasesJson).
+ *
+ * 合并策略跟 web 一致 (web M3 fix): server 落的是 **raw 流式累积**结果, 相邻
+ *   thinking chunk 没在 server 端合并 ⇒ 回放时必须 client-side 就地拼接,
+ *   否则时间线显示「思考 20 次」短句列表, 而不是 1 条完整思考链
+ *   (跟 PC 流式路径 `ChatDetail.mergeThinkingPhase` 同款).
+ *   遇到 tool ⇒ 关闭当前 open thinking.
+ *
+ * 健壮性 (server 数据不可信, 一条脏数据不许拖垮整个 history):
+ *   · 字段缺失 / null / 空串 → undefined (不给空数组, 免得渲出空 timeline 容器)
+ *   · 非法 JSON → undefined (静默降级, 不抛异常)
+ *   · 解析结果非数组 → undefined
+ *   · 条目字段缺失 / 类型不对 → **逐条丢弃**, 其余合法项保留 (不整份丢)
+ */
+function parsePhasesJson(
+  phasesJson: string | null | undefined,
+): ExecutionPhase[] | undefined {
+  if (!phasesJson) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(phasesJson);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parsed)) return undefined;
+  const phases: ExecutionPhase[] = [];
+  let openThinkingIdx = -1;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const p = item as {
+      type?: unknown;
+      text?: unknown;
+      event?: unknown;
+      ts?: unknown;
+    };
+    const ts = typeof p.ts === "number" && Number.isFinite(p.ts) ? p.ts : undefined;
+    if (p.type === "thinking" && typeof p.text === "string") {
+      if (openThinkingIdx >= 0) {
+        const cur = phases[openThinkingIdx];
+        if (cur && cur.type === "thinking") {
+          cur.text = (cur.text ?? "") + p.text;
+          if (ts !== undefined) cur.ts = ts;
+        }
+      } else {
+        phases.push({ type: "thinking", text: p.text, ts });
+        openThinkingIdx = phases.length - 1;
+      }
+    } else if (p.type === "tool" && p.event && typeof p.event === "object") {
+      // tool 出现 → 关闭任何 open thinking
+      openThinkingIdx = -1;
+      phases.push({ type: "tool", event: p.event as Record<string, unknown>, ts });
+    }
+    // 其它形态 (type 未知 / 字段类型不对) → 丢弃该条, 保留其它合法项
+  }
+  return phases.length > 0 ? phases : undefined;
+}
+
 export async function getHistory(chatId: string): Promise<{
   messages: ChatMessage[];
   nextCursor: string | null;
@@ -481,6 +556,8 @@ export async function getHistory(chatId: string): Promise<{
       role: string;
       content: string;
       created_at: string;
+      /** A2-D4-02 · 思考 / 工具时间线原始数据 (JSON 字符串, 解析见 parsePhasesJson) */
+      phases_json?: string | null;
       metadata?: string | Record<string, unknown> | null;
       recalled?: boolean;
       recalled_at?: string | null;
@@ -523,6 +600,9 @@ export async function getHistory(chatId: string): Promise<{
       //   recalled 这条可选字段透传到 client, 用于 MessageBubble 占位 + 关闭菜单.
       recalled: m.recalled ?? false,
       recalledAt: m.recalled_at ?? null,
+      // A2-D4-02 · 思考 / 工具时间线 —— server 落库的 phases_json 解析结果.
+      //   缺失 / null / 脏数据 ⇒ undefined (不渲空 timeline 容器).
+      phases: parsePhasesJson(m.phases_json),
     };
   });
   return { messages, nextCursor: r.next_cursor };
