@@ -22,16 +22,19 @@
 # 0.7.8 (Home 对齐 web + Markdown 表格列宽 clamp + .gitignore 三级解锁):
 #   - output 改 release-align-v8/ 绕 Search Indexer 锁旧目录
 #   - buildVersion bump 0.7.8 (package.json 同步)
+# 0.7.9 (A 域 179 条全量核实收口 + Markdown 全栈自研接线 M3/M4/M5):
+#   - output 改 release-align-v9/ 绕 Search Indexer 锁旧目录
+#   - buildVersion bump 0.7.9 (package.json 同步)
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.8
+buildVersion: 0.7.9
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
-  # 0.7.8 (Home 对齐 + clamp + gitignore 解锁): 隔离输出目录
-  output: release-align-v8
+  # 0.7.9 (A 域收口 + Markdown 全栈自研 M3/M4/M5): 隔离输出目录
+  output: release-align-v9
 
 files:
   - dist/**/*
