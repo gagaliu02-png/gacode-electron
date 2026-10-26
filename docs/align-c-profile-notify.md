@@ -13,7 +13,7 @@
 
 ### F-1 · PC 端没有 `clsx` / `tailwind-merge` / `class-variance-authority`
 
-- 证据：`gacode-electron/package.json:18-32` 依赖里只有 `@tanstack/react-query / date-fns / electron-updater / hash-wasm / highlight.js / qrcode / react / react-dom / react-markdown / react-router-dom / rehype-highlight / rehype-sanitize / remark-emoji / remark-gfm`
+- 证据：`gacode-electron/package.json:18-27` 依赖里只有 `@tanstack/react-query / date-fns / electron-updater / hash-wasm / qrcode / react / react-dom / react-router-dom`（⚠️ **M3 批，commit `b29207f` 已摘除**：`highlight.js` / `react-markdown` / `rehype-highlight` / `rehype-sanitize` / `remark-emoji` / `remark-gfm` —— PC 已切自研 markdown 管线 `src/lib/markdown/`）
   - ⚠️ **修正（2026-10-26 复核）**：原枚举漏了 **`date-fns@^4.4.0`** —— PC **已装** date-fns，`gacode-electron/src/components/chat/MessageBubble.tsx:31-32` 已在用 `formatDistanceToNow` + `zhCN`（`import { formatDistanceToNow } from "date-fns"; import { zhCN } from "date-fns/locale";`）
 - web 端：`gacode-web/package.json` 有 `clsx` + `tailwind-merge`（web 的 `cn()` = `twMerge(clsx(...))`）
 - **影响**：web 端 `<CardContent className="p-10 ...">` 靠 `twMerge` 把基础串 `p-6 pt-0` 覆盖成 `p-10`；PC 端如果照抄两个 className 串，**后写的 `p-6 pt-0` 不会被覆盖**（Tailwind 本身不解析冲突，靠 CSS 源序胜出，且 Tailwind 不保证类名顺序）。

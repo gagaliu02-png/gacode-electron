@@ -396,7 +396,7 @@
 2. **方向逆**：gaga 给 PC 端主线「先把每一个 page 和 web 端对齐」。PC 单独加 web 没有的功能 = 主动制造新的端间差异，方向反了。
 3. **gaga 原话**：「markdown 这类优化型任务 PC 端都不参与」。
 4. **真硬前置在 server**：`messages.content` 不带 latex/mermaid 标记（清单 §send-blocker 第 10 项「疑似，待核」，本节后由 gagaOS 统一提单给 unified-api，P2）。
-5. **跨端契约**：PC highlight.js / rehype-highlight 已装但未启用（PC 退出 markdown 主线，本轮既不启用也不卸载）—— 这是 v2 docs 已有既定决策。
+5. **跨端契约**：PC highlight.js / rehype-highlight **已卸载**（M3 批，commit `b29207f`）—— PC 已切自研 markdown 管线，语法高亮按安卓基准**不做**；本条原「已装但未启用（既不启用也不卸载）」的旧决策已作废。
 
 **改派方向**：
 

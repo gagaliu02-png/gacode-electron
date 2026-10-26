@@ -2346,32 +2346,23 @@
   - 或改 `LibraryMarkdownTableCard` 的 className base（见 B-15）
 - **预估改动**：约 10 行
 
-### B-15 · Markdown 渲染器能力差异（web `Markdown` vs PC `LibraryMarkdownTableCard`）
+### B-15 · Markdown 渲染器能力差异（web `Markdown` vs PC 知识库 markdown 卡）—— **口径已反转：PC 不再追 web，统一到安卓基准**
 - **web**：`gacode-web/src/components/Markdown.tsx`（459 行）—— `react-markdown` **9.0.1** + `remark-gfm` + `remark-emoji` + `rehype-sanitize`（自定义 schema），`components` 映射覆盖 **20+ 元素**
-- **PC**：`gacode-electron/src/components/library/LibraryMarkdownTableCard.tsx`（111 行）—— `react-markdown` **10.1.0** + `remark-gfm` + `rehype-sanitize`（默认 schema），`components` 只覆盖 **5 个**：`table` / `th` / `td` / `code` / `a`
-- **判定**：缺失（下列 8 个子能力 PC 端没有）
-- **怎么改**（逐项）：
-  1. **缺 `remark-emoji`**（`:smile:` → 😄）
-     - ✅ **无需新增依赖** —— PC `package.json` **已有** `"remark-emoji": "^5.0.2"`（与 web 同版本），真正缺的是**没接进** `remarkPlugins`
-     - 改法：`src/components/library/LibraryMarkdownTableCard.tsx:55` 的 `remarkPlugins={[remarkGfm]}` → `remarkPlugins={[remarkGfm, remarkEmoji]}`（文件顶部加 `import remarkEmoji from "remark-emoji";`）
-  2. **缺图片 lightbox**（web `Markdown.tsx:139-178` `MarkdownImage` + `85-129` `LightboxDialog`）
-     - PC 需新增 `MarkdownImage` + `LightboxDialog` 两组件（`<dialog>` + `showModal()`，零依赖）
-  3. **缺 `ExpandableCell`**（web `Markdown.tsx:197-234` —— 表格单元格超 6 行折叠 + 「展开 / 收起」按钮）
-     - ⚠️ **gaga 规则**：「表格 `.md-table-td-clamp` / `.md-table-td-toggle` / `ExpandableCell` 相关逻辑**一行不动**（web/PC 与安卓是不同轴差异），只抄 web 端当前的实际行为」
-     - → PC 端 **`LibraryMarkdownTableCard.tsx:68-74` 的 `td` 映射一行不动**；只**新增** `ExpandableCell` 组件并把 `td` 改为包一层（新增不等于改动既有 `.md-table-td-inner` 逻辑）
-     - PC 需确认 `src/styles/globals.css` 已有 `.md-table-td-clamp` / `.md-table-td-toggle` 规则（**待核**）
-  4. **缺 code block 复制按钮 + 语言徽章**（web `Markdown.tsx:36-72` `CodeBlock`）
-     - PC 现有 `code` 映射（`LibraryMarkdownTableCard.tsx:75-92`）只是原样透传 className，无 header 栏、无复制按钮
-  5. **缺 `pre` 覆盖**（web `Markdown.tsx:295-297`：`pre({children}) { return <>{children}</>; }`）
-  6. **缺标题层级样式**（web `h1`~`h6`，`Markdown.tsx:311-342`）—— PC 无 → 走浏览器默认 h1/h2 样式（体积差很大）
-  7. **缺 `p` / `ul` / `ol` / `li` / `blockquote` / `hr` / `strong` / `em` / `del` 样式**（web `Markdown.tsx:343-423`）—— PC 走浏览器默认
-  8. **缺 `input`（GFM task list）**（web `Markdown.tsx:424-439`，`accent-brand` checkbox）
-  9. **rehype-sanitize schema 不同**：web 放开了 `code.className`（`language-`）、`span.className`（hljs/token/shiki）、`input.type/checked/disabled`（`Markdown.tsx:241-260`）；PC 用 `rehypeSanitize` 默认 schema → **会剥掉 `language-xxx` class，导致 PC 代码块失去语言标识**
-     - 改法：PC 需照抄 web 的 `sanitizeSchema` 对象
-  10. **⚠️ react-markdown 版本差异（gaga 点名的坑）**：PC `^10.1.0` / web `^9.0.1`
-      - `components` 回调签名差异：v9 的 `code({node, className, children, ...props})` / v10 同样是解构 props，但 v10 的 `inline` 判断改为「有 `className` 且匹配 `language-`」；**PC 现有判断 `cls && /language-/.test(cls)`（`LibraryMarkdownTableCard.tsx:76`）与 web 的 `const isInline = !className`（`Markdown.tsx:278`）语义不同** → 内联代码在 PC 会被误判为块级（若内联 code 恰好带 className）
-      - 抄 components 映射时**必须按 v10 签名写**，不能直接复制 web 的 v9 写法
-- **预估改动**：约 200 行（其中 `ExpandableCell` ~40 行、`CodeBlock` ~40 行、`MarkdownImage`+`LightboxDialog` ~90 行、schema ~25 行、其余映射 ~10 行）+ **0 依赖**（`remark-emoji` PC `package.json` 已有，只需接进 `remarkPlugins`）
+- **PC**：**已归并到自研 markdown 管线**（M3 批 commit `b29207f`）—— `gacode-electron/src/components/library/LibraryMarkdownTableCard.tsx` 现 **59 行**，只调 `<Markdown size="reading" cutCodeBlocks>`（`src/components/library/LibraryMarkdownTableCard.tsx:54`）；底层 = `src/lib/markdown.tsx`（薄封装）→ `src/lib/markdown/renderer.tsx`（渲染层）→ `src/lib/markdown/parser.ts`（解析层，零依赖）
+- **判定**：🟢 **已落地** —— PC **不再**按 web 的能力清单补差，而是**统一到安卓基准**（行为依据 `docs/md-android-behavior-spec.md`，每条带安卓 file:line）
+- **怎么改**（逐项 —— **口径已反转**：下列 web 端能力**全部削平**，不做）：
+  1. **emoji 短码**（web `remark-emoji`：`:smile:` → 😄）→ **削平**：不做短码转换，短码原样输出（安卓无此能力）
+  2. **图片 Lightbox**（web `Markdown.tsx:139-178` `MarkdownImage` + `85-129` `LightboxDialog`）→ **削平**：安卓不支持点击放大；PC 只出固定尺寸图片块（≤280px / 120–320px / 圆角 12，`src/styles/globals.css` 的 `.md-image*`）
+  3. **`ExpandableCell`**（web `Markdown.tsx:197-234` —— 表格单元格超 6 行折叠 + 「展开 / 收起」按钮）→ **削平**：安卓表格**无行数折叠**；PC 的 clamp 是**列宽** clamp（80px / 240px），单元格长内容折行**不截断**（旧的 `.md-table-td-clamp` / `.md-table-td-toggle` 死规则已删）
+  4. **code block 复制按钮 + 语言徽章**（web `Markdown.tsx:36-72` `CodeBlock`）→ **保留能力，但改由自研层实现**：`src/lib/markdown/renderer.tsx` 的 `MdCodeCard` 自带语言徽章 + 复制按钮（`size="reading"` + `cutCodeBlocks` 场景）
+  5. **语法高亮**（web `rehype-highlight` / `highlight.js`）→ **削平**：安卓不做高亮；PC 的 `highlight.js` / `rehype-highlight` 依赖已摘除
+  6. **H4–H6**（web `Markdown.tsx:311-342` `h1`~`h6`）→ **削平**：安卓只判 `#` / `##` / `###`，H4-H6 原样当文本（井号保留）
+  7. **真 `<ul>/<ol>` 嵌套**（web `Markdown.tsx:343-423`）→ **削平**：列表前缀是**文本**（`  • ` / `  N. `），缩进子项落普通文本
+  8. **task-list 真 checkbox**（web `Markdown.tsx:424-439`，`accent-brand` checkbox）→ **削平**：前缀是文本 `[X] ` / `[ ] `（安卓同样不做真勾选框）
+  9. **`.md-bq` 3 色左边框 / `.md-hr` 居中短线 / `.md-img*` lightbox 形态 / `.md-del`** → **削平**：PC 引用改为「无边框 / 每层 2 空格缩进」「满宽 1px 分隔线」「固定尺寸图片块」「`.md-strike`」
+  10. **rehype-sanitize schema**（web 放行 `code.className`(`language-`) / `span.className`(hljs/token/shiki) / `input.type|checked|disabled`）→ **不再需要**：自研管线是**白名单渲染**（AST 决定产出什么 DOM），天然无 XSS 面
+  11. **react-markdown v9 / v10 `components` 回调签名差异** → **不再适用**：PC 不再使用 react-markdown
+- **预估改动**：**已交付**（M3 批 commit `b29207f`）—— `LibraryMarkdownTableCard.tsx` 111 行 → **59 行**，**0 依赖**（6 个第三方包从 `package.json` 摘除）
 
 ### B-16 · 正文容器：缺 `overflow-y-auto` / `w-full` / `flex-1`
 - **web**：`gacode-web/src/app/(main)/library/[id]/page.tsx:301`
@@ -4249,7 +4240,7 @@
 
 | # | 条目 | 要动什么 | 预估行数 |
 |---|---|---|---|
-| 1 | **B-15** | web `Markdown.tsx`（459 行，react-markdown 9）整套能力搬到 PC `LibraryMarkdownTableCard`：缺 `remark-emoji` **接入**（PC `package.json` **已有**该依赖，只需接进 `remarkPlugins`）、缺 `ExpandableCell`（表格 6 行折叠 + 展开按钮）、缺 `CodeBlock`（语言徽章 + 复制按钮）、缺图片 Lightbox、缺标题/列表/引用/删除线/task-list 样式、rehype-sanitize schema 需放行 `language-` class；且 **react-markdown 版本 PC 10 / web 9 的 components 回调签名有坑** | ≈200 + 0 依赖 |
+| 1 | **B-15** | ~~web `Markdown.tsx`（459 行，react-markdown 9）整套能力搬到 PC `LibraryMarkdownTableCard`~~ → **口径已反转**：PC 不再搬 web 能力，改为**统一到安卓基准**（自研 markdown 管线：`parser.ts` 解析层 + `renderer.tsx` 渲染层）；web 侧的 emoji 短码 / 图片 Lightbox / `ExpandableCell` 6 行折叠 / task-list 真 checkbox / 真 `<ul>/<ol>` 嵌套 / H4-H6 / 语法高亮 **全部削平**；代码块语言徽章 + 复制按钮由自研渲染层 `MdCodeCard` 提供 | **已交付**（M3 批 commit `b29207f`；PC `LibraryMarkdownTableCard.tsx` 111 行 → 59 行，**0 依赖**，6 个第三方包已摘除） |
 | 2 | **D-08 + D-09 + D-10 + D-11 + D-12** | 交付中心列表拆成 web 的 `ImageCard`（1:1 图）/ `WebCard`（16:9 图 + 渐变占位）/ `DocumentCard`（横排文件卡 + 下载按钮）/ `CardMenu`（⋮ 只含删除），替换 PC 统一的 `DeliveryCard`；连带 6 个 lucide svg 函数 | ≈220 |
 | 3 | **L-38 ~ L-41** | 知识库列表行新增 web 形态的浮层上下文菜单组件 `LibraryRowMenu.tsx`（fixed z-[70] 定位 + Esc/外部点击关闭 + 详情/编辑/在新窗口打开/删除 4 项 + 分隔线），并把 `LibraryCard` 的右键从「直接开编辑」改成「弹菜单」 | ≈90 |
 | 4 | **E-07 + S-10** | 新建 `src/components/deliveries/DocumentPreview.tsx`：PDF → Google Docs Viewer iframe（min(80vh,800px)）+ TXT 直链 fetch/UTF-8 解码 + 短 id 走 server `/yinian/documents/:id/text` + 加载/错误/空三态；PC `api.ts` 需新增 `getDocumentText` | ≈130 + 1 api 函数 |
@@ -4377,11 +4368,12 @@ L-07 / L-08 / L-09 / L-10 / L-13 / L-16 / L-19 / L-20 / L-22 / L-26 / L-31 / L-3
   - 写入点：`library.routes.js:442`（POST 建条 `const metadata = { title }`）/ `:609`（PATCH 改标题 `baseMeta.title = title`）
 - **应该怎么改**：结论改成「**PC 切到 `/memories/:id` 时自己映射 `metadata.title` 即可，不是死结**」（比原文有价值得多）。B-21（改前 `:2552`）里同一处「阻塞点 / 需实测」同步去掉。
 
-## 11.5 E-5 · B-15 / §八 第 1 行的「PC 需新增依赖 remark-emoji」是错的
+## 11.5 E-5 · B-15 / §八 第 1 行的「PC 需新增依赖 remark-emoji」是错的 —— **M3 批后整条作废（依赖整体摘除）**
 
 - **文档原话**（改前 `:2341`）：「依赖：PC **需新增依赖** `remark-emoji`」；§八 第 1 行（改前 `:4224`）：「缺 `remark-emoji` 依赖 … ≈200 + **1 依赖**」
-- **源码真相**：PC `package.json` **已有** `"remark-emoji": "^5.0.2"`（与 web 同版本）；真正缺的是**没接进** `remarkPlugins` —— `src/components/library/LibraryMarkdownTableCard.tsx:55` 现在是 `remarkPlugins={[remarkGfm]}`
-- **应该怎么改**：全部改成「**无需新增依赖**，`remarkPlugins` 加 `remarkEmoji` 即可」；§八 第 1 行改成「≈200 + **0 依赖**」。
+- **当时真相**：PC `package.json` **已有** `"remark-emoji": "^5.0.2"`（与 web 同版本）；真正缺的是**没接进** `remarkPlugins` —— `src/components/library/LibraryMarkdownTableCard.tsx:55` 当时是 `remarkPlugins={[remarkGfm]}`
+- **M3 批后现状**（2026-10-26，commit `b29207f`）：PC **整条第三方 markdown 体系已摘除** —— `react-markdown` / `remark-gfm` / `remark-emoji` / `rehype-highlight` / `rehype-sanitize` / `highlight.js` 六个包从 `package.json` 移除；`LibraryMarkdownTableCard.tsx`（111 行 → **59 行**）也不再引用 `remarkPlugins`，改走自研管线 `src/lib/markdown.tsx` → `src/lib/markdown/renderer.tsx` → `src/lib/markdown/parser.ts`
+- **应该怎么改**：本条纠正**作废**；B-15 / §八 第 1 行已改写为「PC 已归并到自研 markdown 管线，emoji 短码等 web 能力按安卓基准全部削平」（**不是**「接进 `remarkPlugins`」）
 
 ## 11.6 E-6 · S- 编号双占（§五 S-01~S-10 与 §六 S-01~S-07 撞号）+ §八 第 10 行指错条目
 

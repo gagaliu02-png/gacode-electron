@@ -253,7 +253,7 @@
   }
 
   /* ==========================================================================
-     md-table-* — Markdown 表格 (来自 lib/markdown.tsx `table` / `th` / `td` 分支)
+     md-table-* — Markdown 表格 (来自 lib/markdown/renderer.tsx 的 `renderTable`)
 
      跟 gacode-web/src/styles/globals.css 1:1 对齐 (verified 2026-10-17)。
      阶段 2 (gaga 拍板): 列宽一致 + 正文断行 + 仅超容器时横滚.
@@ -261,8 +261,10 @@
        ① 表头居中 + 加粗 + 浅灰背景 + 加粗下边框 (跟正文区隔)
        ② 单词边界优先 (overflow-wrap: break-word + word-break: normal),
           长 URL 才强制断, 不再用 anywhere (anywhere 太激进英文单词内也断).
-       ③ 每列最多 6 行, 超过则折叠 + 底部"展开/收起"按钮
-          (测量 + 交互逻辑在 lib/markdown.tsx 的 ExpandableCell 里).
+       ③ ~~每列最多 6 行, 超过则折叠 + 底部"展开/收起"按钮~~ ——
+          随旧第三方体系下线 (M3 批 commit b29207f): 安卓表格**无行数折叠**,
+          clamp 是**列宽** clamp (见下方 --md-table-col-min / --md-table-col-max),
+          单元格长内容折行不截断.
      - table-layout: auto 让同列 cell 等宽 (列内最长内容决定列宽).
      暗色模式: 走 CSS 变量 --bg-sunken / --fg / --border-default, 跟 :root 默认
               暗色 token 配套; .light class 切到浅色 token 时, 表格颜色一并切.
@@ -329,8 +331,8 @@
   }
 
   /* 表头单元格 — 阶段 3: 略大 padding + 加粗下边框 (2px = 表头结束标记).
-     P0 (2026-10-17): 默认 text-align: left — GFM 规范无对齐标记就是左对齐;
-     markdown 源码里写了 `:---:` / `---:` 时, react-markdown-gfm 会注入 inline
+     P0 (2026-10-17): 默认 text-align: left — 对齐标记缺省就是左对齐;
+     markdown 源码里写了 `:---:` / `---:` 时, 渲染层按 AST 的 alignments 注入 inline
      style.textAlign= center/right, 自动覆盖此处 CSS 类默认值. */
   .md-table-th {
     padding: 10px 12px;
@@ -342,7 +344,9 @@
     word-break: normal;
   }
 
-  /* 正文单元格 — 阶段 3: 单词边界优先; 折叠逻辑见 .md-table-td-clamp + ExpandableCell */
+  /* 正文单元格 — 阶段 3: 单词边界优先（长内容在格内折行，**不截断**）；
+     旧「超 6 行折叠 + 展开按钮」（.md-table-td-clamp / .md-table-td-toggle）
+     随旧第三方体系下线（M3 批 commit b29207f）—— 安卓表格无行数折叠 */
   .md-table-td {
     padding: 8px 12px;
     border-bottom: 1px solid var(--border-default);
@@ -351,42 +355,6 @@
     vertical-align: top;
     overflow-wrap: break-word;
     word-break: normal;
-  }
-
-  /* cell 内容容器 — 阶段 3: 平时 display:block, 加 .md-table-td-clamp 后切到 -webkit-box */
-  .md-table-td-inner {
-    display: block;
-    overflow-wrap: inherit;
-    word-break: inherit;
-  }
-
-  .md-table-td-clamp {
-    display: -webkit-box;
-    -webkit-line-clamp: 6;
-    line-clamp: 6;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  /* 展开/收起按钮 — 跟 gagaOS 其它 inline 链接同色 (brand), 11px 小号 */
-  .md-table-td-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    margin-top: 4px;
-    padding: 0;
-    background: none;
-    border: none;
-    font-size: 11px;
-    line-height: 1.2;
-    color: var(--brand);
-    cursor: pointer;
-    user-select: none;
-  }
-  .md-table-td-toggle:focus-visible {
-    outline: 2px solid var(--brand);
-    outline-offset: 2px;
-    border-radius: 2px;
   }
 
   .md-table tbody tr:last-child .md-table-td,
@@ -406,116 +374,21 @@
   }
 
   /* ==========================================================================
-     P0 markdown 渲染细节 (2026-10-17) — 7 项 (跟 gacode-web 同源)
-       ① md-img 图片居中 + 点击放大 (lightbox)
-       ② md-del 删除线 muted 色
-       ③ md-bq 嵌套引用 — descendant selector 每层 +1.5rem 缩进 + 切色
-       ④ li:has(input[type=checkbox][checked]) 已勾选 = line-through + 透明度
-       ⑤ md-hr 浅灰 + 居中短线
-       ⑥ 表格默认对齐: 跟随 gfm inline style (无 inline 时 left)
-       ⑦ md-lightbox 全屏图 + 关闭交互
+     P0 markdown 渲染细节 (2026-10-17) — 遗留项清理 (M4 收口批, 2026-10-26)
+
+     旧第三方体系（react-markdown + remark-gfm + remark-emoji + rehype-*
+     + highlight.js）注入的规则已**全部删除** —— 渲染层不再产出对应 class：
+       ① md-img / md-img-wrap / md-img-fallback* → 新管线出 `.md-image*`（无 lightbox）
+       ② md-del                                → 新管线出 `.md-strike`
+       ③ md-bq（3 色左边框 + 每层 1.5rem 缩进） → 新管线出 `.md-quote`（无边框 / 无色阶）
+       ④ li:has(input[type=checkbox][checked]) → 新管线 task-list 前缀是**文本**（无真 checkbox）
+       ⑤ md-hr（居中 35% 短线）                → 新管线出 `.md-hr-full`（满宽 1px + 上下 4px）
+       ⑦ md-lightbox-*                        → 安卓不支持点击放大，整条下线
+
+     ⑥ 表格默认对齐 —— **保留**（渲染层仍给 th / td 挂 `.md-table-th` / `.md-table-td`）
      ========================================================================== */
 
-  /* ① md-img — 居中 + 卡片化 + 鼠标 zoom-in 光标 */
-  .md-img-wrap {
-    display: block;
-    margin: 0.75rem auto;
-    text-align: center;
-  }
-  .md-img {
-    display: inline-block;
-    max-width: 100%;
-    max-height: 320px;
-    border-radius: 6px;
-    border: 1px solid var(--border-default);
-    background: var(--bg-sunken);
-    cursor: zoom-in;
-    object-fit: contain;
-  }
-  .md-img:hover {
-    box-shadow: 0 0 0 1px var(--brand);
-  }
-  .md-img-fallback {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 1rem;
-    border: 1px dashed var(--border-default);
-    border-radius: 6px;
-    background: var(--bg-sunken);
-    color: var(--fg-muted);
-    font-size: 11px;
-    text-align: center;
-    max-width: 100%;
-    word-break: break-all;
-  }
-  .md-img-fallback-url {
-    font-size: 10px;
-    opacity: 0.7;
-  }
-
-  /* ② md-del — 删除线, 用半透明 muted 描线 */
-  .md-del {
-    color: var(--fg-muted);
-    text-decoration: line-through;
-    text-decoration-color: color-mix(in srgb, var(--fg-muted) 60%, transparent);
-    text-decoration-thickness: 1px;
-  }
-
-  /* ③ md-bq — 嵌套引用, 每层 +1.5rem 缩进 + 切换左边色阶 */
-  .md-bq {
-    margin: 0.5rem 0;
-    padding: 0.35rem 0 0.35rem 0.75rem;
-    border-left: 3px solid var(--brand);
-    color: var(--fg-muted);
-    font-style: italic;
-  }
-  .md-bq .md-bq {
-    margin-left: 1.5rem;
-    border-left-color: var(--brand-cyan);
-    border-left-width: 3px;
-  }
-  .md-bq .md-bq .md-bq {
-    margin-left: 1.5rem;
-    border-left-color: var(--brand-yellow);
-    border-left-width: 3px;
-  }
-  .md-bq .md-bq .md-bq .md-bq {
-    margin-left: 1.5rem;
-    border-left-color: var(--brand-yellow);
-  }
-  .md-bq > :first-child {
-    margin-top: 0;
-  }
-  .md-bq > :last-child {
-    margin-bottom: 0;
-  }
-
-  /* ④ 已勾选任务列表 = 划线 + 半透明 */
-  li:has(> input[type="checkbox"][checked]) {
-    text-decoration: line-through;
-    text-decoration-color: color-mix(in srgb, var(--fg-muted) 60%, transparent);
-    color: var(--fg-muted);
-    opacity: 0.6;
-  }
-  li > input[type="checkbox"] {
-    margin-right: 0.35rem;
-    vertical-align: middle;
-    accent-color: var(--brand);
-  }
-
-  /* ⑤ md-hr — 浅灰短线 + 居中 + 前后留空 */
-  .md-hr {
-    border: 0;
-    height: 1px;
-    background: var(--border-default);
-    margin: 1rem auto;
-    width: 35%;
-    min-width: 80px;
-  }
-
-  /* ⑥ 表格默认对齐 — 默认 left, 让 gfm 注入的 inline style 覆盖 */
+  /* ⑥ 表格默认对齐 — 默认 left, 让调用方注入的 inline style 覆盖 */
   .md-table .md-table-th {
     text-align: left;
   }
@@ -547,9 +420,11 @@
 
    ⚠️ 本段是**追加**在文件末尾 —— 未层叠(unlayered) ⇒ 优先级高于 `@layer components`
       与 Tailwind utilities ⇒ 不必写 `!important` 就能压住旧规则。
-   ⚠️ 本段只**新增** `.md-*` 规则，**不改动任何既有规则**；
-      旧规则（`.md-bq` / `.md-hr` / `.md-img*` / `.md-lightbox-*` / `.md-table-td-clamp`）
-      的清理属于 M4。
+   ✅ 本段只**新增** `.md-*` 规则，**不改动任何既有规则**；
+      旧第三方体系的死规则（`.md-bq` / `.md-hr` / `.md-img*` / `.md-img-fallback*` /
+      `.md-del` / `.md-lightbox-*` / `.md-table-td-clamp` / `.md-table-td-inner` /
+      `.md-table-td-toggle` / react-markdown task-list 的 `li:has(input[type=checkbox])`）
+      已在 M4 收口批（2026-10-26）从 `@layer components` 段删除。
 
    ── 关键参数与安卓出处 ──────────────────────────────────────────────────
      正文字号     chat 14px / 阅读 16px+24px     MarkdownRichText.kt:157-159
@@ -785,7 +660,8 @@
    （行为规格见 docs/md-android-behavior-spec.md，每条带安卓 file:line）。
 
    ⚠️ 本段**只追加**，不动上面 M2 段的任何既有规则
-      （`.md-table` 的列宽 clamp / 横向滚动 / `.md-bq` / `.md-table-td-clamp` 等留给 M4）。
+      （`.md-table` 的列宽 clamp / 横向滚动 **一个字节都不动**；
+       旧死规则的删除见 M4 收口批）。
 
    ── 间距模型（安卓出处）────────────────────────────────────────────────────
      块间距      8px          顶层块之间（text ↔ table / image / hr / codeBlock）
