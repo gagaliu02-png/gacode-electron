@@ -10,6 +10,11 @@
  *   - 选中 → onSelect(emoji) → parent 把它追加到 textarea
  *
  * 容器: BottomSheet — 不引 Radix Sheet.
+ *   2026-10-26 对齐 web `components/chat/EmojiPicker.tsx`:
+ *     - 无标题栏 (web SheetContent 无内置标题) ⇒ `title={undefined}`
+ *     - `!p-0` + `!gap-0` + `max-h-[70vh]` ⇒ 对齐 web 的容器 className
+ *     - 搜索框 + 分类 tab 走 BottomSheet 的 `header` prop (固定在滚动区外),
+ *       网格区 `flex-1 overflow-y-auto` (web 是「头部固定 + 网格独立滚动」)
  */
 
 import { useMemo, useState } from "react";
@@ -123,52 +128,64 @@ export function EmojiPicker({ open, onClose, onSelect }: EmojiPickerProps) {
   };
 
   return (
-    // 2026-10-26 对齐 web `components/chat/EmojiPicker.tsx:133`:
-    //   web SheetContent className 含 `max-h-[70vh]` (PC 的 BottomSheet base 是 85vh)
+    // 2026-10-26 对齐 web `components/chat/EmojiPicker.tsx:131-136`:
+    //   web SheetContent className = `bg-bg-elevated flex flex-col gap-0 p-0 max-h-[70vh]`
+    //   → PC: `!p-0` 压过 BottomSheet base 的 `p-6`; `!gap-0` 显式声明 (PC base
+    //     目前没有 gap 类, 留着是为了将来 base 加 gap 时不被盖);
+    //     最大高走 `maxHeight` 独立 prop (`.max-h-[70vh]` 产物顺序早于 base 的
+    //     `.max-h-[85vh]`, 见 BottomSheetProps.maxHeight 注释).
+    //   web **没有标题栏** ⇒ `title={undefined}`.
+    //   搜索框 + 分类 tab 走 `header` prop (固定在滚动区外), 对齐 web 的
+    //   「头部固定 / 网格独立滚动」(web EmojiPicker.tsx:136 / :175).
     <BottomSheet
       open={open}
-      title="选择表情"
+      title={undefined}
       onClose={handleClose}
       maxHeight="max-h-[70vh]"
-    >
-      {/* 顶部搜索 + 分类 */}
-      <div className="px-4 pt-5 pb-3 border-b border-border space-y-3">
-        <div className="relative">
-          <SearchFieldIcon />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索表情 (例如: 笑 / heart)"
-            className="w-full pl-9 pr-3 py-2 rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle outline-none focus:ring-1 focus:ring-brand"
-          />
-        </div>
-        {!search && (
-          <div className="flex gap-2 mt-3">
-            {CATEGORIES.map((c) => {
-              const active = c.key === activeCategory;
-              return (
-                <button
-                  key={c.key}
-                  type="button"
-                  onClick={() => setActiveCategory(c.key)}
-                  className={[
-                    "px-3 py-1 rounded-full text-xs transition-colors duration-150",
-                    active
-                      ? "bg-brand text-brand-on"
-                      : "bg-bg-sunken text-fg-muted hover:text-fg",
-                  ].join(" ")}
-                >
-                  {c.label}
-                </button>
-              );
-            })}
+      contentClassName="!p-0 !gap-0"
+      header={
+        /* 顶部搜索 + 分类 — 对齐 web `components/chat/EmojiPicker.tsx:136-172`
+           (容器 `px-4 pt-5 pb-3 border-b border-border`; web 容器**没有**
+           `space-y-*`, 分类 tab 自己带 `mt-3` ⇒ PC 去掉 space-y-3 免得双份间距) */
+        <div className="px-4 pt-5 pb-3 border-b border-border">
+          <div className="relative">
+            <SearchFieldIcon />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="搜索表情 (例如: 笑 / heart)"
+              className="w-full pl-9 pr-3 py-2 rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle outline-none focus:ring-1 focus:ring-brand"
+            />
           </div>
-        )}
-      </div>
-
-      {/* emoji 网格 */}
-      <div className="px-4 py-3">
+          {!search && (
+            <div className="flex gap-2 mt-3">
+              {CATEGORIES.map((c) => {
+                const active = c.key === activeCategory;
+                return (
+                  <button
+                    key={c.key}
+                    type="button"
+                    onClick={() => setActiveCategory(c.key)}
+                    className={[
+                      "px-3 py-1 rounded-full text-xs transition-colors duration-150",
+                      active
+                        ? "bg-brand text-brand-on"
+                        : "bg-bg-sunken text-fg-muted hover:text-fg",
+                    ].join(" ")}
+                  >
+                    {c.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      }
+    >
+      {/* emoji 网格 — 对齐 web `components/chat/EmojiPicker.tsx:175`
+         `flex-1 overflow-y-auto px-4 py-3` */}
+      <div className="flex-1 overflow-y-auto px-4 py-3">
         {filtered.length === 0 ? (
           <div className="text-center text-fg-muted py-8 text-sm">
             没有匹配的表情

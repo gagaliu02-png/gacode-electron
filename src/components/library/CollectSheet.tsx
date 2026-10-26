@@ -18,12 +18,13 @@
  *   - L-63 提交后**立即**关 Sheet (await 之前就收起, 成功/失败都先收; web :278-280)
  *   - L-64 保存失败 toast 改 title + description 两段式 (web :337-341)
  *   - L-67 入口 Sheet 收起后等 100ms 再开下一层, 避免两层同时在场 (web :415,421,723)
- *   - L-68 补「拍照」入口 → 复用 PC 现有 MediaPicker `kind="camera"`
- *         (accept="image/*" + capture="environment", 见 home/MediaPicker.tsx:63-65)
+ *   - L-68 补「拍照」入口 → 复用 PC 的 MediaPicker **image 模式**
+ *         (align-d-home H-32: web 的 MediaPicker image 模式是「拍照 + 相册」并排两个钮,
+ *          PC 补齐后 Photo 入口走 image 模式, 与 web `library/page.tsx:411-422` 一致)
  *
- * 组件边界 (本批唯一可写文件):
- *   - PC 没有 lucide-react ⇒ Type / Camera / File 手写内联 svg (lucide path 逐字,
- *     核对 gacode-web/node_modules/lucide-react/dist/esm/icons/{type,camera,file}.js);
+ * 组件边界:
+ *   - PC 没有 lucide-react ⇒ Type / Camera / File 图标统一用 ui/Glyphs.tsx
+ *     (2026-10-26 收编: 原来这里手写了 3 份内联 svg, 现在是具名导出复用);
  *     X 直接复用 ui/Glyphs 的 CloseIcon (lucide `x`).
  *   - PC 没有 tailwind-merge / clsx ⇒ className 一律数组 .join(" ").
  *   - web 用到的 token 在 PC tailwind.config.ts 里取值完全一致
@@ -42,7 +43,7 @@ import { uploadAttachment } from "../../lib/upload";
 import { useToast } from "../ui/Toast";
 import { Button } from "../ui/Button";
 import { MediaPicker } from "../home/MediaPicker";
-import { CloseIcon } from "../ui/Glyphs";
+import { CameraIcon, CloseIcon, FileIcon, TypeIcon } from "../ui/Glyphs";
 
 export interface CollectSheetProps {
   open: boolean;
@@ -60,8 +61,8 @@ const LAYER_SWITCH_DELAY_MS = 100;
 
 /** 当前在场的是哪一层 (closed = 两层都不在场, 等 100ms 切下一层) */
 type Layer = "entry" | "text" | "closed";
-/** MediaPicker 模式: 拍照 (image/*) / 文件 */
-type PickerKind = "camera" | "file";
+/** MediaPicker 模式: image (拍照 + 相册, align-d-home H-32) / file */
+type PickerKind = "image" | "file";
 
 interface TextSubmitInput {
   /** 是 URL (走 type=link) 还是纯文本 (走两步法) */
@@ -210,7 +211,7 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
       });
       return;
     }
-    const isImage = kind === "camera";
+    const isImage = kind === "image";
 
     // L-62: 30 秒上传超时提示 (web library/page.tsx:357-363)
     const timeoutTimer = window.setTimeout(() => {
@@ -295,7 +296,7 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
               </button>
               <button
                 type="button"
-                onClick={() => openPicker("camera")}
+                onClick={() => openPicker("image")}
                 className="flex flex-col items-center gap-2 py-5 rounded-md bg-card hover:bg-card-hover transition-colors"
               >
                 <CameraIcon className="w-7 h-7 text-fg-muted" />
@@ -373,80 +374,12 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
       <MediaPicker
         open={pickerKind !== null}
         onClose={onClose}
-        kind={pickerKind ?? "camera"}
+        kind={pickerKind ?? "image"}
         onCapture={(file) => {
-          const kind = pickerKind ?? "camera";
+          const kind = pickerKind ?? "image";
           void handlePickerCapture(file, kind);
         }}
       />
     </>
-  );
-}
-
-// ────────────────────────────────────────────────────────────
-// 内联图标 (lucide path 逐字 — PC 无 lucide-react)
-// ────────────────────────────────────────────────────────────
-
-/** lucide `type` — 24×24 / sw2 (web library/page.tsx:727) */
-function TypeIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <polyline points="4 7 4 4 20 4 20 7" />
-      <line x1="9" x2="15" y1="20" y2="20" />
-      <line x1="12" x2="12" y1="4" y2="20" />
-    </svg>
-  );
-}
-
-/** lucide `camera` — 24×24 / sw2 (web library/page.tsx:735) */
-function CameraIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-      <circle cx="12" cy="13" r="3" />
-    </svg>
-  );
-}
-
-/** lucide `file` — 24×24 / sw2 (web library/page.tsx:743) */
-function FileIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-    </svg>
   );
 }

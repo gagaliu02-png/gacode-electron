@@ -70,6 +70,14 @@ const config: Config = {
         danger: "#E54a5e",          // ErrorRedDark (Color.kt:48)
         "danger-soft": "#7A0019",   // errorContainer (Theme.kt:39)
 
+        // --- web 私有 token 补齐 (2026-10-26 H-56①) ---
+        // cron 定时任务专属紫 — web `src/styles/globals.css:81` `--color-cron: #a78bfa`.
+        // web 的 LibraryPicker (`components/chat/LibraryPicker.tsx:57`) 给 link 类型
+        // 图标用 `text-cron`; PC 之前没有该 token ⇒ 退化成 brand-green (绿), 色不对.
+        // ⚠️ 只在 **LibraryPicker** 用; 知识库列表页 / LibraryDetail 仍用 brand-green
+        //    (web `app/(main)/library/page.tsx:124` 就是绿的, 两处不可混用).
+        cron: "#a78bfa",
+
         // --- shadcn semantic token compatibility ---
         // 这些是 Theme.kt:20-42 的 lightColorScheme / darkColorScheme 的等价 web 映射
         // 让现有 ui/button.tsx 等组件不用动也能继承 gagaOS 视觉
@@ -207,9 +215,12 @@ const config: Config = {
       //   elevation-1..4 / brand-glow (commit 1 已用, 保留)
       // ============================================================
       boxShadow: {
-        none: "none",
         sm: "0 1px 2px 0 rgb(0 0 0 / 0.5)",
         DEFAULT: "0 1px 3px 0 rgb(0 0 0 / 0.5)",
+        // 2026-10-26: `none` 挪到 DEFAULT **之后** ⇒ 产物里 `.shadow-none` 在
+        //   `.shadow` 之后 ⇒ 同属性时 `shadow-none` 能盖住 `shadow`.
+        //   (之前 `none` 排在最前 ⇒ `.shadow` 永远赢, 只能靠 `!shadow-none` 硬压.)
+        none: "none",
         md: "0 4px 6px -1px rgb(0 0 0 / 0.5), 0 2px 4px -2px rgb(0 0 0 / 0.4)",
         lg: "0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.4)",
         xl: "0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.4)",

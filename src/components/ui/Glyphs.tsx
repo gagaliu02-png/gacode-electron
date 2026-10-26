@@ -719,7 +719,111 @@ export function DocTypeIcon({ className, size = 20, strokeWidth = 1.6 }: GlyphPr
   );
 }
 
-/** 知识库条目类型图标 — link — 20×20 / sw1.6 */
+/**
+ * 知识库条目类型图标 — link (LibraryPicker 专用, 紫色 `text-cron`) — 20×20 / sw1.6
+ *
+ * 2026-10-26 (H-56① 对齐 web `components/chat/LibraryPicker.tsx:57`):
+ *   web 的 `typeIcon` 对 link 类型用 **`text-cron`** (紫 #a78bfa, web
+ *   `src/styles/globals.css:81` `--color-cron`), **不是** 绿。
+ *   ⚠️ 但 web 的**知识库列表页** (`app/(main)/library/page.tsx:117-128`) 对 link
+ *      用的是 `text-brand-green` —— 两处各有独立 typeIcon, 不可混用。
+ *   ⇒ PC 的 `LinkTypeIcon` 保持绿 (给列表页 / LibraryDetail 用), 这里另开一个
+ *      紫色的给 LibraryPicker 用 (本文件「同名不同形 → 分开导出」约定).
+ */
+export function LinkCronIcon({ className, size = 20, strokeWidth = 1.6 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={["w-5 h-5 text-cron", className].filter(Boolean).join(" ")}
+    >
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  );
+}
+
+/**
+ * 知识库条目类型图标 — default (type=text) — lucide `library` — 20×20 / sw1.6
+ *
+ * 2026-10-26 (H-56② 对齐 web `components/chat/LibraryPicker.tsx:59`):
+ *   web 的 default 分支用 lucide **`Library`** (书脊造型:
+ *   `m16 6 4 14` / `M12 6v14` / `M8 8v12` / `M4 4v16`), 不是展开的书本.
+ *   ⚠️ `M4 4v16` 是真值 (PC `components/home/PlusSheet.tsx` 的 library 图标同款);
+ *      旧台账里写的 `M4 6v16` 是错值, 不要照抄.
+ *   ⚠️ 不能复用下面的 `LibraryIcon` (空态专用, 40×40 + `w-10 h-10 opacity-40`
+ *      内联 class), 按本文件「同名不同形 → 分开导出」约定单独导出.
+ *   ⚠️ **className 原样透传** (不内联颜色/尺寸) —— 本图标有两个调用点:
+ *      LibraryPicker 要 `w-5 h-5 text-fg-muted` (web `LibraryPicker.tsx:59` 的
+ *      调用点写法), Home 的 PlusSheet 要 `w-6 h-6` + **继承按钮的 currentColor**
+ *      (web `SheetActionMenu.tsx:94` 的 `Library` 图标不写死颜色).
+ */
+export function LibraryTypeIcon({ className, size = 20, strokeWidth = 1.6 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="m16 6 4 14" />
+      <path d="M12 6v14" />
+      <path d="M8 8v12" />
+      <path d="M4 4v16" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `smile` — 24×24 / sw2 (web `SheetActionMenu.tsx:87` 的 `Smile`)
+ *
+ * className 原样透传 —— 颜色由调用点的按钮继承 (web 的 ActionButton 用
+ * `text-fg-muted hover:text-fg`, 图标是 currentColor).
+ */
+export function SmileIcon({ className, size = 24, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+      <line x1="9" x2="9.01" y1="9" y2="9" />
+      <line x1="15" x2="15.01" y1="9" y2="9" />
+    </svg>
+  );
+}
+
+/**
+ * 知识库条目类型图标 — link (绿) — 20×20 / sw1.6
+ *
+ * ⚠️ 2026-10-26 (H-56①) 之前这里写的是「PC 没有 cron 紫 token ⇒ 取 brand-green」,
+ *    那是**只对知识库列表页成立**的结论 (web `app/(main)/library/page.tsx:124`
+ *    确实给 link 用绿). web 的**选择器** (`components/chat/LibraryPicker.tsx:57`)
+ *    用的是 `text-cron` 紫 ⇒ 现在 PC 补了 `cron` token, 选择器改用 `LinkCronIcon`.
+ *    本图标保持绿 (列表页 / LibraryDetail 详情页仍在用).
+ */
 export function LinkTypeIcon({ className, size = 20, strokeWidth = 1.6 }: GlyphProps) {
   return (
     <svg
@@ -732,11 +836,6 @@ export function LinkTypeIcon({ className, size = 20, strokeWidth = 1.6 }: GlyphP
       strokeWidth={strokeWidth}
       strokeLinecap="round"
       strokeLinejoin="round"
-      // 2026-10-26 对齐 web `components/chat/LibraryPicker.tsx:57` 的 `text-cron`.
-      // ⚠️ PC 仓**没有** cron 紫 token (web 的 --cron: #a78bfa 属 web 私有 token,
-      //    PC 的 globals.css / tailwind.config.ts 都无对应项) ⇒ 取 PC 体系里
-      //    语义最接近的现有 token `brand-green` (#198754):
-      //    它正是 web 自己在 `app/(main)/library/page.tsx:124` 给 link 类型图标用的颜色.
       className={["w-5 h-5 text-brand-green", className].filter(Boolean).join(" ")}
     >
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
@@ -757,7 +856,15 @@ export function LinkTypeIcon({ className, size = 20, strokeWidth = 1.6 }: GlyphP
  *    - `ImageTypeIcon` = 20×20 / sw1.6 / className 注入 `w-5 h-5 text-brand-cyan`
  *    - `DocTypeIcon`   = 20×20 / sw1.6 / className 注入 `w-5 h-5 text-brand`
  *    - `LinkTypeIcon`  = 20×20 / sw1.6 / className 注入 `w-5 h-5 text-brand-green`
- *      (web LibraryPicker 用 `text-cron` 紫, PC 无该 token ⇒ 取 PC 的 brand-green)
+ *      (知识库列表页 / LibraryDetail 详情页用; web `app/(main)/library/page.tsx:124`)
+ *    - `LinkCronIcon`  = 20×20 / sw1.6 / className 注入 `w-5 h-5 text-cron`
+ *      (LibraryPicker 用; web `components/chat/LibraryPicker.tsx:57`)
+ *    - `LibraryTypeIcon` = 20×20 / sw1.6 / **className 原样透传**
+ *      (LibraryPicker default 类型, web `components/chat/LibraryPicker.tsx:59`
+ *       的调用点是 `w-5 h-5 text-fg-muted`; Home 的 PlusSheet 复用同一个图标但要
+ *       继承按钮颜色 ⇒ 不能内联颜色)
+ *    - `LibraryIcon`   = 40×40 / sw1.6 / className 注入 `w-10 h-10 opacity-40`
+ *      (LibraryPicker 空态; web `components/chat/LibraryPicker.tsx:222`)
  *    - 本文件 `ImageIcon` / `FileTextIcon` = 12×12 / sw2 / className 原样透传
  *    合并会改视觉 (PC 无 tailwind-merge → `.w-5` 产物顺序在 `.w-3` 之后会赢)
  */
@@ -891,6 +998,93 @@ export function TextTypeIcon({ className, size = 20, strokeWidth = 1.6 }: GlyphP
     >
       <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
       <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+    </svg>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// 知识库采集宫格图标 (来源: components/library/CollectSheet.tsx)
+// ════════════════════════════════════════════════════════════
+
+/**
+ * lucide `type` — 24×24 / sw2 (知识库采集宫格「Text」入口)
+ *
+ * 2026-10-26 收编自 `components/library/CollectSheet.tsx` 的内联 svg
+ * (lucide path 逐字保留: polyline `4 7 4 4 20 4 20 7` + line `9 15 20 20` +
+ * line `12 12 4 12 20`).
+ */
+export function TypeIcon({ className, size = 24, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <polyline points="4 7 4 4 20 4 20 7" />
+      <line x1="9" x2="15" y1="20" y2="20" />
+      <line x1="12" x2="12" y1="4" y2="20" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `camera` — 24×24 / sw2 (知识库采集宫格「Photo」入口 + MediaPicker「拍照」按钮)
+ *
+ * 2026-10-26 收编自 `components/library/CollectSheet.tsx` 的内联 svg
+ * (lucide path 逐字保留: `M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2
+ * 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z` + circle `12 13 3`) —— 跟 web
+ * `components/common/MediaPicker.tsx:61-80` 的 Camera 图标逐字一致.
+ */
+export function CameraIcon({ className, size = 24, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+      <circle cx="12" cy="13" r="3" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `file` — 24×24 / sw2 (知识库采集宫格「File」入口)
+ *
+ * 2026-10-26 收编自 `components/library/CollectSheet.tsx` 的内联 svg
+ * (lucide path 逐字保留: `M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z`
+ * + `M14 2v4a2 2 0 0 0 2 2h4`).
+ */
+export function FileIcon({ className, size = 24, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
     </svg>
   );
 }

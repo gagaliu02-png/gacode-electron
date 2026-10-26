@@ -1,14 +1,30 @@
 /**
  * components/chat/UploadErrorChip.tsx — 附件上传失败可见反馈
  *
- * 对齐 gacode-web/src/components/common/UploadErrorChip.tsx 1:1:
- *   - 红边浅红底卡片 (border-red-200 bg-red-50/60 dark mode 等价色)
- *   - AlertTriangle 图标 + 文件名 + 错误摘要 + 重试 / 删除 按钮
+ * 对齐 gacode-web/src/components/common/UploadErrorChip.tsx 1:1
+ * (web 是唯一事实源):
+ *   - 红边浅红底卡片: web `<Card className="border border-red-200 bg-red-50/60 w-full">`
+ *     ⇒ PC 用 `ui/Card` (已跟 web card.tsx 1:1: `rounded-lg border bg-card
+ *       text-card-foreground shadow`), 覆盖 `border-red-200 bg-red-50/60`.
+ *   - `AlertTriangle` 图标 (`w-4 h-4 text-red-600 shrink-0`) + 文件名 +
+ *     错误摘要 (`text-xs text-red-700`) + 重试 / 删除 按钮
+ *   - 按钮用 web 的 `Button size="sm" variant="ghost"` ⇒ PC 的
+ *     `<Button variant="ghost" size="sm">` (PC ui/Button.tsx 已跟 web button.tsx 1:1)
  *   - onRetry / onRemove 可选 — 调用方不传则不渲染对应按钮
+ *
+ * ⚠️ PC 无 tailwind-merge → 同名类由 **CSS 产物顺序** 决胜:
+ *   - `CardContent` base 是 `p-6`, 产物里 `.p-6` 在 `.p-3` **之后** ⇒ 调用点的
+ *     `p-3` 盖不住 ⇒ 必须写 `!p-3`.
+ *   - `Card` base 的 `bg-card` 在默认调色板 (`bg-red-50/60`) **之前** ⇒
+ *     `bg-red-50/60` 天然赢, 不需要 `!`.
  *
  * gaga 截图反馈 2026-10-20 §3: 旧版上传失败完全静默, UI 没反应 (gagaOS 已知痛点).
  * 现在显式红 chip + 重试按钮, 让 user 知道发生了什么.
  */
+
+import { Card, CardContent } from "../ui/Card";
+import { Button } from "../ui/Button";
+import { AlertTriangleIcon } from "../ui/Glyphs";
 
 export interface UploadErrorChipProps {
   fileName: string;
@@ -24,59 +40,31 @@ export function UploadErrorChip({
   onRemove,
 }: UploadErrorChipProps) {
   return (
-    <div className="w-full border border-red-500/40 bg-red-500/10 rounded-md">
-      <div className="p-3 flex items-center gap-2">
-        <AlertTriangleIcon />
+    // web `components/common/UploadErrorChip.tsx:40`
+    <Card className="border-red-200 bg-red-50/60 w-full">
+      {/* web `components/common/UploadErrorChip.tsx:41` — `!p-3` 压过
+          CardContent base 的 `p-6` (见文件头注释) */}
+      <CardContent className="!p-3 flex items-center gap-2">
+        <AlertTriangleIcon size={16} className="text-red-600 shrink-0" />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium truncate">{fileName}</p>
-          <p className="text-xs text-red-400 truncate">
+          <p className="text-xs text-red-700 truncate">
             上传失败 · {errorMsg}
           </p>
         </div>
         {onRetry ? (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="shrink-0 px-2 py-1 rounded text-xs text-fg hover:bg-bg-sunken transition-colors duration-150"
-          >
+          <Button variant="ghost" size="sm" onClick={onRetry}>
             重试
-          </button>
+          </Button>
         ) : null}
         {onRemove ? (
-          <button
-            type="button"
-            onClick={onRemove}
-            className="shrink-0 px-2 py-1 rounded text-xs text-fg hover:bg-bg-sunken transition-colors duration-150"
-          >
+          <Button variant="ghost" size="sm" onClick={onRemove}>
             删除
-          </button>
+          </Button>
         ) : null}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
 export default UploadErrorChip;
-
-// ─────────── icons ───────────
-
-function AlertTriangleIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="text-red-400 shrink-0"
-    >
-      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-      <line x1="12" y1="9" x2="12" y2="13" />
-      <line x1="12" y1="17" x2="12.01" y2="17" />
-    </svg>
-  );
-}

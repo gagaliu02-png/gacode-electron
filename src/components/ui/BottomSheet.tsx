@@ -21,6 +21,26 @@
  *   - `subtitle` — 标题下方的副标题 (web LibraryPicker 顶部副标题)
  *   - `header` — 固定在滚动区外的头部 (web EmojiPicker 的搜索框 + 分类 tab)
  *
+ * 2026-10-26 (align-d-home H-29 · 形态补齐): 对照 web `components/ui/sheet.tsx`,
+ *   逐项核对本组件与 web `SheetContent` 的形态差异, 处理结果:
+ *   - **圆角** — web `sheet.tsx:73` 的 bottom 侧类无圆角, 但 web 每个面板自己加
+ *     (`SheetActionMenu.tsx:74` `rounded-t-2xl`); PC base 已是 `rounded-t-2xl` ✓
+ *   - **最大宽** — web 无 `max-w-*` (全宽); PC base 已无 `max-w-*` (全宽) ✓
+ *   - **标题栏** — web `SheetContent` **没有内置标题栏**; PC 的 `title` 已可选,
+ *     undefined 时不渲染 ✓ (本次补: 无标题栏时给一个独立关闭按钮)
+ *   - **padding 归属** — web `SheetContent` base `p-6`, 各面板用 className 覆盖;
+ *     PC base `p-6` + `contentClassName` 覆盖 ✓
+ *   - **关闭按钮 (本次新增)** — web `sheet.tsx:102-109` 的 SheetContent **永远**带
+ *     一个右上角 X (absolute right-4 top-4); PC 原来把 X 只放在标题栏里 ⇒
+ *     「无标题栏」的面板 (PlusSheet / MediaPicker / EmojiPicker / PlusActionsSheet)
+ *     一个可见关闭入口都没有 ⇒ 无标题栏时补一个绝对定位 X, 有标题栏时保持原样
+ *     (避免两个 X).
+ *   - **未对齐 (有意不动)**: web 的 `border-t` (sheet.tsx:73) 在 PC 没有加 ——
+ *     web 的 `border-t` 没带颜色类, 实际是 currentColor 描边 (PC 同样是
+ *     currentColor), 加上去会给**所有**底部面板加一条亮线; web 的遮罩
+ *     `bg-bg-base/80 backdrop-blur-sm` (sheet.tsx:86) vs PC `bg-black/60`
+ *     也会波及 ChatList / Browser / 通知设置等既有调用方 ⇒ 都不在本次改动面内.
+ *
  * ⚠️ 本仓无 tailwind-merge → 同名类由 **CSS 产物顺序** 决胜, 不可靠.
  *    调用方要覆盖 base class 时请带 `!` 前缀 (如 `!rounded-t-2xl` / `!max-w-none`).
  *
@@ -39,6 +59,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { Button } from "./Button";
+import { CloseIcon } from "./Glyphs";
 
 export interface BottomSheetProps {
   open: boolean;
@@ -116,6 +137,12 @@ export function BottomSheet({
   }, [open, onClose]);
 
   if (!open) return null;
+  // 有标题栏 ⇒ 关闭按钮在标题栏里 (PC 原行为); 无标题栏 ⇒ 补 web 的绝对定位 X.
+  // web `components/ui/sheet.tsx:102-109` 的 SheetContent **永远**带一个右上角 X,
+  // 但 web 的面板大多**没有内置标题栏** (标题自己在内容里) ⇒ PC 之前把 X 只放在
+  // 标题栏里, 导致「无标题栏」的面板 (PlusSheet / MediaPicker / EmojiPicker /
+  // PlusActionsSheet) 一个可见的关闭入口都没有.
+  const showTitle = !hideTitle && Boolean(title);
   return (
     <div
       role="dialog"
@@ -143,7 +170,7 @@ export function BottomSheet({
           contentClassName ?? "",
         ].join(" ")}
       >
-        {!hideTitle && title ? (
+        {showTitle ? (
           <div className="flex items-center justify-between mb-3 shrink-0">
             <div className="min-w-0">
               <h2
@@ -161,6 +188,20 @@ export function BottomSheet({
               ×
             </Button>
           </div>
+        ) : null}
+        {/* 无标题栏时的独立关闭按钮 — 对齐 web `components/ui/sheet.tsx:102-109`
+            (absolute right-4 top-4 + lucide X + opacity-70).
+            ⚠️ PC globals.css 全局禁 transition ⇒ web 的 `transition-opacity` 在 PC
+               上不产生动效 (PC 全局策略, 非 bug). */}
+        {!showTitle ? (
+          <button
+            type="button"
+            aria-label="关闭"
+            onClick={onClose}
+            className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <CloseIcon size={16} />
+          </button>
         ) : null}
         {header ? <div className="shrink-0">{header}</div> : null}
         <div className="flex-1 min-h-0 overflow-y-auto">{children}</div>

@@ -1,26 +1,26 @@
 /**
- * components/home/PlusSheet.tsx — Home 页 + 按钮底部弹出 6 项 action
+ * components/home/PlusSheet.tsx — Home 页 + 按钮底部弹出 action sheet
  *
- * 对齐 gacode-web `src/components/chat/SheetActionMenu.tsx`:
- *   - 拍照 / 相册 / 文件 / 表情 / 知识库挂载 / 模板 — 6 项
- *   - 拍左侧图标 (24px) + 圆形 56x56 bg-bg-sunken + 下方 label
+ * 对齐 gacode-web `src/components/chat/SheetActionMenu.tsx` (web 是唯一事实源):
+ *   - **4 项**: 图片 / 文件 / 表情 / 挂载知识库 (web `SheetActionMenu.tsx:76-95`)
+ *   - PC 原来是 6 项 (多出「拍照」「模板」) + 3 列 ⇒ 按 web 删到 4 项 + 4 列
+ *     (「拍照」下沉到 MediaPicker 的 image 模式, 见 align-d-home H-32;
+ *      「模板」是 PC 独有, web 没有 ⇒ 按「PC 多出 web 没有的直接删」删除)
+ *   - 左侧图标 (24px) + 圆形 56x56 bg-bg-sunken + 下方 label
+ *   - web 的 SheetContent **没有标题栏** ⇒ `title={undefined}`
+ *   - web 的内边距挂在 SheetContent 自身 (`px-4 py-5`) ⇒ 容器 `!p-0` +
+ *     内层 grid 自己带 `py-5 px-4` (PC 无 tailwind-merge, 只能这样让位)
  *
  * 容器复用 components/ui/BottomSheet — 阶段 7 浏览器弹出面板,
  * 不引 Radix Sheet, 边界遵守.
  *
- * 模板 (template) electron 端暂时没实现, 回调里 toast 占位.
+ * ⚠️ 本仓无 lucide-react ⇒ 图标用 components/ui/Glyphs.tsx 的内联 svg.
  */
 
 import { BottomSheet } from "../ui/BottomSheet";
-import { useToast } from "../ui/Toast";
+import { FileTextIcon, ImageIcon, LibraryTypeIcon, SmileIcon } from "../ui/Glyphs";
 
-export type PlusAction =
-  | "camera"
-  | "gallery"
-  | "file"
-  | "emoji"
-  | "library"
-  | "template";
+export type PlusAction = "image" | "file" | "emoji" | "library";
 
 export interface PlusSheetProps {
   open: boolean;
@@ -54,149 +54,45 @@ function ActionBtn({ label, onClick, icon }: ActionBtnProps) {
 }
 
 export function PlusSheet({ open, onClose, onPick }: PlusSheetProps) {
-  const { toast } = useToast();
-
+  // 先收起自己, 再派发 —— 否则 Home 那边再开 MediaPicker / EmojiPicker 时
+  // 两个 sheet 会同时在场 (web `SheetActionMenu` 的约定: 点项 → 关 Sheet → 回调).
   const handlePick = (action: PlusAction) => {
     onClose();
-    // 模板暂未实现, 给个 toast 占位; 其它真走 parent 派发.
-    if (action === "template") {
-      toast({ message: "模板功能即将推出", variant: "default" });
-      return;
-    }
     onPick(action);
   };
 
   return (
-    <BottomSheet open={open} title="添加附件" onClose={onClose}>
-      <div className="grid grid-cols-3 gap-y-5 gap-x-2 py-4">
+    // A2-D1-30 (对齐 web `SheetActionMenu.tsx:70-75`):
+    //   web 的 SheetContent **没有标题栏** → 不渲染 BottomSheet 内置标题栏.
+    //   web 内边距 `px-4 py-5` 挂在 SheetContent 自身 ⇒ 容器 `!p-0` 让位,
+    //   内层 grid 自带 `py-5 px-4` (与 web 逐字一致).
+    <BottomSheet
+      open={open}
+      title={undefined}
+      onClose={onClose}
+      contentClassName="!p-0"
+    >
+      {/* web `SheetActionMenu.tsx:74` 网格: 4 列 / gap-3 / py-5 / px-4 */}
+      <div className="grid grid-cols-4 gap-3 py-5 px-4" data-testid="plus-sheet">
         <ActionBtn
-          label="拍照"
-          onClick={() => handlePick("camera")}
-          icon={
-            <svg
-              aria-hidden="true"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-              <circle cx="12" cy="13" r="3" />
-            </svg>
-          }
-        />
-        <ActionBtn
-          label="相册"
-          onClick={() => handlePick("gallery")}
-          icon={
-            <svg
-              aria-hidden="true"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-              <circle cx="9" cy="9" r="2" />
-              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-            </svg>
-          }
+          label="图片"
+          onClick={() => handlePick("image")}
+          icon={<ImageIcon size={24} className="w-6 h-6" />}
         />
         <ActionBtn
           label="文件"
           onClick={() => handlePick("file")}
-          icon={
-            <svg
-              aria-hidden="true"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-              <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-              <path d="M10 9H8" />
-              <path d="M16 13H8" />
-              <path d="M16 17H8" />
-            </svg>
-          }
+          icon={<FileTextIcon size={24} className="w-6 h-6" />}
         />
         <ActionBtn
           label="表情"
           onClick={() => handlePick("emoji")}
-          icon={
-            <svg
-              aria-hidden="true"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-              <line x1="9" x2="9.01" y1="9" y2="9" />
-              <line x1="15" x2="15.01" y1="9" y2="9" />
-            </svg>
-          }
+          icon={<SmileIcon size={24} className="w-6 h-6" />}
         />
         <ActionBtn
           label="挂载知识库"
           onClick={() => handlePick("library")}
-          icon={
-            <svg
-              aria-hidden="true"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="m16 6 4 14" />
-              <path d="M12 6v14" />
-              <path d="M8 8v12" />
-              <path d="M4 4v16" />
-            </svg>
-          }
-        />
-        <ActionBtn
-          label="模板"
-          onClick={() => handlePick("template")}
-          icon={
-            <svg
-              aria-hidden="true"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect width="18" height="18" x="3" y="3" rx="2" />
-              <path d="M3 9h18" />
-              <path d="M9 21V9" />
-            </svg>
-          }
+          icon={<LibraryTypeIcon size={24} className="w-6 h-6" />}
         />
       </div>
     </BottomSheet>
