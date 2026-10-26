@@ -335,29 +335,27 @@ export interface ChatMessage {
   recalledAt?: string | null;
 }
 
-export interface NotificationItem {
-  id: string;
-  title: string;
-  body?: string;
-  type?: string;
-  read?: boolean;
-  createdAt: string;
-  /**
-   * server 端 notification.routes.js 实际返的扩展字段 — UI 用它判断跳哪种
-   * action (url 外链 / deep_link 路由内 / 无动作). 这些字段在阶段 3 client
-   * 没暴露, 这里加扩展.
-   */
-  actionType?: string;
-  actionValue?: string;
-  /** optional: notification category — system / chat / library / delivery */
-  category?: string;
-}
+// =========================================================================
+// 通知 DTO —— 归一 + 类型判定 + 跳转目标解析 全在 lib/notifications.ts
+// (align-c-profile-notify.md C3-07 / E10)。
+// ⚠️ 后端 Prisma 行的已读字段叫 **`isRead`** (不是 `read`) —— 旧 PC DTO 写的
+//    `read?: boolean` → 运行时永远 undefined → **已读态从来没渲染出来过**。
+//    类型在这里 re-export (保持老 import 路径不变)。
+// ⚠️ 服务端 `GET /notifications` **只认 `?unread=true`** —— 没有 `?category=`
+//    (Prisma 模型里压根没有 category 列), 也没有 `?cursor=` / `nextCursor`
+//    (F-8) ⇒ PC 旧版的 5 个 category tab 与 cursor 分页都是空壳, 已随
+//    C3-07 / C3-20 一起删掉。
+// =========================================================================
+import {
+  normalizeNotificationList,
+  type NotificationItem,
+} from "./notifications";
+
+export type { NotificationItem };
 
 export interface NotificationsListResponse {
   notifications: NotificationItem[];
   unreadCount: number;
-  /** 服务端 cursor, 分页拉下一批时回传 (notifications-5 增量) */
-  nextCursor?: string | null;
 }
 
 // ─────────── Sessions ───────────
@@ -619,43 +617,13 @@ export function submitApprovalDecisionLegacy(input: {
 
 export async function listNotifications(
   unread: boolean,
-  params: { category?: string; cursor?: string } = {},
 ): Promise<NotificationsListResponse> {
-  const qs = new URLSearchParams();
-  if (unread) qs.set("unread", "true");
-  if (params.category) qs.set("category", params.category);
-  if (params.cursor) qs.set("cursor", params.cursor);
-  const q = qs.toString();
-  const r = await request<{
-    notifications: Array<{
-      id: string | number;
-      title: string;
-      body?: string;
-      type?: string;
-      isRead?: boolean;
-      createdAt: string;
-      actionType?: string;
-      actionValue?: string;
-      category?: string;
-    }>;
+  const q = unread ? "?unread=true" : "";
+  const raw = await request<{
+    notifications: unknown[];
     unreadCount: number;
-    nextCursor?: string | null;
-  }>(`/notifications${q ? `?${q}` : ""}`);
-  return {
-    notifications: (r.notifications ?? []).map((n) => ({
-      id: String(n.id),
-      title: n.title,
-      body: n.body,
-      type: n.type,
-      read: n.isRead,
-      createdAt: n.createdAt,
-      actionType: n.actionType,
-      actionValue: n.actionValue,
-      category: n.category,
-    })),
-    unreadCount: r.unreadCount ?? 0,
-    nextCursor: r.nextCursor ?? null,
-  };
+  }>(`/notifications${q}`);
+  return normalizeNotificationList(raw);
 }
 
 // ─────────── Notifications: mark read ───────────
@@ -1155,9 +1123,14 @@ export function getProfile(): Promise<ProfileData> {
 }
 
 export interface UpdateProfileInput {
-  displayName?: string | null;
+  /**
+   * 空值语义 = **undefined** (不更新), 不是 null (清空) ——
+   * 对齐 web (align-c-profile-notify.md C2-32): undefined 会被 JSON.stringify
+   * 直接丢掉该 key ⇒ 服务端 `if (displayName !== undefined)` 不赋值 ⇒ 原值保留。
+   */
+  displayName?: string;
   gender?: Gender;
-  bio?: string | null;
+  bio?: string;
 }
 
 export function updateProfile(input: UpdateProfileInput): Promise<ProfileData> {

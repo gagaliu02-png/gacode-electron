@@ -6,91 +6,59 @@
  *   - unified-api 当前没有 /gacode/profile/apps endpoint
  *   - 仅 userId == 6 显示入口 (web 端是硬编码的特殊用户, PC 阶段 3 沿用同一策略)
  *
- * 阶段 3 简化: 通用占位页 + 说明. 后续 server / 应用平台 API 落地后再接.
+ * 2026-10-26 对齐 web (docs/align-c-profile-notify.md 组 1 · C1-01 ~ C1-12):
+ *   - C1-01/02: 单层容器 `px-4 lg:px-8 py-6 max-w-2xl mx-auto` (删掉 max-w-md 中间层)
+ *   - C1-03/04: 卡片改用 <Card> / <CardContent> (web 的 rounded-lg border bg-card
+ *               text-card-foreground shadow + 内容 p-10 text-center text-fg-muted)
+ *   - C1-05/06: 图标改成裸 SVG (去掉圆形底容器) + mb-4 (lucide Construction 路径)
+ *   - C1-07/09: 标题 <p> → <div> + 显式 text-fg; 描述文案逗号改全角
+ *   - C1-10: 删掉页面内 <h1> (标题只由 AppShell header 渲染)
+ *   - C1-12: 删掉页内 isPrivileged 分支 —— web 本页对**所有用户**渲染同一张占位卡,
+ *             特权门禁只发生在**入口** (web Drawer 的 isSpecial; PC 侧栏入口见 S-1)
  */
 
-import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { getProfile } from "../lib/api";
-import { Button } from "../components/ui/Button";
+import { Card, CardContent } from "../components/ui/Card";
 
 export function ProfileApps() {
-  const navigate = useNavigate();
-
-  const { data: profile } = useQuery({
-    queryKey: ["profile"],
-    queryFn: getProfile,
-  });
-
-  // 仅特殊用户 (userId === "6") 显示入口 — 跟 web 行为一致
-  const isPrivileged = profile?.id === "6";
-
-  if (!isPrivileged) {
-    return (
-      <div className="min-h-full px-4 lg:px-8 py-6">
-        <div className="max-w-md mx-auto">
-          <div className="rounded-md bg-bg-elevated p-6 text-center">
-            <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-sunken flex items-center justify-center text-fg-muted">
-              <LockIcon />
-            </div>
-            <p className="text-base font-medium mb-1">我的应用</p>
-            <p className="text-sm text-fg-muted">
-              此功能暂未对你的账号开放
-            </p>
-            <div className="mt-4">
-              <Button
-                variant="ghost"
-                size="md"
-                onClick={() => navigate("/profile")}
-              >
-                返回
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-full px-4 lg:px-8 py-6">
-      <div className="max-w-md mx-auto space-y-5">
-        <h1 className="text-xl font-medium">我的应用</h1>
-        <div className="rounded-md bg-bg-elevated p-8 text-center">
-          <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-sunken flex items-center justify-center text-fg-muted">
-            <ConstructionIcon />
+    <div className="min-h-full px-4 lg:px-8 py-6 max-w-2xl mx-auto">
+      <Card>
+        <CardContent className="!p-10 text-center text-fg-muted">
+          <ConstructionIcon className="w-12 h-12 mx-auto text-fg-muted mb-4" />
+          <div className="text-base font-medium mb-1 text-fg">我的应用</div>
+          <div className="text-sm">
+            管理你创建的 gagaOS 应用 — 这个功能正在开发中，先用基础功能吧 🚧
           </div>
-          <p className="text-base font-medium mb-1">我的应用</p>
-          <p className="text-sm text-fg-muted">
-            管理你创建的 gagaOS 应用 — 这个功能正在开发中,先用基础功能吧 🚧
-          </p>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
 // ────────────────────────────────────────────────────────────
-// icons
+// icons (手写内联 SVG — PC 无 lucide-react, F-2)
 // ────────────────────────────────────────────────────────────
 
-function LockIcon() {
+/** lucide `Construction` 同款路径 (C1-05) */
+function ConstructionIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="11" width="18" height="11" rx="2" />
-      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-    </svg>
-  );
-}
-
-function ConstructionIcon() {
-  return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2" y="6" width="20" height="12" rx="2" />
-      <path d="M6 10v4" />
-      <path d="M10 10v4" />
-      <path d="M14 10v4" />
-      <path d="M18 10v4" />
+    <svg
+      width="48"
+      height="48"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={["w-12", "h-12", "mx-auto", "text-fg-muted", "mb-4", className]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <path d="M2 20h20" />
+      <path d="M4 20V9l6 4V9l6 4V9l4 2v9" />
+      <path d="M12 2v4" />
+      <path d="M12 6h5" />
     </svg>
   );
 }

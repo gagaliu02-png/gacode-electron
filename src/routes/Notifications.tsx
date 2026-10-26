@@ -1,245 +1,231 @@
 /**
  * routes/Notifications.tsx — 通知中心 (gacode-electron 0.7.5)
  *
- * 数据: useInfiniteQuery / useQuery(["notifications", { category, cursor }])
- * 端点: GET /notifications — server 端 notifications/notification.routes.js:113,
- *   返 { notifications, unreadCount, nextCursor }. server 端 take=50 hard cap,
- *   客户端 cursor 模式 (notifications-5) 拉下一批.
+ * 数据: useQuery(["notifications", { unread: false }])
+ * 端点: GET /notifications — server 端 notifications/notification.routes.js:343,
+ *   返 { notifications, unreadCount }. server 端 take=50 hard cap, **只认
+ *   `?unread=true`** —— 没有 `?category=` / `?cursor=` / `nextCursor` (F-8).
  *
- * 功能 (本批 P1+P2 14 项里的 5 项):
- *   - notifications-3 (P1): 单击未读 → markRead + 处理 deep_link (跳转 React Router
- *     内部 /chat/:id / /library/:id 等); url 仍走 window.open
- *   - notifications-5 (P2): 分页 — server cursor 模式 (InfiniteScrollList)
- *   - notifications-6 (P1): 分类 tab — CategoryTabs 切 system/chat/library/delivery
- *   - notifications-8 (P1): 系统级桌面通知 — 已有 lib/notifications-sse.ts + 主
- *     进程 electron/notifications.ts 路径, 只需保证 SSE → 系统通知 IPC 链路 (✓)
- *   - notifications-10 (P1): 通知设置入口 — NotificationSettingsSheet + localStorage
+ * 2026-10-26 对齐 web (docs/align-c-profile-notify.md 组 3 + 组 4):
+ *   - C3-01: 单层滚动容器 `px-4 lg:px-8 py-6 max-w-3xl mx-auto` (去掉 sticky 头部)
+ *   - C3-02/03: 标题「通知中心」+ 铃铛图标 + destructive Badge (「N 未读」)
+ *   - C3-04: 「全部已读」补图标 (CheckCheck / Loader2) + gap-1.5
+ *   - C3-05 / C4-01 / C4-03: 通知页顶部**常驻**「桌面通知」状态卡
+ *               (PC 三态替代 web 的浏览器三态, 见 S-6 已拍板口径)
+ *   - C3-06: 「待开发」占位 Banner (401/403 时)
+ *   - C3-07 / C3-08: **废掉 5 个 category tab**, 改成按服务端 `type` 分三组
+ *               (日程提醒 / 定时任务产出 / 其它), 每组带图标 + 标题 + 数量
+ *   - C3-20: 删掉 cursor 分页 (服务端根本不认 `?cursor=` ⇒ 分页永不触发)
+ *   - C3-21/22: 空态改 web 的 Card + 📭, 加载态改 3 条 h-20 骨架
+ *   - C3-17/18/19: 点通知 → 深链解析 (yinian://chat/{id} → /chat/{id}) +
+ *               外链白名单 + 认不出的链接提示
+ *   - C4-14/15: 列表轮询 45s (NOTIFICATION_POLL_MS) + queryKey 前缀失效
  *
- * 跳转规则:
- *   - actionType='url'         → window.open(actionValue)
- *   - actionType='deep_link'   → 用 react-router 内部跳 (path 形如 /chat/:id)
- *   - actionType='none' / 无    → 不跳转
- *
- * 跟 CategoryTabs / NotificationItem / InfiniteScrollList / NotificationSettingsSheet 协作,
- * 这些组件在 src/components/notifications/ 下, 不动 electron/preload.ts / main.ts.
- *
- * PC-7 (2026-10-20 gagaOS 拍板): 通知卡片形态对齐 web — 复用 PC-6 Library 视觉语言
- *   1. 卡片: rounded-2xl border border-border bg-bg-elevated (NotificationItem.tsx)
- *   2. 分类 tab: 改用 <Tabs variant="underline"> (CategoryTabs.tsx), 不再是实心药丸
- *   3. 空态: rounded-2xl border border-border bg-bg-elevated p-12 + 居中 icon
+ * ⚠️ PC 独有 (按 gaga 指示保留): 右上角齿轮设置入口 + 刷新按钮 +
+ *   NotificationSettingsSheet (5 个开关 + 测试通知)。
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listNotifications,
+  loadNotificationPrefs,
   markAllNotificationsRead,
   markNotificationRead,
-  type NotificationItem,
+  saveNotificationPrefs,
+  type NotificationPrefs,
+  type NotificationsListResponse,
 } from "../lib/api";
-import { useToast } from "../components/ui/Toast";
-import { Button } from "../components/ui/Button";
 import {
-  CategoryTabs,
-  type NotificationCategory,
-} from "../components/notifications/CategoryTabs";
+  NOTIFICATION_GROUP_ORDER,
+  NOTIFICATION_POLL_MS,
+  notificationPresentation,
+  notificationTarget,
+  openExternalNotificationUrl,
+  type NotificationItem,
+  type NotificationKind,
+} from "../lib/notifications";
+import { useToast } from "../components/ui/Toast";
+import { Badge } from "../components/ui/Badge";
+import { Button } from "../components/ui/Button";
+import { Card, CardContent } from "../components/ui/Card";
 import { NotificationItem as NotificationRow } from "../components/notifications/NotificationItem";
-import { InfiniteScrollList } from "../components/notifications/InfiniteScrollList";
 import { NotificationSettingsSheet } from "../components/notifications/NotificationSettingsSheet";
 
-const NOTIFICATIONS_PAGE_KEY = ["notifications"] as const;
+const NOTIFICATIONS_QUERY_KEY = ["notifications", { unread: false }] as const;
 
 export function Notifications() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const [category, setCategory] = useState<NotificationCategory>("all");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [prefs, setPrefs] = useState<NotificationPrefs>(() =>
+    loadNotificationPrefs(),
+  );
+  const [pendingId, setPendingId] = useState<string | null>(null);
 
-  // 第一页 — 用 useQuery (而不是 useInfiniteQuery) 简化首屏 + 让 unread 计数
-  // 跟 AppShell bell 共享同一 key. cursor 切到下一页时单独维护 page-1 之外的 state.
+  // 通知偏好变化 (设置面板改的) → 顶部长驻卡跟着刷新
+  useEffect(() => {
+    const onPrefs = () => setPrefs(loadNotificationPrefs());
+    window.addEventListener(
+      "gacode:notification-prefs-changed",
+      onPrefs as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        "gacode:notification-prefs-changed",
+        onPrefs as EventListener,
+      );
+    };
+  }, []);
+
+  // C3-20 / C4-14: 一次性拉 50 条 (web 同款), 45s 轮询兜底, 不分页
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: [
-      ...NOTIFICATIONS_PAGE_KEY,
-      "page1",
-      { category, unread: false },
-    ],
-    queryFn: () => listNotifications(false, { category: apiCategory(category) }),
-    placeholderData: (prev) => prev,
+    queryKey: NOTIFICATIONS_QUERY_KEY,
+    queryFn: () => listNotifications(false),
+    retry: false,
+    refetchInterval: NOTIFICATION_POLL_MS,
+    refetchIntervalInBackground: false,
   });
 
-  // 累加的列表 (第一页 + 后续 cursor 页). 切 category 时清空.
-  const [extraPages, setExtraPages] = useState<NotificationItem[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
-
-  useEffect(() => {
-    setExtraPages([]);
-    setNextCursor(null);
-  }, [category]);
-
-  const firstPage: NotificationItem[] = data?.notifications ?? [];
-  const items = [...firstPage, ...extraPages];
+  const items: NotificationItem[] = data?.notifications ?? [];
   const unreadCount = data?.unreadCount ?? 0;
-  const hasMore = !!nextCursor;
 
-  const [pendingId, setPendingId] = useState<string | null>(null);
+  // C3-07: 按服务端 `type` 分组 (日程提醒 → 定时任务产出 → 其它)
+  const groups = NOTIFICATION_GROUP_ORDER.map((kind) => ({
+    kind,
+    items: items.filter((n) => notificationPresentation(n).kind === kind),
+  })).filter((g) => g.items.length > 0);
+
+  // 401/403 → 视为「后端未就绪」(web 同款判断)
+  const isUndeployed =
+    !!error &&
+    /401|403/.test(error instanceof Error ? error.message : String(error));
 
   const readOneMutation = useMutation({
     mutationFn: (id: string) => markNotificationRead(id),
     onMutate: (id) => {
       setPendingId(id);
-      const prev = queryClient.getQueryData<{
-        notifications: NotificationItem[];
-        unreadCount: number;
-      }>([
-        ...NOTIFICATIONS_PAGE_KEY,
-        "page1",
-        { category, unread: false },
-      ]);
-      if (prev) {
-        queryClient.setQueryData(
-          [...NOTIFICATIONS_PAGE_KEY, "page1", { category, unread: false }],
-          {
-            notifications: prev.notifications.map((n) =>
-              String(n.id) === String(id) ? { ...n, read: true } : n,
-            ),
-            unreadCount: Math.max(0, (prev.unreadCount ?? 0) - 1),
-          },
-        );
-      }
-      // 同步更新 extra pages
-      setExtraPages((cur) =>
-        cur.map((n) =>
-          String(n.id) === String(id) ? { ...n, read: true } : n,
-        ),
+      const prev = queryClient.getQueryData<NotificationsListResponse>(
+        NOTIFICATIONS_QUERY_KEY,
       );
+      if (prev) {
+        queryClient.setQueryData(NOTIFICATIONS_QUERY_KEY, {
+          notifications: prev.notifications.map((n) =>
+            String(n.id) === String(id) ? { ...n, isRead: true } : n,
+          ),
+          unreadCount: Math.max(0, (prev.unreadCount ?? 0) - 1),
+        });
+      }
       return { prev };
     },
     onError: (err, _vars, ctx) => {
       if (ctx?.prev) {
-        queryClient.setQueryData(
-          [...NOTIFICATIONS_PAGE_KEY, "page1", { category, unread: false }],
-          ctx.prev,
-        );
+        queryClient.setQueryData(NOTIFICATIONS_QUERY_KEY, ctx.prev);
       }
       toast({
-        message: `标记已读失败: ${err instanceof Error ? err.message : String(err)}`,
+        title: "标记已读失败",
+        description: err instanceof Error ? err.message : String(err),
         variant: "danger",
       });
     },
     onSettled: () => {
       setPendingId(null);
-      queryClient.invalidateQueries({
-        queryKey: [...NOTIFICATIONS_PAGE_KEY, { unread: true }],
-      });
+      // C4-15: 前缀匹配 —— 列表 + 角标两条 query 一起失效
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
     },
   });
 
   const readAllMutation = useMutation({
     mutationFn: markAllNotificationsRead,
     onMutate: () => {
-      const prev = queryClient.getQueryData<{
-        notifications: NotificationItem[];
-        unreadCount: number;
-      }>([
-        ...NOTIFICATIONS_PAGE_KEY,
-        "page1",
-        { category, unread: false },
-      ]);
+      const prev = queryClient.getQueryData<NotificationsListResponse>(
+        NOTIFICATIONS_QUERY_KEY,
+      );
       if (prev) {
-        queryClient.setQueryData(
-          [...NOTIFICATIONS_PAGE_KEY, "page1", { category, unread: false }],
-          {
-            notifications: prev.notifications.map((n) => ({ ...n, read: true })),
-            unreadCount: 0,
-          },
-        );
+        queryClient.setQueryData(NOTIFICATIONS_QUERY_KEY, {
+          notifications: prev.notifications.map((n) => ({ ...n, isRead: true })),
+          unreadCount: 0,
+        });
       }
-      setExtraPages((cur) => cur.map((n) => ({ ...n, read: true })));
       return { prev };
     },
     onSuccess: () => {
-      toast({ message: "已全部标为已读", variant: "success" });
+      toast({ title: "已全部标为已读", variant: "success" });
     },
     onError: (err, _vars, ctx) => {
       if (ctx?.prev) {
-        queryClient.setQueryData(
-          [...NOTIFICATIONS_PAGE_KEY, "page1", { category, unread: false }],
-          ctx.prev,
-        );
+        queryClient.setQueryData(NOTIFICATIONS_QUERY_KEY, ctx.prev);
       }
       toast({
-        message: `操作失败: ${err instanceof Error ? err.message : String(err)}`,
+        title: "操作失败",
+        description: err instanceof Error ? err.message : String(err),
         variant: "danger",
       });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({
-        queryKey: [...NOTIFICATIONS_PAGE_KEY, { unread: true }],
-      });
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
     },
   });
 
-  // 加载更多 — cursor 模式. 触发条件: sentinel 进入视口 + hasMore + !loadingMore.
-  const loadMore = useCallback(async () => {
-    if (!nextCursor || loadingMore) return;
-    setLoadingMore(true);
-    try {
-      const res = await listNotifications(false, {
-        category: apiCategory(category),
-        cursor: nextCursor,
-      });
-      setExtraPages((cur) => [...cur, ...res.notifications]);
-      setNextCursor(res.nextCursor ?? null);
-    } catch (err) {
-      toast({
-        message: `加载更多失败: ${err instanceof Error ? err.message : String(err)}`,
-        variant: "danger",
-      });
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [category, nextCursor, loadingMore, toast]);
-
+  // C3-17 / C3-18 / C3-19: 点通知 → 标已读 + 跳落点
   const handleClick = (n: NotificationItem) => {
-    // 未读时先 markRead
-    if (!n.read && pendingId !== n.id) {
+    if (!n.isRead && pendingId !== n.id) {
       readOneMutation.mutate(n.id);
     }
-    // 处理动作
-    const at = n.actionType;
-    const av = n.actionValue;
-    if (!at || !av) return;
-    if (at === "url") {
-      window.open(av, "_blank", "noopener,noreferrer");
-    } else if (at === "deep_link") {
-      // av 是内部 path, 形如 /chat/:id 或 /library/:id
-      if (av.startsWith("/")) {
-        navigate(av);
-      } else {
-        // 兜底: 当作外链
-        window.open(av, "_blank", "noopener,noreferrer");
+    const target = notificationTarget(n);
+    // ① 外链 (actionType='url') → 开新窗口
+    if (target.kind === "url") {
+      if (!openExternalNotificationUrl(target.url)) {
+        toast({
+          title: "无法打开链接",
+          description: target.url,
+          variant: "warning",
+        });
       }
+      return;
     }
-    // type 'system' / 'library' / 'chat' / 'delivery' / 'none' / 未知 → 不跳转
+    // ② 认不出的 deep link → 提示一句, 别让用户以为点击没生效
+    if (target.kind === "none") {
+      if (target.rawLink) {
+        toast({
+          title: "无法识别的链接",
+          description: target.rawLink,
+          variant: "warning",
+        });
+      }
+      return;
+    }
+    if (!target.href) return;
+    navigate(target.href);
   };
 
+  const updatePrefs = (next: Partial<NotificationPrefs>) => {
+    const merged: NotificationPrefs = { ...prefs, ...next };
+    setPrefs(merged);
+    saveNotificationPrefs(merged);
+  };
+
+  const desktopSupported =
+    typeof window !== "undefined" && !!window.gacode?.notify;
+
   return (
-    <div className="min-h-full flex flex-col">
-      {/* 顶部 */}
-      <div className="sticky top-0 z-10 bg-bg-base px-4 lg:px-8 py-3 flex items-center justify-between">
+    <div className="px-4 lg:px-8 py-6 max-w-3xl mx-auto">
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <h1 className="text-base font-medium">通知</h1>
+          <BellIcon className="w-5 h-5 text-brand" />
+          <h1 className="text-lg font-semibold">通知中心</h1>
           {unreadCount > 0 ? (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-brand/20 text-brand border border-brand/40">
-              {unreadCount} 条未读
-            </span>
+            <Badge variant="destructive" className="!text-[10px]">
+              {unreadCount} 未读
+            </Badge>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
+          {/* PC 独有: 通知设置 (齿轮) + 刷新 */}
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
@@ -259,50 +245,64 @@ export function Notifications() {
           <Button
             variant="ghost"
             size="sm"
-            disabled={unreadCount === 0 || readAllMutation.isPending}
             onClick={() => readAllMutation.mutate()}
+            disabled={readAllMutation.isPending || unreadCount === 0}
+            className="gap-1.5"
           >
+            {readAllMutation.isPending ? (
+              <SpinnerIcon className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <CheckCheckIcon className="w-3.5 h-3.5" />
+            )}
             全部已读
           </Button>
         </div>
       </div>
 
-      {/* 分类 tab (notifications-6) — PC-7: 下划线变体 (跟 PC-6 Library 同款),
-          border-b 由 <Tabs variant="underline"> 自带, 这里不再叠一层 */}
-      <div className="px-4 lg:px-8 py-2">
-        <CategoryTabs active={category} onChange={setCategory} />
-      </div>
+      {/* Pending-development placeholder */}
+      {isUndeployed ? <PendingBanner /> : null}
 
-      {/* 列表 */}
-      <div className="flex-1 px-4 lg:px-8 py-4">
-        {isLoading ? (
-          <SkeletonList />
-        ) : error ? (
-          <div className="rounded-md bg-danger-soft/30 px-4 py-3 text-sm">
-            加载失败:{error instanceof Error ? error.message : String(error)}
-          </div>
-        ) : items.length === 0 ? (
-          <EmptyState category={category} />
-        ) : (
-          <InfiniteScrollList
-            hasMore={hasMore}
-            isLoading={loadingMore}
-            onLoadMore={loadMore}
-          >
-            <ul className="space-y-2 max-w-3xl mx-auto">
-              {items.map((n) => (
-                <li key={n.id}>
+      {/* 桌面通知常驻卡 (C3-05 / C4-01 / C4-03) — PC 三态替代 web 的浏览器三态 */}
+      <DesktopNotificationCard
+        prefs={prefs}
+        supported={desktopSupported}
+        onEnable={() => updatePrefs({ enabled: true, desktopEnabled: true })}
+        onDisable={() => updatePrefs({ desktopEnabled: false })}
+      />
+
+      {/* Loading */}
+      {isLoading && !isUndeployed ? <SkeletonList /> : null}
+
+      {/* Empty */}
+      {!isLoading && !isUndeployed && items.length === 0 ? <EmptyState /> : null}
+
+      {/* List — 按 type 分组 */}
+      {!isLoading && items.length > 0 ? (
+        <div className="space-y-6">
+          {groups.map((g) => (
+            <section key={g.kind} data-notif-group={g.kind}>
+              <div className="flex items-center gap-2 mb-2">
+                <GroupIcon kind={g.kind} />
+                <h2 className="text-sm font-semibold text-fg-muted">
+                  {notificationPresentation({ type: g.kind }).group}
+                </h2>
+                <span className="text-xs text-fg-subtle">{g.items.length}</span>
+              </div>
+              <div className="space-y-2">
+                {g.items.map((n) => (
                   <NotificationRow
+                    key={n.id}
                     item={n}
+                    isRead={!!n.isRead}
                     onClick={() => handleClick(n)}
-                    categoryIcon={iconForCategory(n.category)}
+                    categoryIcon={<GroupIcon kind={g.kind} />}
                   />
-                </li>
-              ))}
-            </ul>
-          </InfiniteScrollList>
-        )}
-      </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : null}
 
       <NotificationSettingsSheet
         open={settingsOpen}
@@ -313,76 +313,187 @@ export function Notifications() {
 }
 
 // ────────────────────────────────────────────────────────────
-// helpers
+// DesktopNotificationCard — 通知页顶部常驻的「桌面通知」开关卡
+//
+// web 的 BrowserNotificationCard 是浏览器三态 (unsupported / denied /
+// default / granted+paused / granted+enabled); Electron 没有浏览器权限
+// 模型 ⇒ PC 换成自己的三态 (S-6 已拍板):
+//   · 系统不支持 (window.gacode?.notify 不在)
+//   · 未开启 (prefs.enabled && prefs.desktopEnabled)
+//   · 已开启
+// 文案按拍板口径: 提示去「Windows 设置 → 系统 → 通知」开 Gacode,
+// **不做**自动引导弹窗 (桌面应用不该在用户没触发时弹模态框)。
 // ────────────────────────────────────────────────────────────
 
-function apiCategory(c: NotificationCategory): string | undefined {
-  return c === "all" ? undefined : c;
-}
+function DesktopNotificationCard({
+  prefs,
+  supported,
+  onEnable,
+  onDisable,
+}: {
+  prefs: NotificationPrefs;
+  supported: boolean;
+  onEnable: () => void;
+  onDisable: () => void;
+}) {
+  const enabled = prefs.enabled && prefs.desktopEnabled;
 
-function iconForCategory(category?: string) {
-  switch (category) {
-    case "system":
-      return <SystemIcon />;
-    case "chat":
-      return <ChatIcon />;
-    case "library":
-      return <LibraryIcon />;
-    case "delivery":
-      return <DeliveryIcon />;
-    default:
-      return <DefaultIcon />;
-  }
-}
-
-// ────────────────────────────────────────────────────────────
-// EmptyState / SkeletonList
-// ────────────────────────────────────────────────────────────
-
-function EmptyState({ category }: { category: NotificationCategory }) {
-  const text =
-    category === "all"
-      ? "系统通知和消息提醒会出现在这里"
-      : "这个分类还没有通知";
-  // PC-7: 空态对齐 PC-6 Library EmptyState — rounded-2xl + border + bg-bg-elevated
-  //   + p-12 + 居中 icon (无圆背景) + 标题 + 副文案.
-  //   (通知空态没有可执行的动作, 跟 web 一样不放行动按钮)
   return (
-    <div className="h-full flex items-center justify-center">
-      <div className="rounded-2xl border border-border bg-bg-elevated p-12 text-center max-w-sm w-full">
-        <BellIcon className="w-12 h-12 mx-auto mb-4 text-fg-muted" />
-        <p className="text-base font-medium">还没有通知</p>
-        <p className="text-sm text-fg-muted mt-2">{text}</p>
-      </div>
-    </div>
+    <Card className="mb-4">
+      <CardContent className="!p-4">
+        {supported ? (
+          <div className="flex items-start gap-3">
+            {enabled ? (
+              <BellRingIcon className="w-5 h-5 text-success mt-0.5 shrink-0" />
+            ) : (
+              <BellIcon className="w-5 h-5 text-brand mt-0.5 shrink-0" />
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-fg">
+                {enabled ? "桌面通知已开启" : "开启桌面通知"}
+              </div>
+              <div className="text-xs text-fg-muted mt-1">
+                {enabled
+                  ? "AI 回复到达且您不在前台时, 会收到系统通知"
+                  : "AI 回复到达时提醒您"}
+              </div>
+              {!enabled ? (
+                <div className="text-xs text-fg-subtle mt-1">
+                  请在 Windows 设置→系统→通知中允许 Gacode
+                </div>
+              ) : null}
+            </div>
+            {enabled ? (
+              <Button size="sm" variant="outline" onClick={onDisable}>
+                关闭
+              </Button>
+            ) : (
+              <Button size="sm" onClick={onEnable} className="gap-1.5">
+                开启
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-start gap-3">
+            <BellOffIcon className="w-5 h-5 text-fg-subtle mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-fg">系统通知不可用</div>
+              <div className="text-xs text-fg-muted mt-1">
+                当前环境不支持系统通知
+              </div>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// GroupIcon — 分组标题 / 通知行的类型图标 (按 type 走)
+// ────────────────────────────────────────────────────────────
+
+function GroupIcon({ kind, className = "" }: { kind: NotificationKind; className?: string }) {
+  if (kind === "schedule_reminder") {
+    return <CalendarIcon className={["w-4", "h-4", "text-brand", className].filter(Boolean).join(" ")} />;
+  }
+  if (kind === "cron_result") {
+    return <ClockIcon className={["w-4", "h-4", "text-brand", className].filter(Boolean).join(" ")} />;
+  }
+  return <BellIcon className={["w-4", "h-4", "text-fg-muted", className].filter(Boolean).join(" ")} />;
+}
+
+// ────────────────────────────────────────────────────────────
+// EmptyState / SkeletonList / PendingBanner
+// ────────────────────────────────────────────────────────────
+
+function EmptyState() {
+  return (
+    <Card>
+      <CardContent className="!p-10 text-center text-fg-muted">
+        <div className="text-5xl mb-4">📭</div>
+        <div className="text-base font-medium mb-1 text-fg">暂无通知</div>
+        <div className="text-sm">新消息会在此处通知你</div>
+      </CardContent>
+    </Card>
   );
 }
 
 function SkeletonList() {
   return (
-    <ul className="space-y-2 max-w-3xl mx-auto">
+    <div className="space-y-3">
       {Array.from({ length: 3 }).map((_, i) => (
-        <li
-          key={i}
-          className="rounded-2xl bg-bg-elevated p-4 animate-pulse"
-        >
-          <div className="h-4 w-2/3 bg-bg-sunken rounded" />
-          <div className="h-3 w-3/4 bg-bg-sunken rounded mt-2" />
-        </li>
+        <div key={i} className="h-20 w-full rounded-lg animate-pulse bg-bg-elevated" />
       ))}
-    </ul>
+    </div>
+  );
+}
+
+function PendingBanner() {
+  return (
+    <Card className="border-dashed border-warning/50 bg-warning-soft/30">
+      <CardContent className="!p-6 text-center">
+        <div className="text-5xl mb-3">🛎️</div>
+        <h2 className="text-base font-semibold text-fg mb-1">通知中心</h2>
+        <p className="text-sm text-fg-muted">🚧 待开发 — 后端接口尚未就绪</p>
+        <p className="text-xs text-fg-subtle mt-2">
+          部署 Worker D 的通知端点后, 这里将显示实时通知列表
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
 // ────────────────────────────────────────────────────────────
-// icons
+// icons (手写内联 SVG — PC 无 lucide-react)
 // ────────────────────────────────────────────────────────────
 
-function BellIcon({ className }: { className?: string }) {
+function BellIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
       <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    </svg>
+  );
+}
+
+function BellRingIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M10.5 5.5A6 6 0 0 1 18 8c0 7 3 9 3 9H5" />
+      <path d="M18 8a6 6 0 0 0-9.33-5" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    </svg>
+  );
+}
+
+function BellOffIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M10.5 5.5A6 6 0 0 1 18 8c0 7 3 9 3 9H5" />
+      <path d="M6 8c0 7-3 9-3 9h14" />
+      <path d="M2 2l20 20" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4" />
+      <path d="M8 2v4" />
+      <path d="M3 10h18" />
+    </svg>
+  );
+}
+
+function ClockIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
     </svg>
   );
 }
@@ -402,54 +513,24 @@ function GearIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 2 2 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 1.82-.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   );
 }
 
-function SystemIcon() {
+function CheckCheckIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="12" y1="8" x2="12" y2="12" />
-      <line x1="12" y1="16" x2="12.01" y2="16" />
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M18 6 7 17l-4-4" />
+      <path d="m22 10-7.5 7.5L8 13" />
     </svg>
   );
 }
 
-function ChatIcon() {
+function SpinnerIcon({ className = "" }: { className?: string }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
-  );
-}
-
-function LibraryIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-    </svg>
-  );
-}
-
-function DeliveryIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-      <line x1="12" y1="22.08" x2="12" y2="12" />
-    </svg>
-  );
-}
-
-function DefaultIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="12" y1="16" x2="12" y2="12" />
-      <line x1="12" y1="8" x2="12.01" y2="8" />
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
     </svg>
   );
 }
