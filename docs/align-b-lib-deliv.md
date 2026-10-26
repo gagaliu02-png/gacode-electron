@@ -12,6 +12,9 @@
 - 判定三选一：**缺失** / **形态不同** / **已一致**
 - 排序：按「改动量从小到大」—— 纯 className 一行改 → 补一个组件 → 补状态/交互 → 补数据通路
 - **不列 PC 增强**（PC 有、web 没有的功能一律不写）。PC 已有的 `SortMenu` / `TagFilter` / `LibraryDropZone` / `SyncStatusBadge` / `LibraryMarkdownTableCard` / 顶部「+ 新建」按钮 / 详情页「在对话中引用」/「返回列表」按钮 等，均属 PC 增强，**不计入差异**。
+- ⚠️ **判定口径已变更（2026-10-26 · 产品负责人拍板）**：**web 端 = 唯一事实源** —— web 有什么 PC 必须有什么；**PC 多出 web 没有的，直接删**（不要端回去问要不要保留）。原因：PC 有些入口调服务端直接 404（服务端没有对应端点/字段），留着就是坏体验。
+  ⇒ 上面那条「不列 PC 增强」对**知识库域（§一 / §二）仍然有效**（尚未进入整改批次）；但**交付中心域（§三 / §四）已按新口径整改完毕** —— 原判为「PC 增强 · 不列差异」的 **D-26 / D-27 / E-13** 全部**已删除**，处置明细见 **§十四**。
+  ⇒ 本文件是**对标台账**，判定可能过时；**以代码为事实源**。
 - PC 端 Tailwind **无** `tailwind-merge` / `clsx` / `cva`：`className` 是数组 `.join(" ")` 追加，冲突类名靠 **CSS 产物顺序** 决定，必要时用 `!` 前缀强制覆盖（如 `!rounded-full`）。
 - PC 端 Tailwind token 已确认存在（`gacode-electron/tailwind.config.ts`）：`brand{DEFAULT,hover,active,on,yellow,cyan,green}` / `bg-base|bg-sunken|bg-elevated` / `fg|fg-muted|fg-subtle` / `border|border-strong` / `card`(`#0a0a0a`) / `popover`(`#181818`) / `muted`(`#181818`) / `accent`(`#1f1f1f`) / `destructive`(`#E54a5e`) / `ring`(`#FF6B35`)。
 - 圆角：PC `rounded`=8px / `rounded-md`=16px / `rounded-lg`=20px / `rounded-xl`=22px / `rounded-2xl`=24px / `rounded-full`=9999px。
@@ -2352,14 +2355,14 @@
 - **判定**：🟢 **已落地** —— PC **不再**按 web 的能力清单补差，而是**统一到安卓基准**（行为依据 `docs/md-android-behavior-spec.md`，每条带安卓 file:line）
 - **怎么改**（逐项 —— **口径已反转**：下列 web 端能力**全部削平**，不做）：
   1. **emoji 短码**（web `remark-emoji`：`:smile:` → 😄）→ **削平**：不做短码转换，短码原样输出（安卓无此能力）
-  2. **图片 Lightbox**（web `Markdown.tsx:139-178` `MarkdownImage` + `85-129` `LightboxDialog`）→ **削平**：安卓不支持点击放大；PC 只出固定尺寸图片块（≤280px / 120–320px / 圆角 12，`src/styles/globals.css` 的 `.md-image*`）
+  2. **图片 Lightbox**（web `Markdown.tsx:139-178` `MarkdownImage` + `85-129` `LightboxDialog`）→ ⚠️ **订正（2026-10-26）**：原文写「**安卓不支持点击放大**」是**错的** —— 安卓**有**图片点击放大：图片块可点 `MarkdownImageBlock.kt:60` `.clickable { onFullscreen() }` → `MarkdownRichText.kt:242` `onFullscreen = { onImageClick?.invoke(block.url) }` → 全屏弹层 `ui/common/FullscreenImageDialog.kt:36`（`LibraryTab.kt:624` / `LibraryDetailScreen.kt:373` 调用）。⇒ **三端一致 = 都支持图片点击放大**（web 也有）。PC 侧 **M5 批已落地**（渲染层透传 `onImageClick` + `src/components/ui/ImageLightbox.tsx` 原生 `<dialog>` 弹层，断言见 `scripts/verify-md-render.mjs` §A2）。PC 的固定尺寸图片块（≤280px / 120–320px / 圆角 12，`src/styles/globals.css` 的 `.md-image*`）是**缩略图形态**，不是「不能放大」。
   3. **`ExpandableCell`**（web `Markdown.tsx:197-234` —— 表格单元格超 6 行折叠 + 「展开 / 收起」按钮）→ **削平**：安卓表格**无行数折叠**；PC 的 clamp 是**列宽** clamp（80px / 240px），单元格长内容折行**不截断**（旧的 `.md-table-td-clamp` / `.md-table-td-toggle` 死规则已删）
   4. **code block 复制按钮 + 语言徽章**（web `Markdown.tsx:36-72` `CodeBlock`）→ **保留能力，但改由自研层实现**：`src/lib/markdown/renderer.tsx` 的 `MdCodeCard` 自带语言徽章 + 复制按钮（`size="reading"` + `cutCodeBlocks` 场景）
   5. **语法高亮**（web `rehype-highlight` / `highlight.js`）→ **削平**：安卓不做高亮；PC 的 `highlight.js` / `rehype-highlight` 依赖已摘除
   6. **H4–H6**（web `Markdown.tsx:311-342` `h1`~`h6`）→ **削平**：安卓只判 `#` / `##` / `###`，H4-H6 原样当文本（井号保留）
   7. **真 `<ul>/<ol>` 嵌套**（web `Markdown.tsx:343-423`）→ **削平**：列表前缀是**文本**（`  • ` / `  N. `），缩进子项落普通文本
   8. **task-list 真 checkbox**（web `Markdown.tsx:424-439`，`accent-brand` checkbox）→ **削平**：前缀是文本 `[X] ` / `[ ] `（安卓同样不做真勾选框）
-  9. **`.md-bq` 3 色左边框 / `.md-hr` 居中短线 / `.md-img*` lightbox 形态 / `.md-del`** → **削平**：PC 引用改为「无边框 / 每层 2 空格缩进」「满宽 1px 分隔线」「固定尺寸图片块」「`.md-strike`」
+  9. **`.md-bq` 3 色左边框 / `.md-hr` 居中短线 / `.md-img*` lightbox 形态 / `.md-del`** → **削平**（**lightbox 一项除外**）：PC 引用改为「无边框 / 每层 2 空格缩进」「满宽 1px 分隔线」「`.md-strike`」；**图片 lightbox 形态不削平** —— M5 批已按安卓/web 三端一致落地全屏预览（见上条第 2 点的订正）
   10. **rehype-sanitize schema**（web 放行 `code.className`(`language-`) / `span.className`(hljs/token/shiki) / `input.type|checked|disabled`）→ **不再需要**：自研管线是**白名单渲染**（AST 决定产出什么 DOM），天然无 XSS 面
   11. **react-markdown v9 / v10 `components` 回调签名差异** → **不再适用**：PC 不再使用 react-markdown
 - **预估改动**：**已交付**（M3 批 commit `b29207f`）—— `LibraryMarkdownTableCard.tsx` 111 行 → **59 行**，**0 依赖**（6 个第三方包从 `package.json` 摘除）
@@ -3312,16 +3315,16 @@
 ### D-26 · PC 的排序菜单（SortMenu）
 - **PC**：`gacode-electron/src/routes/Deliveries.tsx:266` — `<SortMenu value={sort} onChange={setSort} />` + `sortedItems` 客户端排序（`Deliveries.tsx:110-118`）
 - **web**：`gacode-web/src/app/(main)/deliveries/page.tsx` — **无排序**
-- **判定**：**不列为差异**（PC 增强）
-- **怎么改**：无（保留不动）
-- **预估改动**：0
+- **判定**：~~**不列为差异**（PC 增强）~~ → 🔴 **已按新口径删除（2026-10-26 · §十四）**：web 无排序 ⇒ PC 的 `SortMenu` + `sortedItems` 客户端排序 **整块删掉**（PC 侧 `src/routes/Deliveries.tsx` 已无 `SortMenu` import、无 `sort` state、无 `LibrarySort` 依赖）
+- **怎么改**：**已完成**（无需再改）
+- **预估改动**：0（已落地）
 
 ### D-27 · PC 的多选 toolbar / PdfCard 分组 / retry 按钮
 - **PC**：`DeliveriesMultiSelectToolbar`（`Deliveries.tsx:330-341`）、`DocumentSplitGrid` 的 PDF / 其它文档分组（`Deliveries.tsx:387-445`）、「重新下载」按钮（`Deliveries.tsx:567-577`）
 - **web**：`gacode-web/src/app/(main)/deliveries/page.tsx` — 全部没有
-- **判定**：**不列为差异**（PC 增强）
-- **怎么改**：无（保留不动）
-- **预估改动**：0
+- **判定**：~~**不列为差异**（PC 增强）~~ → 🔴 **已按新口径删除（2026-10-26 · §十四）**：① `src/components/deliveries/MultiSelectToolbar.tsx` **整文件删除**；② `DocumentSplitGrid` + `PdfCard` **整块删除**（文档 tab 改回 web 的统一 2 列 grid，`deliveries/page.tsx:285-298`）；③ 卡片上的「重新下载」按钮**删除**（web 的 ⋮ 菜单只剩「删除」，`deliveries/page.tsx:680-683` 注释明确说 retry 入口跟安卓对齐后已摘除）；④ 客户端批量删除 `batchDeleteDeliverables` **api wrapper 一并删除**
+- **怎么改**：**已完成**（无需再改）
+- **预估改动**：0（已落地）
 
 ---
 
@@ -3810,9 +3813,10 @@
 ### E-13 · PC 的 ShareSheet / StarButton（PC 增强）
 - **PC**：`gacode-electron/src/components/deliveries/ShareSheet.tsx`、`StarButton.tsx`（`DeliveryDetail.tsx:29-30` import，`200-208` 使用）
 - **web**：`gacode-web/src/app/(main)/deliveries/[id]/page.tsx` — 无
-- **判定**：**不列为差异**（PC 增强；且 server 端 `share` / `star` endpoint 未实现，PC 侧是 send-blocker 占位）
-- **怎么改**：无（保留不动）
-- **预估改动**：0
+- **判定**：~~**不列为差异**（PC 增强；且 server 端 `share` / `star` endpoint 未实现，PC 侧是 send-blocker 占位）~~ → 🔴 **已按新口径删除（2026-10-26 · §十四）**：服务端 `unified-api/src/modules/yinian/deliverables.routes.js` 只有 3 条路由（`:243` GET list / `:359` GET detail / `:407` DELETE）⇒ **无 star / share / retry endpoint** ⇒ PC 这两个按钮点了必 404。
+  ⇒ 已删：`src/components/deliveries/ShareSheet.tsx`、`src/components/deliveries/StarButton.tsx` **两个文件** + 详情页「分享到对话」按钮 + `<StarButton>` + `shareOpen` state + `src/lib/api.ts` 的 `shareDeliverableToChat` / `starDeliverable` / `unstarDeliverable` **三个 api wrapper** + `ShareDeliverableToChatResult` 类型
+- **怎么改**：**已完成**（无需再改）
+- **预估改动**：0（已落地）
 
 ---
 
@@ -4166,7 +4170,7 @@
   2. `Deliveries.tsx` 的 `DocumentSplitGrid` 分派逻辑重写
   3. **PC 的 `PdfCard` 分组**（`Deliveries.tsx:387-445`，document tab 内把 PDF 单独一节用 iframe 预览）会跟 web 的 `DocumentCard` 冲突 → 需决定是并入 DocumentCard 还是保留分组
   4. PC 的多选态（`isInMultiSelect` / `selectedIds`）在 web 交付中心**不存在** → 三组件要不要支持多选？web 无此状态
-- **需 gaga 拍**：PC 交付中心要不要保留自己的多选 + PDF 分组能力，还是彻底 1:1 还原成 web 的三卡形态。
+- **需 gaga 拍**：~~PC 交付中心要不要保留自己的多选 + PDF 分组能力，还是彻底 1:1 还原成 web 的三卡形态。~~ → ✅ **已拍并落地（2026-10-26 · §十四）**：按「web = 唯一事实源」口径**彻底 1:1 还原成 web 的三卡形态**，PC 的多选态与 PDF 分组**一并删除**（web 交付中心没有这两个状态）。
 
 ### X-06 · PlusSheet 项数：PC 6 项（多「拍照」「模板」）vs web 4 项
 - **web**：`gacode-web/src/components/chat/SheetActionMenu.tsx:76-95` — 图片 / 文件 / 表情 / 挂载知识库
@@ -4197,7 +4201,7 @@
   1. `Deliveries.tsx:308` `onOpen` 改为开原链接（Electron 需走 `window.gacode.openWithSystem` 走系统默认应用）
   2. 若照此改，PC 的 `DeliveryDetail.tsx` 页面基本变成死路（除非从别处可达）
   3. 反过来若保留 PC 的跳详情，则 web 的「点卡片直接看内容」这个**零点击成本**的交互在 PC 端就丢了
-- **需 gaga 拍**：交付中心列表点卡片，是「直接开原链接」还是「进详情页」。
+- **需 gaga 拍**：~~交付中心列表点卡片，是「直接开原链接」还是「进详情页」。~~ → ✅ **已拍并落地（2026-10-26 · §十四）**：按「web = 唯一事实源」口径选 **「直接开原链接」** —— PC `Deliveries.tsx` 的 `ImageCard` / `WebCard` 已改成 `window.open(item.url, "_blank", "noopener,noreferrer")`（Electron 主进程 `setWindowOpenHandler`（`electron/main.ts:234-240`）把 http(s) 交给系统默认浏览器，与 web 行为一致）。**PC 详情页 `/deliveries/:id` 仍保留**（web 端也有这个页面，只是 web 列表里没有入口；PC 的聊天气泡交付物条 `src/components/chat/DeliverableStrip.tsx:53` 会跳它）。
 - **备注**：服务端 `deliverables.routes.js` 全部路由只有 3 条（`:243` GET list / `:359` GET detail / `:407` DELETE）⇒ **无 star / share / retry endpoint**（PC 侧 E-13 / D-27 的「收藏 / 分享 / 重试」都是 PC 自加的 send-blocker 占位，见 §十 第 9 条）。
 
 ---
@@ -4303,11 +4307,11 @@ L-07 / L-08 / L-09 / L-10 / L-13 / L-16 / L-19 / L-20 / L-22 / L-26 / L-31 / L-3
 
 6. **web 端「在新窗口打开」菜单项名不副实** —— `library/page.tsx:1126-1139` 的菜单项写「在新窗口打开」，但 `onClick` 调的是 `open()`，而 `open()`（`library/page.tsx:884-887`）是 `router.push` 跳详情页，不是 `window.open`。→ 1:1 还原时**不要**真的开新窗口，照抄 web 的跳详情页行为。→ L-40
 
-7. **交付中心 web 端没有「进详情页」的路径** —— web 卡片点击是 `window.open(item.url, "_blank")`（`deliveries/page.tsx:423`）；`/deliveries/[id]` 页面在 web 端是孤立路由。PC 端点卡片跳自己的详情页。→ 这不是「谁对谁错」，是产品路径分叉 → X-05（§六 6.2 产品决策）
+7. **交付中心 web 端没有「进详情页」的路径** —— web 卡片点击是 `window.open(item.url, "_blank")`（`deliveries/page.tsx:423`）；`/deliveries/[id]` 页面在 web 端是孤立路由。PC 端点卡片跳自己的详情页。→ 这不是「谁对谁错」，是产品路径分叉 → X-05（§六 6.2 产品决策）→ **2026-10-26 已拍并落地：PC 改成跟 web 一致（点卡片开原链接），见 §十四**
 
-8. **web 端交付中心的 ⋮ 菜单只剩「删除」** —— 注释原文（`deliveries/page.tsx:680-683`）：「Android DeliveriesViewModel 不调 HTTP retry endpoint… web 没有这种后台下下载… 所以 ⋮ 菜单移除 "重试" 项」。PC 端保留了「重新下载」按钮并调 `retryDownloadDeliverable`（`Deliveries.tsx:567-577`），且 PC 的 `api.ts` 里这个 endpoint 是 PC 自己加的。→ PC 增强，**不列差异**，但 1:1 还原会让 PC 少一个功能入口。
+8. **web 端交付中心的 ⋮ 菜单只剩「删除」** —— 注释原文（`deliveries/page.tsx:680-683`）：「Android DeliveriesViewModel 不调 HTTP retry endpoint… web 没有这种后台下下载… 所以 ⋮ 菜单移除 "重试" 项」。PC 端保留了「重新下载」按钮并调 `retryDownloadDeliverable`（旧 `Deliveries.tsx:567-577`），且 PC 的 `api.ts` 里这个 endpoint 是 PC 自己加的。→ ~~PC 增强，**不列差异**，但 1:1 还原会让 PC 少一个功能入口。~~ → **2026-10-26 已按新口径删除**（PC 列表的「重新下载」按钮 + `DocumentSplitGrid`/`PdfCard` + 多选底栏全删，见 §十四；`api.ts` 的 `retryDownloadDeliverable` wrapper 保留，与 web `src/lib/api.ts:1353-1356` 的同名占位保持一致 —— web 端同样没有 UI 调它）
 
-9. **PC 的 `retryDownloadDeliverable` / `shareDeliverableToChat` / `starDeliverable` 三个 endpoint server 端不存在** —— PC 自己的注释写明（`ShareSheet.tsx:11-13`、`StarButton.tsx:9-12`）：「server unified-api 当前**没有**该 endpoint… 调用会 404」。→ 交付详情页的「分享到对话」「收藏」两个按钮在 PC 上**必然报错**，1:1 还原后这两项会消失（web 没有）。→ E-13（PC 增强，不列）
+9. **PC 的 `retryDownloadDeliverable` / `shareDeliverableToChat` / `starDeliverable` 三个 endpoint server 端不存在** —— PC 自己的注释写明（旧 `ShareSheet.tsx:11-13`、`StarButton.tsx:9-12`）：「server unified-api 当前**没有**该 endpoint… 调用会 404」。→ 交付详情页的「分享到对话」「收藏」两个按钮在 PC 上**必然报错**，1:1 还原后这两项会消失（web 没有）。→ E-13 → **2026-10-26 已按新口径删除**（两个组件文件 + 详情页按钮 + 三个 api wrapper 全删，见 §十四）
 
 10. **PC 的 `LibraryDropZone` 有一个真实数据 bug：doc 类型入库不带 url** —— `LibraryDropZone.tsx:61-66`：`createLibraryItem({ type: "doc", title, url: undefined, tags: [] })`，只上传拿到的 `res.fileId` 却**不传 url**；而 web 端所有 doc 入库都带 url（`library/page.tsx:383`）。→ PC 拖拽入库的文档条目**点开是空的**。→ 不在本次清单（web 无拖拽入库），但属真 bug，建议单独排。
 
@@ -4535,3 +4539,158 @@ export const getDocumentText = (fileId: string) =>
 2. **L-25 的裁剪基准 —— 改为用累积的 `items`，不用当前页 `data.items`**。理由：PC 列表累积，若按当前页裁剪，点「加载更多」到第 2 页会把第 1 页的选中清掉，这是 PC 引入的回归（web 是整页替换，裁剪当前页等价于裁剪全量）。这是 1 行改动（见 13.3 / L-25）。
 3. **L-31 与 L-32 必须同批** —— L-32（类型图标按类型上色）排进下一批，与 L-31 一起落（见 13.4 / L-31）。
 4. **L-47 保留 PC 的「已选 N 条」，但 `flex-1` 占位要删** —— L-52（PC 多选栏多一行）不在本批；`justify-between` 因有 `flex-1` 占位而视觉不生效，**删掉 `flex-1` 占位让 `justify-between` 生效**，「已选 N 条」保留到 L-52 一并处理（已改，L-47 + L-52）。
+
+---
+
+# 十四、交付中心 1:1 还原批次（2026-10-26 · 本批已落地）
+
+> **口径（本批唯一依据）**：**web 端 = 唯一事实源**。web 有什么 PC 必须有什么；**PC 多出 web 没有的直接删**（不回头征求确认）。
+> **事实源**：`gacode-web/src/app/(main)/deliveries/page.tsx`（738 行）+ `deliveries/[id]/page.tsx`（533 行）+ `components/deliveries/DocumentPreview.tsx`（216 行）+ `lib/deliverable-download-name.ts`（30 行）+ `lib/api.ts:1250-1356`（2026-10-26 逐行读过）。
+> **本批范围**：交付中心**列表页 + 详情页**（§三 / §四）+ 交付相关组件 + `src/lib/api.ts` 的交付段。**知识库域（§一 / §二）不在本批**。
+
+## 14.0 改动文件清单
+
+| 文件 | 动作 | 说明 |
+|---|---|---|
+| `src/routes/Deliveries.tsx` | 重写 | 列表页 1:1；删排序/多选/PDF 分组/retry/拖放 |
+| `src/routes/DeliveryDetail.tsx` | 重写 | 详情页 1:1；删收藏/分享/返回列表按钮/ContentView 三路分流 |
+| `src/components/deliveries/DocumentPreview.tsx` | **新增** | 抄 web `components/deliveries/DocumentPreview.tsx` |
+| `src/components/deliveries/CardMenu.tsx` | **新增** | ⋮ 菜单（只含「删除」），PC 用共享 `DropdownMenu` 承载 |
+| `src/components/deliveries/Icons.tsx` | **新增** | 10 个 lucide 同款内联 svg（PC 无 lucide-react） |
+| `src/components/deliveries/ShareSheet.tsx` | **删除** | web 无分享 |
+| `src/components/deliveries/StarButton.tsx` | **删除** | web 无收藏 |
+| `src/components/deliveries/MultiSelectToolbar.tsx` | **删除** | web 无多选 |
+| `src/components/deliveries/DeliveriesDropZone.tsx` | **删除** | web 无拖放入库 |
+| `src/lib/api.ts` | 改 | 删 4 个 wrapper + 1 个类型；加 `getDocumentText` / `pickDeliverableDownloadName` / `displayName` 字段 / `origin` 透传参数 |
+
+## 14.1 判定更新表（§三 / §四 / §五 / §六 逐条）
+
+| 条目 | 原判定 | 本批后 | 落点 |
+|---|---|---|---|
+| D-01 Tabs 形态 | 形态不同 | ✅ 已落地（underline + 图标） | `Deliveries.tsx` 本地 `DeliveriesTabs` |
+| D-02 Tab 缺图标 | 缺失 | ✅ 已落地 | `Deliveries.tsx` `TAB_DEFS` |
+| D-03 缺搜索折叠按钮 | 缺失 | ✅ 已落地 | `Deliveries.tsx` Row 1 右 |
+| D-04 搜索框常驻 | 形态不同 | ✅ 已落地（折叠 + 圆药丸） | `Deliveries.tsx` Row 2 |
+| D-05 sticky 顶栏 | 形态不同 | ✅ 已一致 | — |
+| D-06 列表容器 | 形态不同 | ✅ 已落地（`py-2`；滚动容器由 AppShell `main` 承担，PC 无嵌套滚动） | `Deliveries.tsx` |
+| D-07 网格间距 | 形态不同 | ✅ 已落地（`gap-4`） | 三型卡片所在 grid |
+| D-08 三型卡片 | 结构级差异 | ✅ 已落地 | `ImageCard`/`WebCard`/`DocumentCard` |
+| D-09 ImageCard | 缺失 | ✅ 已落地 | `Deliveries.tsx` |
+| D-10 WebCard | 缺失 | ✅ 已落地（+ `deriveDomain`） | `Deliveries.tsx` |
+| D-11 DocumentCard | 缺失 | ✅ 已落地 | `Deliveries.tsx` |
+| D-12 CardMenu | 缺失 | ✅ 已落地 | `components/deliveries/CardMenu.tsx` |
+| D-13 卡片点击行为 | 形态不同 | ✅ 已落地（`window.open` 开原链接） | `Deliveries.tsx` |
+| D-14 文档下载 | 缺失 | ✅ 已落地（blob + `pickDeliverableDownloadName`） | `Deliveries.tsx` + `api.ts` |
+| D-15 空态卡片 | 形态不同 | ✅ 已落地 | `Deliveries.tsx` `EmptyState` |
+| D-16 加载更多按钮 | 形态不同 | ✅ 已落地（纯文字按钮） | `Deliveries.tsx` `LoadMore` |
+| D-17 骨架屏 | 形态不同 | ✅ 已落地 | `Deliveries.tsx` `SkeletonGrid` |
+| D-18 删除确认弹窗 | 形态不同 | ✅ 已落地（标题/描述/「我确定」/「删除中...」） | `Deliveries.tsx` |
+| D-19 / D-21~D-25 | 已一致 | ✅ 保持一致 | — |
+| D-20 删除失败 toast | 形态不同 | ✅ 已落地（改 web 的 `title`+`description` 两段） | `Deliveries.tsx` / `DeliveryDetail.tsx` |
+| **D-26 SortMenu** | 不列差异（PC 增强） | 🔴 **已删**（新口径） | — |
+| **D-27 多选/PdfCard/retry** | 不列差异（PC 增强） | 🔴 **已删**（新口径） | — |
+| E-01 顶部面包屑 | 缺失 | ✅ 已落地（返回 + 刷新） | `DeliveryDetail.tsx` |
+| E-02 容器宽度 | 形态不同 | ✅ 已落地（`max-w-2xl`） | `DeliveryDetail.tsx` |
+| E-03 大图预览 | 形态不同 | ✅ 已落地（16:9 + 失败占位） | `DeliveryDetail.tsx` |
+| E-04 标题字号 | 形态不同 | ✅ 已落地（`text-lg font-semibold`） | `DeliveryDetail.tsx` |
+| E-05 Badge + 时间 + 域名 | 形态不同 | ✅ 已落地（删 `#id` / 「· AI 生成」标签） | `DeliveryDetail.tsx` |
+| E-06 元信息卡 | 形态不同 | ✅ 已落地（删 URL 行；加「无元数据」空态） | `DeliveryDetail.tsx` |
+| E-07 DocumentPreview | 缺失 | ✅ 已落地 | `components/deliveries/DocumentPreview.tsx` |
+| E-08 操作区 4 按钮 | 缺失 | ✅ 已落地（打开/复制链接/保存到相册/下载三态/跳到源对话/删除） | `DeliveryDetail.tsx` |
+| E-09 删除确认弹窗 | 形态不同 | ✅ 已落地 | `DeliveryDetail.tsx` |
+| E-10 错误态卡片 | 缺失 | ✅ 已落地（重试 + 返回列表） | `DeliveryDetail.tsx` |
+| E-11 加载态骨架 | 形态不同 | ✅ 已落地 | `DeliveryDetail.tsx` |
+| E-12 删除后跳转 + 清缓存 | 形态不同 | ✅ 已落地（`removeQueries(["deliverable", id])`） | `DeliveryDetail.tsx` |
+| **E-13 ShareSheet / StarButton** | 不列差异（PC 增强） | 🔴 **已删**（新口径） | — |
+| S-10 缺 DocumentPreview | 缺失 | ✅ 已落地 | `components/deliveries/DocumentPreview.tsx` |
+| X-03 卡片三型 | 结构级差异 | ✅ 已解决 | — |
+| X-05 卡片点击行为 | 产品决策 | ✅ 已解决（选 web 的「开原链接」） | — |
+
+## 14.2 删除清单（PC 独有 → 已删）
+
+> **M8 下游要撤服务端工单，看这一节。**
+
+**组件文件（整文件删除）**
+| 文件 | 导出的东西 | 对应服务端端点 |
+|---|---|---|
+| `src/components/deliveries/ShareSheet.tsx` | `ShareSheet` / `ShareSheetProps` | `POST /yinian/deliverables/:id/share`（**服务端从来没有**） |
+| `src/components/deliveries/StarButton.tsx` | `StarButton` / `StarButtonProps` | `POST` / `DELETE /yinian/deliverables/:id/star`（**服务端从来没有**） |
+| `src/components/deliveries/MultiSelectToolbar.tsx` | `DeliveriesMultiSelectToolbar` / `DeliveriesMultiSelectToolbarProps` | 无（纯客户端 fan-out） |
+| `src/components/deliveries/DeliveriesDropZone.tsx` | `DeliveriesDropZone` / `DeliveriesDropZoneProps` | 无（走 `uploadAttachment` + `createLibraryItem`，两端都有的端点） |
+
+**`src/routes/Deliveries.tsx` 内删除的代码**
+- `SortMenu` 引用 + `sort` state + `sortedItems`（客户端 newest/oldest/title 排序）
+- 多选：`selectedIds` state / `isInMultiSelect` / `allSelected` / `toggleMultiSelect` / `cancelMultiSelect` / `handleToggleSelectAll` / `batchDeleteMutation` / `handleBatchDelete` / `DeliveriesMultiSelectToolbar` 渲染块
+- `DocumentSplitGrid` 组件 + `PdfCard` 组件（PDF / 其它文档分组 + PDF iframe 缩略）
+- 统一 `DeliveryCard` 组件 + 其内的 `TypeIcon`（被三型卡片取代）
+- `retryMutation` + 卡片上的「重新下载」按钮（`retryDownloadDeliverable` 调用点）
+- `DeliveriesDropZone` 包裹层
+- `formatRelative`（PC 手写相对时间）→ 改用 web 同款 `formatDistanceToNow(..., { addSuffix: true, locale: zhCN })`（PC 已有 `date-fns` 依赖）
+
+**`src/routes/DeliveryDetail.tsx` 内删除的代码**
+- `StarButton` 引用 + 收藏按钮；`ShareSheet` 引用 + 「分享到对话」按钮 + `shareOpen` state
+- 底部操作行的「返回列表」按钮（web 走顶部面包屑返回）
+- 标题旁的 `#{item.id}` 与「· AI 生成 / · 用户上传」标签
+- 元信息卡里的「URL」行 + `InfoRow` 组件
+- `ContentView` 组件 + `classifyFileRender`（`embed-html` / `embed-text` / `open-with-system` 三路分流）
+- `openWithSystem`（`window.gacode.openWithSystem`）调用 —— 详情页的「打开」改成跟 web 一样的 `window.open(url, "_blank")`
+
+**`src/lib/api.ts` 内删除的导出**
+| 导出 | 对应端点 | 服务端是否存在 |
+|---|---|---|
+| `batchDeleteDeliverables(ids)` | 无（客户端 fan-out `DELETE /yinian/deliverables/:id`） | 端点存在，**包装删除** |
+| `starDeliverable(id)` | `POST /yinian/deliverables/:id/star` | ❌ **不存在** |
+| `unstarDeliverable(id)` | `DELETE /yinian/deliverables/:id/star` | ❌ **不存在** |
+| `shareDeliverableToChat(id, input)` | `POST /yinian/deliverables/:id/share` | ❌ **不存在** |
+| `ShareDeliverableToChatResult`（类型） | — | — |
+
+> **`retryDownloadDeliverable` / `RetryDownloadResult` 保留**（未删）：web `src/lib/api.ts:1353-1356` 有**同名同路径**的占位 wrapper（同样没有 UI 调它）。PC 侧删的是**UI 入口**。
+> ⇒ **服务端工单口径**：star / share 两个端点的 PC 侧需求**彻底撤销**；retry 端点若要撤，需先确认 web 那份占位是否一并撤（web 端目前也没有 UI 用它）。
+
+## 14.3 新增清单（web 有 → 已补）
+
+| 新增 | 位置 | web 事实源 |
+|---|---|---|
+| `DocumentPreview` 组件（PDF iframe / TXT 解码 / 短 id 走服务端 / 加载·错误·空三态） | `src/components/deliveries/DocumentPreview.tsx` | `web/src/components/deliveries/DocumentPreview.tsx:1-216` |
+| `CardMenu` 组件（⋮ 菜单，只含「删除」） | `src/components/deliveries/CardMenu.tsx` | `web .../deliveries/page.tsx:685-714` |
+| 10 个 lucide 同款 svg（layout-grid / download / loader-2 / construction / external-link / copy / save / refresh-cw / refresh-ccw / message-square） | `src/components/deliveries/Icons.tsx` | web 端 `lucide-react` 同名图标 |
+| tab 图标（全部/图片/网站/文档） | `Deliveries.tsx` `TAB_DEFS` + `DeliveriesTabs` | `web .../deliveries/page.tsx:69-77 / 198-207` |
+| 搜索折叠按钮 + 折叠式搜索框 | `Deliveries.tsx` Row 1/Row 2 | `web .../deliveries/page.tsx:210-220 / 235-249` |
+| 三型卡片（ImageCard 1:1 图 / WebCard 16:9 渐变占位 / DocumentCard 文件行 + 下载 + ⋮） | `Deliveries.tsx` | `web .../deliveries/page.tsx:408-669` |
+| 文档 blob 下载 + 文件名策略（`displayName → title → 兜底`） | `Deliveries.tsx` `DocumentCard.download` + `api.ts` `pickDeliverableDownloadName` | `web .../deliveries/page.tsx:581-601` + `web/src/lib/deliverable-download-name.ts:30-41` |
+| 「加载更多」纯文字按钮 + 骨架屏（按 tab 分形态）+ 空态卡片（含 keyword 分支） | `Deliveries.tsx` | `web .../deliveries/page.tsx:362-400 / 719-738` |
+| 详情页顶部面包屑（返回 + 刷新） | `DeliveryDetail.tsx` | `web .../deliveries/[id]/page.tsx:311-329` |
+| 详情页大图预览（16:9 + object-contain + 失败占位） | `DeliveryDetail.tsx` | `web .../deliveries/[id]/page.tsx:332-353` |
+| 详情页类型 Badge（带图标）+ 时间 + 域名 | `DeliveryDetail.tsx` | `web .../deliveries/[id]/page.tsx:360-369` |
+| 详情页元信息卡（类型 / 大小 / 生成提示词 / 无元数据） | `DeliveryDetail.tsx` | `web .../deliveries/[id]/page.tsx:372-391` |
+| 详情页操作区 5+1 按钮（打开 / 复制链接 / 保存到相册 / 下载三态 / 跳到源对话 / 删除） | `DeliveryDetail.tsx` | `web .../deliveries/[id]/page.tsx:409-494` |
+| 详情页错误态卡片（重试 + 返回列表）+ 加载态骨架 | `DeliveryDetail.tsx` | `web .../deliveries/[id]/page.tsx:256-299` |
+| `getDocumentText` + `DocumentTextResponse` | `src/lib/api.ts` | `web/src/lib/api.ts:1332-1342` |
+| `pickDeliverableDownloadName` | `src/lib/api.ts` | `web/src/lib/deliverable-download-name.ts:30-41` |
+| `Deliverable.displayName` 字段 + `listDeliverables` 的 `origin` 透传参数 | `src/lib/api.ts` | `web/src/lib/api.ts:1267-1291` |
+
+## 14.4 超出独占范围的问题（发现但**没改**，交 PM）
+
+| # | 位置 | 问题 | 建议 |
+|---|---|---|---|
+| 1 | `src/components/ui/Tabs.tsx` | 共享 `Tabs` 不支持 **tab 图标**（`TabsTab` 只有 key/label/count/disabled）⇒ 本批在 `Deliveries.tsx` 内**本地实现**了一份带图标的 tab 行（`DeliveriesTabs`），与共享组件重复 | 给 `TabsTab` 加 `icon?: React.ReactNode` 后，把 `Deliveries.tsx` 的本地实现换回 `<Tabs variant="underline">` |
+| 2 | `src/components/ui/DropdownMenu.tsx:87-96` | 菜单容器 className 写死：`min-w-[12rem] rounded-md border border-border bg-bg-elevated`；web 是 `min-w-[8rem] border-0 rounded-xl bg-popover`（`web .../deliveries/page.tsx:703`） | 给 `DropdownMenu` 加 `contentClassName` prop |
+| 3 | `src/components/ui/DropdownMenu.tsx` | web 的 trigger 有 `data-[state=open]:bg-muted`（打开态底色），PC 的 `TriggerChild` 不注入 `data-state` | `TriggerChild` 注入 `data-state={open ? "open" : "closed"}` |
+| 4 | `src/components/ui/Card.tsx:48` | PC `CardContent` base 是 `p-6`（web 是 `p-6 pt-0`）⇒ web 里 `p-3` 的地方 PC **必须**写 `!p-3`（本批已用 `!p-3`） | 同 web 改成 `p-6 pt-0`（PC 当时改成 `p-6` 是为了不被 `pt-0` 压掉调用方内距，改成 `p-6 pt-0` 会回退那个修复） |
+| 5 | `gacode-electron/tailwind.config.ts:209-213` | `boxShadow` 顺序里 `none` 在 `DEFAULT` **之前** ⇒ `.shadow` 产物顺序在后 ⇒ `shadow-none` **盖不住** `shadow`（web 空态 `shadow-none` 抄过来会失效，本批用 `!shadow-none` 绕过） | 把 `none` 挪到 `DEFAULT` 之后 |
+| 6 | `src/components/layout/AppShell.tsx:71` | 顶栏标题对 `/deliveries/*` 固定「交付详情」；web 是 `setHeaderTitle(item.title)`（详情页标题 = 交付物标题）、列表页 `setHeaderTitle("交付中心")` | 详情页把标题改成交付物标题（需 AppShell 支持页面级标题覆盖） |
+| 7 | `src/components/chat/DeliverableStrip.tsx` | PC 独有的聊天气泡交付物条（web 聊天页没有）⇒ 与 web 不 1:1；且它是 PC 详情页现在**唯一**的入口 | 删或保留由 PM 拍（本批未动） |
+| 8 | `electron/deliveries-downloader.ts` + `electron/preload.ts:131-137` + `electron/main.ts:721-745` | 主进程自动下载 worker + `downloadDeliverable` / `getDeliverablesStatus` 两个 IPC —— **渲染层已无任何调用点**（本批前就没有；web 无此能力） | 一并撤（主进程 + preload + main 三处），或接上 UI |
+| 9 | `src/lib/api.ts` 的 `Deliverable` 类型 | 服务端 `deliverableDetailDto`（`unified-api/src/modules/yinian/deliverables.routes.js:201-231`）**不返 `downloadStatus`** ⇒ 详情页「导出到下载文件夹 / 下载原文件 / 重试下载」三个按钮（web 同款逻辑）**实际不渲染** | 若要 PC 保留下载能力：服务端在 DTO 里补 `downloadStatus`，或 PC 自行用 `openWithSystem` IPC 保留一个「下载」按钮 |
+| 10 | `src/components/ui/ConfirmDialog.tsx` | web 的 AlertDialog 是「标题 + 描述」两段 + `删除中...` 态；PC 的 `ConfirmDialog` 只有一段 `message`（本批把 web 的描述文案塞进 `message` 承载） | 给 `ConfirmDialog` 加 `description` prop |
+
+## 14.5 本批门禁结果
+
+| 门禁 | 结果 |
+|---|---|
+| `pnpm typecheck`（node + web 两个 project，均 `--composite false`） | ✅ exit 0，零错误 |
+| `node scripts/verify-md-parser.mjs` | ✅ **172/172** |
+| `node scripts/verify-md-render.mjs` | ✅ **180/180**（本批未动 markdown；脚本当前断言数是 180，§十四 之前记的 164 已过时 —— 断言集随 M5 批扩到 180） |
+| `node scripts/verify-md-table-colwidth.mjs` | ✅ 绿（§A 静态断言全过；§B 渲染实测因 `scripts/e2e/node_modules` 不在库而跳过，脚本自身已标注） |
+| `git status --porcelain` | 本批改动 **全部落在独占清单内**；仓内另有 7 个文件被**并行 worker** 改动（`src/components/ui/{Glyphs,DropdownMenu,Button,BottomSheet}.tsx` / `src/components/chat/PlusActionsSheet.tsx` / `src/components/home/{EmojiPicker,LibraryPicker}.tsx`），**非本批所改** |
+

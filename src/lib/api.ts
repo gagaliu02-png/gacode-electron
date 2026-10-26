@@ -402,7 +402,7 @@ export async function getChats(): Promise<{ chats: ChatSession[] }> {
  * keyword. 这里 getChats 拉全量, 客户端本地 filter. server 端加 keyword 后,
  * 函数签名不变, 实现里加 query param 即可.
  *
- * 不动 getChats 签名 (保持向后兼容 AppShell / ChatDetail / ShareSheet 等
+ * 不动 getChats 签名 (保持向后兼容 AppShell / ChatDetail 等
  * 多处调用点 — 它们都不带 keyword 调用).
  */
 export async function searchChatsByTitle(
@@ -1027,6 +1027,13 @@ export interface Deliverable {
   mimeType?: string;
   sizeBytes?: number | string;
   prompt?: string;
+  /**
+   * [2026-10-22 两条下载路径对齐] 下载展示名 — 服务端单点算好 (= 直连 URL 的
+   * Content-Disposition 里那一个), 形如 `17926600121500-销售报表.xlsx`.
+   * **可选**: 外链交付物 / 老数据 / 历史交付物 上可能没有 → 前端必须退回 `title`,
+   * 不能因为缺这个字段就让下载拿不到文件名。见 pickDeliverableDownloadName.
+   */
+  displayName?: string | null;
   /** "ai_generated" | "user_uploaded" | null (legacy) — server 已硬过滤掉 user_uploaded */
   origin?: string | null;
   createdAt: string;
@@ -1052,6 +1059,14 @@ export async function listDeliverables(params: {
   pageSize?: number;
   sessionId?: string;
   keyword?: string;
+  /**
+   * 按 origin 过滤（"ai_generated" | "user_uploaded"）.
+   * [2026-10-15 web 端交付中心需求] 服务端目前还没接受 `?origin=` query
+   *   (unified-api deliverables.routes.js:139 schema 仅有 type/sessionId/keyword/page/pageSize,
+   *    origin 过滤是写死的 ORIGIN_NOT_USER_UPLOADED, 不接受参数).
+   *   前端先把参数透传, 后端补 schema 后即生效; 不传 = 老行为不变.
+   */
+  origin?: string;
 } = {}): Promise<DeliverableListResponse> {
   const qs = new URLSearchParams(
     Object.entries(params).filter(
@@ -1077,36 +1092,17 @@ export function deleteDeliverable(
 }
 
 /**
- * 批量删除 — 客户端 fan-out (跟 library 同样策略, server 无新 endpoint).
- * 失败/部分失败聚合给 caller. 0.7.5 deliveries-9 加.
- */
-export async function batchDeleteDeliverables(
-  ids: string[],
-): Promise<{ succeeded: string[]; failed: { id: string; error: string }[] }> {
-  const results = await Promise.allSettled(
-    ids.map((id) => deleteDeliverable(id).then(() => id)),
-  );
-  const succeeded: string[] = [];
-  const failed: { id: string; error: string }[] = [];
-  results.forEach((r, i) => {
-    if (r.status === "fulfilled") {
-      succeeded.push(r.value);
-    } else {
-      const reason = r.reason;
-      const error =
-        reason instanceof Error ? reason.message : String(reason ?? "未知错误");
-      failed.push({ id: ids[i], error });
-    }
-  });
-  return { succeeded, failed };
-}
-
-/**
  * 0.7.5 deliveries-16 — retry 失败交付.
  *
+ * ⚠️ 1:1 对齐 web (2026-10-26): web 端 **没有** 这个入口 —— 交付列表的 ⋮ 菜单
+ *    只留「删除」(web `src/app/(main)/deliveries/page.tsx:680-683` 注释:
+ *    「Android DeliveriesViewModel 不调 HTTP retry endpoint… web 没有这种后台
+ *    下下载, retry 实际能力 = 用户点开详情页自己开 url」)。
+ *    PC 列表页的「重新下载」按钮已按 1:1 删除; 这里只保留 api 包装, 与
+ *    web `src/lib/api.ts:1353-1356` 的同名占位保持一致 (web 端同样没有 UI 调它)。
+ *
  * server unified-api 当前没有 `/yinian/deliverables/:id/retry` 端点 (send-blocker);
- * 调用会 404 抛错. 这里先留 client 包装 + 错误提示, 等 server 端补 endpoint 后
- * 自然走通. 路径按 web/Android 推测约定先定下来.
+ * 调用会 404 抛错.
  *
  * 预期 server contract (gagaOS 拍板时确认):
  *   POST /api/v1/yinian/deliverables/:id/retry
@@ -1127,58 +1123,55 @@ export function retryDownloadDeliverable(
   );
 }
 
+// =========================================================================
+// DocumentPreview — 跟 Android DocumentViewerActivity v1.2.61 对齐
+//   Android DocumentViewerActivity 用 fileId 形态分流:
+//     · fileId 以 http/https 开头 (交付中心直链, gaclaw 落盘 llm/uploads)
+//       → 直接 GET URL, 客户端解析 (DOCX/XLSX/PPTX/TXT)
+//     · fileId 是 unified-api 的短 id (老 chat 附件 / DocumentsScreen)
+//       → 走 /yinian/documents/{id}/raw 与 /text 端点
+//   web 端 Deliverable 沿用同一套 (item.url 直接当 fileId 透传):
+//     · 直链 URL: PDF 走 Google Docs Viewer iframe; TXT 客户端 UTF-8 解码;
+//                 DOCX/XLSX/PPTX 当前不做 client-side 解析 (mammoth.js/xlsx 依赖会破
+//                 AGENTS.md "绝不清单 - 不动 package.json"), 显式降级提示
+//     · 短 id (理论分支, 当前 web 端没生成路径): 调 /yinian/documents/{id}/text
+//   这一接口同时提供给 DocumentPreview 的"短 id"分支保留, server 端点在
+//   unified-api/src/modules/yinian/yinian.routes.js:441-445, auth-gated.
+// =========================================================================
+export interface DocumentTextResponse {
+  /** server 提取的纯文本 (DOCX 走 mammoth / XLSX 走 SheetJS / PPTX 走自实现 PptxParser / TXT 直读) */
+  plainText: string;
+  /** 可选 — server 端可能在 metadata 标注来源格式 ("docx" | "xlsx" | "pptx" | "pdf" | "txt") */
+  format?: string;
+  /** 可选 — 是否被截断 (大文件 server 端只取前 N KB) */
+  truncated?: boolean;
+}
+
+export function getDocumentText(
+  fileId: string,
+): Promise<DocumentTextResponse> {
+  return request<DocumentTextResponse>(`/yinian/documents/${fileId}/text`);
+}
+
 /**
- * 0.7.5 deliveries-id-9 — 收藏 (star / favorite).
+ * 挑一个 blob 下载用的文件名 — 跟 web `src/lib/deliverable-download-name.ts:30-41`
+ * 逐字同款 (web 那边是独立文件, PC 仓只能改 api.ts, 故放这里)。
  *
- * server unified-api 当前没有交付物的 star endpoint (send-blocker); 调用会 404.
- * 路径按 library 风格对齐 (跟 library 也没有 star — 因为 server 没实现).
- * gagaOS 拍板后, server 若引入 `yinian_deliverable_favorite` 表, 这里路径要
- * 跟 server 对齐.
+ * 优先级: 服务端 displayName → item.title → 调用方给的 fallback。
+ * 注意这里只做「二选一」, 不做任何拼接 —— 拼接是服务端 release-display-name.js 的单点职责。
  */
-export function starDeliverable(
-  id: string,
-): Promise<{ id: string; starred: boolean }> {
-  return request<{ id: string; starred: boolean }>(
-    `/yinian/deliverables/${id}/star`,
-    { method: "POST" },
-  );
-}
+export function pickDeliverableDownloadName(
+  item: { displayName?: string | null; title?: string | null } | null | undefined,
+  fallback: string,
+): string {
+  const displayName =
+    typeof item?.displayName === "string" ? item.displayName.trim() : "";
+  if (displayName) return displayName;
 
-export function unstarDeliverable(
-  id: string,
-): Promise<{ id: string; starred: boolean }> {
-  return request<{ id: string; starred: boolean }>(
-    `/yinian/deliverables/${id}/star`,
-    { method: "DELETE" },
-  );
-}
+  const title = typeof item?.title === "string" ? item.title.trim() : "";
+  if (title) return title;
 
-/**
- * 0.7.5 deliveries-id-8 — 分享到对话 (新开一条 session 并把 deliverable 引用挂上).
- *
- * server unified-api 当前没有 `/yinian/deliverables/:id/share` 端点 (send-blocker);
- * 调用会 404. 预期 contract (跟 web/Android 推测约定):
- *   POST /api/v1/yinian/deliverables/:id/share
- *   body: { sessionId?: string }   // 不传 = 新建一个 session
- *   resp: { ok, data: { sessionId, messageId, shareToken } }
- */
-export interface ShareDeliverableToChatResult {
-  sessionId: string;
-  messageId?: string;
-  shareToken?: string;
-}
-
-export function shareDeliverableToChat(
-  id: string,
-  input: { sessionId?: string } = {},
-): Promise<ShareDeliverableToChatResult> {
-  return request<ShareDeliverableToChatResult>(
-    `/yinian/deliverables/${id}/share`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
+  return fallback;
 }
 
 // ─────────── Profile ───────────
