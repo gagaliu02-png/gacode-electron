@@ -30,8 +30,33 @@ export interface GacodeBridge {
    * 主进程已经有现成的 `window.gacode.notify`, 但 SSE 流不在 renderer
    * (EventSource 是 renderer 起的), 让 renderer 推 SSE 事件过来由主进程弹
    * Windows Toast, 在收到通知时调用这个。
+   *
+   * `target` = 用户点了 Toast 之后的落点 (C4-11):
+   *   - "/chat/{id}"  站内路由 (主进程恢复窗口 + 聚焦 + 推回 renderer 跳路由)
+   *   - "http(s)://" 外链 (主进程 shell.openExternal)
+   *   - null         没有落点 (点了只恢复窗口)
    */
-  notificationSSESend: (event: { title: string; body: string }) => void;
+  notificationSSESend: (event: {
+    title: string;
+    body: string;
+    target?: string | null;
+  }) => void;
+
+  /**
+   * 窗口现在是不是在前台 (C4-09)。
+   * 主进程算 `!mainWindow.isMinimized() && mainWindow.isFocused()` ——
+   * **不要**用 renderer 的 `document.hidden` (Electron 窗口最小化时
+   * `document.visibilityState` 仍可能是 `visible`)。
+   * 桥不存在时渲染层按「不在前台」处理。
+   */
+  isWindowFocused: () => Promise<boolean>;
+
+  /**
+   * 监听「用户点了 Windows Toast」事件 (C4-11, 主进程 → 渲染层)。
+   * payload = 站内路由 path (外链由主进程自己 shell.openExternal, 不走这里)。
+   * 返回的函数调用 = 取消订阅。
+   */
+  onNotificationClick: (callback: (target: string) => void) => () => void;
 
   /**
    * 设置 Windows 任务栏进度条 (`mainWindow.setProgressBar`)。

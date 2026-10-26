@@ -76,7 +76,10 @@ const config: Config = {
         background: "#000000",      // surface
         foreground: "#e5e7eb",      // onSurface
         "background-hover": "#0a0a0a", // surface1 略亮
-        card: "#0a0a0a",            // surface1
+        card: "#141414",            // surface1 (C1-03b — 跟 globals.css 的 --card 对齐;
+                                   // 之前这里是字面量 #0a0a0a, globals.css 里的
+                                   // --card: #141414 完全不生效)
+        "card-hover": "#1e1e1e",    // surface1 hover 态 (C1-03b)
         "card-foreground": "#e5e7eb",
         popover: "#181818",         // surface2
         "popover-foreground": "#e5e7eb",

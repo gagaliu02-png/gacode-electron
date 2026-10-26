@@ -8,7 +8,8 @@
  * 功能 (2026-10-19 v0.7.2 补齐):
  *   - 顶部: 头像 (大圆) + displayName + username + email
  *   - 元信息: 性别 / 简介 / UID (含一键复制) / 注册时间
- *   - 操作入口: 编辑资料 / 改密 / 我的应用 / 设置 (v2) / 交付中心 / 头像设置
+ *   - 操作入口: 编辑资料 / 改密 / 设置 (v2) / 交付中心 / 头像设置
+ *     (「我的应用」已按 S-1 删除 —— 唯一入口是侧栏 AppShell 那个带门禁的)
  *   - 底部: 登出 + 注销账户 (DELETE /auth/account, 物理删数据 + 二次确认 + username 输入防误触)
  *   - 上传头像: file picker → uploadAvatar → invalidate profile (顶部相机按钮 + 「头像设置」入口都触发同一逻辑)
  *
@@ -27,8 +28,9 @@
  *   - C2-25: 「编辑」按钮补 aria-label
  *   - C2-26: 未读轮询走 NOTIFICATION_POLL_MS (45s)
  *
+ *   - C2-07: 头像缺省图改用 Cody 占位图 (cody_192.png, 跟 web 同款)
  * ⚠️ PC 独有 (按 gaga 指示不列入差异, 保留): 相机按钮 + @username + 操作入口列表
- *   (编辑资料/修改密码/我的应用/头像设置/交付中心/设置) + 登出按钮 + 邮箱/注册时间
+ *   (编辑资料/修改密码/头像设置/交付中心/设置) + 登出按钮 + 邮箱/注册时间
  *   两行 + 注销前必须输入 username 的二次确认。
  */
 
@@ -138,7 +140,13 @@ export function Profile() {
   const email = user?.email || "(未设置)";
   const genderText = user?.gender ? GENDER_LABEL[user.gender] || "保密" : "保密";
   const bioText = user?.bio?.trim() ? user.bio : "未设置";
-  const avatarSrc = user?.avatar || "";
+  // C2-07: 头像缺省图 —— 跟 web `gacode-web/src/app/(main)/profile/page.tsx:156`
+  // 同款 (user.avatar 为空时用 Cody 占位图 cody_192.png)。
+  // ⚠️ PC 打包后 renderer 走 file:// ⇒ 不能用根绝对路径 "/assets/..." (会解析到
+  //    文件系统根 → 裂图), 必须用 import.meta.env.BASE_URL 拼相对路径
+  //    (打包态 "./", dev "/") —— 同仓 AppShell.tsx 的 cody_48.png 已是这个写法。
+  const avatarSrc =
+    user?.avatar || `${import.meta.env.BASE_URL}assets/cody/cody_192.png`;
   const uid = user?.id || "—";
 
   return (
@@ -173,7 +181,8 @@ export function Profile() {
         <div className="relative">
           {isLoading ? (
             <div className="w-[72px] h-[72px] rounded-xl bg-bg-elevated animate-pulse" />
-          ) : avatarSrc ? (
+          ) : (
+            // C2-07: 头像缺省图 = Cody 占位图 (web 同款) —— 不再回退到首字母圆底。
             <img
               src={avatarSrc}
               alt={displayName}
@@ -181,16 +190,6 @@ export function Profile() {
               height={72}
               className="w-[72px] h-[72px] rounded-xl object-cover"
             />
-          ) : (
-            // C2-07: web 用静态 Cody 占位图 (/assets/cody/cody_192.png);
-            // PC 仓**没有该资产** ⇒ 照抄会 404 裂图, 保留 PC 的首字母 fallback
-            // (形状已随 C2-06 对齐成 72px + rounded-xl)。见报告「需要 PM 拍板」。
-            <div
-              aria-hidden="true"
-              className="w-[72px] h-[72px] rounded-xl bg-brand/30 border border-brand/40 flex items-center justify-center text-fg text-2xl font-medium"
-            >
-              {displayName.trim().charAt(0).toUpperCase() || "?"}
-            </div>
           )}
           <button
             type="button"
@@ -245,11 +244,9 @@ export function Profile() {
           label="修改密码"
           onClick={() => navigate("/profile/change-password")}
         />
-        <ActionRow
-          icon={<AppsIcon />}
-          label="我的应用"
-          onClick={() => navigate("/profile/apps")}
-        />
+        {/* S-1 — 「我的应用」入口**只有一处**: 侧栏 AppShell.tsx 里那个带
+            `user.id === "6"` 门禁的版本。Profile 页原来还有一份**无门禁**的
+            (任何登录用户都看得到) ⇒ 双入口。已删除, 只保留侧栏门禁版。 */}
         {/* profile-5: 新增三个入口. 头像设置复用顶部 file picker 逻辑,
             走 handlePickAvatar (跟相机按钮同一份代码路径). */}
         <ActionRow
@@ -576,17 +573,6 @@ function LockIcon() {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="11" width="18" height="11" rx="2" />
       <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-    </svg>
-  );
-}
-
-function AppsIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="7" height="7" rx="1" />
-      <rect x="14" y="3" width="7" height="7" rx="1" />
-      <rect x="3" y="14" width="7" height="7" rx="1" />
-      <rect x="14" y="14" width="7" height="7" rx="1" />
     </svg>
   );
 }

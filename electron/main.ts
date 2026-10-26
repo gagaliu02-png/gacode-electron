@@ -400,6 +400,31 @@ function registerTaskbarProgressIpc(): void {
 }
 
 // =========================================================================
+// C4-09 — 窗口焦点状态 IPC
+//
+// renderer 判断「要不要弹系统通知」时需要知道窗口是不是在前台。
+// ⚠️ **不要**用 renderer 的 `document.hidden` / `document.visibilityState` ——
+//    Electron 窗口最小化时 visibilityState 仍可能是 "visible" ⇒ 判断不准。
+//    主进程这边才是真值: `!isMinimized() && isFocused()`。
+//
+// 读法: renderer `window.gacode.isWindowFocused()` (preload 走
+// `ipcRenderer.invoke('gacode:is-focused')`)。
+// =========================================================================
+
+function registerWindowStateIpc(): void {
+  ipcMain.handle('gacode:is-focused', (): boolean => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    try {
+      return !mainWindow.isMinimized() && mainWindow.isFocused();
+    } catch (err) {
+      console.warn('[gacode-electron] is-focused failed', err);
+      return false;
+    }
+  });
+  console.log('[gacode-electron] Window state IPC handler registered');
+}
+
+// =========================================================================
 // refresh-fix — refreshToken 持久化 IPC handlers
 //
 // 文件路径: %APPDATA%/Gacode/refresh-token.json
@@ -801,9 +826,10 @@ app.whenReady().then(() => {
   createWindow();
   createAppMenu(() => mainWindow);
   createTray(() => mainWindow);
-  registerNotificationIpc();
+  registerNotificationIpc(() => mainWindow);
   registerBrowserTabIpc();
   registerTaskbarProgressIpc();
+  registerWindowStateIpc();
   registerAuthStorageIpc();
   registerBookmarksIpc();
   registerOpenWithSystemIpc();

@@ -55,9 +55,24 @@ contextBridge.exposeInMainWorld('gacode', {
     }),
 
   // 阶段 4: SSE 收到事件 → 推主进程弹 Windows Toast (主进程的 Notification API)
-  notificationSSESend: (event: { title: string; body: string }): void => {
+  // C4-11: 多带一个 target = 点击 Toast 之后的落点 (站内 path / 外链 URL / null)
+  notificationSSESend: (event: {
+    title: string;
+    body: string;
+    target?: string | null;
+  }): void => {
     ipcRenderer.send('gacode:notification-sse-event', event);
   },
+
+  // C4-09: 窗口现在是不是在前台 —— 主进程算
+  //   `!mainWindow.isMinimized() && mainWindow.isFocused()`。
+  //   不用 renderer 的 document.hidden (最小化时 visibilityState 仍是 visible)。
+  isWindowFocused: (): Promise<boolean> =>
+    ipcRenderer.invoke('gacode:is-focused'),
+
+  // C4-11: 用户点了 Windows Toast → 主进程推回站内落点 → 渲染层跳路由
+  onNotificationClick: (callback: (target: string) => void): (() => void) =>
+    listenMain<string>('gacode:notification-clicked', (target) => callback(target)),
 
   // 阶段 4: 任务栏进度 (mainWindow.setProgressBar 0..1; -1 清除)
   setTaskbarProgress: (progress: number): void => {

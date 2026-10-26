@@ -44,6 +44,10 @@ import {
   setSessionPin,
   type ChatSession,
 } from "../../lib/api";
+import {
+  formatUnreadBadge,
+  NOTIFICATION_POLL_MS,
+} from "../../lib/notifications";
 
 const SIDEBAR_WIDTH = "w-64";
 const RECENT_DEFAULT_LIMIT = 5;
@@ -65,7 +69,7 @@ function resolveTitle(pathname: string): string {
   if (pathname.startsWith("/library/")) return "知识库详情";
   if (pathname === "/deliveries") return "交付中心";
   if (pathname.startsWith("/deliveries/")) return "交付详情";
-  if (pathname.startsWith("/notifications")) return "通知";
+  if (pathname.startsWith("/notifications")) return "通知中心";
   if (pathname === "/profile") return "我的";
   if (pathname === "/profile/edit") return "编辑资料";
   if (pathname === "/profile/change-password") return "修改密码";
@@ -182,10 +186,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   const recent = allChats.filter((c) => !pinnedIds.has(c.id));
 
   // notifications — 顶红点
+  // C2-26 / C4-14 — 对齐 web `gacode-web/src/components/layout/Drawer.tsx:80-87`:
+  //   轮询兜底 45s (NOTIFICATION_POLL_MS, 不是 30s 硬编码) + staleTime 30s
+  //   + retry:false + refetchIntervalInBackground:false (窗口最小化时不轮询)。
   const { data: notifData } = useQuery({
     queryKey: ["notifications", { unread: true }],
     queryFn: () => listNotifications(true),
-    refetchInterval: 30_000, // 30s 轮询, refetchOnWindowFocus 默认 false
+    retry: false,
+    staleTime: 30 * 1000,
+    refetchInterval: NOTIFICATION_POLL_MS,
+    refetchIntervalInBackground: false,
   });
   const unreadCount = notifData?.unreadCount ?? 0;
 
@@ -291,7 +301,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <BellIcon />
             {unreadCount > 0 ? (
               <span className="absolute top-1.5 right-1.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[10px] font-semibold bg-brand text-brand-on">
-                {unreadCount > 99 ? "99+" : unreadCount}
+                {formatUnreadBadge(unreadCount)}
               </span>
             ) : null}
           </button>
