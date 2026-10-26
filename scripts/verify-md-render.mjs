@@ -11,8 +11,14 @@
  *
  * 验什么:
  *   §A 静态    —— 渲染层源码不许出现第三方 markdown 库 / 原生列表标签 / 旧 PC 专属 class
+ *   §A2 静态   —— 全屏预览组件（ui/ImageLightbox.tsx）用的是原生 <dialog>、零依赖
  *   §B DOM 结构 —— 用 react-dom/server 的 renderToStaticMarkup 渲染真实 DOM，断言结构
  *   §C CSS 参数 —— 静态核对 globals.css 新增段里的关键视觉参数（不验视觉）
+ *
+ * M5 批（2026-10-26）：补上**图片点击全屏预览**（三端一致，web 是 PC 的事实源）。
+ *   渲染层新增**可选** prop `onImageClick?: (url: string) => void`
+ *   （MdMarkdown → MdRenderer → 图片块）；传了才给图片挂 `.md-image-zoom-in`
+ *   （CSS 给 `cursor: zoom-in`），不传 ⇒ DOM 与 M3/M4 批**一字节不差**。
  *
  * 退出码: 0 = 全绿 / 1 = 有断言失败。
  *
@@ -203,12 +209,26 @@ hasNot(rendererCode, "highlight.js", "renderer 不依赖 highlight.js");
 hasNot(rendererCode, "lucide-react", "renderer 不依赖 lucide-react（图标手写内联 SVG）");
 hasNot(rendererCode, "md-bq", "renderer 不挂 .md-bq（3 色左边框是 PC/web 独有）");
 hasNot(rendererCode, "md-table-td-clamp", "renderer 不挂 .md-table-td-clamp（安卓无行数折叠）");
-hasNot(rendererCode, "md-lightbox", "renderer 不引入 lightbox（安卓不支持）");
+has(rendererCode, "onImageClick", "renderer 透传 onImageClick（图片点击放大入口，对齐 web / 安卓）");
+has(rendererCode, "md-image-zoom-in", "renderer 给可点图片挂 .md-image-zoom-in（zoom-in 光标标记）");
 hasNot(rendererCode, "<ul", "renderer 不产出原生 <ul>");
 hasNot(rendererCode, "<ol", "renderer 不产出原生 <ol>");
 hasNot(rendererCode, "<li", "renderer 不产出原生 <li>");
 hasNot(rendererCode, "parseInline", "renderer 不自行做行内解析（标题 D1 照抄安卓）");
 has(rendererSrc, 'from "./parser"', "renderer 只消费 M1 的 AST（./parser）");
+
+// ── §A2 静态：全屏预览组件（ui/ImageLightbox.tsx）──────────────────────────
+console.log("\n§A2 静态 —— 全屏预览组件（原生 <dialog>，零依赖）");
+const LIGHTBOX_PATH = path.join(ROOT, "src/components/ui/ImageLightbox.tsx");
+const lightboxSrc = readFileSync(LIGHTBOX_PATH, "utf8");
+const lightboxCode = codeOnly(lightboxSrc);
+
+has(lightboxCode, "<dialog", "ImageLightbox 用浏览器原生 <dialog>（web 同款，零依赖）");
+has(lightboxCode, "showModal", "ImageLightbox 用原生 showModal()（自带焦点陷阱 + Esc 关闭）");
+has(lightboxCode, "md-lightbox-backdrop", "ImageLightbox 的 <dialog> 挂 .md-lightbox-backdrop（暗色遮罩）");
+has(lightboxCode, "md-lightbox-close", "ImageLightbox 带右上角关闭按钮 .md-lightbox-close");
+has(lightboxCode, "stopPropagation", "ImageLightbox 点图片本身不关（stopPropagation）");
+hasNot(lightboxCode, "保存", "ImageLightbox 不含「保存到相册」（安卓也没有 —— 契约不含保存功能）");
 
 // ── §B DOM 结构 ───────────────────────────────────────────────────────────
 console.log("\n§B DOM 结构 —— react-dom/server 渲染真实 DOM");
@@ -344,8 +364,13 @@ if (render) {
   const img = render("![alt](https://x.com/a.png)");
   has(img, "md-image", "块级图片挂 .md-image");
   has(img, 'src="https://x.com/a.png"', "图片 src 正确");
-  hasNot(img, "md-lightbox", "图片无 lightbox（安卓不支持，契约 C2）");
-  hasNot(img, "zoom-in", "图片无点击放大光标");
+  hasNot(img, "md-image-zoom-in", "未传 onImageClick ⇒ 图片不可点（DOM 与 M3/M4 批完全一致）");
+
+  // 图片点击放大 —— 对齐 web Markdown.tsx:139-178 + 安卓 MarkdownImageBlock.kt:50/60
+  const imgClick = render("![alt](https://x.com/a.png)", { onImageClick: () => {} });
+  has(imgClick, "md-image-zoom-in", "传了 onImageClick ⇒ 图片挂 .md-image-zoom-in（可点标记）");
+  has(imgClick, "zoom-in", "传了 onImageClick ⇒ 图片带 zoom-in 光标（点图可放大）");
+  has(imgClick, 'src="https://x.com/a.png"', "传了 onImageClick ⇒ src 不变（只多挂可点标记）");
 
   // ── 分隔线 ──────────────────────────────────────────────────────────────
   const hr = render("---");
@@ -480,6 +505,15 @@ has(m2, "font-size: 11px", "CSS: 语言徽章 11px（安卓 11.sp）");
 has(m2, "font-size: 13px", "CSS: 代码正文 13px（安卓 13.sp）");
 has(m2, "line-height: 18px", "CSS: 代码正文行高 18px（安卓 18.sp）");
 has(m2, ".md-extension", "CSS: .md-extension 存在");
+
+// ── M5 · 图片全屏预览（对齐 web globals.css:837-859）──────────────────────
+has(m2, ".md-lightbox-dialog", "CSS: .md-lightbox-dialog 存在（原生 <dialog>）");
+has(m2, ".md-lightbox-backdrop", "CSS: .md-lightbox-backdrop 存在（暗色遮罩）");
+has(m2, ".md-lightbox-inner", "CSS: .md-lightbox-inner 存在（close 按钮定位上下文）");
+has(m2, ".md-lightbox-img", "CSS: .md-lightbox-img 存在（全屏大图）");
+has(m2, ".md-lightbox-close", "CSS: .md-lightbox-close 存在（右上角关闭按钮）");
+has(m2, "@keyframes md-lightbox-in", "CSS: @keyframes md-lightbox-in 存在（与 web 对齐）");
+has(m2, "cursor: zoom-in", "CSS: 缩略图可点放大光标 zoom-in");
 
 // ── M2' · 块粒度对齐安卓（段落边界 / 块边界）────────────────────────────
 has(m2, "M2' · Markdown 块粒度对齐安卓", "globals.css 末尾有 M2' 返工段");

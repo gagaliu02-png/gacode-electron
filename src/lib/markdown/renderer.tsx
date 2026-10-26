@@ -55,7 +55,13 @@
  * <MdMarkdown text={content} size="chat" />
  * // 知识库详情：围栏切成卡片（语言徽章 + 复制按钮）
  * <MdMarkdown text={content} size="reading" cutCodeBlocks />
+ * // 图片点击放大（可选）：传了 onImageClick 才可点
+ * <MdMarkdown text={content} onImageClick={(url) => setLightboxUrl(url)} />
  * ```
+ *
+ * ⚠️ **本层不自带 lightbox** —— 只暴露 `onImageClick` 回调；
+ *    弹窗本体在 `src/components/ui/ImageLightbox.tsx`（原生 `<dialog>`，
+ *    形态对齐 web `Markdown.tsx:85-129`）。
  *
  * 断言脚本：`scripts/verify-md-render.mjs`（纯 node，只覆盖 **DOM 结构**；
  * **视觉一致性需真机人工确认**）。
@@ -100,6 +106,19 @@ export interface MdRendererProps {
   size?: MdRenderSize;
   /** 追加到根容器的 className（由调用方决定气泡底色等）。 */
   className?: string;
+  /**
+   * 图片点击回调（**图片点击放大**的入口）。
+   *
+   * - **不传（默认）** ⇒ 图片块**完全不可点**，DOM 与 M3/M4 批**一字节不差**
+   *   （不挂 `.md-image-zoom-in`、不挂 `onClick`）。
+   * - **传了** ⇒ 图片**加载成功后**点缩略图触发回调（url = AST 里的
+   *   `MdImageBlock.url`，已由解析层 `normalizeImageUrl` 归一化过 ——
+   *   本层**不再**做任何 URL 放行判断）。
+   *
+   * 对齐：web `Markdown.tsx:139-178` 的 `MarkdownImage` + 安卓
+   * `MarkdownImageBlock.kt:50`（`onFullscreen: () -> Unit`）/ `:60`（`.clickable { onFullscreen() }`）。
+   */
+  onImageClick?: (url: string) => void;
 }
 
 export interface MdMarkdownProps {
@@ -117,6 +136,12 @@ export interface MdMarkdownProps {
   size?: MdRenderSize;
   /** 追加到根容器的 className。 */
   className?: string;
+  /**
+   * 图片点击回调（图片点击放大入口）—— 透传给 `MdRenderer` → 图片块。
+   *
+   * ⚠️ **可选**：不传 ⇒ 图片块行为与 M3/M4 批**完全一致**（不可点）。
+   */
+  onImageClick?: (url: string) => void;
 }
 
 // ============================================================================
@@ -569,10 +594,28 @@ function MdCodeCard({ lang, raw }: { lang: string | null; raw: string }): React.
  * `heightIn(min = 120.dp, max = 320.dp)` + `RoundedCornerShape(12.dp)` +
  * 底色 `surface.copy(alpha = 0.35f)`；`ContentScale.Crop`（`:66`）。
  *
- * ⚠️ **无 lightbox**（安卓不支持，契约 C2 / DEC-15）—— PC 旧的 `LightboxDialog`
- * 属于 M3/M4 的清理范围，本层不引入、也不挂点击放大。
+ * ### 图片点击放大（**可选**）
+ *
+ * - `onImageClick` **不传** ⇒ 图片**完全不可点**（DOM 与 M3/M4 批一字节不差）。
+ * - `onImageClick` **传了** ⇒ 图片**加载成功后**点缩略图触发回调，
+ *   并给 `<img>` 挂 `.md-image-zoom-in`（CSS 给 `cursor: zoom-in`）。
+ * - **加载失败 ⇒ 不触发**（保持既有 fallback 行为：显示 alt）。
+ *
+ * 对齐：web `Markdown.tsx:139-178`（`onClick={() => setLightboxUrl(src)}`）
+ * + 安卓 `MarkdownImageBlock.kt:50`（`onFullscreen: () -> Unit`）/ `:60`（`.clickable { onFullscreen() }`）。
+ *
+ * ⚠️ 本层**不引入新的 URL 放行逻辑** —— `url` 由解析层 `normalizeImageUrl`
+ * （`parser.ts:758-766`：只放行 `http(s)://` / `www.`，拒 `data:`）归一化过了。
  */
-function MdImage({ url, alt }: { url: string; alt: string | null }): React.ReactElement {
+function MdImage({
+  url,
+  alt,
+  onImageClick,
+}: {
+  url: string;
+  alt: string | null;
+  onImageClick?: (url: string) => void;
+}): React.ReactElement {
   const [failed, setFailed] = React.useState(false);
 
   React.useEffect(() => {
@@ -586,14 +629,17 @@ function MdImage({ url, alt }: { url: string; alt: string | null }): React.React
       </span>
     );
   }
+
+  const clickable = typeof onImageClick === "function";
   return (
     <span className="md-image">
       <img
-        className="md-image-img"
+        className={joinClass("md-image-img", clickable && "md-image-zoom-in")}
         src={url}
         alt={alt ?? ""}
         loading="lazy"
         onError={() => setFailed(true)}
+        onClick={clickable ? () => onImageClick(url) : undefined}
       />
     </span>
   );
@@ -604,8 +650,10 @@ function MdImage({ url, alt }: { url: string; alt: string | null }): React.React
  *
  * ⚠️ 顶层块**只有 5 种**（安卓 `MdBlock`）：`text` / `table` / `codeBlock` / `image` / `hr`
  * —— 标题 / 列表 / 引用 / `:::` 都**不是**顶层块（它们是 `text` 块内部的行）。
+ *
+ * @param onImageClick 图片点击回调（可选）—— 透传给图片块。
  */
-function renderBlock(block: MdBlock): React.ReactNode {
+function renderBlock(block: MdBlock, onImageClick?: (url: string) => void): React.ReactNode {
   switch (block.type) {
     case "text":
       return renderTextBlock(block);
@@ -614,7 +662,13 @@ function renderBlock(block: MdBlock): React.ReactNode {
     case "codeBlock":
       return <MdCodeCard lang={(block as MdCodeBlock).lang} raw={(block as MdCodeBlock).raw} />;
     case "image":
-      return <MdImage url={(block as MdImageBlock).url} alt={(block as MdImageBlock).alt} />;
+      return (
+        <MdImage
+          url={(block as MdImageBlock).url}
+          alt={(block as MdImageBlock).alt}
+          onImageClick={onImageClick}
+        />
+      );
     case "hr":
       // 安卓：满宽 1dp 分隔线 + **上下各 4dp padding**（`MarkdownRichText.kt:244-249`）
       // ⇒ 不用 PC 旧的 `.md-hr`（居中短线 35%），另起 `.md-hr-full`。
@@ -634,12 +688,17 @@ function renderBlock(block: MdBlock): React.ReactNode {
  * 根容器 `.md-root` 的视觉参数（字号 / 块间距）由 CSS 决定，
  * 详见 `src/styles/globals.css` 末尾的「M2 · Markdown 自研渲染层」段。
  */
-export function MdRenderer({ blocks, size = "chat", className }: MdRendererProps): React.ReactElement {
+export function MdRenderer({
+  blocks,
+  size = "chat",
+  className,
+  onImageClick,
+}: MdRendererProps): React.ReactElement {
   const list = blocks || [];
   return (
     <div className={joinClass("md-root", `md-root-${size}`, className)}>
       {list.map((block, i) => (
-        <React.Fragment key={i}>{renderBlock(block)}</React.Fragment>
+        <React.Fragment key={i}>{renderBlock(block, onImageClick)}</React.Fragment>
       ))}
     </div>
   );
@@ -656,12 +715,20 @@ export function MdMarkdown({
   cutCodeBlocks = false,
   size = "chat",
   className,
+  onImageClick,
 }: MdMarkdownProps): React.ReactElement {
   const blocks = React.useMemo(
     () => parseMarkdown(text ?? "", { cutCodeBlocks }),
     [text, cutCodeBlocks],
   );
-  return <MdRenderer blocks={blocks} size={size} className={className} />;
+  return (
+    <MdRenderer
+      blocks={blocks}
+      size={size}
+      className={className}
+      onImageClick={onImageClick}
+    />
+  );
 }
 
 export default MdMarkdown;

@@ -405,7 +405,7 @@ PC 端 `src/styles/globals.css` 已有等价实现，PC AST 只需产出**行列
 | 底色 | `surface.copy(alpha = 0.35f)`（加载中也有东西可看） | `MarkdownImageBlock.kt:59` |
 | 裁剪 | `ContentScale.Crop` | `MarkdownImageBlock.kt:66` |
 | 失败提示 | 显示 alt（无 alt 时用兜底文案），最多 3 行 + 省略号 | `MarkdownImageBlock.kt:71-80` |
-| **无 lightbox** | 安卓**不支持**图片点击放大（契约 C2 / DEC-15）—— PC 端现有 `.md-lightbox-*` 属于 web 契约，**对齐安卓时要去掉** | 契约 B9 / C2 |
+| **全屏预览** | 安卓**支持**图片点击放大 —— 点击缩略图 → 全屏预览弹窗（`onFullscreen` 回调 + `FullscreenImageDialog`）；**PC 已补齐**（渲染层可选 prop `onImageClick` + `components/ui/ImageLightbox.tsx` 原生 `<dialog>`，形态对齐 web）。⚠️ 不含「保存到相册」 | `MarkdownImageBlock.kt:50`（`onFullscreen: () -> Unit`）、`:60`（`.clickable { onFullscreen() }`）、`ui/common/FullscreenImageDialog.kt:36` |
 
 ---
 
@@ -455,7 +455,7 @@ PC 端 `src/styles/globals.css` 已有等价实现，PC AST 只需产出**行列
 | **D7** | **表格行的 `\|` 判定与表格行判定不一致** —— 渲染分支用 `line.startsWith("\|")`（不容忍前导空格），表格切分用 `trimStart().startsWith("\|")`（容忍）⇒ 缩进表格行会被当表格切分，但退化渲染分支不认它 | `MarkdownParser.kt:429` vs `:684` | **按源码执行**（两条路径分别判定） |
 | **D8** | **行内 code 里的 URL 反而不是 code** —— 裸 URL 扫描器在扫描器位置先命中，会把整段（含反引号）当裸 URL 文本吃掉，`code` 样式失效 | `MarkdownParser.kt:638-643` + 安卓单测 `MarkdownParserTest.kt:326-337`（锁的是现状） | **按源码执行**（扫描器先命中）⇒ PC AST 里这种行会产出 `link(bare)` 而不是 `inlineCode`。⚠️ 安卓已用单测锁死现状，PC 应对齐单测语义 |
 | **D9** | **`[text](url)` 的链接文本不递归解析** —— `[**粗**](u)` 显示字面量 `**粗**` | `MarkdownParser.kt:612` | **按源码执行** |
-| **D10** | **PC 与安卓的图片 lightbox 不一致** —— PC 有 `.md-lightbox-*`（web 契约），安卓明确不支持 | 契约 C2 / B9 | 对齐安卓时 PC **去掉** lightbox（⚠️ 属渲染层批，本批不改） |
+| **D10** | **PC 与安卓的图片 lightbox 已一致** —— 三端都有全屏预览（PC：渲染层 `onImageClick` + `ui/ImageLightbox` 原生 `<dialog>`；web：`LightboxDialog`；安卓：`onFullscreen` → `FullscreenImageDialog`）。⚠️ 不含「保存到相册」 | `MarkdownImageBlock.kt:50`、`:60`、`ui/common/FullscreenImageDialog.kt:36` | ✅ **一致** —— PC 渲染层已补齐图片点击放大（2026-10-26，`.md-lightbox-*` 按 web 口径重新上线） |
 | **D11** | **行内图不是「原样字面文本」，而是「`!` + 一个链接」** —— `renderInlineLine` 没有 image 分支，但它**先命中的链接分支**会把 `[alt](url)` 接住 ⇒ `see ![alt](u) here` 渲染成 `see !alt here`（`!` 是普通字符，`alt` 是链接、URL 不露出） | `MarkdownParser.kt:597-619`（链接分支）+ `:536-545`（分支清单无 image） | **按源码执行**（PC AST 产出 `link`，不产 image）。⚠️ brief / PM 口径 #4 写的「原样显示 `![alt](url)` 字面文本」与源码实际**不一致** —— 但「不产图片节点 / 不渲染成 `<img>`」这个**要点成立**（PC 要删的是 react-markdown 的行内 `<img>`） |
 | **D12** | **表格可以从文本的任意一行开始** —— 升级判定是逐行扫描的（「`i` 是表格行 + `i+1` 是分隔行」），不是「分隔行必须是整个文本的第二行」 | `MarkdownParser.kt:1032-1077`（`while` 循环里逐行试） | **按源码执行**（PC `detectTableUpgrade` 同样逐行扫描） |
 

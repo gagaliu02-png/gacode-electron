@@ -707,3 +707,103 @@
 .md-line {
   min-height: 1lh;
 }
+
+/* ============================================================================
+   M5 · Markdown 图片全屏预览（2026-10-26）
+
+   基准 = **web**（PC 是 web 的下游 —— web 端是 PC 端的唯一事实源）
+     弹窗形态   web src/components/Markdown.tsx:85-129（浏览器原生 <dialog>）
+     视觉规则   web src/styles/globals.css:837-859
+     点击入口   web src/components/Markdown.tsx:139-178（MarkdownImage 自持 lightbox）
+     三端一致   安卓 MarkdownImageBlock.kt:50/60（onFullscreen → 全屏预览）
+                 安卓 ui/common/FullscreenImageDialog.kt:36（**不含**保存到相册）
+
+   ⚠️ 本段**只新增** lightbox 规则 —— 上面 M2 / M2' 段的任何既有规则
+      （表格列宽 clamp / 横向滚动 / `.md-table-thead{font-size:12px}` / 间距数值）
+      **一个字节都不动**。
+   ⚠️ 上文 M4 收口批注释里的第 ⑦ 条「md-lightbox-* 整条下线」**已过期** ——
+      它的依据「安卓不支持点击放大」已被证伪（安卓 MarkdownImageBlock.kt:50/60 有
+      onFullscreen）⇒ 本段按 web 口径把 lightbox 重新上线。
+   ⚠️ PC 全局禁用 animation（`animation: none !important`，见本文件「gagaOS 全局禁用
+      CSS 动效」段）⇒ `@keyframes md-lightbox-in` 在 PC 上**不生效**
+      —— 保留只为与 web 规则对齐（同 BottomSheet 的 `animate-slide-in-from-bottom`）。
+   ============================================================================ */
+
+/* 全屏预览对话框 —— 原生 <dialog>（web 同款：p-0 bg-transparent border-0 m-auto）
+   ⚠️ 尺寸 / 底色 / 居中由下面的 `.md-lightbox-backdrop` 接管（同权重 → 后写者胜）；
+      这里只保留 UA 归零里**不冲突**的那一项：去掉 dialog 默认的内部滚动。 */
+.md-lightbox-dialog {
+  overflow: visible;
+}
+
+/* 暗色遮罩 —— web `.md-lightbox-backdrop`（web globals.css:838-849）
+   PC 把它落在 <dialog> 本体上（web 落在 ::backdrop 伪元素上）——
+   好处：点遮罩关闭不依赖 ::backdrop 的命中测试行为。 */
+.md-lightbox-backdrop {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 2rem;
+  border: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  cursor: zoom-out;
+  animation: md-lightbox-in 0.15s ease-out;
+}
+
+/* 图片容器 —— close 按钮的定位上下文（web `.md-lightbox-inner relative`） */
+.md-lightbox-inner {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* 全屏大图 —— web `.md-lightbox-img`（max-w-95vw max-h-95vh + object-fit contain） */
+.md-lightbox-img {
+  display: block;
+  max-width: 95vw;
+  max-height: 95vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+}
+
+/* 右上角关闭按钮 —— web `.md-lightbox-close`（圆形 / 黑底白字 / 36px） */
+.md-lightbox-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #ffffff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.md-lightbox-close:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+/* 淡入 —— web `@keyframes md-lightbox-in`（PC 全局禁 animation ⇒ 不生效，见上） */
+@keyframes md-lightbox-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* 缩略图点击放大光标（web 有，PC 原来没有）
+   ⚠️ **条件生效** —— 只有挂了 `.md-image-zoom-in`（= 传了 onImageClick）才给 zoom-in：
+      不可点的图片不该带「可点」的光标。 */
+.md-image-img.md-image-zoom-in {
+  cursor: zoom-in;
+}
