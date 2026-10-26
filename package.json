@@ -1,6 +1,6 @@
 {
   "name": "gacode-electron",
-  "version": "0.7.7",
+  "version": "0.7.8",
   "description": "Gacode PC 鐗?- 鐙珛 Electron 妗岄潰搴旂敤(Windows 涓?",
   "private": true,
   "main": "dist/main/index.js",

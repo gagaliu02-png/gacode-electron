@@ -19,16 +19,19 @@
 # 0.7.7 (阶段 9 PC vs web 对齐: PC-1~PC-7 六个 batch, gagaOS 拍板):
 #   - output 改 release-align-v7/ 绕 Search Indexer 锁旧目录
 #   - buildVersion bump 0.7.7 (package.json 同步)
+# 0.7.8 (Home 对齐 web + Markdown 表格列宽 clamp + .gitignore 三级解锁):
+#   - output 改 release-align-v8/ 绕 Search Indexer 锁旧目录
+#   - buildVersion bump 0.7.8 (package.json 同步)
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.7
+buildVersion: 0.7.8
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
-  # 0.7.7 (阶段 9 对齐 PC-1~PC-7): 隔离输出目录
-  output: release-align-v7
+  # 0.7.8 (Home 对齐 + clamp + gitignore 解锁): 隔离输出目录
+  output: release-align-v8
 
 files:
   - dist/**/*
