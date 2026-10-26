@@ -78,6 +78,10 @@ build-*-stage*.log
 release-*/
 out/
 
+# 一次性探针目录 + 打包 stderr 日志（worker 临时产物 / 构建噪声）
+.tmp-probe/
+*.log.err
+
 # 功能对齐审计产物 + 一次性工具脚本（audit-interactive 系列）
 audit-*.html
 audit-*.json
