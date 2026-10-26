@@ -12,14 +12,15 @@
  *   - 右键行 → 光标坐标 (web library/page.tsx:909 `setMenuPos({x: e.clientX, y: e.clientY})`)
  *   - 点 ⋯ 按钮 → 按钮左下角 (web library/page.tsx:1079-1082 `rect.left` / `rect.bottom + 4`)
  *
- * ⚠️ PC 仓没有 lucide-react ⇒ 图标是手写内联 svg (path 取自 web 用的
- *    lucide-react v0.407.0, 逐字照抄); 删除图标复用共享 Glyphs.tsx 的 TrashIcon
- *    (组件意识: 不重复实现). Eye / Tag / ExternalLink 共享 Glyphs.tsx 里还没有,
- *    建议后续收进 Glyphs.tsx (见交付报告「超出独占范围的问题」).
+ * ⚠️ PC 仓没有 lucide-react ⇒ 图标走共享图标库 `components/ui/Glyphs.tsx`
+ *    (组件意识: 不重复实现). 2026-10-26 收编: 本文件原先就地手写的
+ *    Eye / Tag / ExternalLink 内联 svg 已全部收进 Glyphs.tsx
+ *    (`EyeIcon` / `TagIcon` / `ExternalLinkIcon`), 删除图标复用已有的
+ *    `TrashIcon` (lucide `trash-2`).
  */
 
 import { useEffect, useRef } from "react";
-import { TrashIcon } from "../ui/Glyphs";
+import { ExternalLinkIcon, EyeIcon, TagIcon, TrashIcon } from "../ui/Glyphs";
 
 export interface LibraryRowMenuProps {
   /** 菜单位置 (视口坐标) — null 表示关闭 */
@@ -117,41 +118,5 @@ export function LibraryRowMenu({
         删除
       </button>
     </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────
-// Icons — lucide-react v0.407.0 原始 path (web 端用的就是这一版)
-//   svg 用 width/height="100%" ⇒ tailwind 的 w-4 h-4 生效
-// ────────────────────────────────────────────────────────────
-
-/** lucide `eye` */
-function EyeIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-/** lucide `tag` */
-function TagIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
-      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
-    </svg>
-  );
-}
-
-/** lucide `external-link` */
-function ExternalLinkIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M15 3h6v6" />
-      <path d="M10 14 21 3" />
-      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-    </svg>
   );
 }

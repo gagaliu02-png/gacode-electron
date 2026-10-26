@@ -18,10 +18,43 @@ import { Button } from "./Button";
 export interface ConfirmDialogProps {
   title: string;
   message?: string;
+  /**
+   * 描述段 (可选, 第二段) — 对齐 web AlertDialog 的「标题 + 描述」两段结构
+   * (gacode-web/src/components/ui/alert-dialog.tsx:115-121 AlertDialogHeader
+   *  + :149-159 AlertDialogDescription)。
+   * 不传 ⇒ 渲染结果与加本 prop 之前**完全一致** (只有 title + message 两段),
+   * 现有 8 个调用点零改动即可继续工作 (向后兼容)。
+   */
+  description?: string;
   confirmLabel?: string;
   cancelLabel?: string;
   confirmVariant?: "default" | "danger";
   loading?: boolean;
+  /**
+   * pending 时的确认按钮形态（三态）:
+   *   · `"spinner+text"` — 转圈 **+** 文字（**默认值**，向后兼容 ⇒ 现有 8 个调用点零改动）
+   *   · `"spinner-only"` — **只**转圈，文字消失（web library 系列）
+   *   · `"text-only"`   — **只**文字，不转圈（web profile / deliveries / Header）
+   *
+   * 背景: web 各弹窗的 pending 形态**不统一** ——
+   *   · library 系列是 **spinner-only**
+   *     (gacode-web/src/app/(main)/library/page.tsx:1255-1256
+   *      `{deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : "删除"}`;
+   *      批量删除同款 :620-624)
+   *   · profile / deliveries / Header 是**文字**
+   *     (profile/page.tsx:284「正在注销...」/ deliveries/page.tsx:350「删除中...」
+   *      / deliveries/[id]/page.tsx:517「删除中...」/ components/layout/Header.tsx:282「保存中...」)
+   * 而 PC 的 Button 是「spinner + **保留** children」并存 (src/components/ui/Button.tsx:101-107),
+   * 所以同一套 ConfirmDialog 默认只能给出「spinner 与文字同时显示」这一种形态 ⇒ 与 web 的两种形态
+   * **都不完全一致**。本 prop 让调用方按 web 逐处指定。
+   *
+   * **默认值必须是 `"spinner+text"`** —— 否则现有调用点会被批量改动。
+   *
+   * 实现: 三种形态全部在 ConfirmDialog 内部完成，**不改** src/components/ui/Button.tsx:
+   *   · `"spinner-only"` → pending 时**不把 confirmLabel 传给 Button**（Button 只剩 spinner）
+   *   · `"text-only"`   → pending 时**不传 loading** 给 Button（Button 不出 spinner，调用方自己换文案）
+   */
+  loadingStyle?: "spinner+text" | "spinner-only" | "text-only";
   onCancel: () => void;
   onConfirm: () => void;
   /** 自定义输入 / 表单 (例如重命名) — 渲染在 message 之后, footer 之前 */
@@ -31,10 +64,12 @@ export interface ConfirmDialogProps {
 export function ConfirmDialog({
   title,
   message,
+  description,
   confirmLabel = "确认",
   cancelLabel = "取消",
   confirmVariant = "default",
   loading,
+  loadingStyle = "spinner+text",
   onCancel,
   onConfirm,
   children,
@@ -52,6 +87,12 @@ export function ConfirmDialog({
       document.body.style.overflow = prev;
     };
   }, [onCancel]);
+
+  // pending 态 —— 三种形态 (loadingStyle) 全在这里分流, 不改 Button.tsx:
+  //   "spinner+text" → Button 同时出 spinner 和 confirmLabel (改前行为)
+  //   "spinner-only" → Button 只出 spinner (confirmLabel 不传下去)
+  //   "text-only"   → Button 不出 spinner (不传 loading), 文案由调用方自己换
+  const pending = !!loading;
 
   return (
     <div
@@ -71,6 +112,9 @@ export function ConfirmDialog({
           {message ? (
             <p className="m-0 text-sm text-fg-muted leading-relaxed">{message}</p>
           ) : null}
+          {description ? (
+            <p className="m-0 text-sm text-fg-muted leading-relaxed">{description}</p>
+          ) : null}
         </div>
         {children ? <div>{children}</div> : null}
         <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 pt-2">
@@ -80,10 +124,10 @@ export function ConfirmDialog({
           <Button
             variant={confirmVariant === "danger" ? "danger" : "default"}
             size="md"
-            loading={loading}
+            loading={pending && loadingStyle !== "text-only"}
             onClick={onConfirm}
           >
-            {confirmLabel}
+            {pending && loadingStyle === "spinner-only" ? null : confirmLabel}
           </Button>
         </div>
       </div>

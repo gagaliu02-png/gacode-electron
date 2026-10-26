@@ -23,7 +23,14 @@
  */
 
 import { useRef, useState } from "react";
-import { MoreIcon } from "../ui/Glyphs";
+import {
+  CircleCheckIcon,
+  CircleIcon,
+  FileTextIcon,
+  ImageIcon,
+  LinkTypeIcon,
+  MoreIcon,
+} from "../ui/Glyphs";
 import { LibraryRowMenu } from "./LibraryRowMenu";
 import type { LibraryItem } from "../../lib/api";
 
@@ -57,10 +64,19 @@ export function LibraryCard({
     item.type === "link" ? "text-brand-green" :
     "text-fg-muted";
 
+  // 2026-10-26 (图标形状对齐 web): 3 个类型图标改用共享 Glyphs 导出 ——
+  //   本地图标是**老版** lucide path (image 的 `m21 15-5-5L5 21` / file-text 的
+  //   `M14 2H6…` 折角版), 且线宽是 sw1.6 ⇒ 跟 web 的 lucide 默认 (sw2) 不一致。
+  //   web 真值: `app/(main)/library/page.tsx:117-128`
+  //     image → <ImageIcon className="w-5 h-5 text-brand-cyan" />   (lucide `Image`)
+  //     doc   → <FileText className="w-5 h-5 text-brand-yellow" />    (lucide `FileText`)
+  //     link  → <LinkIcon className="w-5 h-5 text-brand-green" />     (lucide `Link`)
+  //     其它  → <FileText className="w-5 h-5 text-fg-muted" />
+  //   ⇒ 统一 20px / sw2 (lucide 默认), className 原样透传。
   const Icon =
     item.type === "image" ? ImageIcon :
     item.type === "doc" ? FileTextIcon :
-    item.type === "link" ? LinkIcon :
+    item.type === "link" ? LinkTypeIcon :
     FileTextIcon;
 
   // 长按 500ms 触发多选 — 跟 ChatList ChatRow 同一个 timer 模式.
@@ -139,7 +155,7 @@ export function LibraryCard({
         {isInMultiSelect ? (
           <div className="shrink-0">
             {isSelected ? (
-              <CheckCircleIcon className="w-5 h-5 text-brand" />
+              <CircleCheckIcon className="w-5 h-5 text-brand" />
             ) : (
               <CircleIcon className="w-5 h-5 text-fg-muted" />
             )}
@@ -147,7 +163,11 @@ export function LibraryCard({
         ) : null}
 
         <div className="shrink-0 w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
-          <Icon className={["w-5 h-5", typeIconClass].join(" ")} />
+          <Icon
+            className={["w-5 h-5", typeIconClass].join(" ")}
+            size={20}
+            strokeWidth={2}
+          />
         </div>
 
         {/* L-35: 删掉 PC 多出的「类型 chip + #id」行 ⇒ 文字块只有 2 行 (跟 web 一致) */}
@@ -238,57 +258,8 @@ function formatRelative(iso: string): string {
 
 // ────────────────────────────────────────────────────────────
 // Icons
-//   L-32: 这 3 个类型图标接收 className (尺寸 + 颜色由调用点传),
-//   svg 自身用 width/height=100% (Tailwind 的 w-5 h-5 才生效),
-//   stroke="currentColor" 保证继承调用点给的 text-* 颜色。
-//   L-30: 多选圆图标 (lucide v0.407.0 原始 path)。
+//   2026-10-26: 多选圆图标 (lucide v0.407.0 原始 path) 已收编到
+//   共享图标库 components/ui/Glyphs.tsx (`CircleCheckIcon` / `CircleIcon`),
+//   类型图标 (Image / FileText / Link) 也已收编 (`ImageIcon` / `FileTextIcon` /
+//   `LinkTypeIcon`) ⇒ 本文件不再就地手写 (组件意识: 禁止重复实现)。
 // ────────────────────────────────────────────────────────────
-
-function ImageIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <circle cx="9" cy="9" r="2" />
-      <path d="m21 15-5-5L5 21" />
-    </svg>
-  );
-}
-
-function FileTextIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="16" y1="13" x2="8" y2="13" />
-      <line x1="16" y1="17" x2="8" y2="17" />
-    </svg>
-  );
-}
-
-function LinkIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-    </svg>
-  );
-}
-
-/** lucide `circle-check` (web 的 CheckCircle2) */
-function CheckCircleIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <circle cx="12" cy="12" r="10" />
-      <path d="m9 12 2 2 4-4" />
-    </svg>
-  );
-}
-
-/** lucide `circle` */
-function CircleIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <circle cx="12" cy="12" r="10" />
-    </svg>
-  );
-}

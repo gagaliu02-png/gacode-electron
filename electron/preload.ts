@@ -127,14 +127,11 @@ contextBridge.exposeInMainWorld('gacode', {
     args: { url?: string; filePath?: string },
   ): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('gacode:open-with-system', args),
-
-  // 0.7.5 deliveries-15: 触发一次手动下载轮询 + 读 worker 当前状态.
-  // 跟主进程 deliveries-downloader.ts 联动; 渲染层 (比如 DeliveryDetail 页)
-  // 想立刻重试缓存可以调.
-  downloadDeliverable: (): Promise<unknown> =>
-    ipcRenderer.invoke('gacode:download-deliverable'),
-  getDeliverablesStatus: (): Promise<unknown> =>
-    ipcRenderer.invoke('gacode:deliverables-status'),
+  // 2026-10-26: 交付物自动下载 IPC (`downloadDeliverable` /
+  // `getDeliverablesStatus`) 整条撤掉 — 渲染层零调用点, web 端也没有这个
+  //   能力 (web 的「重试下载」只是浏览器重新 fetch `item.url`).
+  //   对应的 `GacodeBridge` 类型声明也已从 shared/types.ts 删掉 ⇒ 这里
+  //   恢复成完整的 `satisfies GacodeBridge`.
 } satisfies GacodeBridge);
 
 console.log('[gacode-electron] preload loaded');

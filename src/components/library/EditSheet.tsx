@@ -74,7 +74,6 @@ export function EditSheet({ open, item, onClose, onSaved }: EditSheetProps) {
       toast({ title: "已更新", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["library"] });
       queryClient.invalidateQueries({ queryKey: ["library-item", item?.id] });
-      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
       onSaved?.(updated);
       onClose();
     },

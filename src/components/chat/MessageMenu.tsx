@@ -153,7 +153,8 @@ export function MessageMenu(props: MessageMenuProps) {
     try {
       // 跟 gacode-web ChatDetail page.tsx:962-969 同款 fallback:
       //   截断标题 (前 30 字) 当 doc 类型写 library. 等 server 接专用端点
-      //   (yinian-android YinianApi.kt 那边走的是 /messages/:id/save-to-kb)
+      //   (yinian-android 全仓无此端点 —— 安卓唯一的 saveToKnowledgeBase 是
+      //    DocumentViewerActivity.kt:170 的本地函数, 走文档文本入库的另一条路)
       //   再切换. 这里 tags 加 'from-chat' 跟 web 一致.
       const titleBase =
         content.trim().slice(0, 30) || "未命名消息";

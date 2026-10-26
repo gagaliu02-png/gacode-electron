@@ -17,10 +17,24 @@
  *   但**面板只渲染 web 的 4 项** ⇒ camera / template 两个入口在 PC 上已不可达.
  *
  * 容器: 复用 components/ui/BottomSheet.tsx (阶段 7 80ab56f 已建).
- * 边界: 不引 Radix Sheet; inline 24px SVG icon 不引 lucide-react.
+ * 边界: 不引 Radix Sheet; 图标走共享图标库 components/ui/Glyphs.tsx.
+ *
+ * 2026-10-26 (收编 + 修形状):
+ *   - 4 个图标全部改成 import 共享图标 (组件意识: 禁止重复实现):
+ *     `ImageIcon` / `FileTextIcon` / `SmileIcon` / `LibraryTypeIcon`.
+ *   - 前 3 个 path 与 web 逐字一致 (lucide `image` / `file-text` / `smile`),
+ *     尺寸/线宽不变 (24×24 / sw2).
+ *   - 「挂载知识库」原先内联的 shape (`M4 19.5A2.5 2.5 0 0 1 6.5 17H20` +
+ *     `M6.5 2H20v20H6.5…`, 一个文件夹) **不是** web 的 lucide `Library`
+ *     ⇒ 换成共享库的 `LibraryTypeIcon` (lucide `library` 书脊造型:
+ *     `m16 6 4 14` / `M12 6v14` / `M8 8v12` / `M4 4v16`).
+ *     ⚠️ web `SheetActionMenu.tsx:94` 的 `Library` 是 `w-6 h-6` + lucide 默认
+ *     sw2 ⇒ 这里显式传 `size={24} strokeWidth={2}` (共享库默认是 20/sw1.6),
+ *     不新造图标.
  */
 
 import { BottomSheet } from "../ui/BottomSheet";
+import { FileTextIcon, ImageIcon, LibraryTypeIcon, SmileIcon } from "../ui/Glyphs";
 
 export type PlusActionKind =
   | "image"
@@ -49,26 +63,29 @@ const DOCUMENT_ACCEPT =
   ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint,text/plain,text/markdown";
 
 // 2026-10-26: 逐字对齐 web `SheetActionMenu.tsx:76-95` 的 4 项 (图标 + 文案)
+//   图标全部取自共享库 components/ui/Glyphs.tsx (web 用的是 lucide `Image` /
+//   `FileText` / `Smile` / `Library`, PC 对应 ImageIcon / FileTextIcon /
+//   SmileIcon / LibraryTypeIcon).
 const ACTIONS: PlusActionItem[] = [
   {
     kind: "image",
     label: "图片",
-    icon: <ImageIcon />,
+    icon: <ImageIcon size={24} />,
   },
   {
     kind: "document",
     label: "文件",
-    icon: <DocumentIcon />,
+    icon: <FileTextIcon size={24} />,
   },
   {
     kind: "emoji",
     label: "表情",
-    icon: <EmojiIcon />,
+    icon: <SmileIcon size={24} />,
   },
   {
     kind: "knowledge",
     label: "挂载知识库",
-    icon: <KnowledgeIcon />,
+    icon: <LibraryTypeIcon size={24} strokeWidth={2} />,
   },
 ];
 
@@ -115,93 +132,18 @@ export function PlusActionsSheet({ open, onClose, onAction }: PlusActionsSheetPr
   );
 }
 
-// ───────────── icons (inline 24px SVG; 不引 lucide-react) ─────────────
-
-function ImageIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-      <circle cx="9" cy="9" r="2" />
-      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-    </svg>
-  );
-}
-
-function DocumentIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-      <path d="M10 9H8" />
-      <path d="M16 13H8" />
-      <path d="M16 17H8" />
-    </svg>
-  );
-}
-
-function EmojiIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="10" />
-      <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-      <line x1="9" x2="9.01" y1="9" y2="9" />
-      <line x1="15" x2="15.01" y1="9" y2="9" />
-    </svg>
-  );
-}
-
-function KnowledgeIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-    </svg>
-  );
-}
+// ───────────── icons ─────────────
+//   4 个图标全部来自共享库 components/ui/Glyphs.tsx (见文件头注释),
+//   本文件不再就地手写内联 svg.
 
 // 2026-10-26: 「拍照」/「模板」两个入口已按 web 的 4 项口径删除 ⇒ 对应的内联 svg
 //   (CameraIcon / TemplateIcon) 一并移除 (web `SheetActionMenu.tsx` 只有
 //   Image / FileText / Smile / Library 四个图标).
+// 2026-10-26 (收编): 本文件原先就地手写的 4 个内联 svg
+//   (ImageIcon / DocumentIcon / EmojiIcon / KnowledgeIcon) 全部删除,
+//   改成 import 共享图标库 components/ui/Glyphs.tsx.
+//   ⚠️ 尺寸/线宽保持 24×24 / sw2 (共享库默认 Image/FileText 是 12×12,
+//      LibraryTypeIcon 是 20×20/sw1.6 ⇒ 调用点显式传 size/strokeWidth).
 
 // 暴露给 ChatDetail 引用 — 用于设置 file input accept 时跟 sheet 描述对齐.
 // (e.g. image accept = IMAGE_ACCEPT, document accept = DOCUMENT_ACCEPT)

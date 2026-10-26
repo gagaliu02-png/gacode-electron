@@ -92,7 +92,7 @@ export function PlusSheet({ open, onClose, onPick }: PlusSheetProps) {
         <ActionBtn
           label="挂载知识库"
           onClick={() => handlePick("library")}
-          icon={<LibraryTypeIcon size={24} className="w-6 h-6" />}
+          icon={<LibraryTypeIcon size={24} className="w-6 h-6" strokeWidth={2} />}
         />
       </div>
     </BottomSheet>

@@ -158,7 +158,6 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
     onSuccess: () => {
       toast({ title: "已保存到知识库", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["library"] });
-      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
     },
     onError: (err) => {
       // L-64: 改 title + description 两段式 (web library/page.tsx:337-341)
@@ -244,7 +243,6 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
       });
       toast({ title: "已保存到知识库", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["library"] });
-      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
     } catch (err) {
       window.clearTimeout(timeoutTimer);
       // upload.ts 已按 mode 输出人话文案 ("图片上传失败: ..."), 这里不再加前缀,

@@ -104,6 +104,13 @@ export function Tabs({
                 // L-02 + L-05: px-4 py-2.5 / text-sm font-medium (font-medium 对全部态生效)
                 // gap-1 是 PC 独有 (label 与右侧 count 之间要留缝), web 无 count 元素
                 "relative inline-flex items-center justify-center whitespace-nowrap gap-1 px-4 py-2.5 text-sm font-medium transition-colors duration-150",
+                // 键盘 focus 环 — 逐字对齐 web `components/ui/tabs.tsx:82` 的
+                // `focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`
+                // (web 只有一个 trigger, PC 的 underline 变体就是它的对应物;
+                //  pill 变体是 PC 独有 ⇒ 不加)。
+                // ⚠️ PC 无 tailwind-merge ⇒ ring-2 与 ring-ring 分属两个工具类
+                //   (ringWidth / ringColor), 各自独立生效, 不会互相覆盖。
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 // L-02: disabled 两项顺序对齐 web
                 "disabled:pointer-events-none disabled:opacity-50",
                 // L-03: 下划线左右各内缩 12px + 顶部圆角

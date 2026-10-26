@@ -11,6 +11,10 @@
  *   - C1-03/04: 卡片改用 <Card> / <CardContent> (web 的 rounded-lg border bg-card
  *               text-card-foreground shadow + 内容 p-10 text-center text-fg-muted)
  *   - C1-05/06: 图标改成裸 SVG (去掉圆形底容器) + mb-4 (lucide Construction 路径)
+ *   - 2026-10-26 图标形状对齐 web: 本地「围挡柱」手写 SVG 删掉, 改 import 共享
+ *     <ConstructionIcon> (lucide v0.407.0 `construction` 真值 —— 硬帽子 + 工具;
+ *     web `app/(main)/profile/apps/page.tsx:26` 的
+ *     <Construction className="w-12 h-12 mx-auto text-fg-muted mb-4" /> 同款)。
  *   - C1-07/09: 标题 <p> → <div> + 显式 text-fg; 描述文案逗号改全角
  *   - C1-10: 删掉页面内 <h1> (标题只由 AppShell header 渲染)
  *   - C1-12: 删掉页内 isPrivileged 分支 —— web 本页对**所有用户**渲染同一张占位卡,
@@ -18,12 +22,16 @@
  */
 
 import { Card, CardContent } from "../components/ui/Card";
+import { ConstructionIcon } from "../components/ui/Glyphs";
 
 export function ProfileApps() {
   return (
     <div className="min-h-full px-4 lg:px-8 py-6 max-w-2xl mx-auto">
       <Card>
         <CardContent className="!p-10 text-center text-fg-muted">
+          {/* lucide `construction` (48px / sw2) — 共享 <ConstructionIcon>
+              (web `app/(main)/profile/apps/page.tsx:26` 的
+               <Construction className="w-12 h-12 mx-auto text-fg-muted mb-4" /> 同款) */}
           <ConstructionIcon className="w-12 h-12 mx-auto text-fg-muted mb-4" />
           <div className="text-base font-medium mb-1 text-fg">我的应用</div>
           <div className="text-sm">
@@ -32,33 +40,5 @@ export function ProfileApps() {
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────
-// icons (手写内联 SVG — PC 无 lucide-react, F-2)
-// ────────────────────────────────────────────────────────────
-
-/** lucide `Construction` 同款路径 (C1-05) */
-function ConstructionIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      width="48"
-      height="48"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={["w-12", "h-12", "mx-auto", "text-fg-muted", "mb-4", className]
-        .filter(Boolean)
-        .join(" ")}
-    >
-      <path d="M2 20h20" />
-      <path d="M4 20V9l6 4V9l6 4V9l4 2v9" />
-      <path d="M12 2v4" />
-      <path d="M12 6h5" />
-    </svg>
   );
 }

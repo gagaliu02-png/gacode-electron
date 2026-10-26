@@ -19,6 +19,7 @@
  *   - `PinRowIcon`   对话列表行内置顶 (14px / sw1.6, lucide 旧版 path)
  *   - `SearchIcon`   对话列表顶部搜索按钮 (22px / sw1.6, 直线手柄)
  *   - `SearchFieldIcon` 输入框前缀放大镜 (16px / sw2, path 手柄)
+ *   - `SearchBareIcon` 裸放大镜 (20px / sw2, className 原样透传)
  *   - `MoreVertIcon` 实心三点 (fill=currentColor)
  *   - `MoreIcon`     描边三点 (stroke=currentColor)
  *
@@ -379,7 +380,19 @@ export function PencilIcon({ className, size = 14, strokeWidth = 1.6 }: GlyphPro
   );
 }
 
-/** lucide `trash-2` — 16×16 / sw2 */
+/**
+ * lucide `trash-2` — 16×16 / sw2
+ *
+ * 2026-10-26 (图标形状对齐 web): path 换成 lucide-react v0.407.0
+ * `dist/esm/icons/trash-2.js` 的真值 (逐字):
+ *   `M3 6h18` / `M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6` /
+ *   `M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2` + 两条竖线 (`10 11→10 17` / `14 11→14 17`)。
+ * ⚠️ 改前是**旧版** lucide path (polyline `3 6 5 6 21 6` + `M19 6l-1 14a2 2 0 0 1-2 2H8…`),
+ *    桶身/提手形状跟 web 的 lucide `Trash2` 不一致 ⇒ 6 个调用点一起对齐
+ *    (web 调用点: `app/(main)/profile/page.tsx:264` / `library/page.tsx:1150` /
+ *     `library/[id]/page.tsx:293` / `chat/page.tsx:220` / `deliveries/page.tsx:708` /
+ *     `deliveries/[id]/page.tsx:491`)。
+ */
 export function TrashIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
   return (
     <svg
@@ -394,8 +407,11 @@ export function TrashIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps)
       aria-hidden="true"
       className={className}
     >
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M3 6h18" />
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+      <line x1="10" x2="10" y1="11" y2="17" />
+      <line x1="14" x2="14" y1="11" y2="17" />
     </svg>
   );
 }
@@ -1085,6 +1101,488 @@ export function FileIcon({ className, size = 24, strokeWidth = 2 }: GlyphProps) 
     >
       <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
       <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+    </svg>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// 知识库列表图标 (来源: components/library/LibraryRowMenu.tsx + LibraryCard.tsx)
+//   2026-10-26 收编: 这两个文件里的 lucide 图形曾是就地手写的内联 svg,
+//   跟本文件已有图形重复实现 ⇒ 统一收编, 调用点改成 import (组件意识铁律).
+// ════════════════════════════════════════════════════════════
+
+/**
+ * lucide `eye` — 16×16 / sw2 (知识库行菜单「详情」)
+ *
+ * 2026-10-26 收编自 `components/library/LibraryRowMenu.tsx` 的内联 svg.
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/eye.js`:
+ * `M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z` + circle `12 12 3`.
+ * ⚠️ 原实现 svg 用 `width/height="100%"` + 调用点 `w-4 h-4` ⇒ 实际渲染 16px,
+ *    与本组件默认 size=16 一致 (svg 的 width/height 属性会被 tailwind 类覆盖,
+ *    但两者算出同一个值, 视觉不变).
+ */
+export function EyeIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `external-link` — 16×16 / sw2 (知识库行菜单「在新窗口打开」)
+ *
+ * 2026-10-26 收编自 `components/library/LibraryRowMenu.tsx` 的内联 svg.
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/external-link.js`:
+ * `M15 3h6v6` / `M10 14 21 3` / `M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6`.
+ */
+export function ExternalLinkIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `tag` — 16×16 / sw2 (知识库行菜单「编辑」)
+ *
+ * 2026-10-26 收编自 `components/library/LibraryRowMenu.tsx` 的内联 svg.
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/tag.js`:
+ * `M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704
+ * 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z`
+ * + circle `7.5 7.5 .5` (⚠️ 这个点是 **fill=currentColor**, 不是描边, 别改成描边).
+ */
+export function TagIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
+      <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `circle-check` (web 的 `CheckCircle2`) — 20×20 / sw2 (知识库卡片多选「已选中」)
+ *
+ * 2026-10-26 收编自 `components/library/LibraryCard.tsx` 的内联 svg.
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/circle-check.js`:
+ * circle `12 12 10` + `m9 12 2 2 4-4`.
+ * ⚠️ lucide v0.407.0 里 **`check-circle.js` 是别名** (re-export `circle-check-big.js`),
+ *    web 用的 `CheckCircle2` 对应的真实源文件是 `circle-check.js` (本组件按它取 path).
+ */
+export function CircleCheckIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
+
+/** lucide `circle` — 20×20 / sw2 (知识库卡片多选「未选中」) */
+export function CircleIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="10" />
+    </svg>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// 2026-10-26 图标收编批次 (重复实现收编)
+//   path 逐字取自 gacode-web/node_modules/lucide-react@0.407.0
+//   `dist/esm/icons/<name>.js` —— web 端是图标 path 的真值来源。
+//   下列图标的「原像素」= 收编处原本实际渲染的尺寸 (本文件约定:
+//   默认 size = 该图标原始值, 见上面 GlyphProps.size 的注释)。
+// ════════════════════════════════════════════════════════════
+
+/**
+ * lucide `layout-grid` — 16×16 / sw2 (知识库列表 tab「全部」)
+ *
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/layout-grid.js`:
+ * 4 个 rect (7×7 / rx=1), 分别在 (3,3) / (14,3) / (14,14) / (3,14)。
+ * ⚠️ 原实现 (routes/Library.tsx 本地图标) 用 `width/height="100%"` +
+ *    tailwind `w-4 h-4` ⇒ 实际渲染 16px ⇒ 本组件默认 size=16。
+ */
+export function LayoutGridIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={[className].filter(Boolean).join(" ")}
+    >
+      <rect width="7" height="7" x="3" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="14" rx="1" />
+      <rect width="7" height="7" x="3" y="14" rx="1" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `construction` (工地围挡 + 工具) — 48×48 / sw2 (空态大图标)
+ *
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/construction.js`:
+ * rect `x=2 y=6 w=20 h=8 rx=1` + `M17 14v7` + `M7 14v7` + `M17 3v3` +
+ * `M7 3v3` + `M10 14 2.3 6.3` + `m14 6 7.7 7.7` + `m8 6 8 8`。
+ * ⚠️ 原像素 48 (routes/ProfileApps.tsx 本地图标就是 `width="48" height="48"`
+ *    + `w-12 h-12`; routes/Library.tsx 本地图标是 `100%` + `w-12 h-12`)
+ *    ⇒ 本组件默认 size=48。
+ * ⚠️ 收编时**只认 path 逐字相同**: routes/ProfileApps.tsx 的本地图标虽然
+ *    注释写着「lucide Construction 同款」, 但它画的是围挡柱 (M2 20h20 /
+ *    M4 20V9l6 4V9l6 4V9l4 2v9 / M12 2v4 / M12 6h5), 跟 lucide 的
+ *    硬帽子+工具**不是同一个图形** ⇒ 本批**没有**替换它 (形状差异要 PM
+ *    单独拍板)。
+ */
+export function ConstructionIcon({ className, size = 48, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={[className].filter(Boolean).join(" ")}
+    >
+      <rect x="2" y="6" width="20" height="8" rx="1" />
+      <path d="M17 14v7" />
+      <path d="M7 14v7" />
+      <path d="M17 3v3" />
+      <path d="M7 3v3" />
+      <path d="M10 14 2.3 6.3" />
+      <path d="m14 6 7.7 7.7" />
+      <path d="m8 6 8 8" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `loader-circle` (web 端叫 `Loader2`, 是同一个图标) — 14×14 / sw2 (转圈)
+ *
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/loader-circle.js`:
+ * 单 path `M21 12a9 9 0 1 1-6.219-8.56`。
+ * ⚠️ 原像素 14 (routes/Notifications.tsx 本地图标是 `width="14" height="14"`
+ *    + `w-3.5 h-3.5`) ⇒ 本组件默认 size=14。
+ */
+export function LoaderCircleIcon({ className, size = 14, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={[className].filter(Boolean).join(" ")}
+    >
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `save` — 16×16 / sw2 (保存按钮)
+ *
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/save.js`:
+ * `M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2
+ * 2 0 0 1-2-2V5a2 2 0 0 1 2-2z` + `M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7`
+ * + `M7 3v4a1 1 0 0 0 1 1h7`。
+ * ⚠️ 原像素 16 (routes/ProfileEdit.tsx 本地图标是 `width="16" height="16"`
+ *    + `w-4 h-4`) ⇒ 本组件默认 size=16。
+ */
+export function SaveIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={[className].filter(Boolean).join(" ")}
+    >
+      <path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+      <path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" />
+      <path d="M7 3v4a1 1 0 0 0 1 1h7" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `calendar` — 16×16 / sw2 (通知分组「日程提醒」类型图标)
+ *
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/calendar.js`:
+ * rect `x=3 y=4 w=18 h=18 rx=2` + `M16 2v4` + `M8 2v4` + `M3 10h18`。
+ * ⚠️ 元素顺序跟 lucide 源文件不同 (lucide 先两条竖线 path, 本组件沿用
+ *    routes/Notifications.tsx 原实现的顺序 = 先 rect) ⇒ 4 个图形的 path
+ *    字符串逐字相同, 渲染结果零差异。
+ * ⚠️ 原像素 16 (Notifications 本地图标 `width="16" height="16"` + `w-4 h-4`)
+ *    ⇒ 本组件默认 size=16。
+ */
+export function CalendarIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={[className].filter(Boolean).join(" ")}
+    >
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4" />
+      <path d="M8 2v4" />
+      <path d="M3 10h18" />
+    </svg>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// 2026-10-26 图标形状对齐批次 (PC 图标 ≠ web/lucide v0.407.0)
+//   下列 path 逐字取自 gacode-web/node_modules/lucide-react@0.407.0
+//   `dist/esm/icons/<name>.js` —— web 端是图标 path 的真值来源。
+//   className 一律**原样透传** (不内联定位/尺寸/颜色类):
+//   PC 无 tailwind-merge, 内联类无法被调用点的类覆盖 ⇒ 需要自由的调用点
+//   必须用「裸」导出。
+// ════════════════════════════════════════════════════════════
+
+/**
+ * lucide `search` (裸版 — className 原样透传) — 20×20 / sw2
+ *
+ * 2026-10-26: 共享库原有的两个搜索图标都**不能用**在「圆药丸按钮」这种
+ * 非输入框前缀的调用点上:
+ *   - `SearchIcon`      = 22px / sw1.6 / 直线手柄 (`<line>`) —— 尺寸/线宽/手柄都不对
+ *   - `SearchFieldIcon` = 16px / sw2, 但**内联了输入框前缀专用的类**
+ *     (`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted`)
+ *     ⇒ 调用点被迫加 5 个 `!important` 类去压掉 (PC 无 tailwind-merge ⇒ 脆)。
+ * 本导出 = lucide v0.407.0 `search.js` 真值 (circle `11 11 r8` + `m21 21-4.3-4.3`),
+ * 20px / sw2 (对齐 web `app/(main)/library/page.tsx:455` 的 `<Search className="w-5 h-5" />`),
+ * 且**不内联任何类** ⇒ 调用点只需要写自己需要的尺寸/颜色。
+ */
+export function SearchBareIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `bell-ring` — 20×20 / sw2 (通知页「桌面通知已开启」)
+ *
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/bell-ring.js`:
+ * `M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9` + `M10.3 21a1.94 1.94 0 0 0 3.4 0`
+ * + `M4 2C2.8 3.7 2 5.7 2 8` + `M22 8c0-2.3-.8-4.3-2-6`。
+ * ⚠️ 改前是 PC 本地**老版**图形 (只有钟身 + 半圈, 没有两边的铃舌弧线)
+ *    ⇒ 跟 web `app/(main)/notifications/page.tsx:524` 的 `<BellRing className="w-5 h-5 …" />` 不一致。
+ * ⚠️ 原像素 20 (本地 svg `width="20" height="20"`, web 调用点也是 `w-5 h-5`)
+ *    ⇒ 本组件默认 size=20。
+ */
+export function BellRingIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+      <path d="M4 2C2.8 3.7 2 5.7 2 8" />
+      <path d="M22 8c0-2.3-.8-4.3-2-6" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `bell-off` — 20×20 / sw2 (通知页「系统通知不可用」)
+ *
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/bell-off.js`:
+ * `M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5` + `M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7`
+ * + `M10.3 21a1.94 1.94 0 0 0 3.4 0` + `m2 2 20 20`。
+ * ⚠️ 改前是 PC 本地**老版**图形 (钟身 + 斜线, 没有铃舌弧线)
+ *    ⇒ 跟 web `app/(main)/notifications/page.tsx:476 / :489` 的 `<BellOff … />` 不一致。
+ * ⚠️ 原像素 20 ⇒ 本组件默认 size=20。
+ */
+export function BellOffIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5" />
+      <path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+      <path d="m2 2 20 20" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `refresh-cw` — 20×20 / sw2 (刷新按钮)
+ *
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/refresh-cw.js`:
+ * `M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8` + `M21 3v5h-5`
+ * + `M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16` + `M8 16H3v5`。
+ * ⚠️ 改前 PC 本地图标的**末条**是 `M3 21v-5h5` (老版), lucide 是 `M8 16H3v5`
+ *    ⇒ 箭头形状不同 ⇒ 对齐 web `app/(main)/library/page.tsx:464` 的 `<RefreshCw … />`。
+ * ⚠️ 原像素 20 ⇒ 本组件默认 size=20。
+ */
+export function RefreshCwIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M8 16H3v5" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `settings` — 20×20 / sw2 (设置入口)
+ *
+ * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/settings.js`:
+ * 一条长 path (齿轮外形 `M12.22 2h-.44a2 2 0 0 0-2 2v.18…`) + circle `12 12 3`。
+ * ⚠️ 改前 PC 本地图标是**老版** lucide settings path (`M19.4 15a1.65 1.65 0 0 0 .33 1.82…`)
+ *    ⇒ 齿轮外形与 lucide v0.407.0 不同。
+ * ⚠️ web 端**没有**齿轮入口 (PC 独有的「通知设置 / 设置」行) ⇒ 无 web 调用点可对齐,
+ *    按本文件约定取 lucide v0.407.0 的规范形状。
+ * ⚠️ 原像素 20 ⇒ 本组件默认 size=20。
+ */
+export function SettingsIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }

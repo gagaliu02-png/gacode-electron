@@ -52,6 +52,17 @@ import { Button } from "../components/ui/Button";
 import { Card, CardContent } from "../components/ui/Card";
 import { NotificationItem as NotificationRow } from "../components/notifications/NotificationItem";
 import { NotificationSettingsSheet } from "../components/notifications/NotificationSettingsSheet";
+import {
+  BellIcon,
+  BellOffIcon,
+  BellRingIcon,
+  CalendarIcon,
+  CheckCheckIcon,
+  ClockIcon,
+  LoaderCircleIcon,
+  RefreshCwIcon,
+  SettingsIcon,
+} from "../components/ui/Glyphs";
 
 const NOTIFICATIONS_QUERY_KEY = ["notifications", { unread: false }] as const;
 
@@ -232,7 +243,9 @@ export function Notifications() {
             aria-label="通知设置"
             className="w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated transition-colors duration-150 inline-flex items-center justify-center"
           >
-            <GearIcon />
+            {/* lucide `settings` (20px / sw2) — 共享 <SettingsIcon>
+                (PC 独有入口, web 无对应 ⇒ 取 lucide v0.407.0 规范形状) */}
+            <SettingsIcon className="w-5 h-5" />
           </button>
           <button
             type="button"
@@ -240,7 +253,9 @@ export function Notifications() {
             aria-label="刷新"
             className="w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated transition-colors duration-150 inline-flex items-center justify-center"
           >
-            <RefreshIcon />
+            {/* lucide `refresh-cw` (20px / sw2) — 共享 <RefreshCwIcon>
+                (同款: web `app/(main)/library/page.tsx:464`) */}
+            <RefreshCwIcon className="w-5 h-5" />
           </button>
           <Button
             variant="ghost"
@@ -250,9 +265,9 @@ export function Notifications() {
             className="gap-1.5"
           >
             {readAllMutation.isPending ? (
-              <SpinnerIcon className="w-3.5 h-3.5 animate-spin" />
+              <LoaderCircleIcon className="w-3.5 h-3.5 animate-spin" />
             ) : (
-              <CheckCheckIcon className="w-3.5 h-3.5" />
+              <CheckCheckIcon size={14} className="w-3.5 h-3.5" />
             )}
             全部已读
           </Button>
@@ -445,92 +460,15 @@ function PendingBanner() {
 }
 
 // ────────────────────────────────────────────────────────────
-// icons (手写内联 SVG — PC 无 lucide-react)
+// icons — 本文件**不再保留**本地图标 (2026-10-26)
+//   先前收编: 本地 `BellIcon` / `CalendarIcon` / `ClockIcon` / 转圈 (`SpinnerIcon`)
+//   与 components/ui/Glyphs.tsx 的共享组件逐字重复 ⇒ 已删, 改 import 共享组件。
+//   本批 (图标形状对齐 web): 剩下 5 个本地图形是**老版 lucide path**, 跟
+//   lucide v0.407.0 真值不一致 ⇒ 同样收编成共享导出:
+//     · BellRing   → BellRingIcon   (web `notifications/page.tsx:524`)
+//     · BellOff    → BellOffIcon    (web `notifications/page.tsx:476` / `:489`)
+//     · Refresh    → RefreshCwIcon  (web `library/page.tsx:464` 同款)
+//     · Gear       → SettingsIcon   (PC 独有入口, web 无对应 ⇒ 取 lucide 规范形状)
+//     · CheckCheck → CheckCheckIcon (web `notifications/page.tsx:263`)
+//   ⇒ 本文件的本地图标清零。
 // ────────────────────────────────────────────────────────────
-
-function BellIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-    </svg>
-  );
-}
-
-function BellRingIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M10.5 5.5A6 6 0 0 1 18 8c0 7 3 9 3 9H5" />
-      <path d="M18 8a6 6 0 0 0-9.33-5" />
-      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-    </svg>
-  );
-}
-
-function BellOffIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M10.5 5.5A6 6 0 0 1 18 8c0 7 3 9 3 9H5" />
-      <path d="M6 8c0 7-3 9-3 9h14" />
-      <path d="M2 2l20 20" />
-      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-    </svg>
-  );
-}
-
-function CalendarIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="3" y="4" width="18" height="18" rx="2" />
-      <path d="M16 2v4" />
-      <path d="M8 2v4" />
-      <path d="M3 10h18" />
-    </svg>
-  );
-}
-
-function ClockIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <circle cx="12" cy="12" r="10" />
-      <polyline points="12 6 12 12 16 14" />
-    </svg>
-  );
-}
-
-function RefreshIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-      <path d="M21 3v5h-5" />
-      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-      <path d="M3 21v-5h5" />
-    </svg>
-  );
-}
-
-function GearIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 2 2 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 1.82-.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  );
-}
-
-function CheckCheckIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M18 6 7 17l-4-4" />
-      <path d="m22 10-7.5 7.5L8 13" />
-    </svg>
-  );
-}
-
-function SpinnerIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  );
-}

@@ -1,8 +1,7 @@
 /**
  * lib/clipboard.ts — 阶段 4 剪贴板图片粘贴辅助
  *
- * ChatInputBar / LibraryDropZone / DeliveriesDropZone 共用一组 paste 事件
- * 处理函数:
+ * ChatInputBar 共用一组 paste 事件处理函数:
  *   - 从 e.clipboardData.items 找 kind === 'file' 且 type 命中预期 MIME 的
  *     item, 拿到 Blob → File
  *   - 提一个统一签名 `extractClipboardFiles(e, {acceptMimes, acceptImage})` 避免

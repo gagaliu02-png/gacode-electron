@@ -12,10 +12,6 @@ import * as crypto from 'crypto';
 import { createTray } from './tray';
 import { createAppMenu } from './menu';
 import { registerNotificationIpc } from './notifications';
-import {
-  startDeliveriesDownloader,
-  stopDeliveriesDownloader,
-} from './deliveries-downloader';
 
 // CommonJS 下 __dirname 已有,这里只是为了类型注释
 // const __filename = fileURLToPath(import.meta.url); // ESM 模式才需要
@@ -719,36 +715,6 @@ function registerOpenWithSystemIpc(): void {
 }
 
 // =========================================================================
-// 0.7.5 deliveries-15 — deliveries downloader IPC bridge
-//   - gacode:download-deliverable → 触发一次手动下载轮询 (返回 worker status)
-//   - gacode:deliverables-status  → 读 worker 当前状态 (UI 显示用)
-// 跟主进程 worker (deliveries-downloader.ts) 联动, 不阻塞.
-// =========================================================================
-function registerDeliveriesDownloaderIpc(): void {
-  ipcMain.handle(
-    'gacode:download-deliverable',
-    async () => {
-      const { runOnce, getDownloaderStatus } = require('./deliveries-downloader') as {
-        runOnce: () => Promise<unknown>;
-        getDownloaderStatus: () => unknown;
-      };
-      await runOnce();
-      return getDownloaderStatus();
-    },
-  );
-  ipcMain.handle(
-    'gacode:deliverables-status',
-    async () => {
-      const { getDownloaderStatus } = require('./deliveries-downloader') as {
-        getDownloaderStatus: () => unknown;
-      };
-      return getDownloaderStatus();
-    },
-  );
-  console.log('[gacode-electron] deliveries-downloader IPC handlers registered');
-}
-
-// =========================================================================
 // 阶段 4 — second-instance (deep link 唤起 first instance)
 //
 // `second-instance` 事件在 first instance 里触发, 第二个进程已经 quit,
@@ -833,10 +799,6 @@ app.whenReady().then(() => {
   registerAuthStorageIpc();
   registerBookmarksIpc();
   registerOpenWithSystemIpc();
-  registerDeliveriesDownloaderIpc();
-
-  // 0.7.5 deliveries-15: 起交付物自动下载 worker (5 分钟拉一次)
-  startDeliveriesDownloader();
 
   // 0.7.5 global-11: electron-updater 自动更新 — 配置 OK, build 跑通但不
   // 实际触发 (publish 配置 github 但 gagaOS 拍 push 时再 git push + tag).
@@ -951,8 +913,6 @@ app.whenReady().then(() => {
 // PR2:before-quit 标记用户主动退出 —— 让 BrowserWindow.close 不再被劫持
 app.on('before-quit', () => {
   isQuiting = true;
-  // 0.7.5 deliveries-15: 关掉自动下载 worker
-  stopDeliveriesDownloader();
   console.log('[gacode-electron] before-quit, isQuiting=true');
 });
 

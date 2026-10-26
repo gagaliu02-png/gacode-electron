@@ -5,12 +5,16 @@
  * server chat route 解析后注入 LLM 上下文). 视觉跟 web MessageBubble.tsx:443-489
  * 1:1 对齐: 折叠态 "📚 引用了 N 条知识库", 展开态列出每条 id (title 暂无可用字段).
  *
- * ⚠️ 2026-10-19 verifier: unified-api/src/modules/yinian/yinian.chat.routes.js:893
- *   当前**只**把 image_urls + attached_file_ids 落 metadata, knowledge_refs 暂未写.
- *   UI 解析就位 (lib/api.ts:getHistory), server 后续补写即生效. 不在 client 端伪造.
+ * ✅ 2026-10-26 订正（旧注释写于 2026-10-19, 事实已过期）: 服务端**已支持** knowledge_refs ——
+ *   schema: unified-api/src/modules/yinian/yinian.chat.routes.js:405
+ *   解析 + 取 atom 原文 + 注入 LLM 上下文: 同文件 :1366-1389 (getMemoryAtomsForChat)。
+ *   ⚠️ 但服务端**仍不把 knowledge_refs 落进 message metadata**（:1193-1195 只写
+ *   image_urls + attached_file_ids）⇒ 历史回看没有 knowledge_refs 可解析。
+ *   PC 读侧也**还没接**: lib/api.ts:getHistory 不解析 metadata.knowledge_refs,
+ *   ChatDetail.tsx:270-285 也没把它映射进 ChatMessageModel ⇒ 本组件目前恒不渲染。
+ *   组件形态与 web MessageBubble.tsx:443-489 一致, 等读侧接线后即生效。
  *
- * 父组件拿到 knowledgeRefs.length > 0 时挂这个组件. assistant 端 server 暂未回传,
- *   也兼容 — 解析端不区分 role.
+ * 父组件拿到 knowledgeRefs.length > 0 时挂这个组件。解析端不区分 role。
  */
 import { useState } from "react";
 
