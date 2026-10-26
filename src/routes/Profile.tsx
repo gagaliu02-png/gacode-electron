@@ -10,7 +10,7 @@
  *   - 元信息: 性别 / 简介 / UID (含一键复制) / 注册时间
  *   - 操作入口: 编辑资料 / 改密 / 设置 (v2) / 交付中心 / 头像设置
  *     (「我的应用」已按 S-1 删除 —— 唯一入口是侧栏 AppShell 那个带门禁的)
- *   - 底部: 登出 + 注销账户 (DELETE /auth/account, 物理删数据 + 二次确认 + username 输入防误触)
+ *   - 底部: 登出 + 注销账户 (DELETE /auth/account, 物理删数据 + 二次确认)
  *   - 上传头像: file picker → uploadAvatar → invalidate profile (顶部相机按钮 + 「头像设置」入口都触发同一逻辑)
  *
  * 2026-10-26 对齐 web (docs/align-c-profile-notify.md 组 2a · C2-01 ~ C2-26):
@@ -31,7 +31,7 @@
  *   - C2-07: 头像缺省图改用 Cody 占位图 (cody_192.png, 跟 web 同款)
  * ⚠️ PC 独有 (按 gaga 指示不列入差异, 保留): 相机按钮 + @username + 操作入口列表
  *   (编辑资料/修改密码/头像设置/交付中心/设置) + 登出按钮 + 邮箱/注册时间
- *   两行 + 注销前必须输入 username 的二次确认。
+ *   两行。
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -52,7 +52,6 @@ import { useAuth } from "../lib/auth";
 import { useToast } from "../components/ui/Toast";
 import { Button } from "../components/ui/Button";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
-import { Input } from "../components/ui/Input";
 
 const GENDER_LABEL: Record<string, string> = {
   male: "男",
@@ -123,11 +122,13 @@ export function Profile() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      toast({ message: "请选择图片文件", variant: "danger" });
+      toast({ message: "请选择图片文件", variant: "warning" });
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      toast({ message: "头像不能超过 5 MB", variant: "warning" });
+    // 2MB 上限跟 web 一致 (gacode-web/src/app/(main)/profile/edit/page.tsx:72-75),
+    // 本仓 ProfileEdit.tsx:99-102 也已是同款口径 —— 只有本文件是旧值。
+    if (file.size > 2 * 1024 * 1024) {
+      toast({ message: "图片不能超过 2 MB", variant: "warning" });
       return;
     }
     avatarMutation.mutate(file);
@@ -289,7 +290,6 @@ export function Profile() {
       {/* 注销账户 (P0 — GDPR) — 跟操作入口视觉上区分开 (红字危险色), 放最底部 */}
       <div className="mt-6">
         <DeleteAccountRow
-          username={username}
           onDeleted={() => {
             // 跟 localDB 那种"清状态后跳 login"对齐: queryClient 清空 + 调
             // authStorage.clear (IPC) + auth.logout 清内存态, Protected 路由
@@ -400,20 +400,19 @@ function CopyUidButton({ uid }: { uid: string }) {
 }
 
 // ────────────────────────────────────────────────────────────
-// profile-6: 注销账户 (P0) — DELETE /auth/account + 二次确认 + 输 username
+// profile-6: 注销账户 (P0) — DELETE /auth/account + 二次确认
+//   (跟 web 同款: 弹窗直接二次确认, 不要求输入 username ——
+//    gacode-web/src/app/(main)/profile/page.tsx:258-288)
 // ────────────────────────────────────────────────────────────
 
 function DeleteAccountRow({
-  username,
   onDeleted,
 }: {
-  username: string;
   onDeleted: () => void;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
-  const [confirmText, setConfirmText] = useState("");
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteAccount(),
@@ -435,10 +434,6 @@ function DeleteAccountRow({
       });
     },
   });
-
-  // 必须输入准确的 username 才允许点「我确定注销」(防误触)
-  const canConfirm =
-    confirmText.trim().length > 0 && confirmText.trim() === username.trim();
 
   return (
     <>
@@ -465,38 +460,11 @@ function DeleteAccountRow({
           onCancel={() => {
             if (deleteMutation.isPending) return;
             setOpen(false);
-            setConfirmText("");
           }}
           onConfirm={() => {
-            if (!canConfirm) return;
             deleteMutation.mutate();
           }}
-        >
-          <div className="space-y-2">
-            <label
-              className="block text-sm text-fg-muted"
-              htmlFor="delete-confirm-username"
-            >
-              请输入你的用户名{" "}
-              <span className="font-mono text-fg">{username}</span>{" "}
-              以确认操作
-            </label>
-            <Input
-              id="delete-confirm-username"
-              value={confirmText}
-              onChange={(e) => setConfirmText(e.target.value)}
-              placeholder={username}
-              autoComplete="off"
-              disabled={deleteMutation.isPending}
-              autoFocus
-            />
-            {!canConfirm && confirmText.length > 0 ? (
-              <p className="text-xs text-warning">
-                用户名不匹配,请准确输入
-              </p>
-            ) : null}
-          </div>
-        </ConfirmDialog>
+        />
       ) : null}
     </>
   );
