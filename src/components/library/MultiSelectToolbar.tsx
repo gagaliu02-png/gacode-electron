@@ -2,10 +2,11 @@
  * components/library/MultiSelectToolbar.tsx — 多选模式底部 toolbar
  *                          (gacode-electron 0.7.2 P1 library-12)
  *
- * 跟 ChatList 的 bottom multi-select bar 风格一致:
- *   - 左侧: "已选 N 条"
- *   - 中: 取消 / 全选
- *   - 右: "删除 (N)" + AlertDialog 二次确认
+ * 1:1 对齐 web `gacode-web/src/app/(main)/library/page.tsx:584-628`:
+ *   - 底栏只有 3 个按钮 (取消 / 全选 / 删除 N 项), **没有**「已选 N 条」文字
+ *     (计数在全局顶栏, 见 L-28) —— L-52
+ *   - 批量删除二次确认: 标题「确定要删除选中的 N 条?」+ 确认按钮「全部删除」—— L-51
+ *   - pending 时确认按钮内只剩 spinner (web 是文字换成 spinner) —— L-75
  *
  * 父组件 Library.tsx 控制 selectedIds 状态 + 触发删除 mutation.
  */
@@ -44,11 +45,8 @@ export function MultiSelectToolbar({
     <>
       <div className="sticky bottom-0 z-30 bg-bg-base/95 backdrop-blur shadow-[0_-2px_10px_rgba(0,0,0,0.4)]">
         <div className="px-4 lg:px-8 max-w-3xl mx-auto w-full py-3 flex items-center justify-between gap-2">
-          <span className="text-sm">
-            已选 <strong>{selectedCount}</strong> 条
-          </span>
-          {/* L-47 收尾 (2026-10-26): 删掉 flex-1 占位 —— 改成 web 的 justify-between 之后,
-              占位会把两侧撑开, justify-between 就不生效了。「已选 N 条」保留 (L-52 另批处理) */}
+          {/* L-52: 删掉 PC 多出的「已选 N 条」计数块 —— web 底栏只有 3 个按钮,
+              计数在全局顶栏 (AppShell header, 见 L-28) */}
           <Button variant="ghost" size="sm" onClick={onCancel}>
             取消
           </Button>
@@ -72,11 +70,14 @@ export function MultiSelectToolbar({
 
       {confirmOpen ? (
         <ConfirmDialog
-          title={`确认删除 ${selectedCount} 条?`}
+          // L-51: web library/page.tsx:634 标题原文「确定要删除选中的 N 条?」
+          title={`确定要删除选中的 ${selectedCount} 条?`}
           message={
             deleteConfirmMessage ?? "此操作不可恢复,请谨慎操作。"
           }
-          confirmLabel="确认删除"
+          // L-51: web 的确认按钮文案是「全部删除」(web library/page.tsx:685)
+          // L-75: pending 时 web 按钮内只剩 spinner (文字消失) ⇒ 文案置空
+          confirmLabel={deletePending ? "" : "全部删除"}
           confirmVariant="danger"
           loading={deletePending}
           onCancel={() => onConfirmOpenChange(false)}

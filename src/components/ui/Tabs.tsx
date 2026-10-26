@@ -20,12 +20,29 @@
  *   />
  *
  *   <Tabs tabs={[{key:'a',label:'A',count:7}]} value={x} onChange={setX} />  // controlled, 默认 pill
+ *
+ * 2026-10-26 (L-15): tab 支持前置图标 (icon 插槽) — 调用方自己传 svg:
+ *   <Tabs variant="underline" tabs={[{ key:'all', label:'全部', icon:<GridIcon className="w-4 h-4" /> }]} … />
  */
+
+import type { ReactNode } from "react";
 
 export interface TabsTab {
   /** 唯一键 (字符串/number), 跟 activeKey 比较用 === */
   key: string;
   label: string;
+  /**
+   * 可选前置图标 — ReactNode, 调用方自己传 svg, 组件不绑死图标集.
+   *
+   * 2026-10-26 (L-15): web `library/page.tsx:438` 的 tab trigger 是
+   *   `<t.icon className="w-4 h-4 mr-1.5" />` + 文案.
+   *   PC 没有 lucide-react ⇒ 图标由调用方传, 本组件只负责「图标 + 文案」的间距
+   *   (图标容器 `mr-1.5` = 6px, 与 web 一致).
+   *   ⚠️ 图标 + 文案包在同一个 inline-flex 容器里 ⇒ 父级 flex 的 `gap-1`
+   *     不会叠加到「图标↔文案」之间 (否则 4+6=10px ≠ web 的 6px),
+   *     同时 label↔count 的 gap 保持原样 (icon 为空时布局完全不变).
+   */
+  icon?: ReactNode;
   /** 右侧小计 (badge 形式) */
   count?: number;
   /** 禁用 (灰色) */
@@ -100,7 +117,14 @@ export function Tabs({
                   : "text-fg-muted hover:text-fg hover:bg-accent",
               ].join(" ")}
             >
-              <span>{t.label}</span>
+              {/* 图标 + 文案包在同一 inline-flex 里 ⇒ 父级 gap-1 不叠加到图标↔文案之间
+                  (web 是 icon `mr-1.5` = 6px, 不带父级 gap) */}
+              <span className="inline-flex items-center">
+                {t.icon ? (
+                  <span className="mr-1.5 inline-flex items-center">{t.icon}</span>
+                ) : null}
+                <span>{t.label}</span>
+              </span>
               {typeof t.count === "number" ? (
                 <span
                   className={[
@@ -149,7 +173,13 @@ export function Tabs({
                 : "text-fg-muted hover:text-fg",
             ].join(" ")}
           >
-            <span>{t.label}</span>
+            {/* pill 变体同样支持 icon (与 underline 变体同款间距逻辑) */}
+            <span className="inline-flex items-center">
+              {t.icon ? (
+                <span className="mr-1.5 inline-flex items-center">{t.icon}</span>
+              ) : null}
+              <span>{t.label}</span>
+            </span>
             {typeof t.count === "number" ? (
               <span
                 className={[

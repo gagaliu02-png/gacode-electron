@@ -51,12 +51,21 @@ export interface DropdownMenuProps {
   items: DropdownMenuItem[];
   /** 触发对齐到 trigger 右下, 默认 right 下沿对齐 */
   align?: "left" | "right";
+  /**
+   * 菜单容器额外 className (2026-10-26 · 共享组件补能力).
+   *
+   * - 不传 ⇒ 容器 className 与改动前**完全一致** (PC 现状, 其它调用点零影响).
+   * - 传 ⇒ 追加在默认串**之后**; PC 没有 tailwind-merge, 同名类冲突由 CSS 产物顺序决定,
+   *   需要覆盖默认串里的类时调用方自己加 `!` 前缀 (例: `!bg-popover`).
+   */
+  contentClassName?: string;
 }
 
 export function DropdownMenu({
   trigger,
   items,
   align = "right",
+  contentClassName,
 }: DropdownMenuProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -106,7 +115,10 @@ export function DropdownMenu({
             "animate-fade-in",
             "top-full mt-1",
             align === "right" ? "right-0" : "left-0",
-          ].join(" ")}
+            contentClassName,
+          ]
+            .filter(Boolean)
+            .join(" ")}
         >
           {items.map((it, i) => (
             <Fragment key={i}>
@@ -181,6 +193,10 @@ function TriggerChild({
   return cloneElement(child as ReactElement<Record<string, unknown>>, {
     "aria-haspopup": "menu",
     "aria-expanded": open,
+    // 2026-10-26 · 共享组件补能力: web 的 trigger 带 `data-[state=open]:bg-muted`
+    // (打开态底色) — PC 之前没有 data-state ⇒ 那条样式永远不生效.
+    // 注入后, 调用方只要写 `data-[state=open]:bg-muted` 就能拿到 web 同款打开态.
+    "data-state": open ? "open" : "closed",
     onClick: (e: React.MouseEvent) => {
       // 阻止默认 + 阻止冒泡, 防止外层 Link / onClick 多次触发
       e.preventDefault();

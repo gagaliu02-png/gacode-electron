@@ -18,7 +18,16 @@
  *   在侧边 chat 列表里额外给当前 id 加 brand 左侧高亮.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useLocation, useNavigate, type To } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../../lib/auth";
@@ -52,6 +61,37 @@ import {
 const SIDEBAR_WIDTH = "w-64";
 const RECENT_DEFAULT_LIMIT = 5;
 const HOME_PATH = "/";
+
+// ────────────────────────────────────────────────────────────
+// HeaderTitle — 页面级顶栏标题覆写 (2026-10-26 · L-28)
+//
+// web 侧 (gacode-web/src/lib/store + app/(main)/library/page.tsx:163-169):
+//   const setHeaderTitle = useUIStore((s) => s.setHeaderTitle);
+//   useEffect(() => {
+//     setHeaderTitle(isMultiSelectMode ? `已选 ${selectedIds.size} 项` : "知识库");
+//     return () => setHeaderTitle("新对话");
+//   }, [setHeaderTitle, isMultiSelectMode, selectedIds.size]);
+//
+// PC 侧: 顶栏标题是**按路由派生**的 (resolveTitle), 没有 store.
+//   ⇒ 用 context 兜一层: 页面调 useHeaderTitle()?.setHeaderTitle("…") 覆写,
+//     传 null 还原成路由标题; 路由变化时 AppShell 自动清掉覆写.
+//   ⚠️ 不改 AppShell 其它顶栏行为 (返回键 / 显隐规则 / 路由标题映射全部原样).
+// ────────────────────────────────────────────────────────────
+
+export interface HeaderTitleApi {
+  /** 覆写顶栏标题; 传 null ⇒ 还原成按路由派生的标题 */
+  setHeaderTitle: (title: string | null) => void;
+}
+
+const HeaderTitleContext = createContext<HeaderTitleApi | null>(null);
+
+/**
+ * 页面级顶栏标题覆写 hook.
+ * 在 AppShell 之外 (单元测试 / 独立渲染) 使用时返回 null ⇒ 调用方要做空值判断.
+ */
+export function useHeaderTitle(): HeaderTitleApi | null {
+  return useContext(HeaderTitleContext);
+}
 
 // ────────────────────────────────────────────────────────────
 // helpers
@@ -143,7 +183,24 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const { toast } = useToast();
 
-  const title = resolveTitle(location.pathname);
+  // L-28 · 页面级标题覆写 — 默认 null ⇒ 用路由派生标题 (行为与改动前完全一致)
+  const [headerTitle, setHeaderTitle] = useState<string | null>(null);
+  // 路由变化时清掉页面级覆写 (页面自己 unmount 也会清, 这里兜底跨路由残留)
+  // ⚠️ 只在 pathname **真的变了**时清 —— 否则首次挂载会把页面刚设的标题 (如
+  //    「已选 N 项」) 又抹掉 (子组件 effect 先于父组件 effect 执行).
+  const prevPathnameRef = useRef(location.pathname);
+  useEffect(() => {
+    if (prevPathnameRef.current === location.pathname) return;
+    prevPathnameRef.current = location.pathname;
+    setHeaderTitle(null);
+  }, [location.pathname]);
+
+  const headerTitleApi = useMemo<HeaderTitleApi>(
+    () => ({ setHeaderTitle }),
+    [],
+  );
+
+  const title = headerTitle ?? resolveTitle(location.pathname);
   const showBack = isSubRoute(location.pathname);
   // 0.7.6 — gaga 截图反馈 §1: Home 页不要 header (跟 web 同款 — web Home 只有左
   //   ☰ 按钮 + sticky transparent 背景, 不显示标题栏). electron 是桌面端 sidebar
@@ -270,6 +327,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   );
 
   return (
+    <HeaderTitleContext.Provider value={headerTitleApi}>
     <div className="flex h-screen overflow-hidden bg-bg-base text-fg">
       {/* ============================================================
           Sidebar (256px 持久)
@@ -427,6 +485,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main className="flex-1 overflow-y-auto bg-bg-base">{children}</main>
       </div>
     </div>
+    </HeaderTitleContext.Provider>
   );
 }
 

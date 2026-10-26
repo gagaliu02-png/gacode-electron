@@ -15,9 +15,6 @@
  *   的 UI 端, AI 总结到 KB 入口不由本页触发 — 等 server 端补 endpoint 或 ChatDetail
  *   实现改造触发点.
  *
- * 单文件改动; 多选状态 / 编辑 / 排序 / tag 过滤状态全在 Library() 顶层,
- * 卡片改用 LibraryCard (src/components/library/LibraryCard.tsx).
- *
  * PC-6 (2026-10-20 gagaOS 拍板): Library 定稿页 — 七项对齐 web
  *   1. Tabs: pill → underline (用 <Tabs variant="underline">)
  *   2. 搜索框: 常驻 → 折叠圆药丸 (showSearch toggle)
@@ -26,9 +23,24 @@
  *   5. 容器宽度: max-w-5xl → max-w-3xl (对齐 web)
  *   6. 空态: bg-bg-sunken 圆角小卡 → 居中 icon + 标题 + 副文案 + 行动 (border + bg-bg-elevated)
  *   7. FAB: 缺则补 fixed bottom-right + (对齐 web L568)
+ *
+ * 2026-10-26 · 逐 page 1:1 还原 web (web = 唯一事实源, PC 多出 web 没有的直接删):
+ *   - L-06: 搜索按钮图标 16px → 20px (web library/page.tsx:455 `w-5 h-5`)
+ *   - L-14: tab 集合改成 web 的 全部/文本/图片/文档, **serverType 按 tab 分别传**
+ *           (服务端 type 参数过滤的是 modality — library.routes.js:288),
+ *           客户端**不再二次过滤** (server 已过滤, web 同款)
+ *   - L-15: tab 带图标 (LayoutGrid / Type / Image / FileText, w-4 h-4)
+ *   - L-17: 空态卡改 web 形态 (border-0 + bg-card + rounded-2xl + p-10, 去 max-w-sm / 去垂直居中)
+ *   - L-18: 空态图标 LibraryIcon → lucide Construction
+ *   - L-23: 「加载更多」改纯文字按钮 (web library/page.tsx:552-568)
+ *   - L-27: ErrorBoundary 包裹列表页 (web library/page.tsx:130-136)
+ *   - L-28: 多选时全局标题显示「已选 N 项」(AppShell 页面级标题覆写)
+ *   - L-51/L-74/L-75: 删除确认弹窗标题 / 描述逗号 / pending 态 (spinner-only)
+ *   - 口径: 删掉 web 没有的 PC 多余项 —— 顶部「+ 新建」按钮 / SortMenu 排序 /
+ *           TagFilter 标签过滤行 / 空态里的「+ 新建条目」按钮
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -37,45 +49,72 @@ import {
   listLibrary,
   type LibraryItem,
 } from "../lib/api";
-import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { ErrorBoundary } from "../components/ui/ErrorBoundary";
 import { useToast } from "../components/ui/Toast";
 import { Tabs } from "../components/ui/Tabs";
+import {
+  FileTextIcon as FileTextTabIcon,
+  ImageIcon as ImageTabIcon,
+  LibraryTypeIcon,
+  SearchFieldIcon,
+  TypeIcon as TypeTabIcon,
+} from "../components/ui/Glyphs";
+import { useHeaderTitle } from "../components/layout/AppShell";
 import { LibraryDropZone } from "../components/library/LibraryDropZone";
 import { LibraryCard } from "../components/library/LibraryCard";
 import { CollectSheet } from "../components/library/CollectSheet";
 import { EditSheet } from "../components/library/EditSheet";
 import { MultiSelectToolbar } from "../components/library/MultiSelectToolbar";
-import { TagFilter } from "../components/library/TagFilter";
-import { SortMenu, type LibrarySort } from "../components/library/SortMenu";
 
 // =========================================================================
-// 类型 tab — 用 web LibraryItem.type (image | doc | link | text) 做客户端过滤,
-//   对齐 gacode-web Library 顶部 tabs.
+// 类型 tab — 对齐 web `library/page.tsx:106-115` (L-14 / L-15)
+//
+//   web 的 4 个 tab: 全部 / 文本 / 图片 / 文档
+//   ⚠️ tab 的 value 是**服务端 modality 枚举名** (text / image / file), 不是 web DTO
+//      里的 `type` (image|doc|link) —— 服务端 list 的 type 参数过滤的是 **modality**
+//      (`unified-api/src/modules/yinian/library.routes.js:288` `if (type) where.modality = type`).
+//      PC 之前只要不是 all 就固定传 "file" ⇒ 「图片」「链接」两个 tab 恒空 (真 bug).
 // =========================================================================
-type TypeFilter = "all" | "image" | "doc" | "link";
+type TypeFilter = "all" | "text" | "image" | "file";
 
-const TYPE_CHIPS: Array<{ key: TypeFilter; label: string }> = [
-  { key: "all", label: "全部" },
-  { key: "image", label: "图片" },
-  { key: "doc", label: "文档" },
-  { key: "link", label: "链接" },
+const TYPE_TABS: Array<{
+  key: TypeFilter;
+  label: string;
+  icon: ReactNode;
+  /** 传给服务端的 modality; undefined = 不过滤 */
+  serverType: string | undefined;
+}> = [
+  { key: "all", label: "全部", icon: <LayoutGridIcon className="w-4 h-4" />, serverType: undefined },
+  { key: "text", label: "文本", icon: <TypeTabIcon size={16} className="w-4 h-4" />, serverType: "text" },
+  { key: "image", label: "图片", icon: <ImageTabIcon size={16} className="w-4 h-4" />, serverType: "image" },
+  { key: "file", label: "文档", icon: <FileTextTabIcon size={16} className="w-4 h-4" />, serverType: "file" },
 ];
 
 const PAGE_SIZE = 30;
 
+/**
+ * 列表页 — 外层套 ErrorBoundary (L-27, 对齐 web library/page.tsx:130-136)
+ */
 export function Library() {
+  return (
+    <ErrorBoundary title="知识库加载失败" description="请刷新重试,或稍后再试一次">
+      <LibraryInner />
+    </ErrorBoundary>
+  );
+}
+
+function LibraryInner() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const headerTitleApi = useHeaderTitle();
 
   const [type, setType] = useState<TypeFilter>("all");
   const [keyword, setKeyword] = useState("");
   // PC-6: 搜索框折叠 toggle — 默认收起, 跟 web Library (L138 showSearch=false) 一致
   const [showSearch, setShowSearch] = useState(false);
-  const [tagFilter, setTagFilter] = useState<string | undefined>(undefined);
-  const [sort, setSort] = useState<LibrarySort>("newest");
   const [page, setPage] = useState(1);
 
   /** 累积的列表项 — web 端用 setItems 累加分页结果, PC 需自持一份 */
@@ -94,27 +133,20 @@ export function Library() {
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const isInMultiSelect = selectedIds.size > 0;
 
-  // 单条删除 (直接从卡片菜单触发)
+  // 单条删除 (从行上下文菜单触发)
   const [pendingSingleDelete, setPendingSingleDelete] = useState<LibraryItem | null>(null);
 
-  // 把 web 的 'doc' / 'link' 映射回 server 的 modality 'file' — server 端
-  // /yinian/library 只接受 ['text','image','audio','video','file']. web 端
-  // LibraryItem.type 'doc'/'link' 都是 modality 'file' 的子集, 单边 query 时
-  // type='file' 拿全量, 客户端再按 type 二次过滤.
-  const serverType = useMemo<string | undefined>(() => {
-    if (type === "all") return undefined;
-    return "file";
-  }, [type]);
-
-  // server tag 参数 — listLibrary 接受 `tag` (单 tag), 与本地 tagFilter 同步
-  const serverTag = useMemo(() => tagFilter, [tagFilter]);
+  // L-14: serverType 按 tab 分别传 (之前只要不是 all 就固定 "file" ⇒ 图片/链接 tab 恒空)
+  const serverType = useMemo(
+    () => TYPE_TABS.find((t) => t.key === type)?.serverType,
+    [type],
+  );
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ["library", { type, tag: serverTag, keyword, page }],
+    queryKey: ["library", { type, keyword, page }],
     queryFn: () =>
       listLibrary({
         type: serverType,
-        tag: serverTag,
         page,
         pageSize: PAGE_SIZE,
         keyword: keyword.trim() || undefined,
@@ -148,23 +180,20 @@ export function Library() {
     });
   }, [items]);
 
-  // 客户端二次过滤 (server modality='file' 包了 doc+link, 这里拆开) + 客户端排序
-  const filteredItems: LibraryItem[] = useMemo(() => {
-    const raw = items;
-    const t = type === "all"
-      ? raw
-      : raw.filter((it) => it.type === type);
-    const sorted = [...t];
-    sorted.sort((a, b) => {
-      if (sort === "newest") return Date.parse(b.createdAt) - Date.parse(a.createdAt);
-      if (sort === "oldest") return Date.parse(a.createdAt) - Date.parse(b.createdAt);
-      // title
-      return (a.title || "").localeCompare(b.title || "", "zh-Hans-CN");
-    });
-    return sorted;
-  }, [items, type, sort]);
+  // L-14: 客户端**不再二次过滤** —— 服务端已按 modality 过滤 (web 同款:
+  //   `const filteredItems = items;` — web library/page.tsx:221).
+  //   ⚠️ PC 的 DTO `type` 值域只有 image|doc|link (服务端把 modality=text 映射成 link),
+  //      客户端再按 `it.type === type` 过滤会把「文本」tab 的行全杀光.
+  const filteredItems: LibraryItem[] = items;
 
   const hasMore = data?.hasMore ?? false;
+
+  // L-28: 多选时把计数同步到全局顶栏 (web library/page.tsx:166-169 setHeaderTitle)
+  useEffect(() => {
+    if (!headerTitleApi) return;
+    headerTitleApi.setHeaderTitle(isInMultiSelect ? `已选 ${selectedIds.size} 项` : "知识库");
+    return () => headerTitleApi.setHeaderTitle(null);
+  }, [headerTitleApi, isInMultiSelect, selectedIds.size]);
 
   const handleRefresh = () => {
     setPage(1);
@@ -172,7 +201,7 @@ export function Library() {
     toast({ message: "已刷新", variant: "default" });
   };
 
-  // ────── 切 type/tag/keyword/sort → 重置分页 + 退出多选 ──────
+  // ────── 切 type/keyword → 重置分页 + 退出多选 ──────
   const resetFilters = () => {
     setPage(1);
     setItems([]);
@@ -284,14 +313,17 @@ export function Library() {
         <div className="sticky top-0 z-20 bg-bg-base/95 backdrop-blur pt-2 pb-4">
           {/* PC-6: 容器宽度对齐 web (max-w-3xl) — 跟 web L421/481/493 一致 */}
           <div className="px-4 lg:px-8 max-w-3xl mx-auto w-full space-y-2">
-            {/* Row 1: Tabs (左, 下划线变体 — 对齐 web) + [+ 新建] (中) + 排序 + 搜索 + 刷新 (右) */}
+            {/* Row 1: Tabs (左, 下划线变体 — 对齐 web) + 搜索 + 刷新 (右)
+                口径: web 顶栏只有 Tabs + 搜索 + 刷新 ⇒ PC 多出的「+ 新建」按钮 /
+                      SortMenu 排序菜单 / TagFilter 标签行 已删 */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex-1 min-w-0 overflow-x-auto scrollbar-none">
                 {/* PC-6: 改用 <Tabs variant="underline"> — 文字 + brand 下划线
-                     替代旧的实心橙药丸 (item 1). web Library L424-432 同款. */}
+                     替代旧的实心橙药丸 (item 1). web Library L424-432 同款.
+                     L-15: tab 带图标 (icon 插槽, Tabs.tsx 新增). */}
                 <Tabs
                   variant="underline"
-                  tabs={TYPE_CHIPS.map((t) => ({ key: t.key, label: t.label }))}
+                  tabs={TYPE_TABS.map((t) => ({ key: t.key, label: t.label, icon: t.icon }))}
                   activeKey={type}
                   onChange={(k) => {
                     setType(k as TypeFilter);
@@ -300,17 +332,8 @@ export function Library() {
                 />
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={() => setCollectOpen(true)}
-                  aria-label="新建条目"
-                >
-                  <PlusIcon />
-                  <span className="hidden sm:inline">新建</span>
-                </Button>
-                <SortMenu value={sort} onChange={setSort} />
-                {/* PC-6: 搜索按钮 toggle — 跟 web Library L437-445 同款圆药丸 icon 按钮 */}
+                {/* PC-6: 搜索按钮 toggle — 跟 web Library L437-445 同款圆药丸 icon 按钮
+                    L-06: 图标 16px → 20px (web `w-5 h-5`) */}
                 <button
                   type="button"
                   onClick={() => setShowSearch((v) => !v)}
@@ -323,7 +346,7 @@ export function Library() {
                       : "text-fg-muted hover:bg-bg-elevated",
                   ].join(" ")}
                 >
-                  <SearchIcon />
+                  <SearchIcon className="w-5 h-5" />
                 </button>
                 <button
                   type="button"
@@ -344,7 +367,10 @@ export function Library() {
                  需 `!rounded-full` 强制覆盖 */}
             {showSearch ? (
               <div className="relative pt-2">
-                <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted pointer-events-none z-10" />
+                {/* web 的搜索框前缀图标: absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4
+                    text-fg-muted pointer-events-none z-10 (web library/page.tsx:472)
+                    ⇒ 复用共享 <SearchFieldIcon> (自带前 5 个类), 补上后 2 个 */}
+                <SearchFieldIcon className="pointer-events-none z-10" />
                 <Input
                   type="search"
                   value={keyword}
@@ -358,15 +384,6 @@ export function Library() {
                 />
               </div>
             ) : null}
-
-            {/* Row 3: Tag 维度过滤 */}
-            <TagFilter
-              selected={tagFilter}
-              onSelect={(t) => {
-                setTagFilter(t);
-                resetFilters();
-              }}
-            />
           </div>
         </div>
 
@@ -375,7 +392,7 @@ export function Library() {
           {isLoading ? (
             <SkeletonGrid />
           ) : filteredItems.length === 0 ? (
-            <EmptyState onCreateClick={() => setCollectOpen(true)} search={keyword} />
+            <EmptyState search={keyword} />
           ) : (
             <>
               {/* PC-6: 单列行列表 + space-y-3 (item 3) — 对齐 web L516 */}
@@ -393,19 +410,28 @@ export function Library() {
                     onDelete={() => setPendingSingleDelete(it)}
                   />
                 ))}
+
+                {/* L-23: 「加载更多」改纯文字按钮 — web library/page.tsx:552-568 */}
+                {!keyword.trim() && hasMore ? (
+                  <div className="py-4 text-center">
+                    <button
+                      type="button"
+                      onClick={() => setPage((p) => p + 1)}
+                      disabled={isFetching}
+                      className="inline-flex items-center gap-2 text-sm text-fg-muted hover:text-fg disabled:opacity-50"
+                    >
+                      {isFetching ? (
+                        <SpinnerIcon className="w-4 h-4 animate-spin" />
+                      ) : (
+                        /* lucide `library` — 复用共享 Glyphs 的 LibraryTypeIcon
+                           (web library/page.tsx:563 同款 path) */
+                        <LibraryTypeIcon size={16} strokeWidth={2} className="w-4 h-4" />
+                      )}
+                      加载更多
+                    </button>
+                  </div>
+                ) : null}
               </div>
-              {!keyword.trim() && hasMore ? (
-                <div className="flex justify-center mt-4">
-                  <Button
-                    variant="ghost"
-                    size="md"
-                    loading={isFetching}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    加载更多
-                  </Button>
-                </div>
-              ) : null}
             </>
           )}
         </div>
@@ -444,12 +470,15 @@ export function Library() {
         />
       ) : null}
 
-      {/* 单条删除二次确认 */}
+      {/* 单条删除二次确认
+          L-74: 描述逐字对齐 web library/page.tsx:1250 —— 「移除」后面是**全角逗号**,
+                PC 之前是半角 ","
+          L-75: pending 时按钮内只剩 spinner (web 是文字换成 spinner) */}
       {pendingSingleDelete ? (
         <ConfirmDialog
           title="确定要删除这条吗?"
-          message={`「${pendingSingleDelete.title || "未命名"}」 将从知识库移除, 此操作不可撤销。`}
-          confirmLabel="删除"
+          message={`「${pendingSingleDelete.title || "未命名"}」 将从知识库移除，此操作不可撤销。`}
+          confirmLabel={singleDeleteMutation.isPending ? "" : "删除"}
           confirmVariant="danger"
           loading={singleDeleteMutation.isPending}
           onCancel={() => setPendingSingleDelete(null)}
@@ -476,32 +505,33 @@ export function Library() {
 }
 
 // ────────────────────────────────────────────────────────────
-// EmptyState — 无数据 + 「+ 新建」 CTA (gagaOS feedback #4)
+// EmptyState — 无数据占位 (2026-10-26 · L-17 / L-18)
 //
-// PC-6 (item 6): 对齐 web L1022-1027 空态形态
-//   - 旧: rounded-md bg-bg-sunken p-8 + icon 圆背景
-//   - 新: rounded-2xl border border-border bg-bg-elevated p-12 + 居中 icon
-//         (无圆背景, 跟 web 一致) + 标题 + 副文案 + 行动按钮
+//   web `library/page.tsx:512-525`:
+//     <Card className="border-0 shadow-none bg-card rounded-2xl">
+//       <CardContent className="p-10 text-center text-fg-muted">
+//         <Construction className="w-12 h-12 mx-auto text-fg-muted mb-4" />
+//         …标题 / 副文案…
+//   - PC 没有 Card/CardContent 组件 ⇒ 用两个 div 复刻同样的结构
+//   - ⚠️ `!shadow-none`: PC tailwind.config.ts 的 boxShadow 顺序里 `none` 在
+//     `DEFAULT` **之前** ⇒ `.shadow` 产物在后会盖过 `.shadow-none`
+//     ⇒ 必须用 `!` 前缀强制覆盖 (tailwind 3.4.19 支持 `!` 前缀).
+//   - 口径: web 空态**没有**行动按钮 ⇒ PC 多出的「+ 新建条目」按钮已删
+//     (采集入口 = 右下角 FAB, 跟 web 一致)
 // ────────────────────────────────────────────────────────────
 
-function EmptyState({ onCreateClick, search }: { onCreateClick: () => void; search: string }) {
+function EmptyState({ search }: { search: string }) {
   return (
-    <div className="h-full flex items-center justify-center">
-      <div className="rounded-2xl border border-border bg-bg-elevated p-12 text-center max-w-sm w-full">
-        <LibraryIcon className="w-12 h-12 mx-auto text-fg-muted mb-4" />
-        <p className="text-base font-medium mb-1 text-fg">{search ? "未找到匹配项" : "暂无知识库内容"}</p>
-        <p className="text-sm">
-          {search ? `没有标题或标签包含 "${search}" 的内容` : "上传图片 / 文档 / 链接后将自动同步到这里"}
-        </p>
-        <div className="mt-4">
-          <Button
-            variant="default"
-            size="md"
-            onClick={onCreateClick}
-          >
-            <PlusIcon />
-            新建条目
-          </Button>
+    <div className="rounded-2xl border-0 !shadow-none bg-card">
+      <div className="!p-10 text-center text-fg-muted">
+        <ConstructionIcon className="w-12 h-12 mx-auto text-fg-muted mb-4" />
+        <div className="text-base font-medium mb-1 text-fg">
+          {search ? "未找到匹配项" : "暂无知识库内容"}
+        </div>
+        <div className="text-sm">
+          {search
+            ? `没有标题或标签包含 "${search}" 的内容`
+            : "上传图片 / 文档 / 链接后将自动同步到这里"}
         </div>
       </div>
     </div>
@@ -521,32 +551,48 @@ function SkeletonGrid() {
 
 // ────────────────────────────────────────────────────────────
 // Icons
+//   PC 仓没有 lucide-react ⇒ 内联 svg, path 取自 web 用的 lucide-react v0.407.0
+//   (逐字照抄), svg 用 width/height="100%" ⇒ tailwind 的 w-4 / w-5 / w-12 生效
 // ────────────────────────────────────────────────────────────
 
-function LibraryIcon({ className = "" }: { className?: string }) {
+/** lucide `layout-grid` (tab「全部」) */
+function LayoutGridIcon({ className = "" }: { className?: string }) {
   return (
-    <svg
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M16 6 4 14" />
-      <path d="m12 8 8 4" />
-      <path d="M3 18a1 1 0 0 1 1 1v3a2 2 0 0 0 4 0v-3" />
-      <path d="M21 18a1 1 0 0 0-1 1v3a2 2 0 0 1-4 0v-3" />
-      <path d="M4 14v6" />
-      <path d="M20 14v6" />
+    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect width="7" height="7" x="3" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="14" rx="1" />
+      <rect width="7" height="7" x="3" y="14" rx="1" />
     </svg>
   );
 }
 
-// FabPlusIcon — FAB 用 (web CreateFab: ICON_CLASS = "w-[22px] h-[22px]", strokeWidth 2.2)
+/** lucide `construction` (空态图标, web library/page.tsx:515) */
+function ConstructionIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="2" y="6" width="20" height="8" rx="1" />
+      <path d="M17 14v7" />
+      <path d="M7 14v7" />
+      <path d="M17 3v3" />
+      <path d="M7 3v3" />
+      <path d="M10 14 2.3 6.3" />
+      <path d="m14 6 7.7 7.7" />
+      <path d="m8 6 8 8" />
+    </svg>
+  );
+}
+
+/** lucide `loader-2` (转圈, web 用 Loader2) */
+function SpinnerIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  );
+}
+
+/** FabPlusIcon — FAB 用 (web CreateFab: ICON_CLASS = "w-[22px] h-[22px]", strokeWidth 2.2) */
 function FabPlusIcon({ className = "" }: { className?: string }) {
   return (
     <svg
@@ -577,20 +623,15 @@ function RefreshIcon({ className = "" }: { className?: string }) {
   );
 }
 
-function SearchIcon({ className = "" }: { className?: string }) {
+/**
+ * lucide `search` — 搜索按钮 (20px, web library/page.tsx:455 `w-5 h-5`)
+ * ⚠️ 搜索框内的前缀图标复用共享 Glyphs 的 <SearchFieldIcon> (16px, 同样 path)
+ */
+function SearchIcon({ className = "", size = 20 }: { className?: string; size?: number }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <circle cx="11" cy="11" r="8" />
       <path d="m21 21-4.3-4.3" />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
     </svg>
   );
 }
