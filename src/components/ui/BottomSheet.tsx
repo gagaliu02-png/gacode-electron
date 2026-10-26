@@ -15,6 +15,8 @@
  * 2026-10-26 (对齐 web `SheetContent` — align-d-home H-29 / H-43 / H-46 / H-53 /
  * H-54 / S-05): 新增 3 个**可选** prop, 默认行为完全不变, 其它调用方零改动:
  *   - `contentClassName` — 覆盖容器 className (圆角 / 最大宽 / padding / 最大高)
+ *   - `titleClassName` — 覆盖内置标题 className (对齐 web `SheetTitle` =
+ *     `text-lg font-semibold`); 默认 undefined ⇒ 现有行为完全不变
  *   - `title` 改为可选 — undefined 时不渲染标题栏 (web 的 SheetContent 无标题栏)
  *   - `subtitle` — 标题下方的副标题 (web LibraryPicker 顶部副标题)
  *   - `header` — 固定在滚动区外的头部 (web EmojiPicker 的搜索框 + 分类 tab)
@@ -48,6 +50,14 @@ export interface BottomSheetProps {
   footer?: ReactNode;
   /** 内容区容器额外 className (覆盖圆角 / 最大宽 / padding / 最大高) */
   contentClassName?: string;
+  /**
+   * 内置标题的额外 className — 对齐 web `SheetTitle` (`text-lg font-semibold`).
+   * 默认 undefined ⇒ 现有调用方行为完全不变.
+   * ⚠️ 本仓无 tailwind-merge → 同名类由 **CSS 产物顺序** 决胜.
+   *    Tailwind 产物里 `.text-lg` 在 `.text-base` 之后、`.font-semibold` 在
+   *    `.font-medium` 之后 ⇒ 直接追加即可压过内置默认 (无需 `!` 前缀).
+   */
+  titleClassName?: string;
   /** 固定在滚动区外的头部 (搜索框 / 分类 tab 等) */
   header?: ReactNode;
   /**
@@ -66,6 +76,7 @@ export function BottomSheet({
   children,
   footer,
   contentClassName,
+  titleClassName,
   header,
   hideTitle = false,
 }: BottomSheetProps) {
@@ -112,7 +123,13 @@ export function BottomSheet({
         {!hideTitle && title ? (
           <div className="flex items-center justify-between mb-3 shrink-0">
             <div className="min-w-0">
-              <h2 className="text-base font-medium">{title}</h2>
+              <h2
+                className={["text-base font-medium", titleClassName]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                {title}
+              </h2>
               {subtitle ? (
                 <p className="text-xs text-fg-muted mt-0.5">{subtitle}</p>
               ) : null}

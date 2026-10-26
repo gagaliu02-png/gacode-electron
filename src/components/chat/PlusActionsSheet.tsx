@@ -93,8 +93,19 @@ export function PlusActionsSheet({ open, onClose, onAction }: PlusActionsSheetPr
   //   → PC 传 `title={undefined}`, 不渲染 BottomSheet 内置标题栏.
   //   网格 className 照抄 web (`gap-3 py-5 px-4`), 列数保持 3:
   //   PC 有 6 个动作 (web 只有 4 个), 改 4 列会排成 2 行半.
+  //   ⚠️ web 的 `py-5 px-4` 挂在 **SheetContent 自身**上 (base `p-6` 被 twMerge
+  //   掉) ⇒ PC 容器 base 的 `p-6` 必须让位, 否则内边距比 web 多一圈
+  //   (横 40px vs 16px / 纵 44px vs 20px).
+  //   → 容器加 `!p-0` (PC 无 tailwind-merge, 同名类由 CSS 产物顺序决胜 ⇒ 用
+  //   `!` 前缀强制压过 base `p-6`), 让内层 grid 的 `py-5 px-4` 成为唯一
+  //   内边距来源, 与 web 一致.
   return (
-    <BottomSheet open={open} title={undefined} onClose={onClose}>
+    <BottomSheet
+      open={open}
+      title={undefined}
+      onClose={onClose}
+      contentClassName="!p-0"
+    >
       <div className="grid grid-cols-3 gap-3 py-5 px-4" data-testid="plus-actions-sheet">
         {ACTIONS.map((a) => (
           <button

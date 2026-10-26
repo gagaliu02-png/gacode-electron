@@ -447,10 +447,11 @@ export function ChatList() {
       </div>
       </div>
 
-      {/* 批量删除确认 — 底部 Sheet (A1-D4-01, 对齐 web `chat/page.tsx:279-310`) */}
+      {/* 批量删除确认 — 底部 Sheet (A1-D4-01, 对齐 web `chat/page.tsx:279-310`) — 标题 titleClassName 对齐 web SheetTitle (text-lg font-semibold) */}
       <BottomSheet
         open={confirmOpen}
         title={`确认删除 ${multiSelectIds.size} 条对话？`}
+        titleClassName="text-lg font-semibold"
         onClose={() => setConfirmOpen(false)}
         footer={
           <>
@@ -490,10 +491,11 @@ export function ChatList() {
         />
       ) : null}
 
-      {/* 重命名 — 底部 Sheet (A1-D4-02, 对齐 web `chat/page.tsx:314-358`) */}
+      {/* 重命名 — 底部 Sheet (A1-D4-02, 对齐 web `chat/page.tsx:314-358`) — 标题 titleClassName 对齐 web SheetTitle (text-lg font-semibold) */}
       <BottomSheet
         open={renameForId !== null}
         title="重命名对话"
+        titleClassName="text-lg font-semibold"
         onClose={() => setRenameForId(null)}
         footer={
           <>
