@@ -16,7 +16,6 @@
  *   - /translate /summary   → 插入中文模板文本 "请把以下内容翻译成中文:\n..."
  *   - /save                 → 把当前 assistant 最后一条消息保存到知识库 (parent
  *                            触发 createLibraryItem)
- *   - /favorite             → toast 占位
  *   - /voice                → toast 占位 (chat-id-26 已划 later)
  *
  * 容器: 自实现 fixed-position 浮层 (在 ChatInputBar 上方). 不引 Radix Popover,
@@ -37,7 +36,6 @@ export type SlashCommand =
   | "translate"
   | "summary"
   | "save"
-  | "favorite"
   | "camera"
   | "knowledge"
   | "voice";
@@ -63,7 +61,6 @@ const COMMANDS: CommandSpec[] = [
   { cmd: "translate", label: "翻译", description: "插入翻译模板", glyph: "🌐", supported: true, kind: "insert" },
   { cmd: "summary", label: "总结", description: "插入总结模板", glyph: "📝", supported: true, kind: "insert" },
   { cmd: "save", label: "保存", description: "把最近 AI 回复保存到知识库", glyph: "💾", supported: true, kind: "action" },
-  { cmd: "favorite", label: "收藏", description: "收藏这条对话", glyph: "⭐", supported: false, kind: "insert" },
   { cmd: "camera", label: "拍照", description: "用相机拍一张图", glyph: "📷", supported: true, kind: "action" },
   { cmd: "knowledge", label: "挂载知识库", description: "在消息里挂载知识库条目", glyph: "📚", supported: true, kind: "action" },
   { cmd: "voice", label: "语音", description: "用语音输入", glyph: "🎙", supported: false, kind: "insert" },

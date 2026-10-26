@@ -80,7 +80,6 @@ import {
   renameChat,
   setSessionPin,
   autoTitleSession,
-  listSessionDeliverables,
   createLibraryItem,
   createChat,
   type ChatMessage,
@@ -135,7 +134,6 @@ import { MoreIcon, PlusIcon } from "../components/ui/Glyphs";
 
 // 0.7.5 ChatDetail P1 增量 — 新组件
 import { ChatTopBanner } from "../components/chat/ChatTopBanner";
-import { DeliverableStrip } from "../components/chat/DeliverableStrip";
 import { ModelChips } from "../components/chat/ModelChips";
 import type { CallTreeNode } from "../components/chat/CallTreeCard";
 import type { ExecutionPhase } from "../components/chat/ExecutionTimeline";
@@ -890,14 +888,6 @@ export function ChatDetail() {
     return () => window.clearTimeout(t);
   }, [chatId, historyQuery.data, historyQuery.isLoading, currentChat, queryClient]);
 
-  // ────────────── chat-id-29 Session 交付物 (供 DeliverableStrip 用) ──────────────
-  const deliverablesQuery = useQuery({
-    queryKey: ["deliverables", chatId],
-    queryFn: () => listSessionDeliverables(chatId!, 20),
-    enabled: !!chatId,
-    staleTime: 30_000,
-  });
-
   // ────────────── 渲染 ──────────────
 
   if (!chatId) {
@@ -944,7 +934,13 @@ export function ChatDetail() {
         }
         return next;
       });
-      // A2-D3-02 — 把知识库 marker 注入输入框 (server 未识别 knowledge_refs 时的兜底通道)
+      // A2-D3-02 — 把知识库 marker 注入输入框
+      //   2026-10-26 订正: 「server 未识别 knowledge_refs」是**过期事实** —— 服务端自 2026-10-14 起
+      //   已支持该字段 (unified-api yinian.chat.routes.js:405 schema + :1366-1389 取 atom 原文注入上下文)。
+      //   但 PC **发送侧不发** knowledge_refs (src/lib/sse.ts:149-156 只发 image_urls + attached_file_ids),
+      //   web 发 (gacode-web/src/lib/api.ts:797-799 + chat/[id]/page.tsx:763-768)
+      //   ⇒ 在 PC 上 marker 是**唯一**通道, 不再只是「兜底」。
+      //   该差异 owner = 总PM (服务端解析口径落定后 PC 再补该字段) —— 本批**不实现**, 仅订正注释。
       //   对齐 web `src/app/(main)/chat/[id]/page.tsx:1124-1129` (chatInputRef.insertText
       //   → 多个 marker 换行分隔, 用户后续可在输入框编辑).
       //   PC 的 ChatInputBar handle 暴露 insertText (与 insertEmoji 同实现, 按光标插入)。
@@ -1104,7 +1100,7 @@ export function ChatDetail() {
   //   - clear              → 已由 ChatInputBar 自处理 (清 chips)
   //   - image / file / camera / knowledge → 0.7.5 hotfix 2: 路由到 handlePlusAction,
   //     跟 `+` 按钮流程同源 (触发 file input 或弹对应 sheet).
-  //   - search / template / favorite / voice → 保留 no-op / SlashMenu 自带 supported=false 占位
+  //   - search / template / voice → 保留 no-op / SlashMenu 自带 supported=false 占位
   //   - new → 触发 createChat + navigate 到新 chat
   //   - save → 把最近一条 assistant 消息保存到知识库 (chat-id-15 fallback 路径)
   const handleSlashCommand = useCallback(
@@ -1160,7 +1156,6 @@ export function ChatDetail() {
         }
         case "search":
         case "template":
-        case "favorite":
         case "voice":
         case "clear":
         case "translate":
@@ -1272,9 +1267,6 @@ export function ChatDetail() {
         }
       />
 
-      {/* 0.7.5 chat-id-29: Session 交付物缩略条 (卡片跳交付详情 — chat-id-32) */}
-      <DeliverableStrip items={deliverablesQuery.data?.items ?? []} />
-
       {/* gagaOS §② — 知识库挂载 chip — 对齐 web chat/[id]/page.tsx:1311-1331:
           brand-cyan 描边 chip + 逐条可移除 */}
       {pendingKnowledgeRefs.length > 0 ? (
@@ -1311,6 +1303,9 @@ export function ChatDetail() {
           外层容器对齐 web ChatInput.tsx:63-84 — 底边线 + p-4 + bg-background, 内部限宽居中. */}
       <div className="border-t border-border p-4 bg-background">
         <div className="max-w-3xl mx-auto">
+          {/* H-16 (对齐 web): web 的 chat 页**没有**「部分附件上传失败」这条 toast ——
+              它只存在于 web 的 Home 页 ⇒ PC chat 页也不接 onSubmitNotice.
+              (上传中拦截因此回落到上面的 onAttachmentError, 与改动前行为一致.) */}
           <ChatInputBar
             ref={inputBarRef}
             isStreaming={isStreaming}
@@ -1323,7 +1318,6 @@ export function ChatDetail() {
             onAttachmentError={(msg) =>
               toast({ message: `上传失败: ${msg}`, variant: "danger" })
             }
-            onSubmitNotice={(message, variant) => toast({ message, variant })}
           />
         </div>
       </div>

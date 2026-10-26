@@ -2,7 +2,8 @@
  * components/home/LibraryPicker.tsx — Home 页 知识库条目挂载选择器
  *
  * 对齐 web `src/components/chat/LibraryPicker.tsx`:
- *   - 顶部标题「选择知识库」+ 副标题「可多选, 点完成提交」(H-54)
+ *   - 顶部标题「选择知识库」+ 副标题 (多选「可多选, 点完成提交」/ 单选「选中后将插入到消息」)
+ *     —— **自绘一行** (副标题在标题同行右), 走 BottomSheet 的 header 通道 (H-54)
  *   - 顶部搜索 + 类型 tab (全部 / 图片 / 文档 / 链接)
  *   - listLibrary 拿数据, 前端二次过滤 (按 title)
  *   - 单选: 点 row → onSelect(item) → parent 关闭 sheet
@@ -146,20 +147,35 @@ export function LibraryPicker({ open, onClose, onSelect, onConfirm }: LibraryPic
     //   web SheetContent className 含 `max-h-[80vh]` (PC 的 BottomSheet base 是 85vh)
     <BottomSheet
       open={open}
-      // H-54 (对齐 web `components/chat/LibraryPicker.tsx:166-173`):
-      //   标题「选择知识库」+ 副标题 (多选模式「可多选, 点完成提交」/ 单选模式
-      //   「选中后将插入到消息」) —— web 把这一行放在自己内容区的头部
-      //   (`flex items-center justify-between`), PC 用 BottomSheet 的内置
-      //   title/subtitle 承载 (副标题落在标题下一行, 见 BottomSheet 注释).
+      // H-54 (对齐 web `components/chat/LibraryPicker.tsx:165-173`):
+      //   web 的「标题 + 副标题」是**自绘**的一行 (`flex items-center justify-between`,
+      //   副标题在标题**同行右侧**), 画在自己内容区的头部容器里 ——
+      //   不是 BottomSheet 的内置 title/subtitle (内置的副标题落在标题**下一行**).
+      //   ⇒ 这里 title 只作 aria-label, hideTitle 不画内置标题栏 ⇒ 走 web
+      //     `components/ui/sheet.tsx:102-109` 的右上角绝对定位 X.
       title="选择知识库"
-      subtitle={onConfirm ? "可多选, 点完成提交" : "选中后将插入到消息"}
+      hideTitle
       onClose={handleClose}
       maxHeight="max-h-[80vh]"
-      // 搜索 + 类型 tab 固定在滚动区外 —— 对齐 web 的
+      // 对齐 web `components/chat/LibraryPicker.tsx:162`:
+      //   web SheetContent className = `bg-bg-elevated flex flex-col gap-0 p-0 max-h-[80vh]`
+      //   ⇒ `!p-0` 压过 BottomSheet base 的 `p-6` (内边距改由头部 / 列表 / footer
+      //     各自承担, 与 web 的 px-4 对齐); `!gap-0` 显式声明 (base 目前无 gap 类).
+      contentClassName="!p-0 !gap-0"
+      // 标题行 + 搜索 + 类型 tab 固定在滚动区外 —— 对齐 web 的
       // 「头部固定 (`components/chat/LibraryPicker.tsx:165-207`) + 列表独立滚动
       // (`:210` flex-1 overflow-y-auto)」结构 (走 BottomSheet 的 header prop).
       header={
-        <div className="px-1 pt-1 pb-3 border-b border-border space-y-2">
+        // web `components/chat/LibraryPicker.tsx:165-207`:
+        //   头部容器 `px-4 pt-5 pb-3 border-b border-border space-y-3`
+        //   → ① 标题行 (标题 + 副标题同行右) ② 搜索框 ③ 类型 tab
+        <div className="px-4 pt-5 pb-3 border-b border-border space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-medium">选择知识库</h3>
+            <span className="text-xs text-fg-muted">
+              {onConfirm ? "可多选, 点完成提交" : "选中后将插入到消息"}
+            </span>
+          </div>
           <div className="relative">
             <SearchFieldIcon />
             <input
@@ -194,27 +210,34 @@ export function LibraryPicker({ open, onClose, onSelect, onConfirm }: LibraryPic
       }
       footer={
         onConfirm ? (
-          <button
-            type="button"
-            onClick={handleConfirm}
-            data-testid="library-picker-confirm"
-            disabled={pendingSelected.size === 0}
-            className={[
-              "w-full inline-flex items-center justify-center gap-2",
-              "rounded-md py-2.5 text-sm font-medium transition-colors",
-              "focus:outline-none focus:ring-1 focus:ring-brand",
-              pendingSelected.size === 0
-                ? "bg-bg-sunken text-fg-subtle cursor-not-allowed"
-                : "bg-brand text-brand-on hover:bg-brand/90",
-            ].join(" ")}
-          >
-            完成 ({pendingSelected.size})
-          </button>
+          // web `components/chat/LibraryPicker.tsx:300-320` 的 footer 容器是
+          //   `px-4 py-3 border-t border-border bg-bg-elevated` —— BottomSheet 的
+          //   footer 容器已带 `border-t` + `pt-3` (顶部 12px), 这里补 `px-4 pb-3`
+          //   (左右 16px + 底部 12px) ⇒ 与 web 的 py-3 完全一致.
+          <div className="w-full px-4 pb-3">
+            <button
+              type="button"
+              onClick={handleConfirm}
+              data-testid="library-picker-confirm"
+              disabled={pendingSelected.size === 0}
+              className={[
+                "w-full inline-flex items-center justify-center gap-2",
+                "rounded-md py-2.5 text-sm font-medium transition-colors",
+                "focus:outline-none focus:ring-1 focus:ring-brand",
+                pendingSelected.size === 0
+                  ? "bg-bg-sunken text-fg-subtle cursor-not-allowed"
+                  : "bg-brand text-brand-on hover:bg-brand/90",
+              ].join(" ")}
+            >
+              完成 ({pendingSelected.size})
+            </button>
+          </div>
         ) : null
       }
     >
-      {/* 列表 */}
-      <div className="py-2">
+      {/* 列表 — 对齐 web `components/chat/LibraryPicker.tsx:210`
+          `flex-1 overflow-y-auto px-4 py-3` (滚动容器由 BottomSheet 提供) */}
+      <div className="px-4 py-3">
         {query.isLoading ? (
           <div className="flex flex-col items-center justify-center py-12 gap-2">
             <span className="gagaos-spinner" aria-hidden="true" />

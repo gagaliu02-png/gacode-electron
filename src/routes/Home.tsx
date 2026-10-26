@@ -114,8 +114,12 @@ export function Home() {
       navigate(`/chat/${chat.id}`);
     },
     onError: (err) => {
+      // H-69 (对齐 web `app/page.tsx:76-82`): 两段式 toast ——
+      //   title 固定「创建对话失败」, description 放原始错误 (不再拼进 title,
+      //   避免出现「创建对话失败: ...」的前缀式单行文案).
       toast({
-        message: `创建对话失败: ${err instanceof Error ? err.message : String(err)}`,
+        title: "创建对话失败",
+        description: err instanceof Error ? err.message : String(err),
         variant: "danger",
       });
     },
@@ -224,6 +228,25 @@ export function Home() {
     [toast],
   );
 
+  // ────────────── 提交前提示 (H-15 / H-16) ──────────────
+  //
+  // 对齐 web `app/page.tsx:219-234`: HOME 页的这两条提示都是 **title + description
+  // 两段式** toast ——
+  //   ① 上传中拦截 (variant "default"): title「附件还在上传中」/ description「请稍候几秒再发送」
+  //   ② 部分失败仍可发送 (variant "warning"): title「部分附件上传失败」/ description「已移除失败项, 正在发送其余内容」
+  // ⚠️ 只有 Home 接这个 prop —— web 也只有 Home 页有这两条 toast (chat 页没有);
+  //    chat 页不接 ⇒ ChatInputBar 回落到 onAttachmentError (保持 chat 页既有提示).
+  const handleSubmitNotice = useCallback(
+    (
+      title: string,
+      variant: "default" | "warning",
+      description?: string,
+    ) => {
+      toast({ title, description, variant });
+    },
+    [toast],
+  );
+
   // ────────────── MediaPicker.onCapture — 图片来源 / 文件 接线 ──────────────
   //
   // 0.7.6 P0 (Home MediaPicker 接线, ddcc6cd 留 bug): 早期实现是 no-op 空函数
@@ -268,9 +291,12 @@ export function Home() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg === "aborted" || msg.includes("aborted")) return;
-        // uploadAttachment 内部 humanizeUploadError 已输出人话 (例如 "图片上传失败: ..."),
-        // 这里直接透传, 不再加 "上传失败: " 前缀 — 跟 handleAttachmentError 同款.
-        toast({ message: msg, variant: "danger" });
+        // H-42 (对齐 web `app/page.tsx:120-127`): 两段式 toast ——
+        //   title 固定「上传失败」, description 放原始 msg.
+        // ⚠️ uploadAttachment 内部 humanizeUploadError 已输出人话 (例如 "图片上传失败: ..."),
+        //   这里**不再**加 "上传失败: " 前缀 —— 前缀现在是 title, 直接进 description
+        //   不会出现「上传失败: 图片上传失败: ...」双前缀.
+        toast({ title: "上传失败", description: msg, variant: "danger" });
       }
     },
     [mediaKind, toast],
@@ -287,12 +313,13 @@ export function Home() {
     setEmojiOpen(false);
   }, []);
 
-  // 知识库多选确认 — 对齐 web Home 的多选形态 (align-d-home.md H-51).
-  //   逐条注入 `@[library:id] title` marker 到 textarea (insertLibraryMarker 带分隔符).
-  const handleLibraryConfirm = useCallback((items: LibraryItem[]) => {
-    for (const item of items) {
-      inputBarRef.current?.insertLibraryMarker?.(item.id, item.title);
-    }
+  // 知识库单选 — 对齐 web Home 的 `onSelect` (web `app/page.tsx:399-408`):
+  //   web Home 走的是 LibraryPicker 的**旧单选兼容路径** —— 点行即把
+  //   `@[library:id] title` marker 插进输入框并关面板 (不是多选 + 底部「完成」按钮).
+  //   marker 文本与分隔符规则跟 web 逐字一致 (见 ChatInputBar.insertLibraryMarker:
+  //   前面不是空白就补一个空格分隔).
+  const handleLibrarySelect = useCallback((item: LibraryItem) => {
+    inputBarRef.current?.insertLibraryMarker?.(item.id, item.title);
     setLibraryOpen(false);
   }, []);
 
@@ -342,6 +369,10 @@ export function Home() {
             }}
             onSubmit={handleSubmit}
             onAttachmentError={handleAttachmentError}
+            // H-15 / H-16 (对齐 web `app/page.tsx:219-234`): HOME 页的
+            //   「附件还在上传中」(default) 与「部分附件上传失败」(warning)
+            //   两条两段式 toast —— 之前 Home 没接这个 prop ⇒ 永远不弹.
+            onSubmitNotice={handleSubmitNotice}
             onPlusClick={() => setPlusOpen(true)}
             // H-23 (对齐 web `app/page.tsx:367`): web Home 传
             //   `placeholder="说点什么…"`; PC 不传会显示自己的长提示
@@ -374,7 +405,10 @@ export function Home() {
       <LibraryPicker
         open={libraryOpen}
         onClose={() => setLibraryOpen(false)}
-        onConfirm={handleLibraryConfirm}
+        // H-51 (对齐 web `app/page.tsx:399-408`): web Home 走**单选** (onSelect,
+        //   点行即插 marker 并关面板) —— PC Home 之前传 onConfirm (多选 + 底部
+        //   「完成」按钮), 比 web 多一个形态 ⇒ 改回单选.
+        onSelect={handleLibrarySelect}
       />
     </div>
   );

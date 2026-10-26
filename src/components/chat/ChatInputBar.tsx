@@ -148,9 +148,15 @@ export interface ChatInputBarProps {
   onAttachmentError?: (msg: string) => void;
   /**
    * 提交前提示 (上传中拦截 / 部分失败仍可发送).
-   * message 已含全部信息, variant 由 parent 决定 (PC Toast 无 title/description 双字段).
+   * 两段式 title + description —— 对齐 web `app/page.tsx:219-234` 的
+   * toast({ title, description, variant }) (PC Toast 已支持双字段, S-04 已结案).
+   * ⚠️ 只有 Home 页接这个 prop —— web 也只有 Home 有这两条 toast (chat 页没有).
    */
-  onSubmitNotice?: (message: string, variant: "default" | "warning") => void;
+  onSubmitNotice?: (
+    title: string,
+    variant: "default" | "warning",
+    description?: string,
+  ) => void;
   /**
    * textarea placeholder — 不传时按 web 默认推导:
    * 流式 "AI 正在回复..." / 空闲 "说点什么… (Enter 发送，Shift+Enter 换行)".
@@ -175,7 +181,7 @@ export interface ChatInputBarProps {
   /** chat-id-25: slash 命令菜单 — 接收 cmd 后 ChatInputBar 自动清除 '/' 前缀.
    *  ChatDetail 自实现 image/file/camera/knowledge 的真实行为 (走 PlusActionsSheet),
    *  translate/summary 仍由 ChatInputBar 自动插入中文模板到 textarea.
-   *  其余 (search/template/favorite/voice) 默认 toast 占位. */
+   *  其余 (search/template/voice) 默认 toast 占位. */
   onSlashCommand?: (cmd: SlashCommand) => void;
   /**
    * 0.7.5 hotfix 2 — `+` 按钮回调 (gagaOS 2026-10-20 反馈).
@@ -470,8 +476,18 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
       const hasError = attachments.some((x) => x.kind === "error");
 
       // F-02 / H-15 — 上传中点发送: 弹提示并 return, 附件**不**清空 (否则用户以为发出去了)
+      //   对齐 web `app/page.tsx:219-226`:
+      //     toast({ title: "附件还在上传中", description: "请稍候几秒再发送",
+      //             variant: "default" }) + return (**不发送**).
+      //   Home 接 onSubmitNotice ⇒ 拿到 web 的两段式 + default 变体;
+      //   chat 页没接 (web chat 页也没这两条 toast) ⇒ 回落到 onAttachmentError,
+      //   保持 chat 页既有的提示不变 (共享组件带来的既有行为, 不在本批范围).
       if (hasUploading) {
-        onAttachmentError?.("附件还在上传中, 请稍候几秒再发送");
+        if (onSubmitNotice) {
+          onSubmitNotice("附件还在上传中", "default", "请稍候几秒再发送");
+        } else {
+          onAttachmentError?.("附件还在上传中, 请稍候几秒再发送");
+        }
         return;
       }
 
@@ -490,10 +506,14 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
         }));
 
       // H-16 — 部分附件失败仍可发送, 给个 warning 提示 (失败项不带走)
+      //   对齐 web `app/page.tsx:228-234` 的两段式 toast:
+      //     title "部分附件上传失败" / description "已移除失败项, 正在发送其余内容"
+      //     / variant "warning".
       if (hasError) {
         onSubmitNotice?.(
-          "部分附件上传失败, 已移除失败项, 正在发送其余内容",
+          "部分附件上传失败",
           "warning",
+          "已移除失败项, 正在发送其余内容",
         );
       }
 
@@ -536,7 +556,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
         // 已输完 cmd + 空格 — 自动触发 (用户连打 "/image " 一气呵成)
         const cmdStr = rest.slice(0, spaceIdx).toLowerCase();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const known = ["image", "file", "search", "new", "clear", "template", "translate", "summary", "save", "favorite", "camera", "knowledge", "voice"];
+        const known = ["image", "file", "search", "new", "clear", "template", "translate", "summary", "save", "camera", "knowledge", "voice"];
         if (known.includes(cmdStr)) {
           // 清掉整段 "/cmd " 前缀
           const remaining = text.slice(1 + spaceIdx + 1);
