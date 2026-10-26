@@ -123,7 +123,14 @@ export function EmojiPicker({ open, onClose, onSelect }: EmojiPickerProps) {
   };
 
   return (
-    <BottomSheet open={open} title="选择表情" onClose={handleClose}>
+    // 2026-10-26 对齐 web `components/chat/EmojiPicker.tsx:133`:
+    //   web SheetContent className 含 `max-h-[70vh]` (PC 的 BottomSheet base 是 85vh)
+    <BottomSheet
+      open={open}
+      title="选择表情"
+      onClose={handleClose}
+      maxHeight="max-h-[70vh]"
+    >
       {/* 顶部搜索 + 分类 */}
       <div className="px-4 pt-5 pb-3 border-b border-border space-y-3">
         <div className="relative">

@@ -732,7 +732,12 @@ export function LinkTypeIcon({ className, size = 20, strokeWidth = 1.6 }: GlyphP
       strokeWidth={strokeWidth}
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={["w-5 h-5 text-brand-cyan", className].filter(Boolean).join(" ")}
+      // 2026-10-26 对齐 web `components/chat/LibraryPicker.tsx:57` 的 `text-cron`.
+      // ⚠️ PC 仓**没有** cron 紫 token (web 的 --cron: #a78bfa 属 web 私有 token,
+      //    PC 的 globals.css / tailwind.config.ts 都无对应项) ⇒ 取 PC 体系里
+      //    语义最接近的现有 token `brand-green` (#198754):
+      //    它正是 web 自己在 `app/(main)/library/page.tsx:124` 给 link 类型图标用的颜色.
+      className={["w-5 h-5 text-brand-green", className].filter(Boolean).join(" ")}
     >
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
       <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
@@ -751,6 +756,8 @@ export function LinkTypeIcon({ className, size = 20, strokeWidth = 1.6 }: GlyphP
  *    (同本文件顶部约定「同名不同形 → 分开导出」):
  *    - `ImageTypeIcon` = 20×20 / sw1.6 / className 注入 `w-5 h-5 text-brand-cyan`
  *    - `DocTypeIcon`   = 20×20 / sw1.6 / className 注入 `w-5 h-5 text-brand`
+ *    - `LinkTypeIcon`  = 20×20 / sw1.6 / className 注入 `w-5 h-5 text-brand-green`
+ *      (web LibraryPicker 用 `text-cron` 紫, PC 无该 token ⇒ 取 PC 的 brand-green)
  *    - 本文件 `ImageIcon` / `FileTextIcon` = 12×12 / sw2 / className 原样透传
  *    合并会改视觉 (PC 无 tailwind-merge → `.w-5` 产物顺序在 `.w-3` 之后会赢)
  */

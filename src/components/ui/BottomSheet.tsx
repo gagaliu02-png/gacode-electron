@@ -29,6 +29,9 @@
  *     + shadow-elevation-3 + p-6 + max-h-[85vh] (web sheet.tsx:69-74 / :94-97)
  *     —— 影响所有调用方 (不再是最多 672px 宽的居中卡片).
  *   - 新增 `hideTitle?: boolean` — 传了 title 也不画标题栏 (web sheet 无标题栏)
+ *   - 新增 `maxHeight?: string` — 覆盖容器最大高 (web 三个 sheet 各不相同:
+ *     EmojiPicker 70vh / LibraryPicker 80vh / 通用 85vh). 传了就**不输出**
+ *     base 的 `max-h-[85vh]` ⇒ 结果与 CSS 产物顺序无关 (详见 prop 注释)
  *   - ESC 关闭 + body 滚动锁 (web sheet.tsx:44-56)
  *   - ⚠️ **没加** `animate-slide-in-from-bottom`: PC globals.css 全局禁用
  *     animation/transition (`animation: none !important`), 加了也是死的.
@@ -66,6 +69,21 @@ export interface BottomSheetProps {
    * 只是不画标题栏那一行.
    */
   hideTitle?: boolean;
+  /**
+   * 覆盖容器最大高 (Tailwind class, 如 `max-h-[70vh]`) — 对齐 web 三个 sheet
+   * 各不相同的最大高:
+   *   - EmojiPicker   `max-h-[70vh]`  (web components/chat/EmojiPicker.tsx:133)
+   *   - LibraryPicker `max-h-[80vh]`  (web components/chat/LibraryPicker.tsx:162)
+   *   - 通用 sheet    `max-h-[85vh]`  (web components/ui/sheet.tsx:73)
+   *
+   * ⚠️ 本仓无 tailwind-merge → 同名类由 **CSS 产物顺序** 决胜, 不可靠.
+   *    实测 (tailwind 3.4.19 + 本仓 tailwind.config.ts) 产物里
+   *    `.max-h-[70vh]` (line 557) **早于** `.max-h-[85vh]` (line 565)
+   *    ⇒ 若两处都输出, **base 的 85vh 赢**, 调用点传的 70vh 会被盖掉.
+   *    ⇒ 这里改成「**传了 maxHeight 就不输出 base 的 max-h-[85vh]**」,
+   *      结果与 CSS 产物顺序完全无关, 不会被 base 盖掉.
+   */
+  maxHeight?: string;
 }
 
 export function BottomSheet({
@@ -79,6 +97,7 @@ export function BottomSheet({
   titleClassName,
   header,
   hideTitle = false,
+  maxHeight,
 }: BottomSheetProps) {
   // ESC 关闭 + body 滚动锁 (对齐 web sheet.tsx:44-56)
   // ⚠️ hook 必须在 `if (!open) return null` 之前 — 早退会跳过后续 hook.
@@ -113,10 +132,14 @@ export function BottomSheet({
           shadow-elevation-3 + gap-4 + p-6) 与 `sheet.tsx:69-74` (bottom:
           inset-x-0 bottom-0 max-h-[85vh] rounded-t-2xl).
           ⚠️ PC 无 tailwind-merge → 同名类由 CSS 产物顺序决胜, 调用方要覆盖
-          base class 请带 `!` 前缀 (见文件头注释). */}
+          base class 请带 `!` 前缀 (见文件头注释).
+          max-h 走**独立 prop** (`maxHeight`): 传了就**不输出** base 的
+          max-h-[85vh] —— 因为实测产物里 .max-h-[70vh] 早于 .max-h-[85vh],
+          两处同时输出时 base 会赢 (见 BottomSheetProps.maxHeight 注释). */}
       <div
         className={[
-          "relative w-full inset-x-0 bottom-0 max-h-[85vh] rounded-t-2xl bg-bg-elevated text-fg shadow-elevation-3 flex flex-col p-6",
+          "relative w-full inset-x-0 bottom-0 rounded-t-2xl bg-bg-elevated text-fg shadow-elevation-3 flex flex-col p-6",
+          maxHeight ?? "max-h-[85vh]",
           contentClassName ?? "",
         ].join(" ")}
       >

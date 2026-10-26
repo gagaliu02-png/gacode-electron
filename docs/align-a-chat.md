@@ -781,8 +781,8 @@ function SkeletonList() {
 | 项 | 值 |
 |---|---|
 | web | `src/components/ui/button.tsx:6, 17-22` |
-| PC | `src/components/ui/Button.tsx:75` |
-| 判定 | 已一致 |
+| PC | `src/components/ui/Button.tsx:76` |
+| 判定 | 形态不同（2026-10-26 本批已按 web 改齐 → 最终状态：已一致） |
 
 **web 源码**
 ```tsx
@@ -797,15 +797,21 @@ size: {
 },
 ```
 
-**当前 PC 源码**（`src/components/ui/Button.tsx:75`）
+**当前 PC 源码**（`src/components/ui/Button.tsx:76-77`，2026-10-26 改齐后）
 
 ```tsx
-        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium",
+        "inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium",
+        "transition-colors",
 ```
 
 **怎么改**
-- 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
-- 备注：PC base 额外带 `gap-2`（spinner 与文字间距）+ `duration-150`，是 web base 的**超集**，不改变 web 已有的视觉
+- **改前**：PC base 比 web 多 `gap-2` + `duration-150` ⇒ 判定「形态不同」。
+- **本批已改**（2026-10-26，`src/components/ui/Button.tsx:76-77`）：
+  1. 去掉 base 的 `gap-2` —— web base 没有这一层。
+  2. 去掉 base 的 `duration-150` —— Tailwind `transition-colors` 默认时长本来就是 150ms，且 PC `globals.css` 全局禁 transition（`transition-duration: 0s !important`）⇒ 删除**零视觉变化**。
+  3. base **不加** `text-sm`：PC 的 size 档自带字号（sm=`text-xs` / md、lg=`text-sm`），Tailwind 产物里 `.text-sm` 在 `.text-xs` 之后 ⇒ base 加 `text-sm` 会盖掉 sm 档。
+- **影响面**（全仓 30 处 `<Button>` 调用点已逐个核过）：只有 5 处是「图标 + 文字」双子元素 —— ① `AppShell.tsx:383` 登出（自带 `gap-2`）② `ChatList.tsx:382` 新建对话（自带 `gap-2`）③ `ChatList.tsx:350` 全选/清空（自带 `gap-1.5`）④ `ChatList.tsx:367` 删除（自带 `gap-1.5`）⑤ `Notifications.tsx:245` 全部已读（自带 `gap-1.5`）。③⑤ 原先被 base 的 `gap-2` 盖住 `gap-1.5`（Tailwind 产物里 `.gap-1.5` 早于 `.gap-2`）⇒ 改后按 web 的 `gap-1.5` 渲染，**由「不一致」变一致**；①② 自带 `gap-2`，与 web 同款，不受影响；其余 25 处是「纯图标」或「纯文字」，gap 不参与布局。
+- **最终状态**：已一致（base 与 web `button.tsx:6` 逐字等价；`variant` 名 `danger` ↔ web `destructive` **不改**，见 A1-D2-06）。
 
 ---
 
@@ -2860,8 +2866,8 @@ className={cn(
 | 项 | 值 |
 |---|---|
 | web | `src/components/chat/SheetActionMenu.tsx:74` |
-| PC | `src/components/chat/PlusActionsSheet.tsx:109` |
-| 判定 | 已一致（列数保持 3 是 PC 增强：PC 有 6 个动作，web 只有 4 个） |
+| PC | `src/components/chat/PlusActionsSheet.tsx:79` |
+| 判定 | 形态不同（2026-10-26 本批已按 web 改齐 → 最终状态：已一致） |
 
 **web 源码**
 ```tsx
@@ -2871,14 +2877,21 @@ className={cn(
   className="rounded-t-2xl grid grid-cols-4 gap-3 py-5 px-4 border-x-0"
 >
 ```
-**当前 PC 源码**（`src/components/chat/PlusActionsSheet.tsx:109`）
+**当前 PC 源码**（`src/components/chat/PlusActionsSheet.tsx:79`，2026-10-26 改齐后）
 
 ```tsx
-      <div className="grid grid-cols-3 gap-3 py-5 px-4" data-testid="plus-actions-sheet">
+      <div className="grid grid-cols-4 gap-3 py-5 px-4" data-testid="plus-actions-sheet">
 ```
 
 **怎么改**
-- 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
+- **改前**：PC 是 **6 项**（web 4 项）+ `grid-cols-3` ⇒ 判定「形态不同」。
+- **本批已改**（2026-10-26，`src/components/chat/PlusActionsSheet.tsx`）：
+  1. **项数 6 → 4**：删掉 PC 多出的「**拍照**」（相机图标）与「**模板**」（表格图标）两个入口（web 没有）。
+  2. **列数 3 → 4**：网格改 `grid-cols-4`，与 web 一致（4 项正好一行）。
+  3. **文案逐字对齐 web**：PC「文档」→ web「**文件**」；PC「知识库」→ web「**挂载知识库**」。
+  4. **删掉第 3 行灰色描述**（PC 独有的「JPEG · PNG · GIF …」格式说明行）—— web 的按钮只有「图标 + 文案」两行。
+  5. 保留 PC 的容器结构（`contentClassName="!p-0"` + 内层 grid）—— web 把 `px-4 py-5` 挂在 SheetContent 自身，PC 挂在内层 grid，视觉等价。
+- **最终状态**：已一致（4 项 / 4 列 / 图标（lucide `Image` / `FileText` / `Smile` / `Library` 的内联等价 svg，24px）/ 文案 与 web `SheetActionMenu.tsx:76-95` 逐条一致）。
 
 ---
 
@@ -3309,8 +3322,8 @@ function formatAgo(iso: string): string {
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Header.tsx:222-242` |
-| PC | `src/routes/ChatDetail.tsx:912-925` |
-| 判定 | 已一致 |
+| PC | `src/routes/ChatDetail.tsx:912-928` |
+| 判定 | 形态不同（2026-10-26 本批已按 web 改齐 → 最终状态：已一致） |
 
 **web 源码**
 ```tsx
@@ -3329,7 +3342,7 @@ function formatAgo(iso: string): string {
 </DropdownMenuItem>
 ```
 
-**当前 PC 源码**（`src/routes/ChatDetail.tsx:912-925`）
+**当前 PC 源码**（`src/routes/ChatDetail.tsx:912-928`，2026-10-26 改齐后）
 
 ```tsx
   const headerMenuItems: DropdownMenuItem[] = [
@@ -3343,14 +3356,22 @@ function formatAgo(iso: string): string {
     {
       label: "删除会话",
       destructive: true,
+      // 2026-10-26: 分隔线 — 对齐 web `components/layout/Header.tsx:231`
+      //   (<DropdownMenuSeparator /> 夹在「重命名」与「删除会话」之间)
+      separator: true,
       onClick: () => setConfirmDeleteOpen(true),
     },
   ];
 ```
 
 **怎么改**
-- 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
-- 备注：PC `DropdownMenu` 不支持分隔线（`ui/DropdownMenu.tsx` 的 `DropdownMenuItem` 无 separator 字段），web 有 `DropdownMenuSeparator` ⇒ 残余微差见 §十三
+- **改前**：PC `ui/DropdownMenu.tsx` 的 `DropdownMenuItem` **无 separator 字段**，菜单组件也没有分隔线元素 ⇒ web 的「重命名 │ 删除会话」之间那条线在 PC 上没有 ⇒ 判定「形态不同」。
+- **本批已改**（2026-10-26）：
+  1. `src/components/ui/DropdownMenu.tsx` 加分隔线能力（**按 web 的 API 形态**）：新增导出的 `DropdownMenuSeparator` 组件（逐字抄 web `dropdown-menu.tsx:195-206` 的 `<div role="separator" className="my-1 h-px bg-border" />`）+ `DropdownMenuItem.separator`（在本项**之前**画线，PC 是 items 数组形态，对应 web 的独立组件）。
+  2. `src/routes/ChatDetail.tsx:920-928` 的「删除会话」项加 `separator: true` ⇒ 「重命名 │ 删除会话」之间出现与 web 一致的 1px 分隔线。
+  3. 同步 `src/components/chat/MessageMenu.tsx:246`（消息 ⋮ 菜单的「删除」加 `separator: true`）—— 对应 web `components/chat/MessageBubble.tsx:578`。
+- **定位核实**：web 全仓只有 **2 处** `<DropdownMenuSeparator />` —— `Header.tsx:231`（本条）与 `MessageBubble.tsx:578`；web 的 chat **列表页** ⋮ 菜单（`app/(main)/chat/page.tsx:474-483`）只有「重命名」**一项**、无分隔线 ⇒ 本条的 PC 对应位置是 **chat 详情 header 菜单**（A2-D2-04），不是列表页菜单。
+- **最终状态**：已一致（项数 2 项 + 分隔线，与 web 逐字对齐）。
 
 ---
 
@@ -3804,8 +3825,8 @@ export function canRecallMessage(
 | 项 | 值 |
 |---|---|
 | web | `src/components/ui/sheet.tsx:69-74` + `:95` |
-| PC | `src/components/ui/BottomSheet.tsx:119` |
-| 判定 | 已一致 |
+| PC | `src/components/ui/BottomSheet.tsx:141` |
+| 判定 | 形态不同（2026-10-26 本批已按 web 改齐 → 最终状态：已一致） |
 
 **web 源码**
 ```tsx
@@ -3823,14 +3844,23 @@ className={cn(
   className
 )}
 ```
-**当前 PC 源码**（`src/components/ui/BottomSheet.tsx:119`）
+**当前 PC 源码**（`src/components/ui/BottomSheet.tsx:141-143`，2026-10-26 改齐后）
 
 ```tsx
-          "relative w-full inset-x-0 bottom-0 max-h-[85vh] rounded-t-2xl bg-bg-elevated text-fg shadow-elevation-3 flex flex-col p-6",
+          "relative w-full inset-x-0 bottom-0 rounded-t-2xl bg-bg-elevated text-fg shadow-elevation-3 flex flex-col p-6",
+          maxHeight ?? "max-h-[85vh]",
+          contentClassName ?? "",
 ```
 
 **怎么改**
-- 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
+- **改前**：web 的**三个 sheet 最大高各不相同** —— `EmojiPicker` `max-h-[70vh]`（`components/chat/EmojiPicker.tsx:133`）/ `LibraryPicker` `max-h-[80vh]`（`components/chat/LibraryPicker.tsx:162`）/ 通用 `sheet.tsx:73` `max-h-[85vh]`；PC `BottomSheet` 只有**单一** `max-h-[85vh]` base ⇒ 三个场景全是 85vh ⇒ 判定「形态不同」。
+- **本批已改**（2026-10-26）：
+  1. `src/components/ui/BottomSheet.tsx` 新增 `maxHeight?: string` prop（**传了就完全不输出 base 的 `max-h-[85vh]`**）。
+  2. `src/components/home/EmojiPicker.tsx:132` 传 `maxHeight="max-h-[70vh]"`。
+  3. `src/components/home/LibraryPicker.tsx:146` 传 `maxHeight="max-h-[80vh]"`。
+  4. 其它调用点不传 ⇒ 仍是通用 `max-h-[85vh]`，与 web `sheet.tsx:73` 一致。
+- **为什么不能靠 `contentClassName` 叠类**：PC 无 `tailwind-merge` ⇒ 同名类由 **CSS 产物顺序** 决胜。实测（tailwind 3.4.19 + 本仓 `tailwind.config.ts`）：`.max-h-[70vh]`（line 557）**早于** `.max-h-[85vh]`（line 565）⇒ **base 的 85vh 会赢**，调用点传的 70vh 被盖掉 ⇒ 改成「传了就不输出 base」，结果与产物顺序完全无关。
+- **最终状态**：已一致（EmojiPicker 70vh / LibraryPicker 80vh / 通用 85vh，与 web 三个 sheet 一一对应）。
 
 ---
 
@@ -4231,7 +4261,7 @@ const markdownContent = isUser
 | A2-OK-13 | 表情网格 `grid grid-cols-8 gap-1` + 按钮 `w-10 h-10 rounded-md text-2xl` | `EmojiPicker.tsx:181,191` | `home/EmojiPicker.tsx:170,183` | 一致 |
 | A2-OK-14 | 表情分类 tab `px-3 py-1 rounded-full text-xs` | `EmojiPicker.tsx:161` | `home/EmojiPicker.tsx:149` | 一致 |
 | A2-OK-15 | 表情选中空态「没有匹配的表情」 | `EmojiPicker.tsx:177-179` | `home/EmojiPicker.tsx:167` | 一致 |
-| A2-OK-16 | 表情面板最大高：web `max-h-[70vh]` / PC `BottomSheet` base `max-h-[85vh]` | `EmojiPicker.tsx:133` | `BottomSheet.tsx:29` | PC 已是 web `sheet.tsx` 的 `85vh`；web 三个 sheet 各不相同（70/80/85vh）⇒ 残余差见 §十二.4 ③ |
+| A2-OK-16 | 表情面板最大高：web `max-h-[70vh]` / PC `BottomSheet` `maxHeight="max-h-[70vh]"` | `EmojiPicker.tsx:133` | `home/EmojiPicker.tsx:132` + `BottomSheet.tsx:32` | **2026-10-26 本批已对齐**：PC `BottomSheet` 加 `maxHeight` prop（传了就不输出 base 的 `max-h-[85vh]`）⇒ EmojiPicker 70vh / LibraryPicker 80vh / 通用 85vh，与 web 三个 sheet 一一对应（详见 A2-D3-05） |
 | A2-OK-17 | 流式期间 textarea 禁用 | `ChatInputBar.tsx:112` `disabled={disabled}` ← `ChatInput.tsx:73` ← `page.tsx:1352` `disabled={isSending}` | `ChatInputBar.tsx:705` `disabled={isStreaming || disabled}` | 一致（两侧流式中输入框均不可打字；web `ChatInputBar.tsx:71-73` 的「Enter 触发 onAbort」分支因 textarea 被禁用而实际不可达，PC 亦无此路径 → 无行为差异） |
 
 ---
@@ -5648,9 +5678,9 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 #### A5-D3-02 · LibraryPicker 类型 tab（全部/图片/文档/链接）+ 搜索框
 | 项 | 值 |
 |---|---|
-| web | `src/components/chat/LibraryPicker.tsx:38-43`、`:190-206`、`:175-188` |
-| PC | `src/components/home/LibraryPicker.tsx:165-196` |
-| 判定 | 已一致（类型 tab + 搜索框已齐；类型图标配色仍继承 `currentColor`，残余差见 §十三） |
+| web | `src/components/chat/LibraryPicker.tsx:38-43`、`:190-206`、`:175-188`、`:45-61` |
+| PC | `src/components/home/LibraryPicker.tsx:165-196`、`:285-296` + `src/components/ui/Glyphs.tsx:677-890` |
+| 判定 | 形态不同（2026-10-26 本批已按 web 改齐 → 最终状态：已一致） |
 
 **当前 PC 源码**（`src/components/home/LibraryPicker.tsx:165-196`）
 
@@ -5689,8 +5719,36 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
       </div>
 ```
 
+**web 源码**
+```tsx
+// components/chat/LibraryPicker.tsx:45-61
+function typeIcon(type: LibraryItem["type"]) {
+  switch (type) {
+    case "image":
+      return <ImageIcon className="w-5 h-5 text-brand-cyan" />;
+    case "doc":
+      return <FileText className="w-5 h-5 text-brand" />;
+    case "link":
+      return <LinkIcon className="w-5 h-5 text-cron" />;
+    default:
+      return <LibraryIcon className="w-5 h-5 text-fg-muted" />;
+  }
+}
+```
+
 **怎么改**
-- 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
+- **改前**：类型 tab + 搜索框已齐；但类型图标的**配色**与 web 不一致（web 四个图标各一个颜色）⇒ 判定「形态不同」。
+- **本批已改**（2026-10-26，`src/components/ui/Glyphs.tsx` —— PC 的类型图标颜色烤在共享图标组件里，调用点 `src/components/home/LibraryPicker.tsx:285-296` 直接用 `<ImageTypeIcon />` / `<DocTypeIcon />` / `<LinkTypeIcon />` / `<TextTypeIcon />`，无 className 覆盖）：
+
+  | 类型 | web 类名（`LibraryPicker.tsx:45-61`） | PC 类名（`Glyphs.tsx`） | 状态 |
+  |---|---|---|---|
+  | image | `text-brand-cyan` | `text-brand-cyan` | 改前已一致 |
+  | doc | `text-brand` | `text-brand` | 改前已一致 |
+  | link | `text-cron`（紫 `#a78bfa`） | `text-brand-cyan` → **`text-brand-green`** | 本批改 |
+  | text（default） | `text-fg-muted` | `text-fg-muted` | 改前已一致 |
+
+- **token 对应说明（web ↔ PC）**：`text-brand-cyan` → PC `--brand-cyan` / `brand.cyan` = `#0dcaf0`（两端同值）；`text-brand` → PC `--brand` / `brand.DEFAULT` = `#FF6B35`（两端同值）；`text-fg-muted` → PC `--fg-muted` / `fg-muted` = `#9ca3af`（两端同值）；**`text-cron` 在 PC 体系里不存在** —— web 的 `--cron: #a78bfa`（`src/styles/globals.css:81`）是 web 私有 token，PC 的 `globals.css` / `tailwind.config.ts` 都没有（且这两个文件本批不可改）⇒ 取 PC 体系里语义最接近的现有 token `text-brand-green`（`#198754`），它正是 web 自己在 `app/(main)/library/page.tsx:124` 给 link 类型图标用的颜色。
+- **最终状态**：已一致（4 个类型图标各一色，与 web 一一对应；link 用 PC 体系等价值 `brand-green` 代替 web 的 `cron` 紫）。
 
 ---
 
@@ -5862,31 +5920,32 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 
 | 判定 | 改前 | 改后 | Δ |
 |---|---|---|---|
-| 形态不同 | 116 | **0** | -116 |
+| 形态不同 | 116 | **5** | -111 |
 | 缺失 | 33 | **1** | -32 |
-| 已一致 | 25 | **173** | +148 |
+| 已一致 | 25 | **168** | +143 |
 | PC 多出（按 gaga 口径不进差异清单） | 4 | **5** | +1 |
 | 待核 | 1 | **0** | -1 |
 | **合计** | **179** | **179** | — |
 
-**分布复算（2026-10-26 全量核实后）**
+**分布复算（2026-10-26 全量核实 + 同日「以 web 为准」批次后）**
 
 - **复算方式**：脚本逐条解析正文 `#### A?-D?-??` 条目块内的 `| 判定 | … |` 行，按前缀归并（`已一致（…）` / `缺失（…）` / `PC 多出（…）` 分别归 `已一致` / `缺失` / `PC 多出`）。**只统计 179 个条目块内的行** —— `结构级差异 · 需 gaga 拍` 的 S-01~S-08（8 行）与「改动量汇总」表自身的 `| 判定 | 条数 |` 行（1 行）**不计入**。
-- **复算结果**：缺失 **1** + 形态不同 **0** + 已一致 **173** + PC 多出 **5** + 待核 **0** = **179** = 条目总数 ✓
+- **复算结果**：缺失 **1** + 形态不同 **5** + 已一致 **168** + PC 多出 **5** + 待核 **0** = **179** = 条目总数 ✓
 - **各节逐条归并**（与正文逐条自洽）：
-  - A1（62 条）：已一致 **62** / 缺失 **0** / 形态不同 **0** / PC 多出 **0** / 待核 **0**
-  - A2（71 条）：已一致 **68** / 缺失 **0** / 形态不同 **0** / PC 多出 **3** / 待核 **0**
+  - A1（62 条）：已一致 **61** / 缺失 **0** / 形态不同 **1** / PC 多出 **0** / 待核 **0**
+  - A2（71 条）：已一致 **65** / 缺失 **0** / 形态不同 **3** / PC 多出 **3** / 待核 **0**
   - A3（31 条）：已一致 **29** / 缺失 **1** / 形态不同 **0** / PC 多出 **1** / 待核 **0**
   - A4（13 条）：已一致 **12** / 缺失 **0** / 形态不同 **0** / PC 多出 **1** / 待核 **0**
-  - A5（2 条）：已一致 **2** / 缺失 **0** / 形态不同 **0** / PC 多出 **0** / 待核 **0**
+  - A5（2 条）：已一致 **1** / 缺失 **0** / 形态不同 **1** / PC 多出 **0** / 待核 **0**
 - **各档位逐条归并**（档位 = 条目所在小节，与判定无关）：D1 **92** / D2 **52** / D3 **25** / D4 **10** = **179** ✓
-- **改前 → 改后**：判定变更 **149 条**，其中
-  - 形态不同 → 已一致 **115 条**
+- **改前 → 改后**：判定变更 **145 条**，其中
+  - 形态不同 → 已一致 **111 条**
   - 缺失 → 已一致 **32 条**
-  - 待核 → 已一致 **1 条**（A5-D3-02）
-  - 形态不同 → PC 多出 **1 条**（A3-D1-06 —— web 的 `DrawerNavItem` 无 active 分支，PC 侧栏 active 高亮属 PC 多出；原先被误记为「形态不同」，本次按五桶口径归位）
-  - 判定不变 **30 条**
-  - ⇒ 形态不同 -116、缺失 -32、已一致 +148、PC 多出 +1、待核 -1
+  - 待核 → 形态不同 **1 条**（A5-D3-02 —— 本批按 web 补齐了类型图标配色，判定按改前口径回退）
+  - 形态不同 → PC 多出 **1 条**（A3-D1-06 —— web 的 `DrawerNavItem` 无 active 分支，PC 侧栏 active 高亮属 PC 多出；原先被误记为「形态不同」，按五桶口径归位）
+  - 判定不变 **34 条**（含本批回退的 4 条：原判定就是「形态不同」，改齐后仍按改前口径记「形态不同」）
+  - ⇒ 形态不同 -111、缺失 -32、已一致 +143、PC 多出 +1、待核 -1
+- **本批（2026-10-26「以 web 为准」批次）新增的 5 条回退**：A1-D2-05 / A2-D1-30 / A2-D2-04 / A2-D3-05 / A5-D3-02 —— 这 5 条在上一轮被记成「已一致」，实际与 web 不一致；本批已把 PC 改齐到 web（**最终状态 = 已一致**），台账判定按**改前口径**回退为「形态不同」⇒ 已一致 173 → **168**，形态不同 0 → **5**。详见 §12.4 ①~⑤ 与 §12.2 的「本批判定回退」表。
 
 **结构级差异（需 gaga 拍）**：8 条（S-01 ~ S-08）
 
@@ -5907,7 +5966,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 >
 > **⚠️ M3 批已提交（并发 worker）**：A2-D4-02 / A2-D4-03 / A2-D4-04 / A2-D4-06 这 4 条在本快照时刻**已随提交 `b29207f`（markdown 全栈自研接线）落地**（判定已改「已一致」）。若该提交被回退或改判，这 4 条要**重新打回**「缺失 / 形态不同」—— 详见 §十二.4 ⑧。
 >
-> **注**：原表 10 条里 **9 条**已落地（A1-D4-01 / A1-D4-02 → 改用 `BottomSheet`；A3-D2-01 → Cody 图已接；A1-D2-19 → 已加 `disabled={!renameDraft.trim()}`；A1-D2-17 → `Button loading` 已渲染 spinner；A2-D1-30 → 已去标题栏 + `grid-cols-3 gap-3 py-5 px-4`），故整表重排。
+> **注**：原表 10 条里 **9 条**已落地（A1-D4-01 / A1-D4-02 → 改用 `BottomSheet`；A3-D2-01 → Cody 图已接；A1-D2-19 → 已加 `disabled={!renameDraft.trim()}`；A1-D2-17 → `Button loading` 已渲染 spinner；A2-D1-30 → 已去标题栏 + `grid-cols-4 gap-3 py-5 px-4`（2026-10-26「以 web 为准」批次把 6 项删到 4 项、3 列改 4 列）），故整表重排。
 
 ---
 
@@ -5928,11 +5987,11 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 
 ---
 
-### 12.2 已落地条目清单（173 条 · 判定 = 已一致）
+### 12.2 已落地条目清单（168 条 · 判定 = 已一致）
 
 > PC 列为**快照时刻**的真实 `file:line`（HEAD `6e46219`，`src/` 工作区另有未提交改动（本快照已一并计入））。
 
-**A1 · 62 条**
+**A1 · 61 条**
 
 | 条号 | PC 侧 file:line（快照） | 备注 |
 |---|---|---|
@@ -5965,7 +6024,6 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | A1-D2-02 | `src/routes/ChatList.tsx:406` | — |
 | A1-D2-03 | `src/routes/ChatList.tsx:395` | — |
 | A1-D2-04 | `src/routes/ChatList.tsx:385-391` | — |
-| A1-D2-05 | `src/components/ui/Button.tsx:75` | PC base 额外带 `gap-2`（spinner 与文字间距）+ `duration-150`，是 web base 的**超集**，不改变 web 已有的视觉 |
 | A1-D2-06 | `src/components/ui/Button.tsx:39` | — |
 | A1-D2-07 | `src/components/ui/Button.tsx:53` | — |
 | A1-D2-08 | `src/routes/ChatList.tsx:362` | — |
@@ -5999,7 +6057,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | A1-D4-03 | `src/routes/ChatList.tsx:380-392` | — |
 | A1-D4-04 | `src/components/layout/AppShell.tsx:67` + `src/App.tsx:112` + `src/components/layout/AppShell.tsx:156-158` | — |
 
-**A2 · 68 条**
+**A2 · 65 条**
 
 | 条号 | PC 侧 file:line（快照） | 备注 |
 |---|---|---|
@@ -6032,8 +6090,7 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | A2-D1-27 | `src/routes/ChatDetail.tsx:1277-1303` | — |
 | A2-D1-28 | `src/components/chat/MessageList.tsx:131` | — |
 | A2-D1-29 | `src/routes/ChatDetail.tsx:1233-1247` | — |
-| A2-D1-30 | `src/components/chat/PlusActionsSheet.tsx:109` | — |
-| A2-D1-31 | `src/components/chat/PlusActionsSheet.tsx:137-155` | 6 个自绘图标统一 24×24 / `strokeWidth="2"`（= web lucide `w-6 h-6` 默认 strokeWidth 2） |
+| A2-D1-31 | `src/components/chat/PlusActionsSheet.tsx:120-200` | 4 个自绘图标统一 24×24 / `strokeWidth="2"`（= web lucide `w-6 h-6` 默认 strokeWidth 2）；2026-10-26 起随「+ 附件」Sheet 从 6 项删到 4 项 |
 | A2-D1-32 | `src/components/chat/PlusActionsSheet.tsx:116` | — |
 | A2-D1-33 | `src/components/chat/PlusActionsSheet.tsx:120` | — |
 | A2-D1-34 | `src/components/home/EmojiPicker.tsx:136` | — |
@@ -6048,7 +6105,6 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | A2-D2-01 | `src/routes/ChatDetail.tsx:1182` | — |
 | A2-D2-02 | `src/routes/ChatDetail.tsx:1183` | — |
 | A2-D2-03 | `src/routes/ChatDetail.tsx:1195` | — |
-| A2-D2-04 | `src/routes/ChatDetail.tsx:912-925` | PC `DropdownMenu` 不支持分隔线（`ui/DropdownMenu.tsx` 的 `DropdownMenuItem` 无 separator 字段），web 有 `DropdownMenuSeparator` ⇒ 残余微差见 §十三 |
 | A2-D2-05 | `src/routes/ChatDetail.tsx:1415-1416` | web 文案「影响 Drawer 列表和顶部标题显示。」vs PC「影响侧边栏列表和顶部标题显示。」⇒ 语义等价（Drawer = 侧边栏） |
 | A2-D2-06 | `src/routes/ChatDetail.tsx:1398-1399` | — |
 | A2-D2-07 | `src/routes/ChatDetail.tsx:1415-1441` | PM 拍板：通用 `ConfirmDialog` 不加页面专属的「保存中...」文案 |
@@ -6060,7 +6116,6 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | A2-D3-02 | `src/routes/ChatDetail.tsx:949-957` | — |
 | A2-D3-03 | `src/components/chat/MessageMenu.tsx:165` + `src/components/chat/MessageMenu.tsx:187` + `src/components/chat/MessageMenu.tsx:201` | — |
 | A2-D3-04 | `src/components/chat/MessageMenu.tsx:63-75` | — |
-| A2-D3-05 | `src/components/ui/BottomSheet.tsx:119` | — |
 | A2-D3-06 | `src/components/ui/BottomSheet.tsx:83-95` + `src/components/ui/BottomSheet.tsx:108` | — |
 | A2-D3-07 | `src/components/chat/MessageList.tsx:93` | — |
 | A2-D3-08 | `src/components/chat/MessageList.tsx:127` | — |
@@ -6123,12 +6178,23 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 | A4-D2-06 | `src/components/chat/ChatItem.tsx:72` | — |
 | A4-D3-02 | `src/components/chat/ChatItem.tsx:2-21` + `src/components/layout/AppShell.tsx:40` + `src/components/layout/AppShell.tsx:477` | — |
 
-**A5 · 2 条**
+**A5 · 1 条**
 
 | 条号 | PC 侧 file:line（快照） | 备注 |
 |---|---|---|
 | A5-D3-01 | `src/components/home/LibraryPicker.tsx:149-161` + `src/components/chat/KnowledgeAttachSheet.tsx:34` | — |
-| A5-D3-02 | `src/components/home/LibraryPicker.tsx:165-196` | web 的 chat 列表页在**移动端宽度**用底部 Sheet 更自然；PC 是桌面宽窗口，居中对话框也说得过去 → **这一条值得 gaga 单独拍** |
+
+**本批判定回退（形态不同 · 5 条 · 2026-10-26）**
+
+> 这 5 条在上一轮全量核实里被记成「已一致」，**实际与 web 不一致**（gaga 拍板「**以 web 为准**」）。本批已把 PC 改齐到 web，**最终状态 = 已一致**；但台账的「判定」列按**改前口径**记为「形态不同」⇒ 判定分布相应回退（见「改动量汇总」）。
+
+| 条号 | PC 侧 file:line（2026-10-26 改后） | 改法摘要 |
+|---|---|---|
+| A1-D2-05 | `src/components/ui/Button.tsx:76` | base 去掉 `gap-2` + `duration-150` |
+| A2-D1-30 | `src/components/chat/PlusActionsSheet.tsx:79` | 「+ 附件」Sheet 6 项 → 4 项、3 列 → 4 列、文案逐字对齐 |
+| A2-D2-04 | `src/routes/ChatDetail.tsx:912-928` + `src/components/ui/DropdownMenu.tsx:43,155` | `DropdownMenu` 加分隔线能力 + header 菜单「重命名 │ 删除会话」 |
+| A2-D3-05 | `src/components/ui/BottomSheet.tsx:32,141` + `home/EmojiPicker.tsx:132` + `home/LibraryPicker.tsx:146` | `BottomSheet` 加 `maxHeight` 覆盖（70 / 80 / 85vh） |
+| A5-D3-02 | `src/components/ui/Glyphs.tsx:723-741` | 类型图标按 web 上色（link：brand-cyan → brand-green） |
 
 **PC 多出（按 gaga 口径保留不动，不进差异清单）· 5 条**
 
@@ -6152,17 +6218,17 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 
 ---
 
-### 12.4 本次核实新发现的残余微差（**口径已定稿 · ①~⑤ 为用户可感知的视觉差异，待 gaga 勾选是否补齐**）
+### 12.4 残余微差（**①~⑤ 已由 gaga 拍板「以 web 为准」· 本批直接执行并已落地**）
 
-> **口径说明**：①~⑤ 都是**用户肉眼能看出来的视觉差异**（分隔线 / 图标配色 / 面板高度 / 按钮间距 / 列数），按「行为等价」口径判为「已一致」；按 gaga「最细颗粒度、1:1 还原 web」的要求，这 5 条**是否补齐待 gaga 勾选**（已随收尾报告报出）。⑥⑦ 属结构等价 / 文案语义等价（`Drawer` = 侧边栏、`sticky top-0` 因 PC 滚动容器不同而结构等价），**不补**。
+> **口径说明（2026-10-26 更新）**：①~⑤ 都是**用户肉眼能看出来的视觉差异**（分隔线 / 图标配色 / 面板高度 / 按钮间距 / 列数）。上一轮核实按「行为等价」把它们记成「已一致」，**与 gaga「最细颗粒度、1:1 还原 web」的口径冲突**。gaga 已拍板：**以 web 端为唯一事实源，web 有什么 PC 必须有什么，PC 多出来的直接删掉** ⇒ 这 5 条**不是待勾选项，是本批直接执行项**，已全部落地（台账判定按**改前口径**回退为「形态不同」，最终状态 = 已一致，见 §12.2 的「本批判定回退」表）。⑥⑦ 属结构等价 / 文案语义等价（`Drawer` = 侧边栏、`sticky top-0` 因 PC 滚动容器不同而结构等价），**不补**。
 
-| # | 相关条目 | 残余差 | 现状处理 |
+| # | 相关条目 | 残余差 | 现状处理（2026-10-26 已执行） |
 |---|---|---|---|
-| ① | A2-D2-04 | PC `ui/DropdownMenu.tsx` 的 `DropdownMenuItem` **无 separator 字段**，web 的 Header ⋮ 菜单在「重命名 / 删除会话」之间有 `DropdownMenuSeparator` | 判定改「已一致」（**项数**已一致：2 项），分隔线要不要补 → **待 gaga 勾选**（用户可感知的视觉差异） |
-| ② | A5-D3-02 | 类型 tab + 搜索框已齐；但 PC 的类型图标（`Glyphs.tsx` 的 `ImageTypeIcon` / `DocTypeIcon` / `LinkTypeIcon` / `TextTypeIcon`）**不设颜色类**，继承 `currentColor`；web 分别用 `text-brand-cyan` / `text-brand` / `text-cron` / `text-fg-muted` | 主体判定改「已一致」，图标配色要不要补 → **待 gaga 勾选**（用户可感知的视觉差异） |
-| ③ | A2-OK-16 | web 三个 sheet 最大高各不相同（EmojiPicker `max-h-[70vh]` / LibraryPicker `max-h-[80vh]` / 通用 `sheet.tsx` `max-h-[85vh]`），PC `BottomSheet` 只有单一 `max-h-[85vh]` base | 已按 `BottomSheet` base 记「已一致」；要不要 per-call-site 覆盖 → **待 gaga 勾选**（用户可感知的视觉差异） |
-| ④ | A1-D2-05 / A1-D2-06 | PC `Button` base 比 web 多 `gap-2` + `duration-150`（**超集**，不改 web 已有视觉）；PC variant 名 `danger` ↔ web `destructive` | 已按「等价 / 超集」记「已一致」；要不要改名 → **待 gaga 勾选**（用户可感知的视觉差异） |
-| ⑤ | A2-D1-30 | PC 的 `+` 附件 Sheet 是 **6 项**（web 4 项），列数保持 3（web `grid-cols-4`） | 已按「PC 6 项 ⇒ 3 列」记「已一致」；要不要对齐 4 列 → **待 gaga 勾选**（用户可感知的视觉差异） |
+| ① | A2-D2-04 | PC `ui/DropdownMenu.tsx` 的 `DropdownMenuItem` **无 separator 字段**，web 的 Header ⋮ 菜单在「重命名 / 删除会话」之间有 `DropdownMenuSeparator` | **已执行**：`DropdownMenu` 加分隔线能力（导出 `DropdownMenuSeparator` 组件 + `DropdownMenuItem.separator`），`ChatDetail.tsx:920-928` 的「删除会话」加 `separator: true`；同步 `MessageMenu.tsx:246`（对应 web `MessageBubble.tsx:578`）。定位核实：web 全仓只有这 2 处分隔线，chat **列表页** ⋮ 菜单只有「重命名」一项、无分隔线 ⇒ 对应位置是 chat **详情 header** 菜单。**最终状态：已一致** |
+| ② | A5-D3-02 | 类型 tab + 搜索框已齐；PC 的类型图标（`Glyphs.tsx` 的 `ImageTypeIcon` / `DocTypeIcon` / `LinkTypeIcon` / `TextTypeIcon`）配色与 web 不一致（web：`text-brand-cyan` / `text-brand` / `text-cron` / `text-fg-muted`） | **已执行**：PC 4 个类型图标按 web 上色。image / doc / text 三个改前已一致；**link** 由 `text-brand-cyan` 改 `text-brand-green` —— web 的 `text-cron`（`#a78bfa`）在 PC 体系里**不存在**（web 私有 token，PC 的 `globals.css` / `tailwind.config.ts` 本批不可改）⇒ 取 PC 现有 token `brand-green`（`#198754`，web 自己在 `library/page.tsx:124` 也用它给 link 上色）。**最终状态：已一致** |
+| ③ | A2-OK-16 / A2-D3-05 | web 三个 sheet 最大高各不相同（EmojiPicker `max-h-[70vh]` / LibraryPicker `max-h-[80vh]` / 通用 `sheet.tsx` `max-h-[85vh]`），PC `BottomSheet` 只有单一 `max-h-[85vh]` base | **已执行**：`BottomSheet` 加 `maxHeight` prop（**传了就不输出 base 的 `max-h-[85vh]`** —— 实测 Tailwind 产物里 `.max-h-[70vh]` 早于 `.max-h-[85vh]`，叠类时 base 会赢），`home/EmojiPicker.tsx:132` 传 70vh、`home/LibraryPicker.tsx:146` 传 80vh、其余调用点保持 85vh。**最终状态：已一致** |
+| ④ | A1-D2-05 / A1-D2-06 | PC `Button` base 比 web 多 `gap-2` + `duration-150`；PC variant 名 `danger` ↔ web `destructive` | **已执行**：base 去掉 `gap-2` + `duration-150`（全仓 30 处 `<Button>` 调用点已逐个核过：只有 5 处是「图标 + 文字」，其中 3 处自带 gap 不受影响，2 处原被 base `gap-2` 盖住的 `gap-1.5` 改后与 web 一致）。**`variant` 名不改** —— 非用户可见差异，避免全仓波及（见 A1-D2-06）。**最终状态：已一致（命名未对齐，理由：非用户可见差异）** |
+| ⑤ | A2-D1-30 | PC 的 `+` 附件 Sheet 是 **6 项**（web 4 项），列数 3（web `grid-cols-4`），文案「文档 / 知识库」（web「文件 / 挂载知识库」），按钮多一行灰色格式说明 | **已执行**：删到 **4 项**（删「拍照」「模板」两个 PC 多出的入口）+ **4 列** + 文案逐字对齐 + 删掉第 3 行描述。**最终状态：已一致** |
 | ⑥ | A1-D1-17 | web 多选栏 `sticky top-14`（贴在全局 header 之下），PC `sticky top-0`（PC 的 main 自身是滚动容器、header 在 main 之外不重叠） | 已按「结构等价」记「已一致」 |
 | ⑦ | A2-D2-05 | web 文案「影响 **Drawer** 列表和顶部标题显示。」vs PC「影响**侧边栏**列表和顶部标题显示。」 | 已按「语义等价（Drawer = 侧边栏）」记「已一致」 |
 | ⑧ | **A2-D4-02 / A2-D4-03 / A2-D4-04 / A2-D4-06** | 这 4 条在**本次快照时刻**已由**并发 worker 的 M3 批**落地并**随提交 `b29207f`（markdown 全栈自研接线）进入 HEAD**：`ExecutionTimeline` 已挂载到 assistant 气泡 + `ChatDetail.tsx` 有 `streamingPhases` 数据通路；user 气泡已走 `<Markdown>` + 反色 wrapper class；`stripReferencedImageUrls` 已抄进 PC 且父层已算 `userImageUrls` 下传 | 判定已改「已一致（M3 批已提交）」。**若 `b29207f` 被回退 / 改判，这 4 条要重新打回「缺失 / 形态不同」** —— 本轮不擅自拍板 |
@@ -6172,24 +6238,26 @@ const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new M
 ### 12.5 本次对文档的修正（复算记录）
 
 1. **条目总数不变**：179 条（A1 62 / A2 71 / A3 31 / A4 13 / A5 2）—— 只改判定 / PC `file:line` / 「怎么改」栏 / **条目标题**，**没有新增、删除、移动任何条目**。
-2. **判定分布（改前 → 改后）**：形态不同 116 → **0**（-116）；缺失 33 → **1**（-32）；已一致 25 → **173**（+148）；PC 多出 4 → **5**（+1）；待核 1 → **0**（-1）。
-3. **自洽校验**：1 + 0 + 173 + 5 + 0 = **179** ✓；逐条解析正文 `| 判定 | … |` 行（**只统计 179 个条目块内的行**，`结构级差异 · 需 gaga 拍` 的 S-01~S-08 与「改动量汇总」表自身的 `| 判定 |` 行不计入）的归并结果与上表**完全一致**，无未归类判定值。
+2. **判定分布（改前 → 改后）**：形态不同 116 → **5**（-111）；缺失 33 → **1**（-32）；已一致 25 → **168**（+143）；PC 多出 4 → **5**（+1）；待核 1 → **0**（-1）。
+3. **自洽校验**：5 + 1 + 168 + 5 + 0 = **179** ✓；逐条解析正文 `| 判定 | … |` 行（**只统计 179 个条目块内的行**，`结构级差异 · 需 gaga 拍` 的 S-01~S-08 与「改动量汇总」表自身的 `| 判定 |` 行不计入）的归并结果与上表**完全一致**，无未归类判定值。
 4. **档位分布不变**：D1 92 / D2 52 / D3 25 / D4 10 = 179 ✓（档位 = 条目所在小节，判定改成「已一致」的条目仍留在原小节，便于回溯）。
 5. **PC `file:line` 全量刷新**：179 条的 PC 侧行号按内容锚点重抓（脚本现场抓取，代码块与行号同源）；web 侧行号未动。
 6. **Top10 重排**：由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条里 **9 条**已落地 → 整表重排（见上）。
 7. **PC 多出项按口径保留**：A2-D2-12 / A2-D2-13 / A2-D2-14 / A4-D3-01 原判定已是「PC 多出」，保留；**A3-D1-06**（侧栏 active 高亮，web 的 `DrawerNavItem` 无 active 分支）原被误记为「形态不同」，本次按五桶口径归入「PC 多出」—— **不是改口径，是把已有口径落到正确的桶**。
 8. **条目标题中性化**：初稿标题写的是「PC 现状 vs web 目标」的差异陈述（如「空态描述文案缺失」「PC `Button` base 与 web 不一致」），判定回写后会与「已一致」自相矛盾 ⇒ 已把 163 条标题改成**中性检查项**（只写「比什么」，不断言 PC 当前状态），并在头部加了「标题口径」说明；**条目 ID / 条数 / 分档全部不变**。
 9. **M3 批口径更新**：并发 worker 的 M3 批（markdown 全栈自研接线）已随提交 `b29207f` 进入 HEAD，工作区 `src/` 另有未提交改动（本快照已一并计入） ⇒ A2-D4-02 / 03 / 04 / 06 的判定后缀由「M3 批在途 · 工作区未提交」改为「**M3 批已提交**」（§12.4 ⑧ 同步更新）。
+10. **「以 web 为准」批次（2026-10-26，同日）**：gaga 拍板 **web 是唯一事实源**（web 有什么 PC 必须有什么；PC 多出来的直接删掉）⇒ 上一轮被记成「已一致」但**实际不一致**的 5 条（A1-D2-05 / A2-D1-30 / A2-D2-04 / A2-D3-05 / A5-D3-02）已在本批把 PC 改齐，**判定按改前口径回退为「形态不同」**（最终状态 = 已一致，见各条「怎么改」栏）；§12.4 ①~⑤ 的「待 gaga 勾选」措辞已清掉；判定分布由 173/0/1/5/0 改为 **168 已一致 / 5 形态不同 / 1 缺失 / 5 PC 多出 / 0 待核 = 179**（脚本复算，见「改动量汇总」的分布复算段）。
 
 ## 附：本次文档修正的复算记录
 
 1. **条目总数不变**：179 条（A1 62 / A2 71 / A3 31 / A4 13 / A5 2）—— 只改判定 / PC `file:line` / 「怎么改」栏 / **条目标题**，**没有新增 / 删除 / 移动条目**，各节条数不变。
-2. **判定分布（改前 → 改后）**：形态不同 116 → **0**（-116）；缺失 33 → **1**（-32）；已一致 25 → **173**（+148）；PC 多出 4 → **5**（+1）；待核 1 → **0**（-1）。
-3. **自洽校验**：1 + 0 + 173 + 5 + 0 = **179** = 条目总数 ✓。
+2. **判定分布（改前 → 改后）**：形态不同 116 → **5**（-111）；缺失 33 → **1**（-32）；已一致 25 → **168**（+143）；PC 多出 4 → **5**（+1）；待核 1 → **0**（-1）。
+3. **自洽校验**：5 + 1 + 168 + 5 + 0 = **179** = 条目总数 ✓。
 4. **档位分布不变**：D1 92 / D2 52 / D3 25 / D4 10 = 179 ✓（档位 = 条目所在小节，判定改成「已一致」的条目仍留在原小节）。
 5. **PC `file:line` 全量刷新**：179 条的 PC 侧行号按内容锚点重抓；web 侧行号未动。
 6. **改动量 Top10 已重排**：口径由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条中 **9 条**已落地 → 整表重排（见上表）。
 7. **条目标题中性化**：163 条标题由「PC 现状 vs web 目标」的差异陈述改为中性检查项，避免与新判定自相矛盾；ID / 条数 / 分档不变（详见 §十二.5 第 8 条）。
 8. **M3 批已提交**：`b29207f`（markdown 全栈自研接线）已进 HEAD ⇒ A2-D4-02 / 03 / 04 / 06 的判定后缀改为「M3 批已提交」（§12.4 ⑧）。
+9. **「以 web 为准」批次（2026-10-26，同日）**：5 条被记成「已一致」但实际不一致的条目（A1-D2-05 / A2-D1-30 / A2-D2-04 / A2-D3-05 / A5-D3-02）已把 PC 改齐到 web；判定按改前口径回退为「形态不同」⇒ 分布 168 / 5 / 1 / 5 / 0 = 179（脚本复算自洽）。
 
 ---

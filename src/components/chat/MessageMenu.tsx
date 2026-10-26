@@ -237,10 +237,13 @@ export function MessageMenu(props: MessageMenuProps) {
   }
 
   // 4) 删除 — destructive (红色), 放最后
+  //    2026-10-26: 分隔线 — 对齐 web `components/chat/MessageBubble.tsx:578`
+  //      (<DropdownMenuSeparator /> 夹在「保存到知识库」与「删除」之间)
   items.push({
     label: "删除",
     onClick: () => void handleDelete(),
     destructive: true,
+    separator: true,
   });
 
   return (

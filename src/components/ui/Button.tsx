@@ -72,8 +72,21 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       type={rest.type ?? "button"}
       disabled={isDisabled}
       className={[
-        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium",
-        "transition-colors duration-150",
+        // 2026-10-26 对齐 web `button.tsx:6` base (逐字):
+        //   web: "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+        //   ⇒ 去掉 PC 旧有的 `gap-2` + `duration-150`:
+        //     - `gap-2`: web base 没有; PC 之前靠 base 兜底, 反而压掉了调用点的
+        //       `gap-1.5` (Tailwind 产物里 .gap-1.5 在 .gap-2 之前 ⇒ .gap-2 赢)
+        //       —— 实测产物顺序 (tailwind 3.4.19 + 本仓 tailwind.config.ts):
+        //          .gap-1.5 (line 569) < .gap-2 (line 573) ⇒ base gap-2 赢.
+        //       去掉后 ChatList 多选栏「全选/清空」「删除」+ Notifications「全部已读」
+        //       才真正按 web 的 gap-1.5 渲染; 自带 `gap-2` 的调用点 (新建对话 / 登出) 不变.
+        //     - `duration-150`: Tailwind `transition-colors` 默认时长本来就是 150ms,
+        //       且 PC globals.css 全局禁了 transition ⇒ 删除零视觉变化.
+        //   ⚠️ base 不加 `text-sm`: PC 的 size 档自带字号 (sm=text-xs / md=lg=text-sm),
+        //      Tailwind 产物里 .text-sm 在 .text-xs 之后 ⇒ base 加 text-sm 会盖掉 sm 档.
+        "inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium",
+        "transition-colors",
         // A1-D2-05: focus ring 2px+offset → 1px 无 offset (跟 web 一致)
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         "disabled:pointer-events-none disabled:opacity-50",

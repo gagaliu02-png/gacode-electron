@@ -920,6 +920,9 @@ export function ChatDetail() {
     {
       label: "删除会话",
       destructive: true,
+      // 2026-10-26: 分隔线 — 对齐 web `components/layout/Header.tsx:231`
+      //   (<DropdownMenuSeparator /> 夹在「重命名」与「删除会话」之间)
+      separator: true,
       onClick: () => setConfirmDeleteOpen(true),
     },
   ];

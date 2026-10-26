@@ -137,10 +137,13 @@ export function LibraryPicker({ open, onClose, onSelect, onConfirm }: LibraryPic
   }, [open]);
 
   return (
+    // 2026-10-26 对齐 web `components/chat/LibraryPicker.tsx:162`:
+    //   web SheetContent className 含 `max-h-[80vh]` (PC 的 BottomSheet base 是 85vh)
     <BottomSheet
       open={open}
       title="挂载知识库"
       onClose={handleClose}
+      maxHeight="max-h-[80vh]"
       footer={
         onConfirm ? (
           <button

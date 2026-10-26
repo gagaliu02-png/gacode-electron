@@ -9,12 +9,19 @@
  *     trigger={<button>...</button>}
  *     items={[
  *       { label: '编辑', onClick: () => ... },
- *       { label: '删除', destructive: true, onClick: () => ... },
+ *       { label: '删除', destructive: true, separator: true, onClick: () => ... },
  *     ]}
  *   />
+ *
+ * 2026-10-26 (对齐 web `components/ui/dropdown-menu.tsx:195-206`):
+ *   web 用独立的 `<DropdownMenuSeparator />` 组件在菜单项之间画分隔线
+ *   (Header.tsx:231 「重命名 | 删除会话」· MessageBubble.tsx:578 「… | 删除」).
+ *   PC 是 items 数组形态 ⇒ 对应能力 = `DropdownMenuItem.separator`
+ *   (在本项**之前**渲染分隔线) + 导出的 `DropdownMenuSeparator` 组件.
  */
 
 import {
+  Fragment,
   useEffect,
   useRef,
   useState,
@@ -29,6 +36,11 @@ export interface DropdownMenuItem {
   destructive?: boolean;
   /** 禁用 */
   disabled?: boolean;
+  /**
+   * 在本项**之前**渲染一条分隔线
+   * (对齐 web `<DropdownMenuSeparator />` — Header.tsx:231 / MessageBubble.tsx:578).
+   */
+  separator?: boolean;
   /** 自定义渲染 (一般就是 label; 留给 icons+text 的复合场景) */
   render?: ReactNode;
 }
@@ -97,34 +109,55 @@ export function DropdownMenu({
           ].join(" ")}
         >
           {items.map((it, i) => (
-            <button
-              key={i}
-              role="menuitem"
-              disabled={it.disabled}
-              onClick={() => {
-                if (it.disabled) return;
-                setOpen(false);
-                it.onClick();
-              }}
-              className={[
-                // 对齐 web dropdown-menu.tsx:180-186
-                "relative flex w-full cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors",
-                "disabled:opacity-50 disabled:pointer-events-none",
-                // ⚠️ PC 无 tailwind-merge: web 靠 cn() 让「后写的赢」(destructive 的 danger-soft 底色生效),
-                //   PC 只能靠 CSS 产物顺序 —— 实测产物里 .bg-accent 早于 .bg-danger-soft
-                //   (25495 < 27210) ⇒ danger-soft 赢, 与 web 效果一致。
-                //   这里仍把两套 hover 拆成互斥分支: 不依赖调色板顺序, 也不会被将来新增 token 翻盘。
-                it.destructive
-                  ? "text-danger hover:bg-danger-soft focus:bg-danger-soft"
-                  : "text-fg hover:bg-accent focus:bg-accent",
-              ].join(" ")}
-            >
-              {it.render ?? it.label}
-            </button>
+            <Fragment key={i}>
+              {it.separator ? <DropdownMenuSeparator /> : null}
+              <button
+                role="menuitem"
+                disabled={it.disabled}
+                onClick={() => {
+                  if (it.disabled) return;
+                  setOpen(false);
+                  it.onClick();
+                }}
+                className={[
+                  // 对齐 web dropdown-menu.tsx:180-186
+                  "relative flex w-full cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors",
+                  "disabled:opacity-50 disabled:pointer-events-none",
+                  // ⚠️ PC 无 tailwind-merge: web 靠 cn() 让「后写的赢」(destructive 的 danger-soft 底色生效),
+                  //   PC 只能靠 CSS 产物顺序 —— 实测产物里 .bg-accent 早于 .bg-danger-soft
+                  //   (25495 < 27210) ⇒ danger-soft 赢, 与 web 效果一致。
+                  //   这里仍把两套 hover 拆成互斥分支: 不依赖调色板顺序, 也不会被将来新增 token 翻盘。
+                  it.destructive
+                    ? "text-danger hover:bg-danger-soft focus:bg-danger-soft"
+                    : "text-fg hover:bg-accent focus:bg-accent",
+                ].join(" ")}
+              >
+                {it.render ?? it.label}
+              </button>
+            </Fragment>
           ))}
         </div>
       ) : null}
     </div>
+  );
+}
+
+// ────────── DropdownMenuSeparator — 菜单项之间的分隔线 ──────────
+
+/**
+ * 分隔线 — 逐字对齐 web `components/ui/dropdown-menu.tsx:195-206`:
+ *   `<div role="separator" className={cn("my-1 h-px bg-border", className)} />`
+ *
+ * web 的用法是「独立组件, 夹在两个 DropdownMenuItem 之间」;
+ * PC 的菜单是 items 数组形态 ⇒ 走 `DropdownMenuItem.separator` (本项之前画线),
+ * 本组件同时导出, 供调用方在自定义渲染里复用同一份样式.
+ */
+export function DropdownMenuSeparator({ className }: { className?: string }) {
+  return (
+    <div
+      role="separator"
+      className={["my-1 h-px bg-border", className].filter(Boolean).join(" ")}
+    />
   );
 }
 
