@@ -102,29 +102,46 @@ const { parseMarkdown, parseInline, detectTableUpgrade, splitTableCells, parseAl
 const blockOf = (blocks, type) => blocks.find((b) => b.type === type);
 /** 取块里的全部行内文本。 */
 const plain = (inline) => (inline || []).map((n) => n.text ?? "").join("");
-/** 段落块的所有行文本。 */
+/**
+ * 文本块里的**段落**（跨块）—— 两层模型：块 → 段落 → 行。
+ */
+const paragraphsOf = (blocks) =>
+  blocks.filter((b) => b.type === "text").flatMap((b) => b.paragraphs);
+/** 文本块里的**行**（跨段落）。 */
+const textLines = (blocks) => paragraphsOf(blocks).flatMap((p) => p.lines);
+/** 行 → 可见文本（前缀照安卓带上）。 */
+const linePlain = (line) => {
+  if (line.kind === "text" || line.kind === "heading") return plain(line.inline);
+  if (line.kind === "listItem") return line.item.prefix + plain(line.item.inline);
+  if (line.kind === "quote") return line.prefix + plain(line.inline);
+  if (line.kind === "extension") return line.marker;
+  return "";
+};
+/** 文本块里的**普通文本行**的可见文本（不含标题 / 列表 / 引用行）。 */
 const paraLines = (blocks) =>
-  blocks
-    .filter((b) => b.type === "paragraph")
-    .flatMap((b) => b.lines.map((l) => plain(l.inline)));
-/** 全文纯文本（还原成「看得见的字符」）。 */
+  textLines(blocks).filter((l) => l.kind === "text").map((l) => plain(l.inline));
+/** 标题行。 */
+const headingLines = (blocks) => textLines(blocks).filter((l) => l.kind === "heading");
+/** 列表项行。 */
+const listLines = (blocks) => textLines(blocks).filter((l) => l.kind === "listItem");
+/** 引用行。 */
+const quoteLines = (blocks) => textLines(blocks).filter((l) => l.kind === "quote");
+/** 扩展标记行。 */
+const extensionLines = (blocks) => textLines(blocks).filter((l) => l.kind === "extension");
+/** 全文纯文本（还原成「看得见的字符」；段落之间补一个空行 = 原文的空行）。 */
 const visible = (blocks) => {
   const out = [];
   for (const b of blocks) {
-    if (b.type === "paragraph") out.push(b.lines.map((l) => plain(l.inline)).join("\n"));
-    else if (b.type === "heading") out.push(plain(b.inline));
-    else if (b.type === "blockquote") out.push(b.lines.map((l) => l.prefix + plain(l.inline)).join("\n"));
-    else if (b.type === "orderedList" || b.type === "unorderedList" || b.type === "taskList")
-      out.push(b.items.map((i) => i.prefix + plain(i.inline)).join("\n"));
-    else if (b.type === "table") {
+    if (b.type === "text") {
+      for (const p of b.paragraphs) out.push(p.lines.map(linePlain).join("\n"));
+    } else if (b.type === "table") {
       out.push(b.header.map((c) => c.text).join(" | "));
       for (const r of b.rows) out.push(r.map((c) => c.text).join(" | "));
     } else if (b.type === "codeBlock") out.push(b.raw);
     else if (b.type === "image") out.push(b.alt ?? "");
-    else if (b.type === "extension") out.push(b.marker);
     else out.push("");
   }
-  return out.join("\n");
+  return out.join("\n\n");
 };
 
 // =========================================================================
@@ -176,16 +193,17 @@ log("§B 词法:");
   const b = parseMarkdown("# H1\n## H2\n### H3");
   eq(
     b.map((x) => x.type),
-    ["heading", "heading", "heading"],
-    "H1/H2/H3 都产出 heading 节点",
+    ["text"],
+    "H1/H2/H3 同在一个 text 块里（标题是**行级**，不是顶层块）",
   );
+  const hs = headingLines(b);
   eq(
-    b.map((x) => (x.type === "heading" ? x.level : 0)),
+    hs.map((h) => h.level),
     [1, 2, 3],
     "heading 级别 = 1/2/3",
   );
   eq(
-    b.map((x) => (x.type === "heading" ? plain(x.inline) : "")),
+    hs.map((h) => plain(h.inline)),
     ["H1", "H2", "H3"],
     "heading 内容 = 去掉前缀后的原文",
   );
@@ -195,12 +213,12 @@ log("§B 词法:");
 {
   const b = parseMarkdown("#### H4\n##### H5\n###### H6");
   ok(
-    b.every((x) => x.type !== "heading"),
-    "H4-H6 不产出 heading 节点（安卓只判 # / ## / ### ）",
+    headingLines(b).length === 0,
+    "H4-H6 不产出 heading 行（安卓只判 # / ## / ### ）",
   );
   ok(
-    b.every((x) => x.type === "paragraph"),
-    "H4-H6 降级成普通 paragraph",
+    b.every((x) => x.type === "text"),
+    "H4-H6 降级成普通文本行（在 text 块里）",
   );
   eq(
     paraLines(b),
@@ -212,7 +230,7 @@ log("§B 词法:");
 // 标题前缀必须带空格
 {
   const b = parseMarkdown("#NoSpace");
-  ok(blockOf(b, "heading") === undefined, "`#NoSpace`（无空格）不是标题");
+  ok(headingLines(b).length === 0, "`#NoSpace`（无空格）不是标题");
   eq(paraLines(b), ["#NoSpace"], "`#NoSpace` 原样落在普通文本里");
 }
 
@@ -253,7 +271,7 @@ log("§B 词法:");
   const b = parseMarkdown("before\n```kotlin\nval x = 1\n```\nafter");
   ok(blockOf(b, "codeBlock") === undefined, "chat 场景（默认）不产出 codeBlock 块");
   const runs = [];
-  for (const blk of b) if (blk.type === "paragraph") for (const l of blk.lines) for (const n of l.inline) if (n.type === "codeRun") runs.push(n);
+  for (const l of textLines(b)) if (l.kind === "text") for (const n of l.inline) if (n.type === "codeRun") runs.push(n);
   ok(runs.length === 1, "chat 场景围栏正文产出一个 codeRun（行内等宽）");
   eq(runs[0]?.text, "val x = 1", "codeRun 文本 = 围栏之间原文");
 }
@@ -279,9 +297,10 @@ log("§B 词法:");
 // 硬换行：单 \n 即换行
 {
   const b = parseMarkdown("a\nb\nc");
-  const p = blockOf(b, "paragraph");
-  ok(p !== undefined && p.type === "paragraph", "纯文本产出一个 paragraph 块");
-  eq(p?.type === "paragraph" ? p.lines.length : 0, 3, "单 `\\n` 即硬换行（3 行 = 3 个 line）");
+  eq(b.map((x) => x.type), ["text"], "纯文本产出一个 text 块");
+  const paras = paragraphsOf(b);
+  eq(paras.length, 1, "没有空行 ⇒ 1 个段落（3 行同段）");
+  eq(paras[0].lines.length, 3, "单 `\\n` 即硬换行（3 行 = 3 个 line）");
   eq(paraLines(b), ["a", "b", "c"], "每行独立成 line");
 }
 
@@ -374,7 +393,7 @@ log("§C 行内:");
   const b = parseMarkdown('<script>alert("xss")</script>');
   eq(paraLines(b), ['<script>alert("xss")</script>'], "HTML 标签原样作为纯文本");
   const types = new Set();
-  for (const blk of b) if (blk.type === "paragraph") for (const l of blk.lines) for (const n of l.inline) types.add(n.type);
+  for (const l of textLines(b)) if (l.kind === "text") for (const n of l.inline) types.add(n.type);
   eq([...types], ["text"], "HTML 文本只产出 text 节点（无任何 HTML/原始节点 ⇒ 无 XSS 面）");
 }
 
@@ -411,36 +430,34 @@ log("§D 块级:");
 // 引用：每层 2 空格缩进
 {
   const b = parseMarkdown("> 一层\n>> 两层");
-  const q = blockOf(b, "blockquote");
-  ok(q !== undefined, "引用产出 blockquote 块");
-  eq(q?.type === "blockquote" ? q.lines.map((l) => l.level) : [], [1, 2], "引用层级 = `>` 个数");
+  const qs = quoteLines(b);
+  ok(qs.length === 2, "引用产出 quote 行（行级，不是顶层块）");
+  eq(qs.map((l) => l.level), [1, 2], "引用层级 = `>` 个数");
   eq(
-    q?.type === "blockquote" ? q.lines.map((l) => l.prefix) : [],
+    qs.map((l) => l.prefix),
     ["  ", "    "],
     "引用每层 2 个空格缩进（安卓 `\"  \".repeat(level)`）",
   );
   const b2 = parseMarkdown(">>>foo");
-  ok(blockOf(b2, "blockquote") === undefined, "`>>>foo`（`>` 后无空白）不是引用（安卓回退普通文本）");
+  ok(quoteLines(b2).length === 0, "`>>>foo`（`>` 后无空白）不是引用（安卓回退普通文本）");
   eq(paraLines(b2), [">>>foo"], "`>>>foo` 原样落普通文本");
 }
 
 // 列表前缀（PM 口径 #7）
 {
-  const ol = blockOf(parseMarkdown("1. one\n2. two"), "orderedList");
-  ok(ol !== undefined, "有序列表产出 orderedList 块");
-  eq(ol?.type === "orderedList" ? ol.items.map((i) => i.prefix) : [], ["  1. ", "  2. "], "有序列表文本前缀 = `  N. `");
-  const ul = blockOf(parseMarkdown("- first\n- second"), "unorderedList");
-  ok(ul !== undefined, "无序列表产出 unorderedList 块");
-  eq(ul?.type === "unorderedList" ? ul.items.map((i) => i.prefix) : [], ["  • ", "  • "], "无序列表文本前缀 = `  • `");
+  const ol = listLines(parseMarkdown("1. one\n2. two")).filter((l) => l.listKind === "ordered");
+  ok(ol.length === 2, "有序列表产出 listItem 行（listKind = ordered）");
+  eq(ol.map((l) => l.item.prefix), ["  1. ", "  2. "], "有序列表文本前缀 = `  N. `");
+  const ul = listLines(parseMarkdown("- first\n- second")).filter((l) => l.listKind === "unordered");
+  ok(ul.length === 2, "无序列表产出 listItem 行（listKind = unordered）");
+  eq(ul.map((l) => l.item.prefix), ["  • ", "  • "], "无序列表文本前缀 = `  • `");
   eq(
-    ul?.type === "unorderedList" ? ul.items.map((i) => plain(i.inline)) : [],
+    ul.map((l) => plain(l.item.inline)),
     ["first", "second"],
     "列表项正文剥掉 `- ` 前缀",
   );
   eq(
-    blockOf(parseMarkdown("* star"), "unorderedList")?.type === "unorderedList"
-      ? blockOf(parseMarkdown("* star"), "unorderedList").items[0].prefix
-      : "",
+    listLines(parseMarkdown("* star"))[0]?.item.prefix,
     "  • ",
     "`* ` 同样是无序列表",
   );
@@ -449,11 +466,12 @@ log("§D 块级:");
 // 嵌套列表不产出层级（PM 口径 #2）
 {
   const b = parseMarkdown("- a\n  - sub");
-  const ul = blockOf(b, "unorderedList");
-  ok(ul !== undefined, "第一行仍是无序列表项");
-  eq(ul?.type === "unorderedList" ? ul.items.length : 0, 1, "缩进子项**不**是列表项（只有 1 个 item，无嵌套）");
-  ok(blockOf(b, "orderedList") === undefined, "不产出有序列表块");
-  eq(paraLines(b), ["  - sub"], "缩进子项落普通 paragraph（缩进 + 横杠都保留）");
+  ok(listLines(b).length === 1, "第一行仍是无序列表项（只有 1 个 listItem 行）");
+  ok(
+    listLines(b).every((l) => l.listKind === "unordered"),
+    "不产出有序列表行",
+  );
+  eq(paraLines(b), ["  - sub"], "缩进子项落普通文本行（缩进 + 横杠都保留）");
   ok(
     !JSON.stringify(parseMarkdown("- a\n  - sub")).includes('"children"'),
     "AST 里没有 list item children / 层级字段",
@@ -462,17 +480,17 @@ log("§D 块级:");
 
 // task-list（PM 口径 #3：缩进也识别）
 {
-  const t = blockOf(parseMarkdown("- [x] done\n- [ ] todo"), "taskList");
-  ok(t !== undefined, "task-list 产出 taskList 块");
-  eq(t?.type === "taskList" ? t.items.map((i) => i.prefix) : [], ["[X] ", "[ ] "], "task-list 文本前缀 = `[X] ` / `[ ] `");
-  eq(t?.type === "taskList" ? t.items.map((i) => i.checked) : [], [true, false], "task-list 勾选状态解析");
+  const t = listLines(parseMarkdown("- [x] done\n- [ ] todo")).filter((l) => l.listKind === "task");
+  ok(t.length === 2, "task-list 产出 listItem 行（listKind = task）");
+  eq(t.map((l) => l.item.prefix), ["[X] ", "[ ] "], "task-list 文本前缀 = `[X] ` / `[ ] `");
+  eq(t.map((l) => l.item.checked), [true, false], "task-list 勾选状态解析");
   eq(
-    t?.type === "taskList" ? t.items.map((i) => i.style.strikethrough === true) : [],
+    t.map((l) => l.item.style.strikethrough === true),
     [true, false],
     "已勾选 task 整段带删除线标记，未勾选不带",
   );
-  const t2 = blockOf(parseMarkdown("  - [ ] 缩进的"), "taskList");
-  ok(t2 !== undefined, "缩进的 task-list 仍被识别（安卓的不对称：`[\\s]*` 允许前导空白）");
+  const t2 = listLines(parseMarkdown("  - [ ] 缩进的")).filter((l) => l.listKind === "task");
+  ok(t2.length === 1, "缩进的 task-list 仍被识别（安卓的不对称：`[\\s]*` 允许前导空白）");
 }
 
 // 表格
@@ -596,7 +614,7 @@ log("§G 安卓单测移植（yinian-android MarkdownParserTest.kt）:");
   ].join("\n");
   const b = parseMarkdown(src);
   const runs = [];
-  for (const blk of b) if (blk.type === "paragraph") for (const l of blk.lines) for (const n of l.inline) if (n.type === "codeRun") runs.push(n);
+  for (const l of textLines(b)) if (l.kind === "text") for (const n of l.inline) if (n.type === "codeRun") runs.push(n);
   eq(runs.length, 1, "fix1：围栏正文产出 1 个 codeRun");
   eq(
     runs[0]?.urls.map((u) => u.url),
@@ -698,7 +716,135 @@ log("§G 安卓单测移植（yinian-android MarkdownParserTest.kt）:");
 }
 
 // =========================================================================
-// 结论文案 —— 严禁出现「渲染验证通过」这类误导措辞
+// §H 段落边界 / 块边界（安卓两层模型 —— 返工批专项）
+// =========================================================================
+log("");
+log("§H 段落边界 / 块边界（两层模型）:");
+
+// ① 空行被吃掉 —— "# 标题\n\n正文" ⇒ 2 个段落，空行本身不产生任何行
+{
+  const b = parseMarkdown("# 标题\n\n正文");
+  eq(b.map((x) => x.type), ["text"], "标题 + 正文同属一个 text 块（顶层不是 heading 块）");
+  const paras = paragraphsOf(b);
+  eq(paras.length, 2, "空行把 text 块切成 2 个段落（安卓 splitParagraphs）");
+  eq(paras.map((p) => p.lines.length), [1, 1], "空行本身不产生任何行");
+  eq(paras[0].lines[0].kind, "heading", "第 1 段是 heading 行");
+  eq(paras[1].lines[0].kind, "text", "第 2 段是普通文本行");
+  eq(
+    textLines(b).filter((l) => l.kind === "text" && l.inline.length === 0).length,
+    0,
+    "没有任何「空文本行」（空行被吃掉，不进 lines[]）",
+  );
+}
+
+// ② 无空行 ⇒ 标题与正文在**同一个段落**内
+{
+  const b = parseMarkdown("# 标题\n正文");
+  const paras = paragraphsOf(b);
+  eq(paras.length, 1, "没有空行 ⇒ 1 个段落");
+  eq(paras[0].lines.map((l) => l.kind), ["heading", "text"], "标题与正文在同一个段落内");
+}
+
+// ③ 表格是**独立顶层块** ⇒ 与前后文本之间是块边界（不是段落边界）
+{
+  const b = parseMarkdown("正文\n\n| a | b |\n|---|---|\n| 1 | 2 |");
+  eq(b.map((x) => x.type), ["text", "table"], "表格是独立顶层块（text ↔ table = 块边界）");
+  eq(paragraphsOf(b).length, 1, "表格前的文本自成 1 个段落");
+  eq(
+    b[1]?.type === "table" ? b[1].header.map((c) => c.text) : [],
+    ["a", "b"],
+    "表格块内容正确",
+  );
+  eq(paraLines(b), ["正文"], "表格前后的文本不进表格块");
+}
+
+// ④ 列表归组 —— 连续的同类 listItem 归一组；ordered↔unordered 切换时开新组
+{
+  const b = parseMarkdown("1. a\n2. b\n- c\n- d");
+  const ls = listLines(b);
+  eq(ls.map((l) => l.listKind), ["ordered", "ordered", "unordered", "unordered"], "listItem 行的 listKind 序列");
+  // 归组 = 连续同类切一段
+  const groups = [];
+  for (const l of ls) {
+    const last = groups[groups.length - 1];
+    if (last && last.kind === l.listKind) last.items.push(l);
+    else groups.push({ kind: l.listKind, items: [l] });
+  }
+  eq(groups.length, 2, "ordered↔unordered 切换 ⇒ 开新组（2 组）");
+  eq(groups.map((g) => g.items.length), [2, 2], "每组 2 项");
+  eq(groups.map((g) => g.kind), ["ordered", "unordered"], "第 1 组有序 / 第 2 组无序");
+  // task 单独成组
+  const t = listLines(parseMarkdown("- [x] a\n- [ ] b\n1. c"));
+  eq(t.map((l) => l.listKind), ["task", "task", "ordered"], "task 与 ordered 各自分组");
+}
+
+// ⑤ task-list 缩进不对称照抄安卓
+{
+  const ls = listLines(parseMarkdown("  - [ ] 缩进的"));
+  eq(ls.length, 1, "缩进的 task-list 仍被识别（安卓的不对称）");
+  eq(ls[0].listKind, "task", "缩进 task-list 的 listKind = task");
+  const ls2 = listLines(parseMarkdown("  - sub"));
+  eq(ls2.length, 0, "缩进的**普通**列表不识别（安卓的不对称：只有 task-list 允许前导空白）");
+  eq(paraLines(parseMarkdown("  - sub")), ["  - sub"], "缩进普通列表项落普通文本行（缩进 + 横杠都保留）");
+}
+
+// ⑥ 顶层块只有 5 种（安卓 MdBlock）
+{
+  const src = [
+    "# 标题",
+    "",
+    "正文",
+    "",
+    "- 列表",
+    "",
+    "> 引用",
+    "",
+    ":::tip",
+    "",
+    "---",
+    "",
+    "![图](https://x.com/a.png)",
+    "",
+    "| a |",
+    "|---|",
+    "",
+    "```",
+    "code",
+    "```",
+  ].join("\n");
+  const kinds = [...new Set(parseMarkdown(src, { cutCodeBlocks: true }).map((b) => b.type))].sort();
+  eq(kinds, ["codeBlock", "hr", "image", "table", "text"], "顶层块只有 text/table/image/hr/codeBlock 5 种");
+  eq(
+    extensionLines(parseMarkdown(src)).length,
+    1,
+    "`:::` 是 text 块内部的**行**，不是顶层块",
+  );
+  eq(headingLines(parseMarkdown(src)).length, 1, "标题是 text 块内部的行，不是顶层块");
+  eq(quoteLines(parseMarkdown(src)).length, 1, "引用是 text 块内部的行，不是顶层块");
+}
+
+// ⑦ 段落之间 vs 段内行之间 —— AST 层面的区分
+{
+  const b = parseMarkdown("a\nb\n\nc\nd");
+  const paras = paragraphsOf(b);
+  eq(paras.length, 2, "空行 = 段落边界（2 段）");
+  eq(paras.map((p) => p.lines.length), [2, 2], "段内多行仍是同一个段落（段内行之间无额外间距）");
+}
+
+// ⑧ 流式半截表格 —— 升级判定三态**不许变**
+{
+  const half = parseMarkdown("| a | b |");
+  eq(half.map((x) => x.type), ["text"], "半截表格仍是一个 text 块（流式约束不变）");
+  eq(detectTableUpgrade(["| a | b |"]).state, "pending", "detectTableUpgrade：只有表头 = pending");
+  eq(
+    detectTableUpgrade(["| a | b |", "|---|---|"]).state,
+    "upgraded",
+    "detectTableUpgrade：分隔行到齐 = upgraded",
+  );
+}
+
+// =========================================================================
+// 结论文案 —— 严禁出现「渲染验证通过」「视觉一致」这类误导措辞
 // =========================================================================
 log("");
 if (fail > 0) {
@@ -706,8 +852,8 @@ if (fail > 0) {
   process.exit(1);
 }
 console.log(
-  `✅ 解析层断言全部通过（${total}/${total}）—— 仅覆盖「语法解析层」（PC 自研 parser vs 安卓基准）`,
+  `✅ 解析层断言通过（${total}/${total}）—— 仅覆盖「语法解析层」（PC 自研 parser vs 安卓基准）`,
 );
 console.log(
-  "   ⚠️ 渲染层（M2）尚未接线：视觉一致性、表格 clamp/横滑实测、HTML 输出**均未验证**。",
+  "   ⚠️ 渲染层的 DOM 结构断言在另一个脚本（scripts/verify-md-render.mjs）；本脚本**不验视觉**。",
 );

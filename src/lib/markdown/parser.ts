@@ -9,6 +9,25 @@
  * 行为依据（唯一输入源）：`docs/md-android-behavior-spec.md`
  * —— 那里每条规格都带安卓 `file:line`，本文件的每段实现都对应其中的一条。
  *
+ * ## AST 形态 —— **两层模型**（与安卓同构）
+ *
+ * 安卓的块级**只有 5 种**（`MarkdownParser.kt:789-809` 的 `splitMarkdownBlocks`）：
+ * `Text` / `Table` / `Image` / `HR` / `CodeBlock`。
+ * 标题 / 列表 / 引用 / `:::` **不是块级** —— 它们是 `MdBlock.Text` **块内部**的行
+ * （行级分派见 `MarkdownParser.kt:394-438` 的 `when`）。
+ *
+ * ```
+ * MdBlock[]                 ← 顶层：text / table / image / hr / codeBlock
+ *  └─ text                  ← MdTextBlock：一个或多个**段落**
+ *      └─ paragraphs[]      ← MdParagraph：**连续的非空行**（空行 = 段落边界）
+ *          └─ lines[]       ← MdLine：行级 kind（text / heading / listItem / quote / extension）
+ * ```
+ *
+ * ⇒ **空行被吃掉**：空行只作段落边界，**本身不产生任何行、任何渲染**
+ * （安卓 `splitParagraphs`，`MarkdownParser.kt:896-899`）。
+ * ⇒ **块边界**（text ↔ table/image/hr/codeBlock）与**段落边界**（text 块内部的段落之间）
+ * 是两件事 —— 间距由渲染层表达，解析层不管间距。
+ *
  * ## 硬约束
  *
  * 1. **纯 TypeScript** —— 零 React / 零第三方依赖
@@ -85,8 +104,32 @@ export type MdInline =
   /** 围栏代码块正文（chat 形态：行内等宽）。 */
   | { type: "codeRun"; text: string; urls: MdUrlSpan[] };
 
-/** 段落里的一行。 */
-export interface MdParagraphLine {
+// ---------------------------------------------------------------------------
+// 行级（段落内部）
+// ---------------------------------------------------------------------------
+
+/**
+ * 段落里的一行 —— **行级**节点。
+ *
+ * ⚠️ **行级 ≠ 块级** —— 安卓的**块级只有 5 种**（`Text` / `Table` / `Image` / `HR` /
+ * `CodeBlock`，`MarkdownParser.kt:789-809`），而标题 / 列表 / 引用 / `:::` 全都活在
+ * `MdBlock.Text` **块内部**（行级分派见 `MarkdownParser.kt:394-438` 的 `when`）。
+ */
+export type MdLine =
+  /** 普通文本行（含表格退化行 `emEnabled = false`）。 */
+  | MdTextLine
+  /** 标题行（只有 1–3 级）。 */
+  | MdHeadingLine
+  /** 列表项行（ordered / unordered / task）。 */
+  | MdListItemLine
+  /** 引用行。 */
+  | MdQuoteLine
+  /** `:::` 扩展卡片标记行。 */
+  | MdExtensionLine;
+
+/** 普通文本行。 */
+export interface MdTextLine {
+  kind: "text";
   /** 行内节点。 */
   inline: MdInline[];
   /**
@@ -96,25 +139,32 @@ export interface MdParagraphLine {
   emEnabled: boolean;
 }
 
-/** 段落 —— 连续的非块级行；`lines[]` 承载「单 `\n` 即硬换行」。 */
-export interface MdParagraphBlock {
-  type: "paragraph";
-  lines: MdParagraphLine[];
-}
-
-/** 标题 —— **只有 1–3 级**（安卓只判 `# ` / `## ` / `### `）。 */
-export interface MdHeadingBlock {
-  type: "heading";
+/** 标题行 —— **只有 1–3 级**（安卓只判 `# ` / `## ` / `### `）。 */
+export interface MdHeadingLine {
+  kind: "heading";
   level: 1 | 2 | 3;
   /**
    * 标题内容 —— 安卓**原样 append，不走行内解析**（`MarkdownParser.kt:396/399/402`）
-   * ⇒ 正常情况下只有一个 `text` 节点。
+   * ⇒ 正常情况下只有一个 `text` 节点（**D1**）。
    */
   inline: MdInline[];
 }
 
-/** 引用的一行。 */
-export interface MdBlockquoteLine {
+/** 列表类型 —— 决定列表项的**归组**（ordered / unordered / task 各自分组）。 */
+export type MdListKind = "ordered" | "unordered" | "task";
+
+/** 列表项行 —— **无 children / 无层级**（安卓不支持嵌套列表）。 */
+export interface MdListItemLine {
+  kind: "listItem";
+  /** 列表类型（渲染层据此把**连续的同类**列表项归成一组）。 */
+  listKind: MdListKind;
+  /** 列表项本体。 */
+  item: MdListItem;
+}
+
+/** 引用行。 */
+export interface MdQuoteLine {
+  kind: "quote";
   /** 层级 = 行首 `>` 的个数（`MarkdownParser.kt:386`）。 */
   level: number;
   /** 行首缩进前缀 = `"  ".repeat(level)`（`MarkdownParser.kt:388`）。 */
@@ -123,10 +173,11 @@ export interface MdBlockquoteLine {
   inline: MdInline[];
 }
 
-/** 引用块 —— 连续的引用行。 */
-export interface MdBlockquoteBlock {
-  type: "blockquote";
-  lines: MdBlockquoteLine[];
+/** `:::` 扩展卡片标记行 —— 安卓输出 `\u0000<type>\u0000`（`MarkdownParser.kt:433-437`）。 */
+export interface MdExtensionLine {
+  kind: "extension";
+  /** `:::` 之后整行的 trim 结果。 */
+  marker: string;
 }
 
 /** 列表项 —— **无 children / 无层级**（安卓不支持嵌套列表）。 */
@@ -142,26 +193,35 @@ export interface MdListItem {
   inline: MdInline[];
   /** 整行级样式（已勾选 task = 删除线）。 */
   style: MdStyleFlags;
+  /** 仅 task 列表项有值：勾选状态（`checked = true` ⇒ `style.strikethrough = true`）。 */
+  checked?: boolean;
 }
 
-/** 任务列表项 —— `checked = true` 时 `style.strikethrough = true`。 */
-export interface MdTaskItem extends MdListItem {
-  checked: boolean;
+// ---------------------------------------------------------------------------
+// 段落（文本块内部）
+// ---------------------------------------------------------------------------
+
+/**
+ * 段落 —— **连续的非空行**。
+ *
+ * 段落由**空行**切出（安卓 `splitParagraphs`，`MarkdownParser.kt:896-899`）：
+ * 空行本身**不产生任何行**（被吃掉），只是段落与段落之间的**边界标记**。
+ */
+export interface MdParagraph {
+  /** 段落里的行（每行保留自己的行级 kind）。 */
+  lines: MdLine[];
 }
 
-export interface MdOrderedListBlock {
-  type: "orderedList";
-  items: MdListItem[];
-}
-
-export interface MdUnorderedListBlock {
-  type: "unorderedList";
-  items: MdListItem[];
-}
-
-export interface MdTaskListBlock {
-  type: "taskList";
-  items: MdTaskItem[];
+/**
+ * 文本块 —— 顶层块之一（安卓 `MdBlock.Text`），承载 **1 个或多个段落**。
+ *
+ * ⚠️ 块级**只有 5 种**：`text` / `table` / `image` / `hr` / `codeBlock`
+ * —— 标题 / 列表 / 引用 / `:::` **不是**顶层块（它们是段落内部的行）。
+ */
+export interface MdTextBlock {
+  type: "text";
+  /** 段落列表（空行切分）。 */
+  paragraphs: MdParagraph[];
 }
 
 /** 表格单元格 —— `text` 是原文（安卓解析层不剥壳），`inline` 是渲染用的行内解析结果。 */
@@ -205,26 +265,13 @@ export interface MdHrBlock {
   type: "hr";
 }
 
-/** `:::` 扩展卡片标记 —— 安卓输出 `\u0000<type>\u0000`（`MarkdownParser.kt:433-437`）。 */
-export interface MdExtensionBlock {
-  type: "extension";
-  /** `:::` 之后整行的 trim 结果。 */
-  marker: string;
-}
-
-/** 块级节点。 */
+/** 块级节点 —— **只有 5 种**（对齐安卓 `MdBlock`，`MarkdownParser.kt:128-172`）。 */
 export type MdBlock =
-  | MdParagraphBlock
-  | MdHeadingBlock
-  | MdBlockquoteBlock
-  | MdOrderedListBlock
-  | MdUnorderedListBlock
-  | MdTaskListBlock
+  | MdTextBlock
   | MdTableBlock
   | MdCodeBlock
   | MdImageBlock
-  | MdHrBlock
-  | MdExtensionBlock;
+  | MdHrBlock;
 
 /** 解析参数。 */
 export interface MdParseOptions {
@@ -338,9 +385,9 @@ function pushText(out: MdInline[], text: string): void {
   out.push({ type: "text", text });
 }
 
-/** 空段落（安卓 `MdBlock.Text("")`）。 */
-function emptyParagraph(): MdParagraphBlock {
-  return { type: "paragraph", lines: [{ inline: [], emEnabled: true }] };
+/** 空文本块 —— 安卓 `MdBlock.Text("")`（`MarkdownParser.kt:791`）。 */
+function emptyTextBlock(): MdTextBlock {
+  return { type: "text", paragraphs: [] };
 }
 
 // ============================================================================
@@ -719,8 +766,13 @@ export function normalizeImageUrl(raw: string): string | null {
 }
 
 /**
- * 按**空行**把一段文本切成段落 —— 安卓 `MarkdownParser.kt:896-899`。
+ * 按**空行**把一段文本切成段落 —— 安卓 `MarkdownParser.kt:896-899` 的**逐字镜像**。
  * 段内的换行保留（列表项的续行不能被拆开）。
+ *
+ * ⚠️ 这是安卓 UI 层（阅读场景 `MarkdownTextSection`）的入口，**含 trim**。
+ * PC 解析层**内部**的段落切分（`unitsToParagraphs`）**不做 trim** ——
+ * trim 会把 `  - sub` 变成 `- sub`，安卓「普通列表缩进不识别 / task-list 缩进识别」的
+ * 不对称（规格 §3.2 / §3.3）就破了。
  */
 export function splitParagraphs(text: string): string[] {
   return text
@@ -764,31 +816,28 @@ function collectCodeUrls(text: string): MdUrlSpan[] {
 // 行级分派 —— 对应安卓 `toAnnotatedString` 的每行分派（`MarkdownParser.kt:330-441`）
 // ============================================================================
 
-type LineUnit =
-  | { kind: "paragraph"; line: MdParagraphLine }
-  | { kind: "heading"; level: 1 | 2 | 3; inline: MdInline[] }
-  | { kind: "quote"; line: MdBlockquoteLine }
-  | { kind: "list"; listKind: "ordered" | "unordered" | "task"; item: MdListItem }
-  | { kind: "extension"; marker: string };
-
 /**
  * 一行的分派 —— 顺序严格对齐安卓：
  * 任务列表（`?.let` 早退）→ 引用（`?.let` 早退）→ 标题 → 有序列表 → 无序列表 → 表格行 → `:::` → else。
+ *
+ * ⚠️ 产出的是**行级**节点（`MdLine`），**不是**块级节点 ——
+ * 安卓的块级只有 5 种（`MarkdownParser.kt:789-809`），标题 / 列表 / 引用 / `:::`
+ * 全都活在 `MdBlock.Text` 块内部（行级分派见 `MarkdownParser.kt:394-438`）。
  */
-function classifyLine(line: string): LineUnit {
+function classifyLine(line: string): MdLine {
   // ① 任务列表 —— 必须先于有序/无序列表（安卓 :351-356）
   const task = TASK_LIST_REGEX.exec(line);
   if (task) {
     const marker = task[1];
     const body = task[2];
     const checked = marker.toLowerCase() === "x";
-    const item: MdTaskItem = {
+    const item: MdListItem = {
       prefix: checked ? "[X] " : "[ ] ",
       inline: parseInline(body, true),
       style: checked ? { strikethrough: true } : {},
       checked,
     };
-    return { kind: "list", listKind: "task", item };
+    return { kind: "listItem", listKind: "task", item };
   }
 
   // ② 引用 —— `>` 后至少 1 个空白，每层 2 空格缩进（安卓 :385-392）
@@ -797,7 +846,9 @@ function classifyLine(line: string): LineUnit {
     const level = countChar(bq[1], ">");
     return {
       kind: "quote",
-      line: { level, prefix: "  ".repeat(level), inline: parseInline(bq[2], true) },
+      level,
+      prefix: "  ".repeat(level),
+      inline: parseInline(bq[2], true),
     };
   }
 
@@ -816,7 +867,7 @@ function classifyLine(line: string): LineUnit {
   const ordered = ORDERED_LIST_REGEX.exec(line);
   if (ordered) {
     return {
-      kind: "list",
+      kind: "listItem",
       listKind: "ordered",
       item: { prefix: "  " + ordered[1] + ". ", inline: parseInline(ordered[2], true), style: {} },
     };
@@ -825,7 +876,7 @@ function classifyLine(line: string): LineUnit {
   // ⑤ 无序列表 —— `startsWith("- ")` / `startsWith("* ")`，前缀 `"  • "`（安卓 :415-422）
   if (line.startsWith("- ") || line.startsWith("* ")) {
     return {
-      kind: "list",
+      kind: "listItem",
       listKind: "unordered",
       item: { prefix: "  • ", inline: parseInline(line.slice(2), true), style: {} },
     };
@@ -833,7 +884,7 @@ function classifyLine(line: string): LineUnit {
 
   // ⑥ 表格行退化路径 —— `emEnabled = false`（安卓 :429-431）
   if (line.startsWith("|")) {
-    return { kind: "paragraph", line: { inline: parseInline(line, false), emEnabled: false } };
+    return { kind: "text", inline: parseInline(line, false), emEnabled: false };
   }
 
   // ⑦ `:::` 扩展卡片标记（安卓 :433-437）
@@ -842,94 +893,80 @@ function classifyLine(line: string): LineUnit {
   }
 
   // ⑧ else（安卓 :438）
-  return { kind: "paragraph", line: { inline: parseInline(line, true), emEnabled: true } };
-}
-
-/** 把行单元按类型分组成交替的块（连续同类合并）。 */
-function unitsToBlocks(units: LineUnit[]): MdBlock[] {
-  const blocks: MdBlock[] = [];
-  let para: MdParagraphLine[] = [];
-  let quote: MdBlockquoteLine[] = [];
-  let items: MdListItem[] = [];
-  let listKind: "ordered" | "unordered" | "task" = "ordered";
-
-  const flushPara = (): void => {
-    if (para.length > 0) {
-      blocks.push({ type: "paragraph", lines: para });
-      para = [];
-    }
-  };
-  const flushQuote = (): void => {
-    if (quote.length > 0) {
-      blocks.push({ type: "blockquote", lines: quote });
-      quote = [];
-    }
-  };
-  const flushList = (): void => {
-    if (items.length === 0) return;
-    if (listKind === "ordered") blocks.push({ type: "orderedList", items });
-    else if (listKind === "unordered") blocks.push({ type: "unorderedList", items });
-    else blocks.push({ type: "taskList", items: items as MdTaskItem[] });
-    items = [];
-  };
-  const flushAll = (): void => {
-    flushPara();
-    flushQuote();
-    flushList();
-  };
-
-  for (const u of units) {
-    if (u.kind === "paragraph") {
-      flushQuote();
-      flushList();
-      para.push(u.line);
-    } else if (u.kind === "heading") {
-      flushAll();
-      blocks.push({ type: "heading", level: u.level, inline: u.inline });
-    } else if (u.kind === "quote") {
-      flushPara();
-      flushList();
-      quote.push(u.line);
-    } else if (u.kind === "list") {
-      flushPara();
-      flushQuote();
-      if (items.length > 0 && listKind !== u.listKind) flushList();
-      listKind = u.listKind;
-      items.push(u.item);
-    } else {
-      flushAll();
-      blocks.push({ type: "extension", marker: u.marker });
-    }
-  }
-  flushAll();
-  return blocks;
+  return { kind: "text", inline: parseInline(line, true), emEnabled: true };
 }
 
 /**
- * 一个文本块 → 语义块序列。
+ * 一个文本单元 —— 段落切分的最小单位。
+ *
+ * - `blank`：**空行** = 段落边界（安卓 `splitParagraphs` 的切点），**本身不产生任何行**；
+ * - `line`：一行内容（行级 kind 由 `classifyLine` 判定）。
+ */
+type MdTextUnit = { kind: "blank" } | { kind: "line"; line: MdLine };
+
+/** 空行判定 —— **只有真空行**才算段落边界（安卓按 `\n{2,}` 切，`MarkdownParser.kt:897`）。 */
+function isBlankLine(line: string): boolean {
+  return line === "" || line === "\r";
+}
+
+/**
+ * 行单元 → 段落序列（**空行切段**）。
+ *
+ * - 空行 = 段落边界：**吃掉空行本身**，只留边界（安卓 `splitParagraphs` 的 trim + 过滤空段）；
+ * - 连续空行 = 一个边界（`a\n\n\nb` ⇒ 2 段）；
+ * - ⚠️ **不做 trim**：段内行**原样保留**（含前导空白）——
+ *   trim 会把 `  - sub` 变成 `- sub` ⇒ 普通列表的「缩进不识别」这条（安卓的不对称，
+ *   规格 §3.2 / §3.3）就破了 ⇒ 缩进子项必须保持普通文本行。
+ */
+function unitsToParagraphs(units: MdTextUnit[]): MdParagraph[] {
+  const paragraphs: MdParagraph[] = [];
+  let current: MdLine[] = [];
+  for (const u of units) {
+    if (u.kind === "blank") {
+      if (current.length > 0) {
+        paragraphs.push({ lines: current });
+        current = [];
+      }
+      continue;
+    }
+    current.push(u.line);
+  }
+  if (current.length > 0) paragraphs.push({ lines: current });
+  return paragraphs;
+}
+
+/**
+ * 一个文本段 → 文本块（安卓 `MdBlock.Text`）。
  *
  * ⚠️ 围栏处理：chat 形态（`cutCodeBlocks = false`）下围栏**留在文本里**，
  * 渲染成行内等宽（安卓 `MarkdownParser.kt:332-349` + `appendCodeRun` `:481-500`）。
  * 未闭合围栏的缓冲区**永远不会被 flush** ⇒ 内容丢失（安卓现状，见规格 §9-D3）。
+ *
+ * 空行在**行单元层**就被标成 `blank`（段落边界）⇒ 不会被当成内容行，
+ * 也不会把围栏内容里的空行误当段落边界（围栏内容进的是 `codeBuf`，不参与切段）。
  */
-function parseTextLines(text: string): MdBlock[] {
+function parseTextLines(text: string): MdTextBlock {
   const lines = text.split("\n");
-  const units: LineUnit[] = [];
+  const units: MdTextUnit[] = [];
   let inCode = false;
   let codeBuf: string[] = [];
 
   for (const line of lines) {
     if (line.trim().startsWith(FENCE_PREFIX)) {
       if (!inCode) {
-        // 围栏开启行：安卓在 :342 补了一个 "\n" ⇒ 这里落一个空行
-        units.push({ kind: "paragraph", line: { inline: [], emEnabled: true } });
+        // 围栏开启行：安卓在 :342 补了一个 "\n" ⇒ 这里落一个空行（**不是**段落边界）
+        units.push({ kind: "line", line: { kind: "text", inline: [], emEnabled: true } });
         inCode = true;
         codeBuf = [];
       } else {
         const raw = codeBuf.join("\n");
         units.push({
-          kind: "paragraph",
-          line: { inline: [{ type: "codeRun", text: raw, urls: collectCodeUrls(raw) }], emEnabled: true },
+          kind: "line",
+          line: {
+            kind: "text",
+            inline: [{ type: "codeRun", text: raw, urls: collectCodeUrls(raw) }],
+            emEnabled: true,
+          },
         });
         inCode = false;
         codeBuf = [];
@@ -940,10 +977,15 @@ function parseTextLines(text: string): MdBlock[] {
       codeBuf.push(line);
       continue;
     }
-    units.push(classifyLine(line));
+    // 空行 = 段落边界（本身不产生任何行）
+    if (isBlankLine(line)) {
+      units.push({ kind: "blank" });
+      continue;
+    }
+    units.push({ kind: "line", line: classifyLine(line) });
   }
   // 未闭合围栏：缓冲区不 flush（安卓同款行为，规格 §9-D3）
-  return unitsToBlocks(units);
+  return { type: "text", paragraphs: unitsToParagraphs(units) };
 }
 
 // ============================================================================
@@ -969,19 +1011,19 @@ function parseImageLine(line: string): MdImageBlock | null {
  * 分隔行到齐了再变成表格」（安卓 `:1004-1005`）。
  */
 function splitBlocksCore(src: string): MdBlock[] {
-  if (src.length === 0) return [emptyParagraph()];
+  if (src.length === 0) return [emptyTextBlock()];
 
   const lines = src.split("\n");
   // 快路径：全文没有竖线 + 没有 HR ⇒ 一整块文本（安卓 :1016-1018）
   if (!src.includes("|") && !lines.some(isHorizontalRule)) {
-    return parseTextLines(src);
+    return [parseTextLines(src)];
   }
 
   const blocks: MdBlock[] = [];
   const pending: string[] = [];
   const flushText = (): void => {
     if (pending.length === 0) return;
-    blocks.push(...parseTextLines(pending.join("\n")));
+    blocks.push(parseTextLines(pending.join("\n")));
     pending.length = 0;
   };
 
@@ -1014,7 +1056,7 @@ function splitBlocksCore(src: string): MdBlock[] {
     i++;
   }
   flushText();
-  return blocks.length > 0 ? blocks : [emptyParagraph()];
+  return blocks.length > 0 ? blocks : [emptyTextBlock()];
 }
 
 /** 按行切图片块 —— 安卓 `splitBlocksWithImages`（`MarkdownParser.kt:908-941`）。 */
@@ -1049,7 +1091,7 @@ function splitBlocksWithImages(src: string): MdBlock[] {
     pending.push(line);
   }
   flushText();
-  return blocks.length > 0 ? blocks : [emptyParagraph()];
+  return blocks.length > 0 ? blocks : [emptyTextBlock()];
 }
 
 /** 围栏切段 —— 安卓 `splitFencedSegments`（`MarkdownParser.kt:834-875`）。 */
@@ -1101,7 +1143,7 @@ function splitFencedSegments(src: string): MdFencedSegment[] {
 /** 顶层切分 —— 安卓 `splitMarkdownBlocks`（`MarkdownParser.kt:789-809`）。 */
 function splitMarkdownBlocks(src: string, cutCodeBlocks: boolean): MdBlock[] {
   if (!cutCodeBlocks) {
-    if (src.length === 0) return [emptyParagraph()];
+    if (src.length === 0) return [emptyTextBlock()];
     // 快路径：没有 `![` 就不可能是图片（安卓 :792-793）
     if (!src.includes("![")) return splitBlocksCore(src);
     const blocks = splitBlocksWithImages(src);
@@ -1116,7 +1158,7 @@ function splitMarkdownBlocks(src: string, cutCodeBlocks: boolean): MdBlock[] {
       out.push(...splitMarkdownBlocks(seg.text, false));
     }
   }
-  return out.length > 0 ? out : [emptyParagraph()];
+  return out.length > 0 ? out : [emptyTextBlock()];
 }
 
 // ============================================================================
@@ -1124,13 +1166,13 @@ function splitMarkdownBlocks(src: string, cutCodeBlocks: boolean): MdBlock[] {
 // ============================================================================
 
 /**
- * 解析 markdown 文本 → 块级 AST。
+ * 解析 markdown 文本 → 块级 AST（**两层模型**：块 → 段落 → 行）。
  *
  * @param src     markdown 原文
  * @param options `cutCodeBlocks` —— 见 {@link MdParseOptions}
  *
- * **流式用法**：对累积文本重跑本函数即可 —— 半截表格会先返回 `paragraph`，
- * 分隔行到齐后同一次调用返回 `table`（安卓 `splitBlocksCore` 的流式约束）。
+ * **流式用法**：对累积文本重跑本函数即可 —— 半截表格会先返回 `text` 块（表格行当普通文本），
+ * 分隔行到齐后同一次调用返回 `table` 块（安卓 `splitBlocksCore` 的流式约束）。
  */
 export function parseMarkdown(src: string, options: MdParseOptions = {}): MdBlock[] {
   return splitMarkdownBlocks(src, options.cutCodeBlocks === true);

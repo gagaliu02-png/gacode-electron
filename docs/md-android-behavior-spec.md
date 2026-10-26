@@ -88,9 +88,11 @@
 | 行为 | 规格 | 安卓出处 |
 |---|---|---|
 | **单 `\n` 即硬换行** | 每一行都是独立的一行，行尾补 `\n`（最后一行不补） | `MarkdownParser.kt:440`（`if (idx < lines.size - 1) append("\n")`）、`:342`（围栏行同样补 `\n`） |
-| 无段落间距 | 段落之间**不插空行**（阅读场景的 `paragraphSpacing` 由 UI 层控制，chat 场景 = 0） | `MarkdownRichText.kt:145`/`:273-275` |
-| 空行保留 | 空行就是一行空文本（行内为空），**不**被丢弃 | `MarkdownParser.kt:438`（else 分支 `renderInlineLine("")`） |
-| 阅读场景可按空行切段 | `splitParagraphs`：按 `(?:空行){2,}` 切，每段 trim，空段丢弃；段内换行保留 | `MarkdownParser.kt:896-899`（`splitParagraphs`）、`MarkdownRichText.kt:267-285` |
+| **空行被吃掉** | 空行是**段落边界**，**本身不产生任何行、任何渲染**（只留边界） | `MarkdownParser.kt:896-899`（`splitParagraphs`：按 `(?:空行){2,}` 切 + trim + 过滤空段）、`MarkdownRichText.kt:277-284` |
+| 段落 = **连续的非空行** | 段内的行**不再被拆开**（列表项的续行不能被拆开） | `MarkdownParser.kt:896-899`（段内换行保留） |
+| 段落之间**有**间距 | 段落与段落之间的间距由 UI 层的 `paragraphSpacing` 表达（**阅读 12dp** / **chat = 1 个空行**） | `MarkdownRichText.kt:162`（默认 `0.dp`）、`:282`（`spacedBy(paragraphSpacing)`）、`LibraryDetailScreen.kt:332`（阅读场景 `12.dp`） |
+| 段内行之间**无额外间距** | 同一段里的行只靠 line-height 拉开 | `MarkdownParser.kt:440`（行尾补 `\n`，无额外间距） |
+| ⚠️ **trim 的取舍（B 类差异）** | 安卓**阅读场景**的 `splitParagraphs` 会 trim 每段 ⇒ `  - sub` 被 trim 成 `- sub`（进而被当普通列表项）。**PC 解析层内部不做 trim** ⇒ `  - sub` 保持**普通文本行** —— 否则「普通列表缩进不识别 / task-list 缩进识别」这条**不对称**（§3.2 / §3.3）就破了 | `MarkdownParser.kt:896-899`（`.map { it.trim() }`）、`:405`/`:415`（普通列表锚定行首）、`:453`（task-list 用 `[\s]*` 允许前导空白） |
 
 ### 1.3 粗体 / 斜体 / 删除线
 
@@ -463,18 +465,29 @@ PC 端 `src/styles/globals.css` 已有等价实现，PC AST 只需产出**行列
 
 实现文件：`gacode-electron/src/lib/markdown/parser.ts`（纯 TypeScript，零 React / 零第三方依赖）。
 
+> ⚠️ **AST 形态 = 安卓的两层模型**（返工批 M2' 落地，详见 §12）：
+> **顶层块只有 5 种**；标题 / 列表 / 引用 / `:::` 都是**文本块内部的行**，不再是顶层块。
+
+```
+MdBlock[]                 ← 顶层：text / table / image / hr / codeBlock
+ └─ text                  ← MdTextBlock：一个或多个**段落**
+     └─ paragraphs[]      ← MdParagraph：**连续的非空行**（空行 = 段落边界）
+         └─ lines[]       ← MdLine：行级 kind
+```
+
 | 安卓行为 | 安卓出处 | PC AST 形态 |
 |---|---|---|
-| 文本块 | `MarkdownParser.kt:128` | `paragraph`（`lines[]` 承载硬换行） |
+| 文本块 | `MarkdownParser.kt:128`、`:789-809` | `text`（`paragraphs[]` 承载段落；段落内 `lines[]` 承载行） |
 | 表格块 | `MarkdownParser.kt:129` | `table`（`header` / `rows` / `alignments` / `headerAlign`） |
 | 图片块 | `MarkdownParser.kt:142` | `image`（`url` / `alt`） |
 | 分隔线块 | `MarkdownParser.kt:155` | `hr` |
 | 代码块 | `MarkdownParser.kt:172` | `codeBlock`（`lang` / `raw`） |
-| 标题 | `MarkdownParser.kt:394-403` | `heading`（`level` 1–3） |
-| 引用 | `MarkdownParser.kt:385-392` | `blockquote`（`lines[].level` / `lines[].prefix`） |
-| 有序列表 | `MarkdownParser.kt:405-413` | `orderedList`（`items[].prefix = "  N. "`） |
-| 无序列表 | `MarkdownParser.kt:415-422` | `unorderedList`（`items[].prefix = "  • "`） |
-| 任务列表 | `MarkdownParser.kt:356-373` | `taskList`（`items[].prefix = "[X] "/"[ ] "` + `items[].checked` + `items[].style.strikethrough`） |
+| 标题 | `MarkdownParser.kt:394-403` | **行级** `lines[].kind = "heading"`（`level` 1–3） |
+| 引用 | `MarkdownParser.kt:385-392` | **行级** `lines[].kind = "quote"`（`level` / `prefix`） |
+| 有序列表 | `MarkdownParser.kt:405-413` | **行级** `lines[].kind = "listItem"`（`listKind = "ordered"`，`item.prefix = "  N. "`） |
+| 无序列表 | `MarkdownParser.kt:415-422` | **行级** `lines[].kind = "listItem"`（`listKind = "unordered"`，`item.prefix = "  • "`） |
+| 任务列表 | `MarkdownParser.kt:356-373` | **行级** `lines[].kind = "listItem"`（`listKind = "task"`，`item.prefix = "[X] "/"[ ] "` + `item.checked` + `item.style.strikethrough`） |
+| 普通文本行 | `MarkdownParser.kt:438` | **行级** `lines[].kind = "text"`（`inline` / `emEnabled`） |
 | 粗体 | `MarkdownParser.kt:561-576` | `inline.strong`（`weight = 800`） |
 | 斜体 | `MarkdownParser.kt:578-585` | `inline.em` |
 | 删除线 | `MarkdownParser.kt:552-559` | `inline.del` |
@@ -483,11 +496,11 @@ PC 端 `src/styles/globals.css` 已有等价实现，PC AST 只需产出**行列
 | 裸 URL | `MarkdownParser.kt:629-670` | `inline.link`（`bare = true`） |
 | 角标 | `MarkdownParser.kt:621-628` | `inline.cite`（`text = "[#1]"` / `number = 1`） |
 | 围栏代码（chat 形态） | `MarkdownParser.kt:481-500` | `inline.codeRun`（`text` + `urls[]`） |
-| `:::` 扩展 | `MarkdownParser.kt:433-437` | `extension`（`marker`） |
-| 表格退化行（`emEnabled = false`） | `MarkdownParser.kt:429-431`、`:530`、`:545` | `paragraph.lines[].emEnabled = false` |
+| `:::` 扩展 | `MarkdownParser.kt:433-437` | **行级** `lines[].kind = "extension"`（`marker`） |
+| 表格退化行（`emEnabled = false`） | `MarkdownParser.kt:429-431`、`:530`、`:545` | **行级** `lines[].kind = "text"` 且 `emEnabled = false` |
 | 表头恒居中 | `MarkdownTableCard.kt:405-415` | `table.headerAlign = "center"` |
 | 流式升级判定 | `MarkdownParser.kt:1051-1055` | `detectTableUpgrade(lines)` → `none` / `pending` / `upgraded` |
-| 阅读场景按空行切段 | `MarkdownParser.kt:896-899` | `splitParagraphs(text)`（渲染层按需调用） |
+| 按空行切段 | `MarkdownParser.kt:896-899` | **解析层内部**完成（`text.paragraphs[]`）；`splitParagraphs(text)` 另导出为安卓逐字镜像（含 trim，仅供对照） |
 
 **AST 刻意「没有」的东西**（对齐安卓，避免渲染层自作主张）：
 
@@ -511,7 +524,7 @@ PC 端回归断言脚本：`gacode-electron/scripts/verify-md-parser.mjs`（纯 
 有序无序列表文本前缀 / task-list 文本前缀 + 删除线 / 表格（含**半截表格不升级**的流式用例）/ 分隔线 /
 单 `\n` 硬换行 / HTML 标签被当纯文本（XSS 防护）。
 
-**实际分节（当前 142 条断言）**：
+**实际分节（当前 172 条断言）**：
 
 | 节 | 内容 |
 |---|---|
@@ -522,7 +535,69 @@ PC 端回归断言脚本：`gacode-electron/scripts/verify-md-parser.mjs`（纯 
 | §E | 流式：半截表格不升级 + `detectTableUpgrade` 三态 |
 | §F | 表格红线（AST 层）：对齐信息保留、表头居中标记、**无折叠标记** |
 | §G | **安卓单测移植**：`MarkdownParserTest.kt` 的 fix1/fix2/fix3 回归 + 列表前缀 / 链接 / 角标 / 粗体用例 |
+| §H | **段落边界 / 块边界（两层模型）**：空行被吃掉 / 同段 vs 切段 / 表格是独立顶层块 / 列表归组 / task-list 缩进不对称 / 顶层块只有 5 种 |
 
 **退出码 0 = 全绿；非 0 = 有断言失败。**
 **禁止**在渲染层尚未接线时打印「渲染验证通过」之类措辞
-（当前结论文案固定为：「✅ 解析层断言全部通过（N/N）—— 仅覆盖「语法解析层」」+ 一行「渲染层尚未接线，视觉一致性未验证」）。
+（当前结论文案固定为：「✅ 解析层断言通过（N/N）—— 仅覆盖「语法解析层」」+ 一行「渲染层的 DOM 结构断言在另一个脚本」）。
+
+---
+
+## 12. 块粒度与间距模型（安卓**两层模型** —— 返工批 M2' 落地）
+
+> 本节是 M1/M2 返工批的**依据**：M1 原来的 AST 把标题 / 列表 / 引用提成**顶层块**，
+> 块粒度**比安卓粗** ⇒ 标题上下多出 8px 块间距、空行还残留成一行 ⇒ **与安卓对不上**。
+> 本节把 PC 的块粒度改成与安卓**同构**，并给出**间距的实际取值**。
+
+### 12.1 安卓的两层模型（唯一事实源）
+
+| 层 | 内容 | 安卓出处 |
+|---|---|---|
+| **块级** | **只有 5 种**：`Text` / `Table` / `Image` / `HorizontalRule` / `CodeBlock` | `MarkdownParser.kt:789-809`（`splitMarkdownBlocks`）、`:1010-1083`（`splitBlocksCore`） |
+| **段落** | `MdBlock.Text` 的内容按**空行**切段（trim + 过滤空段） | `MarkdownParser.kt:896-899`（`splitParagraphs`）、`MarkdownRichText.kt:267-285`（`MarkdownTextSection`） |
+| **行级** | 段落内部的每一行：`heading` / `list` / `quote` / `:::` / 普通文本 | `MarkdownParser.kt:394-438`（行级 `when`）、`:356-373`（task-list 先判）、`:385-392`（引用先判） |
+
+⇒ **标题 / 列表 / 引用 / `:::` 不是块级** —— 它们活在 `MdBlock.Text` **块内部**。
+
+### 12.2 PC 端的对应形态（与安卓同构）
+
+| 层 | PC 形态 | 说明 |
+|---|---|---|
+| 块级 | `MdBlock = text \| table \| image \| hr \| codeBlock` | **只有 5 种**（`src/lib/markdown/parser.ts`） |
+| 段落 | `MdTextBlock.paragraphs[]` | 空行切段；**空行本身不产生任何行** |
+| 行级 | `MdParagraph.lines[]` | 每行带自己的 kind：`text` / `heading` / `listItem` / `quote` / `extension` |
+
+**渲染层 DOM（`src/lib/markdown/renderer.tsx`）**：
+
+```
+.md-root                  ← 顶层块之间 8px（块边界）
+ └─ .md-text              ← 文本块（安卓 MdBlock.Text）
+     └─ .md-para          ← 段落（空行切出）
+         ├─ .md-line      ← 连续的普通文本行（`\n` = 硬换行）
+         ├─ h1/.md-heading-1 ← 标题行（**段落内部** ⇒ 不吃 8px 块间距）
+         ├─ .md-list      ← 连续的**同类**列表项归一组
+         ├─ .md-quote     ← 连续的引用行
+         └─ .md-extension ← `:::` 扩展标记
+```
+
+### 12.3 间距的**实际取值**（不是"对齐了"，是具体数值 + 出处）
+
+| 场景 | 间距 | 取值 | 安卓出处 | PC 落点 |
+|---|---|---|---|---|
+| **块边界**（text ↔ table / image / hr / codeBlock） | chat | **8px** | `MarkdownRichText.kt:161`（`blockSpacing: Dp = 8.dp`）+ `:193`（`Arrangement.spacedBy(blockSpacing)`） | `globals.css` 的 `.md-root > * + * { margin-top: 8px }` |
+| **块边界** | 阅读 | ⚠️ 安卓是 **12dp**（`LibraryDetailScreen.kt:331`），PC 仍是 8px —— **已知差异**（M2 交付值，本批不动） | `LibraryDetailScreen.kt:331` | 同上 |
+| **段落边界**（text 块内部的段落之间） | 阅读 | **12px** | `LibraryDetailScreen.kt:332`（`paragraphSpacing = 12.dp`）+ `MarkdownRichText.kt:282` | `.md-root-reading .md-text > .md-para + .md-para { margin-top: 12px }` |
+| **段落边界** | chat | **1 个行盒 = 1.5em = 21px** | 安卓 chat 的 `paragraphSpacing = 0.dp`（`MarkdownRichText.kt:162`）⇒ **不切段**，空行在渲染层表现为**一个空行**（一个行盒高）。PC 的 AST 恒切段 ⇒ 等价表达 = 段落之间留 1 个行盒高 | `.md-root-chat .md-text > .md-para + .md-para { margin-top: 1.5em }`（chat `line-height: 1.5` × `font-size: 14px`） |
+| **段内行之间** | chat / 阅读 | **无额外间距**（行距靠 line-height） | `MarkdownParser.kt:440`（行尾补 `\n`，无额外间距） | 段内不挂任何 margin 规则 |
+
+> ⚠️ **8px 块间距规则仍然成立**：新结构下顶层只有 text/table/image/hr/codeBlock ⇒
+> `.md-root > * + *` 依然只给**相邻顶层块**加 8px；**段落间距**由
+> `.md-text > .md-para + .md-para` 单独表达（**两套规则互不干扰**）。
+
+### 12.4 本批落地的 3 个「同构」要点
+
+| 要点 | 规格 | 出处 |
+|---|---|---|
+| **空行被吃掉** | 空行只是**段落边界**，不产生任何行、任何渲染 | `MarkdownParser.kt:896-899` |
+| **段落 = 连续的非空行** | 段内多行仍是同一段（`a\nb` = 1 段 2 行；`a\n\nb` = 2 段） | `MarkdownParser.kt:896-899` |
+| **列表归组** | **连续的同类**列表项归一组（ordered / unordered / task 各自分组；ordered↔unordered 切换 ⇒ 开新组） | `MarkdownParser.kt:405-422`（前缀）+ 渲染层归组 |

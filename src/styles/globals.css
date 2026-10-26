@@ -97,8 +97,9 @@
     /* --- shadcn semantic aliases (让现有 ui/button.tsx 等不动) --- */
     --background: var(--bg-base);
     --foreground: var(--fg);
-    --card: var(--bg-sunken);
+    --card: #141414;
     --card-foreground: var(--fg);
+    --card-hover: #1e1e1e;
     --popover: var(--bg-elevated);
     --popover-foreground: var(--fg);
     --primary: var(--brand);
@@ -136,6 +137,7 @@
     --foreground: var(--fg);
     --card: var(--bg-sunken);
     --card-foreground: var(--fg);
+    --card-hover: #f0f0f0;
     --popover: var(--bg-sunken);
     --popover-foreground: var(--fg);
     --primary: var(--brand);
@@ -163,8 +165,9 @@
     --border-strong: #44464D;
     --background: var(--bg-base);
     --foreground: var(--fg);
-    --card: var(--bg-sunken);
+    --card: #141414;
     --card-foreground: var(--fg);
+    --card-hover: #1e1e1e;
     --popover: var(--bg-elevated);
     --popover-foreground: var(--fg);
     --primary: var(--brand);
@@ -535,4 +538,296 @@
   animation: none !important;
   animation-duration: 0s !important;
   animation-delay: 0s !important;
+}
+/* ============================================================================
+   M2 · Markdown 自研渲染层 (src/lib/markdown/renderer.tsx)
+
+   基准 = 安卓 yinian-android `ui/markdown/*`
+   （行为规格见 docs/md-android-behavior-spec.md，每条带安卓 file:line）。
+
+   ⚠️ 本段是**追加**在文件末尾 —— 未层叠(unlayered) ⇒ 优先级高于 `@layer components`
+      与 Tailwind utilities ⇒ 不必写 `!important` 就能压住旧规则。
+   ⚠️ 本段只**新增** `.md-*` 规则，**不改动任何既有规则**；
+      旧规则（`.md-bq` / `.md-hr` / `.md-img*` / `.md-lightbox-*` / `.md-table-td-clamp`）
+      的清理属于 M4。
+
+   ── 关键参数与安卓出处 ──────────────────────────────────────────────────
+     正文字号     chat 14px / 阅读 16px+24px     MarkdownRichText.kt:157-159
+     块间距       8px                            MarkdownRichText.kt:161,193
+     标题         22/20/18px + Bold(700)         MarkdownParser.kt:47-49
+     粗体         ExtraBold = 800                MarkdownParser.kt:45
+     斜体         Italic + Normal                MarkdownParser.kt:46
+     删除线       #9ca3af 实色 + LineThrough      MarkdownParser.kt:87-91
+     行内 code    Monospace + #181818 + #e5e7eb   MarkdownParser.kt:66-70
+     链接         #FF6B35 + Underline            MarkdownParser.kt:71-82
+     角标 [#N]    Bold + #FFD7B8                 MarkdownParser.kt:61-65
+     分隔线       满宽 1px + 上下 4px            MarkdownRichText.kt:244-249
+     图片         ≤280px / 120–320px / 圆角 12   MarkdownImageBlock.kt:55-59
+     代码块卡片   圆角 12 / 徽章 11sp / 正文 13sp·18sp  MarkdownCodeBlock.kt:57-127
+   ============================================================================ */
+
+/* 根容器 —— 块间距 8px（安卓 Column 的 spacedBy(8.dp)） */
+.md-root {
+  word-break: break-word;
+}
+.md-root-chat {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.md-root-reading {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+/* 段落 —— 单 `\n` 即硬换行 + 空行保留（安卓 MarkdownParser.kt:440） */
+.md-para {
+  white-space: pre-wrap;
+}
+
+/* 标题 —— 22 / 20 / 18px + Bold(700)（安卓只有 H1–H3） */
+.md-heading {
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.md-heading-1 {
+  font-size: 22px;
+}
+.md-heading-2 {
+  font-size: 20px;
+}
+.md-heading-3 {
+  font-size: 18px;
+}
+
+/* 引用 —— 每层 2 空格缩进（由 AST 的 prefix 文本提供），无边框 / 无色阶 / 无斜体 */
+.md-quote {
+  margin: 0;
+}
+.md-quote-line {
+  white-space: pre-wrap;
+}
+
+/* 列表 —— 前缀是文本（不用原生 ul/ol marker） */
+.md-list {
+  margin: 0;
+}
+.md-list-item {
+  white-space: pre-wrap;
+}
+
+/* 分隔线 —— 满宽 1px + 上下 4px（用 padding 而非 margin，避免与 8px 块间距折叠合并） */
+.md-hr-full {
+  box-sizing: content-box;
+  border: 0;
+  width: 100%;
+  height: 1px;
+  padding: 4px 0;
+  margin: 0;
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+/* 块级图片 —— ≤280px / 120–320px / 圆角 12px / 无 lightbox */
+.md-image {
+  display: inline-block;
+  vertical-align: top;
+  overflow: hidden;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-sunken) 35%, transparent);
+}
+.md-image-img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 280px;
+  min-height: 120px;
+  max-height: 320px;
+  object-fit: cover;
+}
+.md-image-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  padding: 0 12px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  white-space: pre-wrap;
+}
+
+/* 代码块卡片（知识库 / 阅读场景） */
+.md-code-card {
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--bg-sunken);
+}
+.md-code-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 2px 12px;
+}
+.md-code-lang {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--brand-container);
+  color: var(--brand-on-container);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+.md-code-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.md-code-copy-icon {
+  width: 14px;
+  height: 14px;
+}
+.md-code-card-divider {
+  height: 1px;
+  background: var(--border-strong);
+}
+.md-code-body {
+  margin: 0;
+  padding: 12px;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* chat 场景的围栏代码 —— 行内等宽（无徽章 / 无复制），URL 可点但不加 link 样式 */
+.md-code-run {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.md-code-run-url {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* 行内 code —— Monospace + 底 #181818 + 字 #e5e7eb */
+.md-inline-code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* 链接 —— #FF6B35 + 下划线 */
+.md-link {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 引用角标 [#N] —— Bold + #FFD7B8 */
+.md-cite {
+  font-weight: 700;
+  color: var(--brand-on-container);
+}
+
+/* 粗体 800 / 斜体 / 删除线（实色 #9ca3af，无透明度） */
+.md-strong {
+  font-weight: 800;
+}
+.md-em {
+  font-weight: 400;
+  font-style: italic;
+}
+.md-strike {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--fg-muted);
+  text-decoration-thickness: 1px;
+}
+
+/* `:::` 扩展标记（安卓 D6：正文丢失，只剩 marker） */
+.md-extension {
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+/* 块间距 8px —— 放在本段最后，避免被上面各块的 margin 规则盖掉 */
+.md-root > * + * {
+  margin-top: 8px;
+}
+
+/* ============================================================================
+   M2' · Markdown 块粒度对齐安卓（段落边界 / 块边界）
+
+   基准 = 安卓 yinian-android `ui/markdown/*`
+   （行为规格见 docs/md-android-behavior-spec.md，每条带安卓 file:line）。
+
+   ⚠️ 本段**只追加**，不动上面 M2 段的任何既有规则
+      （`.md-table` 的列宽 clamp / 横向滚动 / `.md-bq` / `.md-table-td-clamp` 等留给 M4）。
+
+   ── 间距模型（安卓出处）────────────────────────────────────────────────────
+     块间距      8px          顶层块之间（text ↔ table / image / hr / codeBlock）
+                             MarkdownRichText.kt:161（blockSpacing = 8.dp）
+                             MarkdownRichText.kt:193（Arrangement.spacedBy(blockSpacing)）
+
+     段落间距    阅读 12px     text 块**内部**的段落之间（空行切出的段落）
+                             LibraryDetailScreen.kt:332（paragraphSpacing = 12.dp）
+                             MarkdownRichText.kt:282（Arrangement.spacedBy(paragraphSpacing)）
+                 chat 1 行盒  安卓 chat 的 paragraphSpacing = 0.dp（MarkdownRichText.kt:162）
+                             ⇒ **不切段**，空行在渲染层表现为**一个空行**（一个行盒高）。
+                             PC 的 AST 恒切段 ⇒ 等价表达 = 段落之间留 1 个行盒高。
+                             1.5em = chat 的 line-height(1.5) × 14px = 21px = 1 个行盒。
+
+     段内行之间  无额外间距    行距靠 line-height
+                             MarkdownParser.kt:440（单 `\n` 即硬换行）
+   ============================================================================ */
+
+/* 段落内的普通文本行 —— 连续多行用 `\n` 连接（单 `\n` 即硬换行） */
+.md-line {
+  white-space: pre-wrap;
+}
+
+/* 段落间距 —— 段落是 text 块**内部**的单位（空行切出的段落之间）
+   ⚠️ 不走 `.md-root > * + *` 的 8px 块间距（那是**块**边界） */
+.md-root-reading .md-text > .md-para + .md-para {
+  margin-top: 12px;
+}
+.md-root-chat .md-text > .md-para + .md-para {
+  margin-top: 1.5em;
+}
+
+/* 表头字号 12px（安卓 MarkdownTableCard.kt:127-138：12sp / SemiBold）
+   ⚠️ 只改**字号**；`.md-table` 的列宽 clamp(80/240px) + 横向滚动**一个字节都不动** */
+.md-table-thead {
+  font-size: 12px;
+}
+
+/* 空文本行（围栏开启行 / 未闭合围栏残留行）也要占**一个行盒高**
+   —— 安卓在围栏开启行补了一个 "\n"（MarkdownParser.kt:342）⇒ 那一行不是 0 高。
+   `1lh` = 该元素自己的 line-height（chat = 1.5 × 14px = 21px；阅读 = 24px）。
+   ⚠️ 只加 min-height，不改上面 `.md-line` 的 white-space。 */
+.md-line {
+  min-height: 1lh;
 }
