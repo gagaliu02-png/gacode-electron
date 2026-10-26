@@ -1,18 +1,34 @@
 /**
- * components/library/CollectSheet.tsx — 4 路采集入口 Sheet
- *                          (gacode-electron 0.7.2 P0 library-9)
+ * components/library/CollectSheet.tsx — 知识库采集 Sheet (3 宫格入口 + 第二层文本 Sheet)
  *
- * 4 个 tab:
- *   - 文字: textarea → 跟 web 一样, 第一行非空做 title (max 80 字符);
- *           后续用 POST type='doc' (url placeholder) → PATCH content=<正文>
- *           (跟 web library/page.tsx 两步法一致, 因 server POST /library schema enum
- *            仅 ['image','doc','link'], 没有 'text', 客户端做 schema 适配)
- *   - 链接: URL input → POST type='link', url=用户输入
- *   - 图片: file picker (image/*) → uploadAttachment → POST type='image'
- *   - 文件: file picker (any)   → uploadAttachment → POST type='doc'
+ * 1:1 对齐 gacode-web `src/app/(main)/library/page.tsx` (事实源; 台账 L-54 ~ L-68):
+ *   - L-54 信息架构: web 是「3 宫格 (Text / Photo / File) + 第二层」, **不是** 4 tab
+ *                   ⇒ PC 原来的「链接」独立 tab 删除 (web 没有; 链接由 Text 层的
+ *                     URL 识别覆盖, 见 web library/page.tsx:262)
+ *   - L-55 容器: web 的全宽底抽屉 `fixed bottom-0 left-0 right-0 z-50 bg-bg-elevated
+ *         rounded-t-lg p-4 pb-8` + 标题栏 `text-base font-medium` + X `w-8 h-8 rounded-full`
+ *         (web library/page.tsx:705-716)
+ *   - L-56 宫格按钮 `flex flex-col items-center gap-2 py-5 rounded-md bg-card
+ *         hover:bg-card-hover transition-colors` + `w-7 h-7` 图标 (web :717-746)
+ *   - L-57 第二层 Sheet「采集文本 / 链接」: textarea + 取消/采集 (web :751-805)
+ *   - L-59 Text 按钮组 size md → sm (web :783-800)
+ *   - L-60 空内容 → toast warning「内容不能为空」(不再走 "保存失败: ..." danger; web :256-259)
+ *   - L-61 32000 字符截断 → toast warning + description (web :267-276)
+ *   - L-62 上传 30 秒超时 → toast warning「采集超时」(web :357-363)
+ *   - L-63 提交后**立即**关 Sheet (await 之前就收起, 成功/失败都先收; web :278-280)
+ *   - L-64 保存失败 toast 改 title + description 两段式 (web :337-341)
+ *   - L-67 入口 Sheet 收起后等 100ms 再开下一层, 避免两层同时在场 (web :415,421,723)
+ *   - L-68 补「拍照」入口 → 复用 PC 现有 MediaPicker `kind="camera"`
+ *         (accept="image/*" + capture="environment", 见 home/MediaPicker.tsx:63-65)
  *
- * 复用 ui/BottomSheet 走底部抽屉风格, 自实现 tab 切换 (不引 Radix Tabs).
- * 服务端调用一律走 src/lib/api.ts, 不会动任何其他组件.
+ * 组件边界 (本批唯一可写文件):
+ *   - PC 没有 lucide-react ⇒ Type / Camera / File 手写内联 svg (lucide path 逐字,
+ *     核对 gacode-web/node_modules/lucide-react/dist/esm/icons/{type,camera,file}.js);
+ *     X 直接复用 ui/Glyphs 的 CloseIcon (lucide `x`).
+ *   - PC 没有 tailwind-merge / clsx ⇒ className 一律数组 .join(" ").
+ *   - web 用到的 token 在 PC tailwind.config.ts 里取值完全一致
+ *     (card #141414 / card-hover #1e1e1e / bg-elevated #181818 / radius-lg 20 / radius-md 16)
+ *     ⇒ 类名可直接沿用, 不新造颜色.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -21,81 +37,113 @@ import {
   createLibraryItem,
   updateLibraryItem,
   deleteLibraryItem,
-  type LibraryItem,
 } from "../../lib/api";
 import { uploadAttachment } from "../../lib/upload";
 import { useToast } from "../ui/Toast";
 import { Button } from "../ui/Button";
+import { MediaPicker } from "../home/MediaPicker";
+import { CloseIcon } from "../ui/Glyphs";
 
 export interface CollectSheetProps {
   open: boolean;
   onClose: () => void;
 }
 
-type Tab = "text" | "link" | "image" | "file";
-
-const TABS: Array<{ key: Tab; label: string }> = [
-  { key: "text", label: "文字" },
-  { key: "link", label: "链接" },
-  { key: "image", label: "图片" },
-  { key: "file", label: "文件" },
-];
-
+/** 服务端 PATCH content 上限 (web library/page.tsx:254 同值) */
 const MAX_CONTENT_LEN = 32000;
+/** 单文件 50MB 上限 (PC lib/upload.ts 同值) */
 const MAX_BYTES = 50 * 1024 * 1024;
+/** 上传超时兜底 (web library/page.tsx:357-363 同值) */
+const UPLOAD_TIMEOUT_MS = 30_000;
+/** 入口 Sheet 收起 → 下一层打开的间隔 (web library/page.tsx:415,421,723 同值) */
+const LAYER_SWITCH_DELAY_MS = 100;
+
+/** 当前在场的是哪一层 (closed = 两层都不在场, 等 100ms 切下一层) */
+type Layer = "entry" | "text" | "closed";
+/** MediaPicker 模式: 拍照 (image/*) / 文件 */
+type PickerKind = "camera" | "file";
+
+interface TextSubmitInput {
+  /** 是 URL (走 type=link) 还是纯文本 (走两步法) */
+  isUrl: boolean;
+  title: string;
+  /** 已按 MAX_CONTENT_LEN 截断的正文 */
+  content: string;
+}
 
 export function CollectSheet({ open, onClose }: CollectSheetProps) {
-  const [tab, setTab] = useState<Tab>("text");
+  const [layer, setLayer] = useState<Layer>("entry");
+  const [pickerKind, setPickerKind] = useState<PickerKind | null>(null);
   const [textDraft, setTextDraft] = useState("");
-  const [linkUrl, setLinkUrl] = useState("");
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  // 打开时重置草稿
+  /** 入口 Sheet 收起 → 下一层打开的延迟 timer (L-67) */
+  const layerTimerRef = useRef<number | null>(null);
+
+  // 打开时重置到入口层 (open 由 Library.tsx 控制)
   useEffect(() => {
     if (open) {
+      setLayer("entry");
+      setPickerKind(null);
       setTextDraft("");
-      setLinkUrl("");
-      setTab("text");
     }
+    return () => {
+      if (layerTimerRef.current !== null) {
+        window.clearTimeout(layerTimerRef.current);
+        layerTimerRef.current = null;
+      }
+    };
   }, [open]);
 
-  // ─── 文字提交 (两步法) ───
-  const textMutation = useMutation({
-    mutationFn: async (raw: string) => {
-      const txt = raw.trim();
-      if (!txt) throw new Error("内容不能为空");
-      const isUrl = /^https?:\/\/\S+/i.test(txt);
+  /** L-67: 收起当前层, 等 100ms 再开下一层 (两层不同时在场) */
+  const scheduleNext = (apply: () => void) => {
+    setLayer("closed");
+    setPickerKind(null);
+    if (layerTimerRef.current !== null) {
+      window.clearTimeout(layerTimerRef.current);
+    }
+    layerTimerRef.current = window.setTimeout(() => {
+      layerTimerRef.current = null;
+      apply();
+    }, LAYER_SWITCH_DELAY_MS);
+  };
 
-      // URL 走原路径 (不走两步法)
-      if (isUrl) {
-        const firstLine = txt.split(/\r?\n/).find((l) => l.trim()) || txt;
-        const title = firstLine.slice(0, 80).trim() || "未命名";
+  /** 宫格「Text」→ 第二层文本 Sheet (web library/page.tsx:720-724) */
+  const openTextLayer = () => {
+    setTextDraft("");
+    scheduleNext(() => setLayer("text"));
+  };
+
+  /** 宫格「Photo」/「File」→ PC 现有 MediaPicker (web library/page.tsx:411-422) */
+  const openPicker = (kind: PickerKind) => {
+    scheduleNext(() => setPickerKind(kind));
+  };
+
+  // ─── 文本采集 (web handleTextSubmit, library/page.tsx:239-344) ───
+  const textMutation = useMutation({
+    mutationFn: async (input: TextSubmitInput) => {
+      // URL 走原路径 (web library/page.tsx:282-301)
+      if (input.isUrl) {
         return createLibraryItem({
           type: "link",
-          title,
-          url: txt,
+          title: input.title,
+          url: input.content,
         });
       }
-
-      // 纯文本: 截断 + POST + PATCH
-      const firstLine = txt.split(/\r?\n/).find((l) => l.trim()) || txt;
-      const title = firstLine.slice(0, 80).trim() || "未命名";
-      const submittedDraft =
-        txt.length > MAX_CONTENT_LEN ? txt.slice(0, MAX_CONTENT_LEN) : txt;
-
+      // 纯文本两步法: POST type=doc (url 占位) → PATCH content (web :304-343)
+      //   失败回滚: POST 成功但 PATCH 失败 → 删孤儿, 不留半截
       let createdId: string | null = null;
       try {
         const created = await createLibraryItem({
           type: "doc",
-          title,
+          title: input.title,
           url: "text://placeholder",
         });
         createdId = created.id;
-        await updateLibraryItem(created.id, { content: submittedDraft });
+        await updateLibraryItem(created.id, { content: input.content });
         return created;
       } catch (err) {
-        // 失败回滚
         if (createdId) {
           try {
             await deleteLibraryItem(createdId);
@@ -107,54 +155,54 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
       }
     },
     onSuccess: () => {
-      toast({ message: "已保存到知识库", variant: "success" });
+      toast({ title: "已保存到知识库", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["library"] });
       queryClient.invalidateQueries({ queryKey: ["library-tags"] });
-      onClose();
     },
     onError: (err) => {
+      // L-64: 改 title + description 两段式 (web library/page.tsx:337-341)
       toast({
-        message: `保存失败: ${err instanceof Error ? err.message : String(err)}`,
+        title: "保存失败，稍后重试",
+        description: err instanceof Error ? err.message : String(err),
         variant: "danger",
       });
     },
   });
 
-  // ─── 链接提交 (URL) ───
-  const linkMutation = useMutation({
-    mutationFn: async (url: string) => {
-      const trimmed = url.trim();
-      if (!trimmed) throw new Error("链接不能为空");
-      // 不强制要求带 http(s) — server 端 schema 通常要求, 这里宽松,
-      // 失败时由 toast 提示 (POST 4xx → Error).
-      const title = trimmed.slice(0, 80).trim() || "未命名链接";
-      return createLibraryItem({
-        type: "link",
-        title,
-        url: trimmed,
-      });
-    },
-    onSuccess: () => {
-      toast({ message: "已保存到知识库", variant: "success" });
-      queryClient.invalidateQueries({ queryKey: ["library"] });
-      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
-      onClose();
-    },
-    onError: (err) => {
+  const handleTextSubmit = () => {
+    const txt = textDraft.trim();
+    // L-60: 空内容直接 toast 拦截, 根本不调 API (web library/page.tsx:256-259)
+    if (!txt) {
+      toast({ title: "内容不能为空", variant: "warning" });
+      return;
+    }
+    // URL 识别: 是 URL → type='link'; 是纯文本 → 两步法 (web :262)
+    const isUrl = /^https?:\/\/\S+/i.test(txt);
+    // title 取第一行非空内容, 截前 80 字 (web :263-265)
+    const firstLine = txt.split(/\r?\n/).find((l) => l.trim()) || txt;
+    const title = firstLine.slice(0, 80).trim() || "未命名";
+
+    // L-61: 超长截断 + toast 提示 (web library/page.tsx:267-276)
+    let submittedDraft = txt;
+    if (txt.length > MAX_CONTENT_LEN) {
+      submittedDraft = txt.slice(0, MAX_CONTENT_LEN);
       toast({
-        message: `保存失败: ${err instanceof Error ? err.message : String(err)}`,
-        variant: "danger",
+        title: "内容已截断到 32000 字符",
+        description: `原文 ${txt.length} 字符, 超出部分未保存, 请考虑分段`,
+        variant: "warning",
       });
-    },
-  });
+    }
 
-  // ─── 文件/图片上传 ───
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState<number | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
+    // L-63: 提前关闭 Sheet + 清空 input (无论成功/失败都先收起, web :278-280)
+    setLayer("closed");
+    setTextDraft("");
+    onClose();
 
-  const handleFilePicked = async (file: File, kind: "image" | "file") => {
+    textMutation.mutate({ isUrl, title, content: submittedDraft });
+  };
+
+  // ─── Photo / File 采集 (web handlePickerCapture, library/page.tsx:346-409) ───
+  const handlePickerCapture = async (file: File, kind: PickerKind) => {
     if (file.size > MAX_BYTES) {
       toast({
         message: `文件超过 50MB: ${file.name}`,
@@ -162,272 +210,243 @@ export function CollectSheet({ open, onClose }: CollectSheetProps) {
       });
       return;
     }
-    setUploading(true);
-    setProgress(0);
+    const isImage = kind === "camera";
+
+    // L-62: 30 秒上传超时提示 (web library/page.tsx:357-363)
+    const timeoutTimer = window.setTimeout(() => {
+      toast({
+        title: "采集超时",
+        description: "上传超过 30 秒未完成, 请稍后再试",
+        variant: "warning",
+      });
+    }, UPLOAD_TIMEOUT_MS);
+
     try {
       const handle = uploadAttachment(file, {
-        mode: kind === "image" ? "image" : "document",
-        onProgress: (p) => setProgress(p.pct),
+        mode: isImage ? "image" : "document",
       });
       const res = await handle.promise;
+      window.clearTimeout(timeoutTimer);
       const refId = res.url || res.fileId;
-      if (!refId) throw new Error("上传未返回 URL");
-      const created: LibraryItem = await createLibraryItem({
-        type: kind === "image" ? "image" : "doc",
+      if (!refId) {
+        toast({
+          title: "采集失败",
+          description: "上传返回为空 URL",
+          variant: "danger",
+        });
+        return;
+      }
+      await createLibraryItem({
+        type: isImage ? "image" : "doc",
         title: file.name || "未命名",
         url: refId,
       });
-      toast({ message: `已保存到知识库: ${created.title}`, variant: "success" });
+      toast({ title: "已保存到知识库", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["library"] });
-      onClose();
+      queryClient.invalidateQueries({ queryKey: ["library-tags"] });
     } catch (err) {
+      window.clearTimeout(timeoutTimer);
       // upload.ts 已按 mode 输出人话文案 ("图片上传失败: ..."), 这里不再加前缀,
       // 否则会出现 "采集失败: 文档上传失败: ..." 双前缀
       toast({
         message: err instanceof Error ? err.message : String(err),
         variant: "danger",
       });
-    } finally {
-      setUploading(false);
-      setProgress(null);
     }
   };
 
   if (!open) return null;
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="采集到知识库"
-      className="fixed inset-0 z-50 flex items-end justify-center"
-    >
-      <div
-        className="absolute inset-0 bg-black/60"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div className="relative w-full max-w-2xl rounded-t-md bg-bg-elevated shadow-dialog p-5 max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between mb-3 shrink-0">
-          <h2 className="text-base font-medium">采集到知识库</h2>
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label="关闭">
-            ×
-          </Button>
-        </div>
+    <>
+      {/* ═══ 入口层 — 3 宫格 (web library/page.tsx:692-749) ═══ */}
+      {layer === "entry" ? (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/50"
+            onClick={onClose}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="采集内容"
+            className="fixed bottom-0 left-0 right-0 z-50 bg-bg-elevated rounded-t-lg p-4 pb-8"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-base font-medium">采集内容</span>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="关闭"
+                className="w-8 h-8 rounded-full text-fg-muted hover:bg-accent transition-colors inline-flex items-center justify-center"
+              >
+                <CloseIcon size={20} className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <button
+                type="button"
+                onClick={openTextLayer}
+                className="flex flex-col items-center gap-2 py-5 rounded-md bg-card hover:bg-card-hover transition-colors"
+              >
+                <TypeIcon className="w-7 h-7 text-fg-muted" />
+                <span className="text-sm text-fg-muted">Text</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => openPicker("camera")}
+                className="flex flex-col items-center gap-2 py-5 rounded-md bg-card hover:bg-card-hover transition-colors"
+              >
+                <CameraIcon className="w-7 h-7 text-fg-muted" />
+                <span className="text-sm text-fg-muted">Photo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => openPicker("file")}
+                className="flex flex-col items-center gap-2 py-5 rounded-md bg-card hover:bg-card-hover transition-colors"
+              >
+                <FileIcon className="w-7 h-7 text-fg-muted" />
+                <span className="text-sm text-fg-muted">File</span>
+              </button>
+            </div>
+          </div>
+        </>
+      ) : null}
 
-        {/* Tabs — 不引 Radix, 自实现按钮组 */}
-        <div className="flex items-center gap-2 mb-4 shrink-0">
-          {TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              className={[
-                "px-3 py-1 text-sm rounded transition-colors duration-150",
-                tab === t.key
-                  ? "bg-brand text-brand-on shadow-sm"
-                  : "bg-bg-sunken text-fg-muted hover:bg-bg-sunken/80",
-              ].join(" ")}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      {/* ═══ 第二层 — 采集文本 / 链接 (web library/page.tsx:751-805) ═══ */}
+      {layer === "text" ? (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/50"
+            onClick={onClose}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="采集文本 / 链接"
+            className="fixed bottom-0 left-0 right-0 z-50 bg-bg-elevated rounded-t-lg p-4 pb-8"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-base font-medium">采集文本 / 链接</span>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="关闭"
+                className="w-8 h-8 rounded-full text-fg-muted hover:bg-accent transition-colors inline-flex items-center justify-center"
+              >
+                <CloseIcon size={20} className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <textarea
+                value={textDraft}
+                onChange={(e) => setTextDraft(e.target.value)}
+                placeholder="输入链接 (https://...) 或文本内容..."
+                rows={4}
+                autoFocus
+                className="w-full rounded-xl bg-muted/50 px-4 py-3 text-base placeholder:text-fg-subtle focus:outline-none focus:ring-1 focus:ring-brand resize-none"
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={onClose}>
+                  取消
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleTextSubmit}
+                  disabled={!textDraft.trim() || textMutation.isPending}
+                >
+                  {textMutation.isPending ? (
+                    <span className="gagaos-spinner" aria-hidden="true" />
+                  ) : (
+                    "采集"
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
 
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          {tab === "text" ? (
-            <TextTab
-              value={textDraft}
-              onChange={setTextDraft}
-              pending={textMutation.isPending}
-              onSubmit={() => textMutation.mutate(textDraft)}
-              onCancel={onClose}
-            />
-          ) : tab === "link" ? (
-            <LinkTab
-              value={linkUrl}
-              onChange={setLinkUrl}
-              pending={linkMutation.isPending}
-              onSubmit={() => linkMutation.mutate(linkUrl)}
-              onCancel={onClose}
-            />
-          ) : tab === "image" ? (
-            <FileTab
-              label="点击选择图片"
-              hint="支持 JPG / PNG / WebP / GIF 等 (50MB 以内)"
-              inputRef={imageInputRef}
-              accept="image/*"
-              onPick={(f) => handleFilePicked(f, "image")}
-              uploading={uploading}
-              progress={progress}
-              onCancel={onClose}
-            />
-          ) : (
-            <FileTab
-              label="点击选择文件"
-              hint="支持 PDF / DOCX / XLSX / TXT / MD 等文档"
-              inputRef={fileInputRef}
-              accept=".pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp"
-              onPick={(f) => handleFilePicked(f, "file")}
-              uploading={uploading}
-              progress={progress}
-              onCancel={onClose}
-            />
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────
-// 4 个 tab 内内容
-// ────────────────────────────────────────────────────────────
-
-function TextTab({
-  value,
-  onChange,
-  pending,
-  onSubmit,
-  onCancel,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  pending: boolean;
-  onSubmit: () => void;
-  onCancel: () => void;
-}) {
-  const disabled = !value.trim() || pending;
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-fg-muted">
-        输入文本或链接 (以 https:// 开头会被识别为链接)
-      </p>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="输入链接 (https://...) 或文本内容..."
-        rows={4}
-        autoFocus
-        className="w-full rounded-xl bg-muted/50 px-4 py-3 text-base placeholder:text-fg-subtle focus:outline-none focus:ring-1 focus:ring-brand resize-none"
-      />
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="md" onClick={onCancel} disabled={pending}>
-          取消
-        </Button>
-        <Button
-          variant="default"
-          size="md"
-          loading={pending}
-          disabled={disabled}
-          onClick={onSubmit}
-        >
-          采集
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function LinkTab({
-  value,
-  onChange,
-  pending,
-  onSubmit,
-  onCancel,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  pending: boolean;
-  onSubmit: () => void;
-  onCancel: () => void;
-}) {
-  const disabled = !value.trim() || pending;
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-fg-muted">输入网页 URL, 自动入库</p>
-      <input
-        type="url"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="https://example.com/article"
-        autoFocus
-        className="w-full rounded-md bg-bg-sunken border border-border px-4 py-3 text-base placeholder:text-fg-subtle focus:outline-none focus:border-brand"
-      />
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="md" onClick={onCancel} disabled={pending}>
-          取消
-        </Button>
-        <Button
-          variant="default"
-          size="md"
-          loading={pending}
-          disabled={disabled}
-          onClick={onSubmit}
-        >
-          采集
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function FileTab({
-  label,
-  hint,
-  inputRef,
-  accept,
-  onPick,
-  uploading,
-  progress,
-  onCancel,
-}: {
-  label: string;
-  hint: string;
-  inputRef: React.RefObject<HTMLInputElement>;
-  accept: string;
-  onPick: (file: File) => void;
-  uploading: boolean;
-  progress: number | null;
-  onCancel: () => void;
-}) {
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-fg-muted">{hint}</p>
-      <button
-        type="button"
-        disabled={uploading}
-        onClick={() => inputRef.current?.click()}
-        className="w-full rounded-md border-2 border-dashed border-border bg-bg-sunken px-4 py-8 text-center hover:border-brand focus-visible:border-brand disabled:opacity-60"
-      >
-        <span className="block text-sm font-medium text-fg">{label}</span>
-        <span className="block text-xs text-fg-muted mt-1">
-          {uploading
-            ? `上传中 ${progress ?? 0}%`
-            : "支持大部分常见格式 · 单文件最大 50MB"}
-        </span>
-      </button>
-      <input
-        ref={inputRef}
-        type="file"
-        accept={accept}
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onPick(f);
-          e.target.value = "";
+      {/* ═══ MediaPicker — Photo / File 采集 (web library/page.tsx:807-818) ═══ */}
+      <MediaPicker
+        open={pickerKind !== null}
+        onClose={onClose}
+        kind={pickerKind ?? "camera"}
+        onCapture={(file) => {
+          const kind = pickerKind ?? "camera";
+          void handlePickerCapture(file, kind);
         }}
       />
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="md" onClick={onCancel} disabled={uploading}>
-          取消
-        </Button>
-      </div>
-    </div>
+    </>
   );
 }
 
-function stripExt(name: string): string {
-  const i = name.lastIndexOf(".");
-  return i > 0 ? name.slice(0, i) : name;
+// ────────────────────────────────────────────────────────────
+// 内联图标 (lucide path 逐字 — PC 无 lucide-react)
+// ────────────────────────────────────────────────────────────
+
+/** lucide `type` — 24×24 / sw2 (web library/page.tsx:727) */
+function TypeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      width="100%"
+      height="100%"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <polyline points="4 7 4 4 20 4 20 7" />
+      <line x1="9" x2="15" y1="20" y2="20" />
+      <line x1="12" x2="12" y1="4" y2="20" />
+    </svg>
+  );
+}
+
+/** lucide `camera` — 24×24 / sw2 (web library/page.tsx:735) */
+function CameraIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      width="100%"
+      height="100%"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+      <circle cx="12" cy="13" r="3" />
+    </svg>
+  );
+}
+
+/** lucide `file` — 24×24 / sw2 (web library/page.tsx:743) */
+function FileIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      width="100%"
+      height="100%"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+    </svg>
+  );
 }
