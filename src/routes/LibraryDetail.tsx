@@ -11,12 +11,12 @@
  *                          跨页携带 libraryItem 引用, navigate /chat/:id
  *                          (跟 Home.handleSubmit 同路径)
  *   - library-id-8 (P1)  文件详情走 DocumentViewerActivity —
- *                          text 类型 → 走 react-markdown (MarkdownTableCard);
+ *                          text 类型 → 走自研 markdown 管线 (LibraryMarkdownTableCard);
  *                          image 类型 → <img>;
  *                          link / doc 类型 → 「打开」走 openWithSystem IPC
  *                          (跟 DeliveryDetail.tsx 同样的 IPC 桥, shell.openPath /
  *                          shell.openExternal 走系统默认应用)
- *   - library-id-9 (P2)  Markdown 内容单独美化 (MarkdownTableCard)
+ *   - library-id-9 (P2)  Markdown 内容单独美化 (LibraryMarkdownTableCard)
  *   - library-id-10 (P2) 同步状态显示 (SyncStatusBadge — 已同步 / 同步中 / 失败)
  *
  * 复用 (Library 0.7.4 已就绪):

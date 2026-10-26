@@ -3,28 +3,27 @@
  * (gacode-electron 0.7.5 P2 library-id-9)
  *
  * LibraryDetail 当 LibraryItem.type === "text" 且 content 是 markdown 时,
- * 不再用裸 <pre> 把整个内容塞出来 — 走跟 ChatDetail / ChatListMarkdown
- * 同一套"表格 / 代码块 / 列表"分段渲染路径, 但简化版:
+ * 不再用裸 <pre> 把整个内容塞出来 — 走跟 ChatDetail 同一套自研 markdown 管线,
+ * 但用 **阅读场景** 参数:
  *
- *   - 用 react-markdown + remark-gfm 解析 (跟 lib/markdown.tsx 同款)
- *   - 表格 → 卡片样式 (边框 + 第一行 header)
- *   - 代码块 → 等宽字体 + 浅色背景 (跟 markdown.tsx 的 md-code 对齐)
- *   - 列表 → 普通 ul / ol
- *   - 链接 → 外链 (Electron 走系统默认浏览器 — <a target="_blank">)
+ *   - `size="reading"`     → 正文字号 16px / 行高 24px（安卓 MarkdownRichText.kt:157-159）
+ *   - `cutCodeBlocks`      → 围栏代码块切成卡片（语言徽章 + 复制按钮），
+ *                            而不是 chat 场景的行内等宽
+ *
+ * ## M3 批次（2026-10-26）：归并到自研管线
+ *
+ * 旧版这里是**第二套**第三方 markdown 实例（remark / rehype 插件链，
+ * components 只覆盖 table / th / td / code / a 五个）。
+ * 现在底层换成 `lib/markdown.tsx` → `lib/markdown/renderer.tsx`（自研管线），
+ * ⇒ 全仓只剩**一套** markdown 实现（表格 / 代码块 / 列表 / 引用 / 标题全都有）。
  *
  * 设计依据:
  *   - text 类 LibraryItem.content 通常是用户复制的文章 / 笔记 / 网页摘录,
  *     markdown 比例高. 跟 web LibraryDetail + Android LibraryDetail
  *     `MarkdownTableCard` 行为对齐.
- *   - 不重做 full markdown renderer — 只覆盖最常见的 markdown 子集
- *     (段落 / 列表 / 链接 / 表格 / 代码块 / 标题).
- *   - P1-A worker 在 ChatDetail 那边会建 src/components/ui/MarkdownTableCard.tsx,
- *     本组件是 library 专属变体, 不与之冲突 (路径不同 + 用途不同).
  */
 
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeSanitize from "rehype-sanitize";
+import { Markdown } from "../../lib/markdown";
 
 export interface LibraryMarkdownTableCardProps {
   /** markdown 原文 */
@@ -51,61 +50,10 @@ export function LibraryMarkdownTableCard({
         className ?? "",
       ].join(" ")}
     >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeSanitize]}
-        components={{
-          table({ children }) {
-            return (
-              <div className="md-table-scroll my-3">
-                <table className="md-table">{children}</table>
-              </div>
-            );
-          },
-          th({ children }) {
-            return <th className="md-table-th">{children}</th>;
-          },
-          td({ children }) {
-            return (
-              <td className="md-table-td">
-                <div className="md-table-td-inner">{children}</div>
-              </td>
-            );
-          },
-          code({ className: cls, children, ...props }) {
-            const isBlock = cls && /language-/.test(cls);
-            if (isBlock) {
-              return (
-                <code className={cls} {...props}>
-                  {children}
-                </code>
-              );
-            }
-            return (
-              <code
-                className="rounded bg-bg-sunken px-1 py-0.5 font-mono text-[0.9em]"
-                {...props}
-              >
-                {children}
-              </code>
-            );
-          },
-          a({ children, href }) {
-            return (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-brand hover:underline"
-              >
-                {children}
-              </a>
-            );
-          },
-        }}
-      >
+      {/* 阅读场景：16px / 24px，围栏切成代码块卡片 */}
+      <Markdown size="reading" cutCodeBlocks>
         {content}
-      </ReactMarkdown>
+      </Markdown>
     </div>
   );
 }

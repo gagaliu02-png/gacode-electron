@@ -62,6 +62,12 @@
  *   - §D ChatDetail 自管 EmojiPicker / KnowledgeAttachSheet open 状态
  *   - §E 文件格式明确列出 (image: jpeg/png/gif/webp/svg/heic/bmp;
  *     document: pdf/doc/docx/xls/xlsx/ppt/pptx/txt/md)
+ *
+ * M3 批次 (2026-10-26):
+ *   - A2-D4-02: `chunk.reasoning` → `message.phases` (思考 / 工具时间线数据通路)
+ *   - A2-D4-06: `userImageUrls` 并集 → MessageList → MessageBubble.stripImageUrls
+ *   - C4-08: 轮次终态 (`isTerminalDone`) → 「AI 回复到达」系统通知
+ *     (仅窗口不在前台时弹; 取消帧 / error 帧不弹)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -82,6 +88,7 @@ import {
 } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
 import { useChatStream } from "../lib/sse";
+import { notifyAiReplyArrived } from "../lib/chat-notifications";
 import {
   isTerminalDone,
   isCancelFrame,
@@ -131,6 +138,7 @@ import { ChatTopBanner } from "../components/chat/ChatTopBanner";
 import { DeliverableStrip } from "../components/chat/DeliverableStrip";
 import { ModelChips } from "../components/chat/ModelChips";
 import type { CallTreeNode } from "../components/chat/CallTreeCard";
+import type { ExecutionPhase } from "../components/chat/ExecutionTimeline";
 import type { SlashCommand } from "../components/chat/SlashMenu";
 import {
   HOME_FIRST_MESSAGE_KEY,
@@ -141,6 +149,28 @@ import {
 // 标签 id — 临时 assistant message 用, server 真 messageId 回来后替换
 function streamingId(): string {
   return `streaming-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/**
+ * A2-D4-02 · thinking chunk 合并 ——
+ * 相邻 thinking **就地拼接** (跟 web `chat/[id]/page.tsx:605-618` +
+ * 安卓 `SsePipeline.WORK` 同款).
+ *
+ * ⚠️ 不合并的话, 一次思考会被切成 N 条短句 ⇒ 时间线显示「思考 20 次」,
+ *    展开看到 20 条 ~5-10 字短句 (gaga 真机截图证据).
+ */
+function mergeThinkingPhase(
+  phases: ExecutionPhase[],
+  text: string,
+  ts: number,
+): ExecutionPhase[] {
+  const last = phases[phases.length - 1];
+  if (last && last.type === "thinking") {
+    const next = phases.slice(0, -1);
+    next.push({ ...last, text: (last.text ?? "") + text, ts });
+    return next;
+  }
+  return [...phases, { type: "thinking", text, ts }];
 }
 
 // 附件上限 — 与 lib/upload.ts MAX_BYTES 对齐.
@@ -258,6 +288,24 @@ export function ChatDetail() {
   const [streamingEvents, setStreamingEvents] = useState<
     Array<Record<string, unknown>>
   >([]);
+  // A2-D4-02 · 思考 / 工具时间线 (流式累积 chunk.reasoning + tool 事件).
+  // 合并策略跟 web `chat/[id]/page.tsx:605-618` + 安卓 SsePipeline.WORK 一致:
+  //   相邻 thinking chunk **就地拼接** (不是每 chunk 一条) —— 否则时间线会显示
+  //   "思考 20 次" 的短句列表, 而不是 1 条完整思考链.
+  const [streamingPhases, setStreamingPhases] = useState<ExecutionPhase[]>([]);
+  // onChunk 回调闭包里的 state 是**旧值** ⇒ 终态帧要拿「本轮完整正文 / phases」
+  // 发通知 (C4-08) 必须走 ref 镜像.
+  const streamingContentRef = useRef<string>("");
+  const streamingPhasesRef = useRef<ExecutionPhase[]>([]);
+  // C4-08: 通知标题 = 会话标题 (取不到 → 「新对话」), 同样走 ref.
+  const chatTitleRef = useRef<string>("新对话");
+  useEffect(() => {
+    chatTitleRef.current = currentChat?.title || "新对话";
+  }, [currentChat]);
+
+  // A2-D4-06 · 本轮上传的图 URL (还没落进 history) ——
+  //   新对话场景下首次发图的 URL 漏在 history 之外, AI 流里引用它时不会被剥.
+  const [pendingUserImageUrls, setPendingUserImageUrls] = useState<string[]>([]);
   // 流式 error 状态 (network / sse / server). 仅在被动失败时显示; USER_STOP 不显示.
   const [streamError, setStreamError] = useState<{
     kind: StreamingErrorKind;
@@ -278,19 +326,14 @@ export function ChatDetail() {
   const [pendingKnowledgeRefs, setPendingKnowledgeRefs] = useState<
     Array<{ id: string; title: string }>
   >([]);
-  // 0.7.5 chat-id-20/12: 流式起始时间戳 + call tree 节点 (走 React state 渲染)
+  // 0.7.5 chat-id-12: call tree 节点 (走 React state 渲染)
   const [streamingCallTree, setStreamingCallTree] = useState<CallTreeNode[]>([]);
-  const [streamingSinceState, setStreamingSinceState] = useState<number | null>(null);
-  // 这俩 ref 不进 useMemo, 仅 startStream 内部用
-  const streamingSinceRef = useRef<number | null>(null);
+  // 这 ref 不进 useMemo, 仅 startStream 内部用
   const callTreeRef = useRef<CallTreeNode[]>([]);
-  const phaseTimelineRef = useRef<Array<{
-    type: "thinking" | "tool";
-    tool?: string;
-    text?: string;
-    startedAt: number;
-    endedAt?: number;
-  }>>([]);
+  // ⚠️ M3 批次: 原 `streamingSinceState` / `streamingSinceRef` / `phaseTimelineRef`
+  //   三个声明**从未被赋值** (grep 全仓 0 写入点) ⇒ 死代码。
+  //   `streamingSince*` 随 `ExecutionTiming` → `ExecutionTimeline` 的替换一起删
+  //   (A2-D4-02); `phaseTimelineRef` 由 `streamingPhases` state 取代 (A2-D4-02 数据通路).
 
   // 阶段 8 chat-id-13 — approval_request 累积. 任一按钮触发 → 清整张 banner.
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
@@ -334,6 +377,7 @@ export function ChatDetail() {
     setStreamingAssistantId(null);
     setStreamingContent("");
     setStreamingEvents([]);
+    setStreamingPhases([]);
     setStreamError(null);
     setWaitingFirstFrame(false);
     return () => {
@@ -350,9 +394,17 @@ export function ChatDetail() {
       role: "assistant",
       content: streamingContent,
       richEvents: streamingEvents as ChatMessageModel["richEvents"],
+      // A2-D4-02 · 思考 / 工具时间线随消息下传 → ExecutionTimeline
+      phases: streamingPhases,
     };
     return [...baseMessages, streamingMsg];
-  }, [baseMessages, streamingAssistantId, streamingContent, streamingEvents]);
+  }, [
+    baseMessages,
+    streamingAssistantId,
+    streamingContent,
+    streamingEvents,
+    streamingPhases,
+  ]);
 
   // chat-id-19 rerun 显示条件: 不在流式 + 历史非空 + 最后一条是 assistant.
   // (web 同款: 在最后一条 assistant 后留 rerun 入口)
@@ -362,6 +414,36 @@ export function ChatDetail() {
     const last = messages[messages.length - 1];
     return last.role === "assistant" && last.content.trim().length > 0;
   }, [streamingAssistantId, messages]);
+
+  // =========================================================================
+  // A2-D4-06 · 渲染层剥图: 当前 chat 中所有 user message 已上传过的 imageUrls 并集
+  //
+  //   - 数据源: 历史里 role==="user" 的 message.imageUrls (server metadata.image_urls,
+  //     结构化字段) + 本轮上传的图 (pendingUserImageUrls).
+  //   - 用途: 透传给 MessageList → MessageBubble.stripImageUrls, 在 assistant
+  //     渲染前剥掉 AI 重复引用的 user 已发图 (**渲染层过滤**, 不改 prompt).
+  //   - 用并集而不是「最近一条 user 的图」: 范围更稳; 即使 AI 引用了 session
+  //     早期的图, 也会被剥掉, 不会出现「上下文变长后漏剥」的退化路径.
+  //   - Set 去重, 但保留稳定顺序 (按 messages 出现顺序), 便于将来调试 diff.
+  // =========================================================================
+  const userImageUrls = useMemo(() => {
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const m of baseMessages) {
+      if (m.role !== "user") continue;
+      for (const u of m.imageUrls ?? []) {
+        if (!u || seen.has(u)) continue;
+        seen.add(u);
+        ordered.push(u);
+      }
+    }
+    for (const u of pendingUserImageUrls) {
+      if (!u || seen.has(u)) continue;
+      seen.add(u);
+      ordered.push(u);
+    }
+    return ordered;
+  }, [baseMessages, pendingUserImageUrls]);
 
   // ────────────── SSE 启动 + chunk 处理 ──────────────
 
@@ -373,6 +455,9 @@ export function ChatDetail() {
       setStreamingAssistantId(localAssistantId);
       setStreamingContent("");
       setStreamingEvents([]);
+      setStreamingPhases([]);
+      streamingContentRef.current = "";
+      streamingPhasesRef.current = [];
       setStreamError(null);
       setWaitingFirstFrame(true);
       // 新一轮触发 → 清空旧 session 的 pending approvals (不再 stale)
@@ -388,6 +473,15 @@ export function ChatDetail() {
         .filter((a) => !!a.fileId)
         .map((a) => a.fileId as string);
 
+      // A2-D4-06: 本轮上传的图 URL 也要进剥图并集 (还没落进 history)
+      if (imageUrls.length > 0) {
+        setPendingUserImageUrls((prev) => {
+          const merged = [...prev];
+          for (const u of imageUrls) if (!merged.includes(u)) merged.push(u);
+          return merged;
+        });
+      }
+
       try {
         await stream.start({
           sessionId: chatId,
@@ -398,7 +492,17 @@ export function ChatDetail() {
             // waiting first frame → 收到任意 chunk 即结束 typing
             setWaitingFirstFrame(false);
             if (chunk.content) {
+              streamingContentRef.current += chunk.content;
               setStreamingContent((prev) => prev + chunk.content);
+            }
+            // A2-D4-02 · 思考链 → phases (相邻 thinking 就地拼接)
+            if (chunk.reasoning) {
+              streamingPhasesRef.current = mergeThinkingPhase(
+                streamingPhasesRef.current,
+                chunk.reasoning,
+                Date.now(),
+              );
+              setStreamingPhases(streamingPhasesRef.current);
             }
             // 阶段 8 chat-id-13/17 — 抽 approval_request / approval_granted /
             //   approval_denied / feedback 事件走 ApprovalBanner / store, 不进
@@ -422,6 +526,12 @@ export function ChatDetail() {
                 return;
               }
               setStreamingEvents((prev) => [...prev, ev]);
+              // A2-D4-02 · tool 事件同时进 phases 时间线 (跟 web page.tsx:648-655 同款)
+              streamingPhasesRef.current = [
+                ...streamingPhasesRef.current,
+                { type: "tool", event: ev, ts: Date.now() },
+              ];
+              setStreamingPhases(streamingPhasesRef.current);
             }
             if (chunk.events && chunk.events.length > 0) {
               const kept: Array<Record<string, unknown>> = [];
@@ -444,14 +554,33 @@ export function ChatDetail() {
               }
               if (kept.length > 0) {
                 setStreamingEvents((prev) => [...prev, ...kept]);
+                // A2-D4-02 · tool 事件同时进 phases 时间线
+                for (const ev of kept) {
+                  streamingPhasesRef.current = [
+                    ...streamingPhasesRef.current,
+                    { type: "tool", event: ev, ts: Date.now() },
+                  ];
+                }
+                setStreamingPhases(streamingPhasesRef.current);
               }
             }
             if (isTerminalDone(chunk)) {
               // 终态 → 立即用 server messageId 替换本地临时 id
               const serverId = chunk.messageId!;
+              // C4-08 · 「AI 回复到达」系统通知 ——
+              //   仅窗口不在前台时弹 (主进程算 isFocused, 不用 document.hidden).
+              //   取消帧 / error 帧不走这里 ⇒ 用户按停止时**不**通知
+              //   (gaga 口径: 打断 = 彻底丢弃产出).
+              void notifyAiReplyArrived({
+                chatId,
+                chatTitle: chatTitleRef.current,
+                content: chunk.fullContent ?? streamingContentRef.current,
+                phases: streamingPhasesRef.current,
+              });
               setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
               setStreamingContent("");
               setStreamingEvents([]);
+              setStreamingPhases([]);
               // 刷新 history + chats (server 落库后 title 改了)
               queryClient.invalidateQueries({ queryKey: ["history", chatId] });
               queryClient.invalidateQueries({ queryKey: ["chats"] });
@@ -464,6 +593,7 @@ export function ChatDetail() {
               setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
               setStreamingContent("");
               setStreamingEvents([]);
+              setStreamingPhases([]);
               return;
             }
             if (chunk.error) {
@@ -475,6 +605,7 @@ export function ChatDetail() {
               setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
               setStreamingContent("");
               setStreamingEvents([]);
+              setStreamingPhases([]);
             }
           },
         });
@@ -484,6 +615,7 @@ export function ChatDetail() {
           setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
           setStreamingContent("");
           setStreamingEvents([]);
+          setStreamingPhases([]);
           setWaitingFirstFrame(false);
           return;
         }
@@ -498,6 +630,7 @@ export function ChatDetail() {
         setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
         setStreamingContent("");
         setStreamingEvents([]);
+        setStreamingPhases([]);
         setWaitingFirstFrame(false);
       }
     },
@@ -1115,6 +1248,7 @@ export function ChatDetail() {
             messages={messages}
             streamingAssistantId={streamingAssistantId}
             onMessageAction={handleMessageAction}
+            stripImageUrls={userImageUrls}
           />
         )}
       </div>

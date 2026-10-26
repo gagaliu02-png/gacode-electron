@@ -6,7 +6,8 @@
  *   - assistant → 左对齐, sunken 容器色, 圆角, Markdown 渲染, 工具事件
  *
  * 跟 web MessageBubble.tsx M2/M3 同源风格 (props + 状态机), 但代码全部自写.
- * 不复用 gacode-web 其它内部组件 (utils.ts / shadcn), 用本地 mini-markdown.
+ * markdown 走**自研管线** (`lib/markdown.tsx` → `lib/markdown/renderer.tsx`),
+ * 行为基准 = 安卓 (`docs/md-android-behavior-spec.md`).
  *
  * 流式态: assistant 在 isStreaming=true 时, 末尾显示 "▍" pulse 光标,
  *         不抖动附加 reflow (text 累积在父组件).
@@ -20,9 +21,16 @@
  *   - chat-id-9:  挂 ReferenceFold (知识库引用折叠条)
  *   - chat-id-11: RichEventBubble 自身挂 ToolTimingBadge (tool_end 带 duration_ms)
  *   - chat-id-12: assistant 气泡顶部挂 CallTreeCard (链路树)
- *   - chat-id-20: assistant 气泡底部挂 ExecutionTiming (已执行 X 秒 / 用时)
  *   - chat-id-27: assistant 气泡右侧挂 TtsButton (TTS 朗读)
  *   - chat-id-40: 顶部挂 QuoteReplyBlock (引用 / 回复 块)
+ *
+ * M3 批次 (2026-10-26):
+ *   - A2-D4-04: **user 气泡正文从纯文本改成 Markdown 渲染**
+ *   - A2-D4-03: user 气泡 markdown **反色** (code / pre / a 走 primary-foreground)
+ *   - A2-D4-06: assistant 气泡渲染前 **剥掉 user 已上传图的引用**
+ *                (`stripReferencedImageUrls`, 抄 web `MessageBubble.tsx:141-198`)
+ *   - A2-D4-02: `ExecutionTiming` 换成 `ExecutionTimeline` (思考 / 工具时间线,
+ *                挂在正文**上方**, 对齐 web `MessageBubble.tsx:396-398`)
  *
  * 父组件拿到 recalled=true 时**不传 menu** — 这个组件再卡一道防误调.
  */
@@ -36,8 +44,89 @@ import { MessageMenu, type MessageAction } from "./MessageMenu";
 import { ReferenceFold } from "./ReferenceFold";
 import { QuoteReplyBlock } from "./QuoteReplyBlock";
 import { TtsButton } from "./TtsButton";
-import { ExecutionTiming } from "./ExecutionTiming";
+import { ExecutionTimeline, type ExecutionPhase } from "./ExecutionTimeline";
 import { CallTreeCard, type CallTreeNode } from "./CallTreeCard";
+
+// ============================================================================
+// A2-D4-06 · 渲染层剥图 (抄 web `gacode-web/src/components/chat/MessageBubble.tsx:133-198`)
+// ============================================================================
+
+/**
+ * URL normalize helpers —— 解决「stream-end / 刷新页面后 server 重签 URL 导致
+ * 两边字符串不一致」的 bug:
+ *   用户上传时拿到的签名 URL (`?exp=E_upload&sig=S_upload`) 落库到
+ *   `metadata.image_urls`; getHistory 时 server 会**重新签名** (new exp / new sig),
+ *   两边 query string 不再相等 ⇒ 严格相等匹配永远 false ⇒ user 图剥不掉。
+ *   用 **base path** 比较就能稳定命中。
+ *
+ * 仅渲染层归一, **不动** server 端的重签逻辑 (nginx secure_link 依赖那个 sig)。
+ */
+function stripUrlQuery(u: string): string {
+  return u.split("?")[0];
+}
+
+function normalizeUrls(urls: string[]): string[] {
+  return urls.map(stripUrlQuery);
+}
+
+/**
+ * 从 assistant content 里剥除「已经被当前 chat 中 user message 上传过」的所有
+ * imageUrl 引用. 纯字符串变换, **不**修改原始 message.content, 只在渲染前对
+ * 送进 Markdown 的字符串做一次性过滤. 三种 markdown 形式都覆盖:
+ *
+ *   1. `![alt](URL)`  —— 标准 markdown 图片语法
+ *   2. `[text](URL)`  —— 链接形态 (LLM 可能用 markdown link 而不是 image 引用图)
+ *   3. 裸 URL (前后空白 / 行首行尾) —— 也可能直接出现 URL 而无 markdown 包裹
+ *
+ * 边界:
+ *   - content 为空 / urlsToStrip 为空 → 短路返回原文 (避免 RegExp 空 pattern 触发 SyntaxError)
+ *   - URL 含 regex metachar (?=) → 已转义, 不当作正则语法
+ *
+ * export 出来便于单测注入; 调用方在 `routes/ChatDetail.tsx` 算并集后透传.
+ */
+export function stripReferencedImageUrls(
+  content: string,
+  urlsToStrip: string[],
+): string {
+  if (!content) return content;
+  if (!urlsToStrip || urlsToStrip.length === 0) return content;
+  // 转义每个 URL 的 regex metachar (例如 ?, +, =, &). 单独 escape, 再用 | 串起来
+  // 作为 alternation. URL 一般很长, 不需要担心回溯 (顺序 alternation + 量词只在内部).
+  const escaped = normalizeUrls(urlsToStrip).map((u) =>
+    u.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  );
+  // 必须用 non-capturing group 包住 alternation, 否则 `\)` 之类只会关连到最后一个 URL,
+  // 前面 URL 的尾括号会留在原位 (e.g. `![](A)` → 删 `![](A` 留 `)`).
+  const urlAltGroup = `(?:${escaped.join("|")})`;
+  let out = content;
+  // 1) ![alt](URL) — 必须先剥, 否则会被 (2) 的 [text](URL) 也命中然后误删文本
+  const imgRe = new RegExp(`!\\[[^\\]]*\\]\\(${urlAltGroup}\\)`, "g");
+  out = out.replace(imgRe, "");
+  // 2) [text](URL) — 任意文本链接, URL 命中即整段删 (LLM 偶尔会写 [图](url) 之类)
+  const linkRe = new RegExp(`\\[[^\\]]+\\]\\(${urlAltGroup}\\)`, "g");
+  out = out.replace(linkRe, "");
+  // 3) 裸 URL — 仅匹配前后是空白或行首行尾的整段 URL, 避免误伤正文里的同名字符串
+  //    用 (?=\s|$) 而不是 \b, 是因为 URL 含 =, :, / 等非 \w 字符, \b 边界判定不准
+  //    replace 用 "$1" 保留前导空白 (行首或 \s), 否则会把它一起吞掉, 破坏 Markdown 段落布局.
+  const bareRe = new RegExp(`(^|\\s)${urlAltGroup}(?=\\s|$)`, "g");
+  out = out.replace(bareRe, "$1");
+  // 兜底: 剥取后可能留下连续空行 (图片占位行被删后, 上下换行连成 3+ 换行),
+  // 压成 2 换行, 不破坏段内 \n\n 语义 (Markdown 用 \n\n 切段落)
+  out = out.replace(/\n{3,}/g, "\n\n");
+  return out;
+}
+
+/**
+ * A2-D4-03 · user 气泡 markdown **反色** (抄 web `MessageBubble.tsx:340-342`).
+ *
+ * user 气泡底色是 brand 橙 (`bg-primary`) + 黑字 (`text-primary-foreground`),
+ * markdown 里默认的深色 code / pre 底 + brand 橙链接在橙底上看不清 ⇒ 反色。
+ *
+ * ⚠️ `!` 前缀 = `!important` —— 必须压过 `globals.css` 末尾 M2 段里**未分层**的
+ *    `.md-inline-code` / `.md-code-run` / `.md-link` 规则。
+ */
+const USER_MARKDOWN_WRAPPER_CLASS =
+  "[&_code]:!bg-primary-foreground/20 [&_pre]:!bg-primary-foreground/10 [&_blockquote]:!border-primary-foreground/40 [&_a]:!text-primary-foreground";
 
 export interface MessageBubbleProps {
   /** "user" | "assistant" */
@@ -70,10 +159,19 @@ export interface MessageBubbleProps {
   /** chat-id-40: server metadata.quoted_message_id / quoted_content */
   quotedMessageId?: string | null;
   quotedContent?: string | null;
-  /** chat-id-20: 流式开始时间戳 (ms). 气泡底部「已执行 X 秒」用. */
-  streamingSince?: number | null;
-  /** chat-id-11 / chat-id-20: 完成态总耗时 ms (server metadata.tool_total_ms) */
-  toolTotalMs?: number | null;
+  /**
+   * A2-D4-02 · 思考 / 工具时间线 (assistant 才有).
+   * 数据源 = `routes/ChatDetail.tsx` 流式累积的 `chunk.reasoning` + tool 事件.
+   */
+  phases?: ExecutionPhase[];
+  /**
+   * A2-D4-06 · 渲染前剥除的 URL 集合 —— 当前 chat 中所有 user message 已上传过的
+   * imageUrls. 用于在 assistant 气泡渲染前, 把 AI 回复里引用了 user 已发图的
+   * markdown 片段 (`![alt](URL)` / `[text](URL)` / 裸 URL) 整段去掉.
+   * 这是**渲染层过滤**, 不改 message.content, 也不改 server 端 prompt.
+   * 不传 / 空数组 → 不过滤.
+   */
+  stripImageUrls?: string[];
   /** chat-id-12: 链路树节点 (从 chunk.events 解析). 缺省 → 走 RichEventBubble 单卡片 */
   callTree?: CallTreeNode[];
 }
@@ -218,10 +316,15 @@ function UserBubble({
         {/* 文字气泡 — 对齐 web MessageBubble.tsx:359-372:
             底色 bg-primary (brand 橙) + 黑字 text-primary-foreground,
             右下角 4px 小圆角 (rounded-br-[4px]), 主圆角 16px.
-            时间戳在气泡**内** (web footer 行) — 橙底上必须是深色字才看得见. */}
+            时间戳在气泡**内** (web footer 行) — 橙底上必须是深色字才看得见.
+            ⚠️ A2-D4-04: 正文走 Markdown 渲染 ⇒ 外层**不再**挂 whitespace-pre-wrap
+               (段落间距由 `.md-para` 接管, 叠加会多出空行). */}
         {content ? (
-          <div className="rounded-[16px] rounded-br-[4px] bg-primary text-primary-foreground px-4 py-3 text-sm leading-relaxed shadow-sm whitespace-pre-wrap break-words">
-            {content}
+          <div className="rounded-[16px] rounded-br-[4px] bg-primary text-primary-foreground px-4 py-3 text-sm leading-relaxed shadow-sm break-words">
+            {/* A2-D4-03: user 气泡 markdown 反色 (code / pre / a) */}
+            <div className={USER_MARKDOWN_WRAPPER_CLASS}>
+              <Markdown>{content}</Markdown>
+            </div>
             {timeAgo ? (
               <div className="mt-1 flex items-center gap-1 justify-end">
                 <span className="text-[10px] text-primary-foreground/50">
@@ -274,8 +377,8 @@ function AssistantBubble({
   knowledgeRefs,
   quotedMessageId,
   quotedContent,
-  streamingSince,
-  toolTotalMs,
+  phases,
+  stripImageUrls,
   callTree,
 }: Pick<
   MessageBubbleProps,
@@ -289,15 +392,19 @@ function AssistantBubble({
   | "knowledgeRefs"
   | "quotedMessageId"
   | "quotedContent"
-  | "streamingSince"
-  | "toolTotalMs"
+  | "phases"
+  | "stripImageUrls"
   | "callTree"
 > & { messageId: string }) {
   const showCursor = !!isStreaming;
   const hasRichEvents = !!richEvents && richEvents.length > 0;
   const hasCallTree = !!callTree && callTree.length > 0;
   const hasContent = !!content && content.trim().length > 0;
+  const hasPhases = !!phases && phases.length > 0;
   const timeAgo = createdAt ? formatAgo(createdAt) : "";
+
+  // A2-D4-06: 渲染前剥掉 user 已上传过的图引用 (不改原始 content)
+  const markdownContent = stripReferencedImageUrls(content, stripImageUrls ?? []);
 
   if (recalled) {
     return (
@@ -314,7 +421,7 @@ function AssistantBubble({
   }
 
   // 空 + 没事件 → 完全不渲染 (流式刚开始那两个 frame)
-  if (!hasContent && !hasRichEvents && !hasCallTree) return null;
+  if (!hasContent && !hasRichEvents && !hasCallTree && !hasPhases) return null;
 
   return (
     <div className="flex justify-start items-start gap-1.5">
@@ -340,15 +447,24 @@ function AssistantBubble({
 
         {/* Markdown 正文 — 对齐 web MessageBubble.tsx:372:
             bg-background + border border-border, 左下角 4px 小圆角 (rounded-bl-[4px]).
-            时间戳在气泡**内**的 footer 行 (web MessageBubble.tsx:494-510). */}
-        {hasContent ? (
+            时间戳在气泡**内**的 footer 行 (web MessageBubble.tsx:494-510).
+            ⚠️ 气泡在「有正文**或**有 phases」时都渲染 —— 跟 web 一致:
+               思考还没产出正文时, 时间线就已经可见 (web 的气泡容器无条件渲染). */}
+        {hasContent || hasPhases ? (
           <div className="rounded-[16px] rounded-bl-[4px] bg-background border border-border text-foreground px-4 py-3 text-sm leading-relaxed shadow-sm">
-            <Markdown>{content}</Markdown>
-            {showCursor ? (
-              <span
-                aria-hidden="true"
-                className="inline-block w-2 h-3 bg-current animate-pulse rounded-sm"
-              />
+            {/* A2-D4-02: 思考 / 工具时间线 (正文**上方**, 对齐 web MessageBubble.tsx:396-398).
+                phases 为空 ⇒ 组件自身 return null ⇒ 不渲染空框. */}
+            <ExecutionTimeline phases={phases ?? []} />
+            {hasContent ? (
+              <>
+                <Markdown>{markdownContent}</Markdown>
+                {showCursor ? (
+                  <span
+                    aria-hidden="true"
+                    className="inline-block w-2 h-3 bg-current animate-pulse rounded-sm"
+                  />
+                ) : null}
+              </>
             ) : null}
             {timeAgo ? (
               <div className="mt-1 flex items-center gap-1 justify-start">
@@ -367,12 +483,6 @@ function AssistantBubble({
         {knowledgeRefs && knowledgeRefs.length > 0 ? (
           <ReferenceFold ids={knowledgeRefs} />
         ) : null}
-
-        {/* chat-id-20: 助手气泡底部「已执行 X 秒」 / 「用时 X」 */}
-        <ExecutionTiming
-          runningSince={isStreaming ? streamingSince ?? null : null}
-          completedMs={!isStreaming && toolTotalMs != null ? toolTotalMs : null}
-        />
       </div>
 
       {/* 阶段 8 — 消息 ⋮ 菜单 + 0.7.5 chat-id-27 TTS */}
@@ -493,8 +603,8 @@ export function MessageBubble(props: MessageBubbleProps & { messageId: string })
     knowledgeRefs,
     quotedMessageId,
     quotedContent,
-    streamingSince,
-    toolTotalMs,
+    phases,
+    stripImageUrls,
     callTree,
     ...rest
   } = props;
@@ -503,8 +613,8 @@ export function MessageBubble(props: MessageBubbleProps & { messageId: string })
     knowledgeRefs,
     quotedMessageId,
     quotedContent,
-    streamingSince,
-    toolTotalMs,
+    phases,
+    stripImageUrls,
     callTree,
   };
   return rest.role === "user" ? (

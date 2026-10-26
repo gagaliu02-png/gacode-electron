@@ -16,6 +16,7 @@ import { MessageBubble } from "./MessageBubble";
 import type { RichEvent } from "./RichEventBubble";
 import type { MessageAction } from "./MessageMenu";
 import type { CallTreeNode } from "./CallTreeCard";
+import type { ExecutionPhase } from "./ExecutionTimeline";
 
 export interface ChatMessageModel {
   id: string;
@@ -41,6 +42,11 @@ export interface ChatMessageModel {
   streamingSince?: number | null;
   /** chat-id-11 / chat-id-20: server metadata.tool_total_ms */
   toolTotalMs?: number | null;
+  /**
+   * A2-D4-02 · 思考 / 工具时间线 (assistant 才有).
+   * 数据源 = `routes/ChatDetail.tsx` 流式累积的 `chunk.reasoning` + tool 事件.
+   */
+  phases?: ExecutionPhase[];
   /** chat-id-12: call tree 节点 (parent 从 chunk.events 解析) */
   callTree?: CallTreeNode[];
 }
@@ -51,6 +57,13 @@ interface Props {
   streamingAssistantId?: string | null;
   /** 用户已主动向上滚动的状态 (own 滚动观察). 用于"跳到底"按钮的显示控制. */
   onAutoScrollChange?: (sticky: boolean) => void;
+  /**
+   * A2-D4-06 · 当前 chat 中所有 user message 已上传过的 imageUrls 并集.
+   * 透传给每条 MessageBubble 的 `stripImageUrls`: assistant 气泡渲染前把 AI
+   * 回复里引用了 user 已发图的 markdown 片段整段去掉.
+   * 不传 / 空数组 → 不过滤.
+   */
+  stripImageUrls?: string[];
   /**
    * 阶段 8: 消息动作回调 (复制 / 保存到 KB / 点赞 / 点踩 / 撤回 / 删除 / rerun).
    * parent (ChatDetail) 收到 ok=true 时调 queryClient.invalidateQueries
@@ -65,6 +78,7 @@ export function MessageList({
   streamingAssistantId,
   onAutoScrollChange,
   onMessageAction,
+  stripImageUrls,
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -142,8 +156,8 @@ export function MessageList({
               knowledgeRefs={m.knowledgeRefs}
               quotedMessageId={m.quotedMessageId}
               quotedContent={m.quotedContent}
-              streamingSince={m.streamingSince ?? null}
-              toolTotalMs={m.toolTotalMs ?? null}
+              phases={m.phases}
+              stripImageUrls={stripImageUrls}
               callTree={m.callTree}
               onAction={
                 onMessageAction
