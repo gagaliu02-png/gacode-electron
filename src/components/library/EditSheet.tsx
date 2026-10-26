@@ -1,7 +1,20 @@
 /**
- * components/library/EditSheet.tsx — 编辑知识库条目 (gacode-electron 0.7.2 P0 library-11)
+ * components/library/EditSheet.tsx — 编辑知识库条目 (行内编辑弹窗)
  *
- * 编辑库条目的 title + tags (跟 web LibraryRow 的 edit modal 行为对齐).
+ * 事实源: gacode-web/src/app/(main)/library/page.tsx:1208-1242 (编辑 Modal)
+ *   web 用 AlertDialog (自实现, 无 Radix) + 标题 Input + 标签 Input + 取消/保存.
+ *
+ * PC 侧对应物 = components/ui/ConfirmDialog —— 它的 doc 明确写着
+ *   「视觉逐条对齐 gacode-web/src/components/ui/alert-dialog.tsx (C2-20)」:
+ *   居中 modal + 黑色遮罩 (backdrop-blur) + rounded-2xl + shadow-2xl + 边框 +
+ *   max-w-md + p-6 + ESC 关闭 + 锁 body 滚动 + 淡入动画,
+ *   footer 结构 `flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 pt-2`
+ *   跟 web AlertDialogFooter 一致.
+ *   ⇒ 本组件不再自造 modal, 改用 ConfirmDialog (L-69).
+ *
+ * 表单 (L-72): 裸 <input> → components/ui/Input (跟 web 的 Input 同款).
+ * 只读 meta 区 (L-71): web 的编辑弹窗**没有**类型/ID/创建时间 ⇒ 直接删.
+ *
  * 调 PATCH /yinian/library/:id, server schema 接受至少 1 个字段.
  *
  * 用法:
@@ -20,7 +33,8 @@ import {
   type LibraryItem,
 } from "../../lib/api";
 import { useToast } from "../ui/Toast";
-import { Button } from "../ui/Button";
+import { Input } from "../ui/Input";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 export interface EditSheetProps {
   open: boolean;
@@ -57,7 +71,7 @@ export function EditSheet({ open, item, onClose, onSaved }: EditSheetProps) {
       return updateLibraryItem(item.id, { title: trimmedTitle, tags });
     },
     onSuccess: (updated) => {
-      toast({ message: "已更新", variant: "success" });
+      toast({ title: "已更新", variant: "success" });
       queryClient.invalidateQueries({ queryKey: ["library"] });
       queryClient.invalidateQueries({ queryKey: ["library-item", item?.id] });
       queryClient.invalidateQueries({ queryKey: ["library-tags"] });
@@ -66,7 +80,9 @@ export function EditSheet({ open, item, onClose, onSaved }: EditSheetProps) {
     },
     onError: (err) => {
       toast({
-        message: `更新失败: ${err instanceof Error ? err.message : String(err)}`,
+        title: "更新失败",
+        description:
+          err instanceof Error ? err.message : "请稍后重试",
         variant: "danger",
       });
     },
@@ -78,94 +94,46 @@ export function EditSheet({ open, item, onClose, onSaved }: EditSheetProps) {
 
   const submit = () => {
     if (!trimmedTitle) {
-      toast({ message: "标题不能为空", variant: "warning" });
+      toast({ title: "标题不能为空", variant: "warning" });
       return;
     }
     mutation.mutate();
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="编辑知识库条目"
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
+    <ConfirmDialog
+      title="编辑知识库条目"
+      cancelLabel="取消"
+      confirmLabel="保存"
+      confirmVariant="default"
+      loading={mutation.isPending}
+      onCancel={onClose}
+      onConfirm={submit}
     >
-      <div
-        className="absolute inset-0 bg-black/60"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div className="relative w-full max-w-md rounded-md bg-bg-elevated shadow-dialog p-5">
-        <h2 className="text-base font-medium mb-4">编辑知识库条目</h2>
-
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs text-fg-muted mb-1 block">标题</label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="标题"
-              maxLength={200}
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
-              }}
-              className="w-full rounded-md bg-bg-sunken border border-border px-4 py-3 text-base placeholder:text-fg-subtle focus:outline-none focus:border-brand"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-fg-muted mb-1 block">
-              标签{" "}
-              <span className="text-fg-subtle">(用逗号或空格分隔)</span>
-            </label>
-            <input
-              type="text"
-              value={tagsRaw}
-              onChange={(e) => setTagsRaw(e.target.value)}
-              placeholder="例如: 设计, 灵感, 2026"
-              className="w-full rounded-md bg-bg-sunken border border-border px-4 py-3 text-base placeholder:text-fg-subtle focus:outline-none focus:border-brand"
-            />
-          </div>
-
-          {/* 只读 meta — 跟 web 的 details modal 类似, 让用户看到类型/id/时间 */}
-          <div className="rounded-md bg-bg-sunken p-3 text-xs text-fg-muted space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="w-12 shrink-0 text-fg-subtle">类型</span>
-              <span>{item.type}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-12 shrink-0 text-fg-subtle">ID</span>
-              <span className="font-mono break-all">#{item.id}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-12 shrink-0 text-fg-subtle">创建</span>
-              <span>{item.createdAt || "-"}</span>
-            </div>
-          </div>
+      {/* 表单 — web library/page.tsx:1213-1234 */}
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs text-fg-muted mb-1 block">标题</label>
+          <Input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="标题"
+            maxLength={200}
+            autoFocus
+          />
         </div>
-
-        <div className="flex items-center justify-end gap-2 mt-4">
-          <Button
-            variant="ghost"
-            size="md"
-            onClick={onClose}
-            disabled={mutation.isPending}
-          >
-            取消
-          </Button>
-          <Button
-            variant="default"
-            size="md"
-            loading={mutation.isPending}
-            disabled={!trimmedTitle}
-            onClick={submit}
-          >
-            保存
-          </Button>
+        <div>
+          <label className="text-xs text-fg-muted mb-1 block">
+            标签{" "}
+            <span className="text-fg-subtle">(用逗号或空格分隔)</span>
+          </label>
+          <Input
+            value={tagsRaw}
+            onChange={(e) => setTagsRaw(e.target.value)}
+            placeholder="例如: 设计, 灵感, 2026"
+          />
         </div>
       </div>
-    </div>
+    </ConfirmDialog>
   );
 }
