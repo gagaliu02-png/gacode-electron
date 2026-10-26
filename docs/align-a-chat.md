@@ -2718,6 +2718,13 @@ className={cn(
 **怎么改**
 - 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
 
+**本批已改（2026-10-26 · 删 PC 独有的第三分支）**
+- **web 只有两个分支**（`gacode-web/src/components/chat/AttachmentChip.tsx:60-72`）：`thumbnailUrl && isImage` → 真图缩略 `<img>`；`thumbnailUrl && !isImage` → `FileText` 方块。
+- **web 在 `thumbnailUrl` 为空时（文档类型）不渲染任何图标** —— web `app/page.tsx:325` 传 `thumbnailUrl={it.file.type.startsWith("image/") ? it.url : undefined}`。
+- **PC 原有第三分支**：`src/components/chat/AttachmentChip.tsx:69-72` 的 `!isImage`（**没有** `thumbnailUrl` 时也渲染 32×32 的 `FileText` 方块）⇒ PC 多出一个图标块。
+- **本批已删**该分支（现 `src/components/chat/AttachmentChip.tsx:58-77` 为两分支），PC 与 web 同形。
+- **最终状态**：已一致（底色逐字一致 + 缩略图分支数与 web 同为 2）。
+
 ---
 
 #### A2-D1-27 · 知识库挂载 chip 形态（brand-cyan 描边 chip + 逐条可移除）
@@ -3749,7 +3756,13 @@ chatInputRef.current?.insertText(markerText);
 **PC 现状（已落地）**
 ```tsx
 // ChatDetail.tsx:944-953
-      // A2-D3-02 — 把知识库 marker 注入输入框 (server 未识别 knowledge_refs 时的兜底通道)
+      // A2-D3-02 — 把知识库 marker 注入输入框
+      //   2026-10-26 订正: 「server 未识别 knowledge_refs」是**过期事实** —— 服务端自 2026-10-14 起
+      //   已支持该字段 (unified-api yinian.chat.routes.js:405 schema + :1366-1389 取 atom 原文注入上下文)。
+      //   但 PC **发送侧不发** knowledge_refs (src/lib/sse.ts:149-156 只发 image_urls + attached_file_ids),
+      //   web 发 (gacode-web/src/lib/api.ts:797-799 + chat/[id]/page.tsx:763-768)
+      //   ⇒ 在 PC 上 marker 是**唯一**通道, 不再只是「兜底」。
+      //   该差异 owner = 总PM (服务端解析口径落定后 PC 再补该字段) —— 本批**不实现**, 仅订正注释。
       //   对齐 web `src/app/(main)/chat/[id]/page.tsx:1124-1129` (chatInputRef.insertText
       //   → 多个 marker 换行分隔, 用户后续可在输入框编辑).
       //   PC 的 ChatInputBar handle 暴露 insertText (与 insertEmoji 同实现, 按光标插入)。
@@ -3765,7 +3778,24 @@ chatInputRef.current?.insertText(markerText);
 - **锚点更正**：注入点不是 `handleKnowledgePick`（PC 里**不存在**这个函数），而是多选 sheet 的 `onConfirm` = `handleKnowledgeConfirm`（`ChatDetail.tsx:798`、调用处 `:1220`）。
 - **写法更正**：旧文档建议用 `insertEmoji`，但 PC 的 `ChatInputBarHandle` **已有** `insertText`（声明 `src/components/chat/ChatInputBar.tsx:118-135`，`insertText` 在 `:117`；handle 暴露 `:241`；本体 `insertTextAtCursor` `:586-590`）⇒ 已改用 `insertText`，与 web `chatInputRef.current?.insertText(...)` 逐字对应。
 - marker 格式 `@[library:${id}] ${title || "未命名"}`、多行用 `\n` 连接 ⇒ 与 web 一致。
-- **改动量**：0 行（已落地）
+- **本批（2026-10-26）注释订正**：原注释「(server 未识别 knowledge_refs 时的兜底通道)」是**过期事实** —— 服务端自 2026-10-14 起**已识别**该字段 ⇒ 已改成当前事实（PC 发送侧不发该字段，marker 在 PC 上是唯一通道；该差异待服务端口径落定后再对齐）。
+- **改动量**：0 行（marker 注入行为本身**未改**，只改注释）
+
+---
+
+**⚠️ 本条附带的 PC↔web 差异（2026-10-26 新记）· PC 发送侧不发 `knowledge_refs` 字段**
+| 项 | 值 |
+|---|---|
+| web | `src/lib/api.ts:797-799`（`sendMessageStream` 把 `opts.knowledge_refs` 拼进 body）+ `src/app/(main)/chat/[id]/page.tsx:278`（handleSend 走 `opts.knowledge_refs`，正文见 `:758-770`） |
+| PC | `src/lib/sse.ts:149-156`（body 只拼 `image_urls` + `attached_file_ids`，**无** `knowledge_refs`） |
+| 服务端 | `unified-api/src/modules/yinian/yinian.chat.routes.js:405`（schema）+ `:1366-1389`（取 atom 原文注入上下文）—— **2026-10-14 起已支持** |
+| 状态 | 形态不同（PC 少发一个字段）—— ⚠️ 此行**不计入** 179 条的判定复算（复算只统计条目块首张表的 `\| 判定 \|` 行） |
+| owner | **总PM** —— 待服务端解析口径落定后 PC 再补该字段 |
+
+**说明**
+- **真正的差异点**：服务端**已支持**（schema `:405` + 解析注入 `:1366-1389`），web **在发**（`lib/api.ts:797-799`），PC **不发**（`sse.ts:149-156`）⇒ 在 PC 上 markdown marker（`@[library:id] title`）是**唯一**通道，不再只是「兜底」。
+- **本轮不实现**：PC 补该字段涉及服务端解析口径 ⇒ 由**总PM**与总 PM 协调，本批**只订正注释**（`src/routes/ChatDetail.tsx:947-954`），**未改发送行为**。
+- **附：读侧也是一处差异（本批只订正注释，未实现）**：服务端**仍不把** `knowledge_refs` 落进 message metadata（`yinian.chat.routes.js:1193-1195` 只写 `image_urls` + `attached_file_ids`）⇒ 历史回看没有 `knowledge_refs` 可解析。web 在 `src/lib/api.ts:552` + `:577` 是解析的；PC `src/lib/api.ts:getHistory`（`:567-607`）**没有**解析 `metadata.knowledge_refs`，`src/routes/ChatDetail.tsx:270-285` 也没把它映射进 `ChatMessageModel` ⇒ PC 的知识库引用折叠条（`src/components/chat/ReferenceFold.tsx`）当前**恒不渲染**。
 
 ---
 
@@ -4253,7 +4283,7 @@ const markdownContent = isUser
 | A2-OK-05 | 附件 chip 文件名 `truncate max-w-[180px]` | `AttachmentChip.tsx:83` | `AttachmentChip.tsx:8` | 一致 |
 | A2-OK-06 | 附件 chip 类型角标 `text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-sunken text-fg-muted tracking-wide` | `AttachmentChip.tsx:76` | `AttachmentChip.tsx:77` | 逐字一致 |
 | A2-OK-07 | 附件 chip X 按钮 `w-6 h-6 rounded-full` | `AttachmentChip.tsx:92` | `AttachmentChip.tsx:9` | 逐字一致 |
-| A2-OK-08 | 附件 chip 缩略图 `w-8 h-8 rounded object-cover shrink-0` | `AttachmentChip.tsx:65` | `AttachmentChip.tsx:63` | 逐字一致 |
+| A2-OK-08 | 附件 chip 缩略图 `w-8 h-8 rounded object-cover shrink-0` | `AttachmentChip.tsx:65` | `AttachmentChip.tsx:63` | 逐字一致（2026-10-26 已删掉 PC 独有的第三分支 ⇒ 分支数与 web 同为 2，`thumbnailUrl` 为空时两端都不渲染图标，见 A2-D1-26） |
 | A2-OK-09 | 消息 ⋮ 按钮 `w-7 h-7 rounded-full` | `MessageBubble.tsx:548` | `MessageMenu.tsx:253` | 逐字一致 |
 | A2-OK-10 | 撤回窗口常量 120000ms | `MessageBubble.tsx:54` | `MessageMenu.tsx:37` | 一致 |
 | A2-OK-11 | 撤回菜单 disabled 文案 | `MessageBubble.tsx:562` | `MessageMenu.tsx:233` | 一致 |
@@ -6247,6 +6277,29 @@ function typeIcon(type: LibraryItem["type"]) {
 8. **条目标题中性化**：初稿标题写的是「PC 现状 vs web 目标」的差异陈述（如「空态描述文案缺失」「PC `Button` base 与 web 不一致」），判定回写后会与「已一致」自相矛盾 ⇒ 已把 163 条标题改成**中性检查项**（只写「比什么」，不断言 PC 当前状态），并在头部加了「标题口径」说明；**条目 ID / 条数 / 分档全部不变**。
 9. **M3 批口径更新**：并发 worker 的 M3 批（markdown 全栈自研接线）已随提交 `b29207f` 进入 HEAD，工作区 `src/` 另有未提交改动（本快照已一并计入） ⇒ A2-D4-02 / 03 / 04 / 06 的判定后缀由「M3 批在途 · 工作区未提交」改为「**M3 批已提交**」（§12.4 ⑧ 同步更新）。
 10. **「以 web 为准」批次（2026-10-26，同日）**：gaga 拍板 **web 是唯一事实源**（web 有什么 PC 必须有什么；PC 多出来的直接删掉）⇒ 上一轮被记成「已一致」但**实际不一致**的 5 条（A1-D2-05 / A2-D1-30 / A2-D2-04 / A2-D3-05 / A5-D3-02）已在本批把 PC 改齐，**判定按改前口径回退为「形态不同」**（最终状态 = 已一致，见各条「怎么改」栏）；§12.4 ①~⑤ 的「待 gaga 勾选」措辞已清掉；判定分布由 173/0/1/5/0 改为 **168 已一致 / 5 形态不同 / 1 缺失 / 5 PC 多出 / 0 待核 = 179**（脚本复算，见「改动量汇总」的分布复算段）。
+
+### 12.6 本批（2026-10-26 · 过期注释订正 + 死代码清理）落地记录
+
+> **本批不改任何条目 ID / 条数 / 分档**（179 条、判定分布 168 / 5 / 1 / 5 / 0 = 179 **全部不变**）—— 只做四件事：① 订正**过期事实**注释 ② 删 PC 独有的分支 / 组件 ③ 给共享组件补**可选** prop（默认行为不变）④ 把台账订正回与代码一致。
+> **口径**：**代码是事实源，台账是索引** —— 本批的每条结论都带 `file:line` 依据。
+
+| # | 项 | 改前 | 改后 | 依据 |
+|---|---|---|---|---|
+| ① | `src/components/chat/MessageMenu.tsx:154-158` | 注释写「yinian-android YinianApi.kt 那边走的是 `/messages/:id/save-to-kb`」 | 改成「yinian-android **全仓无此端点** —— 安卓唯一的 `saveToKnowledgeBase` 是 `DocumentViewerActivity.kt:170` 的本地函数，走文档文本入库的另一条路」 | 安卓全仓 grep `save-to-kb` **零命中**；`saveToKnowledgeBase` 唯一命中 `yinian-android/app/src/main/java/com/yinian/app/ui/documents/DocumentViewerActivity.kt:170`（本地函数）。**代码零改动** |
+| ② | `src/components/chat/ReferenceFold.tsx:8-13` | 注释写「server **暂未写** knowledge_refs / UI 解析就位 (`lib/api.ts:getHistory`)」 | 改成当前事实：服务端 2026-10-14 起**已支持**（schema `:405` + 解析注入 `:1366-1389`）；但**仍不落 metadata**（`:1193-1195` 只写 `image_urls` + `attached_file_ids`），PC 读侧也**没接**（`getHistory:567-607` 不解析、`ChatDetail.tsx:270-285` 不映射）⇒ 该折叠条当前**恒不渲染** | `unified-api/src/modules/yinian/yinian.chat.routes.js:405` / `:1366-1389` / `:1193-1195`；PC `src/lib/api.ts:getHistory`、web `src/lib/api.ts:552`+`:577`（web 是解析的）。**代码零改动** |
+| ③ | `src/routes/ChatDetail.tsx:947-954` | 注释写「(server 未识别 knowledge_refs 时的兜底通道)」 | 改成当前事实：服务端**已识别**；PC **发送侧不发**该字段 ⇒ marker 在 PC 上是**唯一**通道；该差异 **owner = 总PM**，本批不实现 | 见 **A2-D3-02** 的「本条附带的 PC↔web 差异」块。**行为零改动** |
+| ④ | `src/components/chat/AttachmentChip.tsx:69-72` | PC 独有第三分支（**没有** `thumbnailUrl` 时也渲染 32×32 `FileText` 方块） | **删除** ⇒ 与 web 同为两分支 | web `src/components/chat/AttachmentChip.tsx:60-72` + `app/page.tsx:325`（文档类型不传 `thumbnailUrl` ⇒ web 不渲染图标）。见 **A2-D1-26** / **A2-OK-08** |
+| ⑤ | `src/components/ui/ConfirmDialog.tsx` + `src/routes/Profile.tsx` | 只有 `message` 一段（标题/描述挤在一句里）；pending 恒为「spinner + 文字」，与 web 的两种形态**都不完全一致** | 加**可选** `description`（第二段）+ `loadingStyle?: "spinner+text" \| "spinner-only" \| "text-only"`（默认 `"spinner+text"` ⇒ 现有调用点零改动）；`Profile.tsx` 注销弹窗传 `loadingStyle="text-only"` | web `src/components/ui/alert-dialog.tsx:115-121` + `:149-159`（标题 + 描述两段）、`:173-199`（Action 只切文案、无 spinner）；`app/(main)/library/page.tsx:1255-1256`（spinner-only）、`app/(main)/profile/page.tsx:284`（text-only）；PC `src/components/ui/Button.tsx:101-107`（spinner + **保留** children 并存） |
+| ⑥ | `src/lib/clipboard.ts:4` | 注释写「ChatInputBar / LibraryDropZone / DeliveriesDropZone 共用」 | 删掉已删文件的引用 | `DeliveriesDropZone` 组件本轮已删（web 交付中心没有拖放入库） |
+| ⑦ | `src/components/library/SyncStatusBadge.tsx` / `src/components/library/LibraryMarkdownTableCard.tsx` | 上一批把详情页重写成 web 形态后**零引用** | **两个文件已删** | 全仓 grep（含 `electron/` / `scripts/` / `shared/`）**零代码引用**；仅 `src/routes/LibraryDetail.tsx:35,37` 与 `src/lib/markdown.tsx:18` 的**注释**里提到过 |
+| ⑧ | `src/components/chat/DeliverableStrip.tsx` | PC 独有的聊天气泡交付物条（也是 PC 交付详情页的唯一入口） | **已删**（连带 `src/routes/ChatDetail.tsx` 的 import / `useQuery` / 渲染三处引用） | web 全仓**零** `DeliverableStrip`；web 聊天页无任何交付物条 —— `app/(main)/chat/[id]/page.tsx` 只渲染 `AttachmentChip`（`:1270`）/ `MessageBubble` / `ChatInput`（`:1342`）/ `SheetActionMenu`（`:1385`）；web 唯一的 `Deliver*` 文件是 `src/lib/deliverable-download-name.ts` |
+
+**未改但已发现（超出本批独占范围）**
+- `src/routes/LibraryDetail.tsx:373` —— 删除弹窗是 `confirmLabel="删除"` + `loading={deleteMutation.isPending}`（`:375`）⇒ pending 时「spinner + 删除」并存，与 web library 的 **spinner-only** 不一致 ⇒ 应传 `loadingStyle="spinner-only"`。
+- `src/routes/Deliveries.tsx:20` —— 注释仍写「拖拽文件入 KB 的 DeliveriesDropZone (web 无拖放)」，而该组件已删。
+- `src/routes/Deliveries.tsx` / `src/routes/DeliveryDetail.tsx` —— 删除弹窗的 **text-only** 形态（web `deliveries/page.tsx:350`「删除中...」/ `deliveries/[id]/page.tsx:517`「删除中...」）由**另一批**处理，本批未动。
+
+---
 
 ## 附：本次文档修正的复算记录
 

@@ -2057,7 +2057,7 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 
 #### ⚠️ 现网 bug · PC 昵称 / 简介长度上限超出服务端 → 保存直接 400（**当前就在犯**）
 
-- **性质**：**现网 bug**，**不是**形态差异（不计入本文的 102 条差异统计 —— 统计口径见文末「全量统计」）
+- **性质**：**现网 bug**，**不是**形态差异（不计入本文的 101 条差异统计 —— 统计口径见文末「全量统计」）
 - **现象**：PC 端「编辑资料」页保存时，只要昵称 **51~64 字**、或简介 **201~500 字**，服务端 `PUT /api/v1/gacode/profile` 的 Fastify schema 校验失败 → 返回 **400** → 用户看到保存失败，数据存不进去（**前端软校验放行、后端 schema 拒收**）
 - **根因**：
 
@@ -4250,10 +4250,10 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 | ② 用户**授权**按钮 | 「开启」→ `Notification.requestPermission()`（`gacode-web/src/lib/webNotifications.ts:47-59`）→ **浏览器原生权限弹窗**（用户点允许/拒绝） | 无对应物 | N/A |
 | ③ 授权后**通道** | ① 站内通知：**SSE** `GET /notifications/stream`（`gacode-web/src/lib/notification-stream.ts:327-453`，fetch + 手写帧解析）② **AI 回复终态**：`useChatStore.subscribe` 监听 `finishedAt` null→非 null（`gacode-web/src/lib/webNotifications.ts:278-333`）③ 列表兜底轮询 **45s**（`NOTIFICATION_POLL_MS`） | ① 站内通知：**EventSource** `GET /notifications/stream?token=`（`gacode-electron/src/lib/notifications-sse.ts:166`）② **无 AI 回复终态通知** ③ 列表兜底轮询：AppShell **30s**；**通知页自身无轮询** | SSE 端点 `GET /api/v1/notifications/stream`（`unified-api/src/modules/notifications/notification.routes.js:224`）· `onRequest:[fastify.requireAuth]` · 帧 `id:<eventId>\ndata:{...}\n\n` · 心跳 `: heartbeat` · **支持 `Last-Event-ID` 续传**（`:242-247`）· **2026-10-23 起一个账号可同时开多条连接**（`:221-223` 注释 + `:234-235` `addSseConnection` 追加不顶替） |
 | ④ **前台**收到怎么显示 | `invalidateQueries(["notifications"])` 刷新列表 + 角标；**系统通知不弹** —— `showSiteNotification` 内部判 `document.hidden \|\| visibilityState==='hidden'`（`gacode-web/src/lib/webNotifications.ts:191`） | `invalidateQueries(["notifications"])` + **无条件弹 Windows Toast**（`notifications-sse.ts:132-143` → `window.gacode.notificationSSESend` → `electron/notifications.ts:67-98`）+ **无条件弹应用内 toast**（`notifications-sse.ts:146-149`） | — |
-| ⑤ **后台 / 关窗** | 页签隐藏 → 弹浏览器系统通知（30s 自动 close，`webNotifications.ts:224-233`）；关掉页签 → **收不到**（SSE 随页面销毁） | 窗口最小化 / 后台 → **仍然弹 Toast**（主进程弹，不看 renderer 可见性）；**关窗 = 进程退出 → SSE 断 → 收不到**；重开后可凭服务端 buffer + `Last-Event-ID` 补发（但客户端**没实现续传**，见 C4-06） | 服务端 per-user buffer 保留最近 200 条；`replayMissedEvents(userId, reply, lastEventId)` 补发（`notification.routes.js:242-247`） |
+| ⑤ **后台 / 关窗** | 页签隐藏 → 弹浏览器系统通知（30s 自动 close，`webNotifications.ts:224-233`）；关掉页签 → **收不到**（SSE 随页面销毁；`notification-stream.ts:335` 的 `lastEventId` 是**模块内内存变量**，刷新/关页签即丢 ⇒ 服务端不补发） | 窗口最小化 / 后台 → **仍然弹 Toast**（主进程弹，不看 renderer 可见性）；**关窗 = 隐藏到托盘**（`electron/main.ts:258-266` `e.preventDefault(); mainWindow.hide();`）⇒ 进程**不死**、renderer 不卸载、SSE **不断** ⇒ **关窗期间不丢**；只有托盘「退出」真结束进程时才断（且客户端**没实现续传**，见 C4-06 / S-8） | 服务端 per-user buffer 保留最近 200 条；`replayMissedEvents(userId, reply, lastEventId)` 补发（`notification.routes.js:242-247`）—— **须带 `Last-Event-ID` 才补发**（`notification.service.js:225-229` `if (!lastEventId) return 0;`） |
 | ⑥ **点击**通知跳到哪 | 系统通知 `onclick` → `n.close()` + `window.focus()` + `opts.onClick()`（`webNotifications.ts:208-221`）→ `nav.client(router, target.href)`（会话 / 日程详情 / 外链，`WebNotificationWatcher.tsx:121-130`） | **点了没反应** —— `electron/notifications.ts:52` `new Notification({ title, body, silent: false }).show()`，**没有注册 `n.on('click')`** | deep link 取值见 F-9：`yinian://chat/{sessionId}` / `actionType='none'` + `payload.scheduleId` |
 | ⑦ **设置项** | ① 「浏览器通知」开关 → localStorage `web-notifications-enabled`（**缺省 ON**，`webNotifications.ts:94-106`）② 首次提示 7 天冷却 → localStorage `web-notifications-last-prompt-at`（`:23` `PERMISSION_PROMPT_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000`） | ① 总开关 `enabled` ② 桌面通知 `desktopEnabled` ③ 应用内提示 `inAppEnabled` ④ 按类目屏蔽 `categories.{system,chat,library,delivery}` ⑤ 「弹一条测试通知」按钮 —— 全部存 localStorage（`loadNotificationPrefs` / `saveNotificationPrefs`） | **没有** `/agent-push-preferences` 端点（PC `src/lib/api.ts:674-690` 注释明写）→ 两端都只能客户端持久化 |
-| ⑧ **关闭授权**后行为 | 开关 off → `showSiteNotification` 第 3 个前置条件不通过 → **静默 noop**（返回 false，不抛错）；权限 denied → 卡片显示「已被浏览器拒绝 / 请在浏览器设置中允许本站点发送通知」，**无操作按钮** | `prefs.desktopEnabled=false` → `SystemNotification.fire()` return false ✅；**但 SSE 桥不走 `SystemNotification`，直接调 `window.gacode.notificationSSESend` 且不查 prefs** → **关掉「桌面通知」开关，SSE 仍会弹 Windows Toast** ❌（详见 C4-16） | — |
+| ⑧ **关闭授权**后行为 | 开关 off → `showSiteNotification` 第 3 个前置条件不通过 → **静默 noop**（返回 false，不抛错）；权限 denied → 卡片显示「已被浏览器拒绝 / 请在浏览器设置中允许本站点发送通知」，**无操作按钮** | `prefs.desktopEnabled=false` → `SystemNotification.fire()` return false ✅；**但 SSE 桥不走 `SystemNotification`，直接调 `window.gacode.notificationSSESend` 且不查 prefs** → **关掉「桌面通知」开关，SSE 仍会弹 Windows Toast** ❌（详见 C4-13） | — |
 
 ### 4.1 「web 特有、PC 无法 1:1」的清单（→ 见文末 `S-6`）
 
@@ -4810,22 +4810,27 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 
 ---
 
-### C4-16 · 后台 / 关窗行为对照
+### C4-16 · 后台 / 关窗行为对照 —— **口径作废（2026-10-26 订正）· 不派工**
 
-- **web 端**：
-  - 页签隐藏 → 弹浏览器系统通知（30s 自动 close）
-  - **关掉页签** → SSE 连接随页面销毁 → **收不到**（但其它标签页/其它设备还能收到，因为服务端是 per-user 广播）
-- **PC 端**：
-  - 窗口最小化 → **仍然弹 Toast**（主进程弹的，与 renderer 可见性无关；且当前代码**连最小化都不判断**，见 C4-09）
-  - **关窗 = 进程退出** → SSE 断开 → **收不到**；重开应用后重新连，**但没有 `Last-Event-ID` 续传**（C4-06）→ **关窗期间产生的通知永久丢失**
-- **服务端事实**：per-user buffer 保留最近 200 条 + `Last-Event-ID` 续传**能力是有的**，只是 PC 客户端没用
-- **差异判定**：**形态不同**（PC 关窗期间丢通知）→ **结构级 → S-8**
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\lib\notifications-sse.ts`
-  - 插入锚点：`schedule()` / `handleIncoming`（L116-233）
-  - PC 最终写法：**实现 C4-04 + C4-06**（改 fetch + 带 `Last-Event-ID`）→ 关窗重开后，重连时会带上最后一次的 event id，服务端补发关窗期间的通知
-  - 交互细节：补发的通知会**逐条**触发 Toast（服务端 buffer 是按条补发的）
-  - 预估改动：**并入 C4-04 + C4-06**
+> **⚠️ 本条原口径作废，不需要派工。**
+> 原口径的前提「**PC 关窗 = 进程退出 ⇒ SSE 断开 ⇒ 通知永久丢失**」**与 PC 当前实现不符**。
+
+- **PC 的 close 按钮不是「退出」，是「隐藏到托盘」** —— `gacode-electron/electron/main.ts:258-266`
+  ```js
+  // PR2:close 按钮 = 隐藏到托盘,不真退出。
+  mainWindow.on('close', (e) => {
+    if (!isQuiting && mainWindow && !mainWindow.isDestroyed()) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
+  ```
+  ⇒ 进程**不死**、renderer **不卸载**、SSE 连接**不断**；主进程还能照常弹桌面通知（`gacode-electron/src/lib/notifications-sse.ts:330` → `window.gacode.notificationSSESend`）。
+- **web 关页签才是「真断」** —— `gacode-web/src/lib/notification-stream.ts:335` 的 `lastEventId` 是**模块内内存变量**（`:382` 放进请求头、`:416` 写回），刷新 / 关页签即丢；服务端 `unified-api/src/modules/notifications/notification.service.js:57-58`（per-user ring buffer，上限 200 条、**重启清零**）+ `:225-229`（`replayMissedEvents` —— `if (!lastEventId) return 0;` ⇒ **没有 lastEventId 就不补发**）⇒ 关页签期间的通知**同样收不到**。
+- **两端行为等价**：在「整个进程 / 页签彻底结束」时**都**丢；**PC 关窗场景还优于 web**（PC 关窗根本不结束，SSE 不断）。
+- **原判作废**：原判「形态不同（PC 关窗期间丢通知）→ 结构级 S-8」**不成立** ⇒ 本条**不派工**、预估改动 **0 行**。
+- **残留的真差异另算（不在本条）**：**瞬时断流**（网络抖动 / 切后台）下的续传能力 —— web 用 `fetch` + 手写帧解析能带 `Last-Event-ID`（`notification-stream.ts:382`），PC 用 `EventSource` 带不了（`EventSource` 不能加自定义请求头）⇒ 这部分仍留在 **C4-04 / C4-06 / S-8**，与「关窗」无关。
+- **服务端事实（不变）**：per-user buffer 保留最近 200 条 + `Last-Event-ID` 续传**能力是有的**（`notification.routes.js:242-247`），只是 web 的 `lastEventId` 一关页签就没了、PC 压根没带。
 
 ---
 
@@ -4848,7 +4853,7 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 | C4-13 | 形态不同 | 8 行 |
 | C4-14 | 形态不同 | 10 行 |
 | C4-15 | 形态不同 | 4 行 |
-| C4-16 | 形态不同 | 并入 C4-04/06 |
+| C4-16 | **口径作废**（2026-10-26 订正：PC 关窗 = 隐藏到托盘，SSE 不断 ⇒ 与 web 行为等价） | 0 行（**不派工**） |
 
 ---
 
@@ -4963,16 +4968,20 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 
 ---
 
-### S-8 · PC 关窗期间的通知会永久丢失 —— 要不要实现 `Last-Event-ID` 续传
+### S-8 · PC 的 SSE 断流续传（`Last-Event-ID`）—— 标题口径已订正（2026-10-26）
 
-- **现状**：PC 用 `EventSource`（`notifications-sse.ts:166`），**EventSource 不能带自定义头** → **无法发送 `Last-Event-ID`** → 重连时服务端不知道客户端收到哪 → **断流/关窗期间的通知永久丢失**
-- **服务端能力是有的**：`notification.routes.js:242-247` `replayMissedEvents(userId, reply, lastEventId)`，per-user buffer 保留最近 200 条
+> **⚠️ 标题订正**：本条原标题是「PC **关窗**期间的通知会永久丢失」—— 该前提**与 PC 当前实现不符**（PC close 按钮 = 隐藏到托盘，进程不死 ⇒ 关窗期间**不丢**）。原 C4-16 已据此标为**口径作废**（见 C4-16 条）。
+> **仍然成立的真差异**是**瞬时断流**（网络抖动 / 切后台 / 弱网）下的续传能力 —— 下面这一条**不派工、仍待 gaga 拍**。
+
+- **现状**：PC 用 `EventSource`（`notifications-sse.ts:166`），**EventSource 不能带自定义头** → **无法发送 `Last-Event-ID`** → 重连时服务端不知道客户端收到哪 → **断流期间的通知丢失**
+- **服务端能力是有的**：`notification.routes.js:242-247` `replayMissedEvents(userId, reply, lastEventId)`，per-user buffer 保留最近 200 条（`notification.service.js:57-58`，重启清零）
 - **web 已经实现了**：`gacode-web/src/lib/notification-stream.ts:382` + `:416` —— 因为 web 用 `fetch` 而不是 `EventSource`（`:17-24` 注释明写原因：`EventSource` 不能带自定义请求头）
+  - ⚠️ 但 web 的 `lastEventId` 是**模块内内存变量**（`:335`）⇒ **刷新 / 关页签即丢** ⇒ web 在「页签彻底结束」时**同样收不到**（服务端 `notification.service.js:225-229` `if (!lastEventId) return 0;` ⇒ 没 id 就不补发）⇒ **两端在「彻底结束」时行为等价**
 - **要 gaga 定的**：PC 要不要为此把 SSE 客户端从 `EventSource` 改成 `fetch` + 手写帧解析（≈120 行重写）？
-  - (a) 改：与 web 一致 + 关窗不丢通知（与 S-9 同一个技术改造，一起做成本最低）
-  - (b) 不改：接受关窗丢通知（PC 是常驻桌面应用，用户一般不会长时间关窗）
+  - (a) 改：与 web 一致 + **断流**不丢通知（与 S-9 同一个技术改造，一起做成本最低）
+  - (b) 不改：接受断流丢通知（PC 是常驻桌面应用，窗口最小化/隐藏到托盘时 SSE 不断，实际丢通知的窗口很窄）
 - **影响面**：`src/lib/notifications-sse.ts` 全文件重写
-- **相关条目**：C4-04、C4-06、C4-16
+- **相关条目**：C4-04、C4-06（C4-16 已作废）
 
 ---
 
@@ -5032,17 +5041,18 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 | 判定 | 条数 |
 |---|---|
 | **缺失**（web 有，PC 没有） | **20** |
-| **形态不同**（两边都有但长得/行为不一样） | **77** |
+| **形态不同**（两边都有但长得/行为不一样） | **76** |
 | **已一致** | **5** |
-| **合计** | **102** |
+| **合计** | **101** |
 
 > ⚠️ **修正（2026-10-26 复核 · E3）**：原稿写「缺失 23 / 形态不同 73 / 已一致 6」—— 与正文逐条实测对不上。
-> **统计口径**：全文 `- **差异判定**：` 前缀行共 **102** 行，按每行的**首个关键词**（缺失 / 形态不同 / 已一致）分类；`C2-37` 是「**缺失 + 形态不同**」混合项，按「缺失」计。
-> **逐条实测 = 缺失 20 / 形态不同 77 / 已一致 5**（合计 102 ✅）
+> **统计口径**：全文 `- **差异判定**：` 前缀行共 **101** 行，按每行的**首个关键词**（缺失 / 形态不同 / 已一致）分类；`C2-37` 是「**缺失 + 形态不同**」混合项，按「缺失」计。
+> **逐条实测 = 缺失 20 / 形态不同 76 / 已一致 5**（合计 101 ✅）
 > - 组 1：缺失 1 / 形态不同 11 / 已一致 2
 > - 组 2：缺失 6 / 形态不同 39 / 已一致 3
 > - 组 3：缺失 7 / 形态不同 17 / 已一致 0
-> - 组 4：缺失 6 / 形态不同 10 / 已一致 0（`C4-07` 正文判定是「形态不同（PC 增强，不列）」，按口径计入形态不同）
+> - 组 4：缺失 6 / 形态不同 9 / 已一致 0（`C4-07` 正文判定是「形态不同（PC 增强，不列）」，按口径计入形态不同）
+> - ⚠️ **2026-10-26 订正**：`C4-16`（PC 关窗期间通知丢失）已标为**口径作废**（PC close = 隐藏到托盘，SSE 不断 ⇒ 与 web 行为等价，见该条）⇒ 它的 `- **差异判定**：` 行**已删除**，不计入上述三桶 ⇒ 形态不同 77 → **76**、合计 102 → **101**。条目本身仍在（组 4 仍是 C4-01 ~ C4-16 **16 条**），只是不再是一个「差异」。
 
 分组分布：
 
@@ -5130,8 +5140,9 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 ### E3 · 全量统计的判定分布与正文逐条对不上（严重）
 
 - **文档原话**：「全量统计」L4923-4926 写 缺失 **23** / 形态不同 **73** / 已一致 **6**
-- **源码真相**：正文逐条实测 = **缺失 20 / 形态不同 77 / 已一致 5**（总数 102 对）
-- **应该怎么改**：改成实测值，并注明**统计口径**：`- **差异判定**：` 前缀行共 102 行，按每行**首个关键词**分类；`C2-37` 是「**缺失 + 形态不同**」混合项，按「缺失」计
+- **源码真相**：正文逐条实测 = **缺失 20 / 形态不同 76 / 已一致 5**（**差异**合计 101）
+  - ⚠️ **2026-10-26 再订正**：`C4-16` 标为**口径作废**（PC close = 隐藏到托盘 ⇒ SSE 不断，与 web 行为等价）⇒ 它的 `- **差异判定**：` 行已删除 ⇒ 形态不同 77 → **76**、差异合计 102 → **101**（**条目**总数仍是 102：14 + 48 + 24 + 16，C4-16 条目仍在，只是不再是一个「差异」）
+- **应该怎么改**：改成实测值，并注明**统计口径**：`- **差异判定**：` 前缀行共 **101** 行，按每行**首个关键词**分类；`C2-37` 是「**缺失 + 形态不同**」混合项，按「缺失」计
 
 ### E4 · 组 2 总计自相矛盾（三处互斥，严重）
 

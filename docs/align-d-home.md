@@ -1,16 +1,20 @@
 # HOME 页 · web ↔ PC 逐条对齐清单（align-d-home）
 
 > 产出时间：2026-10-26
-> 真相源：`gacode-web/src/app/page.tsx`（499 行）+ `gacode-web/src/components/chat/ChatInputBar.tsx`（180 行）
-> 对照端：`gacode-electron/src/routes/Home.tsx`（343 行）+ `src/components/home/{MediaPicker,PlusSheet,LibraryPicker,EmojiPicker}.tsx` + `src/components/chat/ChatInputBar.tsx`
+> **最近回写：2026-10-26（D 批次 · HOME 页剩余待办收口）** —— 逐条按**当前工作树代码**核实后回写；判定以代码为准，不以任何人的转述为准。
+> 上一轮回写：C 批次 `6dc3c3d` 之后（明细见 §13）。
+> 真相源：`gacode-web/src/app/page.tsx`（538 行）+ `gacode-web/src/components/chat/ChatInputBar.tsx`（180 行）
+> 对照端：`gacode-electron/src/routes/Home.tsx`（381 行）+ `src/components/home/{MediaPicker,PlusSheet,LibraryPicker,EmojiPicker}.tsx` + `src/components/chat/ChatInputBar.tsx`（909 行）+ `src/components/ui/BottomSheet.tsx`（216 行）
 > 粒度：最细颗粒度。每个可交互元素 / 视觉差异 / 功能分支 / 数据字段映射单独成条。
 
 ## 阅读说明
 
-- **判定**：`缺失`（web 有、PC 没有）· `形态不同`（两边都有但 className / 结构 / 行为不一致）· `已一致`（逐行核对无差异，标 `已一致（d318f17）` 表示该轮已改到位）
+- **判定**：`缺失`（web 有、PC 没有）· `形态不同`（两边都有但 className / 结构 / 行为不一致，**本轮未改**）· `部分落地`（**已改，但仍有残留差异**）· `已一致`（逐行核对无差异；标 `已一致（commit xxxxxxx）` 表示是哪一轮改到位的）· `已拍板 · PC 不还原`（gaga 已拍板不改）
 - **token 前提**：PC `tailwind.config.ts:1-23` 头部注释写明「一字不差同步 gacode-web tailwind.config.ts」，实测 PC 仓**同时**具备 `bg-background` / `text-primary` / `bg-primary` / `border-border` / `rounded-squircle` / `shadow-elevation-3` / `text-headline` / `text-title` / `text-body` / `text-brand` / `text-brand-on` / `bg-bg-sunken` / `bg-bg-elevated` / `text-fg-muted` / `text-fg-subtle`。**所以 web 的 className 串可以逐字抄进 PC**，不需要做 token 改名映射。
 - **PC 仓无 `tailwind-merge` / `clsx` / `cva`**：`cn()` 不存在，className 用 `[...].join(" ")` 数组拼接。冲突类名**不会自动去重**，后面的类名在 CSS 里靠源码顺序决胜，radius 之类必须显式写 `!rounded-full` 强制。
-- **PC toast API 只有一个 `message` 字段**（`src/components/ui/Toast.tsx:31`：`toast: (input: { message: string; variant?: ToastVariant; duration?: number }) => void`），web 的 `title` / `description` 双字段在 PC 端**没有对应实现**。凡涉及双字段 toast 的条目，改造方案一律写成「拼成单行 message」。
+- **PC Toast 已支持 `title` / `description` 双字段**（`src/components/ui/Toast.tsx:32-45`：`ToastItem` 有 `title?` / `description?`，`message` 保留为 `title` 的别名向后兼容；commit `5504f93` 落地）⇒ **S-04 已结案**；剩下要做的是把 HOME 页的**调用点**从单行 `message` 改成双字段（H-42 / H-69）。
+- **PC `BottomSheet` 已支持可选 prop**（`src/components/ui/BottomSheet.tsx:64-108`：`title?` / `subtitle?` / `contentClassName?` / `titleClassName?` / `header?` / `hideTitle?` / `maxHeight?`），默认行为不变、其它调用方零改动 ⇒ **S-05 已结案**。
+- **PC 全局禁 CSS 动效**（`src/styles/globals.css:408-414`：`transition-property: none !important` + `animation: none !important`）⇒ web 的 `animate-spin` / `animate-pulse` 在 PC 上是**静态**的。这是 gagaOS 既定规范，**本轮不改**（见 §12「本轮不做」表）。
 - **本清单不列 PC 独有的功能**（按 gaga 指令：先 1:1 还原 web，PC 增强不在本清单讨论范围）。已知不计入差异的 PC 独有行为：Home 上的 `/` slash 菜单、拖拽文件上传、粘贴图片上传、ChatInputBar 内的 IME 组合保护（`isComposing`）。
 - **表格 / 折叠**：本次范围是 HOME 页，不含 markdown 表格与 `ExpandableCell`；gaga 的「折叠 = 折行 + 可横滑 + 宽度封顶」规则在本页无适用面，不涉及。
 - **`react-markdown` 版本坑**：本页无 markdown 渲染，不涉及 web `^9.0.1` / PC `^10.1.0` 的 components 回调签名差异。
@@ -19,13 +23,18 @@
 
 | 判定 | 条数 |
 |---|---|
-| 缺失 | 14 |
-| 形态不同 | 42 |
-| 已一致 | 14 |
+| 已一致（已落地） | 62 |
+| 部分落地（已改 · 仍有残留差异） | 0 |
+| 形态不同（未改） | 3 |
+| 缺失（未做） | 3 |
+| 已拍板 · PC 不还原 | 2 |
 | **合计** | **70** |
 
-另：**7 条结构级差异**待 gaga 拍（§9 · S-01 ~ S-07，每条含影响面 + 选项 + PM 建议）。
+> 「部分落地」桶**本轮清空**（H-15 / H-16 / H-51 / H-54 全部收口）⇒ 该桶保留在表里但计数为 0，便于跟历史批次对照。
+
+另：§9 结构级差异 7 条 —— **4 条已落地结案**（S-03 / S-04 / S-05 / S-07）· **1 条按既有决策不改**（S-06）· **2 条仍待 gaga 拍**（S-01 未登录态 / S-02 附件 state 归属）。
 「PC 侧栏常驻 vs web 抽屉」一项**已拍板保留**，不进 §9。
+另：**2 类不计入上表合计**的标注 —— 「本轮不做」2 条 · 「待 gaga 真机看」2 条（见 §12 末尾两张表）。
 
 ---
 
@@ -33,22 +42,11 @@
 
 ## H-01　根容器高度与背景 token
 
-- **web**：`gacode-web/src/app/page.tsx:269`（已登录）/ `:426`（未登录）
-  ```tsx
-  <div className="min-h-screen flex flex-col bg-background">
-  ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:274`
-  ```tsx
-  <div className="min-h-full flex flex-col bg-bg-base">
-  ```
-- **判定**：形态不同（2 处差异）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\routes\Home.tsx`
-  - 锚点：`export function Home()` 内 return 的根 div（`Home.tsx:274`）
-  - `min-h-full` → `min-h-screen`（PC 根容器在 AppShell 的 `<main>` 内，`min-h-full` 需要父级有确定高度；`min-h-screen` 是 viewport 语义，与 web 一致）
-  - `bg-bg-base` → `bg-background`（PC 两者都是 `#000000`，`tailwind.config.ts:54` vs `:76`；写 `bg-background` 是为了跟 web 源码逐字一致，便于后续 diff 核对）
-  - 最终 className 串：`"min-h-screen flex flex-col bg-background"`
-  - 预估改动：**1 行**（`Home.tsx:274`）
+- **web**：`gacode-web/src/app/page.tsx:269`　`"min-h-screen flex flex-col bg-background"`
+- **PC**：`gacode-electron/src/routes/Home.tsx:301`　`"min-h-screen flex flex-col bg-background"`
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。PC 已改成与 web 逐字一致的 className 串（`min-h-full` → `min-h-screen`，`bg-bg-base` → `bg-background`；两者同值 #000000，写法对齐 web 便于后续 diff 核对）。
+- 预估改动：**0 行**
 
 ## H-02　未登录分支（整块缺失）
 
@@ -62,10 +60,11 @@
         <Home />
       </Protected>
     }
+  />
   ```
-  PC `Home.tsx` 全文没有任何 `isAuthenticated` 分支判断。
-- **判定**：缺失
-- **怎么改**：见文末「结构级差异 S-01」——这条不是单文件改动，要拆 ProtectedRoute 语义，需 gaga 拍板后单独排工。**本次不给出落地方案**（改动会波及 App.tsx / auth.tsx / 路由守卫，超出「只读不改」边界，且属于信息架构级决策）。
+  PC `src/routes/Home.tsx`（381 行）全文没有任何 `isAuthenticated` 分支判断。
+- **判定**：**缺失**（仍待 gaga 拍 · 见 §9 S-01）
+- **怎么改**：**本轮未动**。仍见 §9「S-01」—— 这不是单文件改动，要拆 ProtectedRoute 语义（改 `App.tsx` 路由守卫 + `Home.tsx` 加分支 + 匿名 AlertDialog），属信息架构级决策，**需 gaga 拍板后单独排工**。
 - 预估改动：**>200 行（跨 4 文件，待拍板）**
 
 ## H-03　顶部 ☰ 菜单按钮 + Drawer —— ✅ 已拍板 · PC 不还原
@@ -90,7 +89,7 @@
     </button>
   </div>
   ```
-- **PC**：`PC 缺失` —— `Home.tsx` 全文无 `Menu` 图标、无 `Drawer`、无 `drawerOpen` state。PC 侧导航由 AppShell 常驻 sidebar 承担（`src/components/layout/AppShell.tsx` 的 `SIDEBAR_WIDTH = 256`）。
+- **PC**：`PC 缺失` —— `src/routes/Home.tsx` 全文无 `Menu` 图标、无 `Drawer`、无 `drawerOpen` state。PC 侧导航由 AppShell 常驻 sidebar 承担（`src/components/layout/AppShell.tsx` 的 `SIDEBAR_WIDTH = 256`）。
 - **判定**：~~缺失~~ → **已拍板 · PC 不还原**
 - **怎么改**：**不改**。gaga 2026-10-26 明确拍板：PC 的 256px 常驻侧栏保留，不改成 web 的 Drawer 抽屉。
   - 侧栏**内部内容与交互**照 web 对齐（置顶可折叠分组 / 每条对话 pin 按钮 / 条目视觉形态 / 圆角间距 hover 态 / 计数与折叠箭头）—— **属 ChatList 侧栏域，不在本 HOME 页清单范围**，由该域 worker 承接。
@@ -100,7 +99,7 @@
 ## H-04　已登录顶部栏容器（sticky + 毛玻璃）—— ✅ 已拍板 · PC 不还原
 
 - **web**：`gacode-web/src/app/page.tsx:277`　`"sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-border bg-background/80 backdrop-blur-sm"`
-- **PC**：`PC 缺失`（PC `Home.tsx:273-296` 从根 div 直接进欢迎语区，中间没有顶栏）
+- **PC**：`PC 缺失`（PC `src/routes/Home.tsx` 从根 div 直接进欢迎语区，中间没有顶栏）
 - **判定**：~~缺失~~ → **已拍板 · PC 不还原**（与 H-03 同因）
 - **怎么改**：
   - **不改**。PC 侧由 AppShell 常驻侧栏 + AppShell 头部（已有 `border-b`，见 commit `767ac23 style(electron): AppShell 头部加 border-b 对齐 web (main) Header`）承担全局头部职责，Home 再画一条顶部栏会与 AppShell 重复。
@@ -110,20 +109,11 @@
 
 ## H-05　欢迎语容器布局
 
-- **web**：`gacode-web/src/app/page.tsx:289`　`"pt-10 pb-6 px-4 text-center"`
-- **PC**：`gacode-electron/src/routes/Home.tsx:284`　`"flex-1 flex flex-col items-center justify-center px-4 lg:px-8 pt-10 pb-6"`
-- **判定**：形态不同
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\routes\Home.tsx`
-  - 锚点：`Home.tsx:284` 的 `<div className="flex-1 flex flex-col items-center justify-center px-4 lg:px-8 pt-10 pb-6">`
-  - web 的欢迎语区**不是垂直居中**：它是一块 `pt-10 pb-6 px-4 text-center` 的固定高度块，上方还有 `<div className="flex-1" />`（`page.tsx:299`）把它推到上面。
-  - 差异拆三条：
-    1. `justify-center` → 删（web 无垂直居中）
-    2. `text-center` → 加（web 有，PC 靠内层 `text-center` 达到同样效果，但 `lg:px-8` → `px-4` 需对齐）
-    3. `lg:px-8` → `px-4`（web 无 lg 断点差异）
-  - 同时新增 web 的空态撑高块：紧跟欢迎语 div 之后插入 `<div className="flex-1" />`（`page.tsx:299` 原文）
-  - 最终 className 串：`"pt-10 pb-6 px-4 text-center"` + 内层保留 PC 现有的 `<div className="flex flex-col items-center gap-3 text-center">`（`Home.tsx:285`，这一层 PC 已一致）
-  - 预估改动：**2 行**（改 1 行 className + 插 1 行 `<div className="flex-1" />`）
+- **web**：`gacode-web/src/app/page.tsx:289`　`"pt-10 pb-6 px-4 text-center"` + `:299`　`<div className="flex-1" />`
+- **PC**：`gacode-electron/src/routes/Home.tsx:315`　`"pt-10 pb-6 px-4 text-center"` + `:327`　`<div className="flex-1" />`
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。PC 已完成 3 处改动：`justify-center` 删除、加 `text-center`、`lg:px-8` → `px-4`；并在欢迎语 div 之后补上 web 的空态撑高块 `<div className="flex-1" />`（`Home.tsx:327`）。内层 `<div className="flex flex-col items-center gap-4 text-center">`（`Home.tsx:316`）保留。
+- 预估改动：**0 行**
 
 ## H-06　Cody 头像（图片资源）
 
@@ -135,34 +125,23 @@
     className="w-16 h-16 rounded-squircle mx-auto mb-4"
   />
   ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:286-291`
+- **PC**：`gacode-electron/src/routes/Home.tsx:317-321`
   ```tsx
-  <div
-    aria-hidden="true"
-    className="w-[72px] h-[72px] rounded-xl bg-bg-elevated flex items-center justify-center text-fg-muted text-2xl font-medium"
-  >
-    cody
-  </div>
+  <img
+    src={`${import.meta.env.BASE_URL}assets/cody/cody_512.png`}
+    alt="Cody"
+    className="w-16 h-16 rounded-squircle"
+  />
   ```
-- **判定**：形态不同（3 处：尺寸 / 圆角 / 资源类型）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\routes\Home.tsx`
-  - 锚点：`Home.tsx:286-291` 的头像 div（`aria-hidden="true"` + `w-[72px] h-[72px]`）
-  - **尺寸**：`w-16 h-16` = 64px。web 用的就是 64px（不是 120px，那是未登录分支 H-11）。PC 现在是 72px → 改 `w-[72px] h-[72px]` 为 `w-16 h-16`
-  - **圆角**：`rounded-squircle` = 22px（PC `tailwind.config.ts:145` 有 `squircle: "22px"`）。PC 现在是 `rounded-xl` = 22px —— **数值相同，但类名不同**，统一写成 `rounded-squircle` 跟 web 逐字对齐
-  - **资源**：web 是真图 `cody_512.png`（512×512 源，显示 64px）。PC 仓内实测 `public/` 只有 `fonts/`，**没有 cody 图**（`Home.tsx:282` 注释已记录）。所以：
-    - 短期（不引入新资源）：保持 PC 的文字占位 div，只改 className → `w-16 h-16 rounded-squircle bg-bg-elevated flex items-center justify-center text-fg-muted text-2xl font-medium`
-    - 完整对齐：需 gagaOS 提供 `cody_512.png` 落到 `gacode-electron/public/assets/cody/cody_512.png`，然后换成
-      ```tsx
-      <img
-        src={"/assets/cody/cody_512.png"}
-        alt="Cody"
-        className="w-16 h-16 rounded-squircle mx-auto mb-4"
-      />
-      ```
-      （Electron 打包走 `public/` → `file://` 相对路径，**不要抄 web 的 `${BASE_PATH}`**——那是 Next.js basePath，PC 无此概念）
-  - **`mx-auto mb-4`**：web 头像自带 `mx-auto mb-4`（居中 + 下间距 16px）。PC 的 `mb-4` 由外层 `gap-3`（`Home.tsx:285`）提供 → 改成 `gap-3` 为 `gap-4` 即等价，或直接在头像上写 `mb-4` 并把外层 gap 调到 `gap-0`。**推荐**：外层 `gap-3` → `gap-4`，头像不加 `mx-auto mb-4`（父级已 `items-center`，`mx-auto` 冗余）
-  - 预估改动：**1 行（className）+ 1 行（gap）+ 资源待提供**
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。已落地内容：
+  - **资源**：新增 `gacode-electron/public/assets/cody/cody_512.png`（259,534 bytes；SHA256 `6B4A14CEA8DFBCD90D341B56F4EAA1475C4A840F88CDCD9D0ED09E7B30B5C445`，与 `gacode-web/public/assets/cody/cody_512.png` **逐字节一致**，已实测比对）。
+  - **结构**：`Home.tsx` 的文字占位 div（`<div aria-hidden="true">cody</div>`）→ `<img alt="Cody">`。
+  - **尺寸**：`w-[72px] h-[72px]` → `w-16 h-16`（64px，与 web 同值）。
+  - **圆角**：`rounded-xl` → `rounded-squircle`（22px，与 web 同值）。
+  - **`mx-auto mb-4`**：web 头像自带居中 + 16px 下间距；PC 的 `mx-auto` 由父级 `items-center` 等价承担、`mb-4` 由父级 `gap-4`（16px）等价承担（`Home.tsx:316`）。
+  - ⚠️ **不要抄 web 的 `${BASE_PATH}`**（Next.js basePath，PC 无此概念）—— PC 用 `import.meta.env.BASE_URL` 拼 `public/` 下的相对路径。
+- 预估改动：**0 行**
 
 ## H-07　欢迎语文案
 
@@ -170,32 +149,20 @@
   ```tsx
   <h1 className="text-headline font-medium">HI 我是 <span className="text-primary">cody</span> 很高兴遇见你</h1>
   ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:292-294`
+- **PC**：`gacode-electron/src/routes/Home.tsx:322-324`
   ```tsx
   <h1 className="text-headline font-medium">
-    HI 欢迎你,<span className="text-brand">{displayName}</span>
+    HI 我是 <span className="text-primary">cody</span> 很高兴遇见你
   </h1>
   ```
-- **判定**：形态不同（文案 + 语义）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\routes\Home.tsx`
-  - 锚点：`Home.tsx:292-294` 的 `<h1>`
-  - 文案逐字改为：`HI 我是 ` + `<span className="text-primary">cody</span>` + ` 很高兴遇见你`
-  - **`text-brand` → `text-primary`**：PC 两个 token 同值（`brand.DEFAULT = #FF6B35`，`primary.DEFAULT = #FF6B35`，`tailwind.config.ts:40` / `:83-86`），统一写 `text-primary` 跟 web 逐字一致
-  - **`displayName` 变量作废**：web 无用户名。改完后 `Home.tsx:97` 的 `const displayName = user?.displayName || user?.username || "访客";` 变成未使用变量 → **需删除该行**（否则 TS `noUnusedLocals` 报错）
-  - 连带：`Home.tsx:82` 的 `const { user } = useAuth();` 若无其他用途 → 一并删除；`useAuth` import（`Home.tsx:41`）也需清理。**注意**：本条删除后 PC Home 不再依赖 auth context，但 `Protected` 仍在 `App.tsx` 层守门，登录态判断不受影响
-  - 最终 JSX：
-    ```tsx
-    <h1 className="text-headline font-medium">
-      HI 我是 <span className="text-primary">cody</span> 很高兴遇见你
-    </h1>
-    ```
-  - 预估改动：**4 行**
+- **判定**：**已一致**（**已落地** · commit `5504f93`）—— F-08 同步消
+- **怎么改**：**不改**。文案已逐字改成 web 的「HI 我是 cody 很高兴遇见你」；`text-brand` → `text-primary`（两 token 同值 #FF6B35）；`displayName` 变量、`const { user } = useAuth();` 与 `useAuth` import **已删除**（PC Home 不再依赖 auth context，登录态仍由 `App.tsx` 的 `<Protected>` 守门，不受影响）。
+- 预估改动：**0 行**
 
 ## H-08　标题 className
 
 - **web**：`gacode-web/src/app/page.tsx:295`　`"text-headline font-medium"`
-- **PC**：`gacode-electron/src/routes/Home.tsx:292`　`"text-headline font-medium"`
+- **PC**：`gacode-electron/src/routes/Home.tsx:322`　`"text-headline font-medium"`
 - **判定**：**已一致**
 - 预估改动：**0 行**
 
@@ -206,20 +173,14 @@
   <div className="border-t border-border p-4 bg-background">
     <div className="max-w-3xl mx-auto">
   ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:304-305`
+- **PC**：`gacode-electron/src/routes/Home.tsx:335-336`
   ```tsx
-  <div className="border-t border-border p-4 bg-bg-base">
-    <div className="max-w-2xl mx-auto w-full">
+  <div className="border-t border-border p-4 bg-background">
+    <div className="max-w-3xl mx-auto w-full">
   ```
-- **判定**：形态不同（2 处）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\routes\Home.tsx`
-  - 锚点：`Home.tsx:304-305`
-  - `bg-bg-base` → `bg-background`（同值，写法对齐 web）
-  - `max-w-2xl` → `max-w-3xl`（**web 已登录分支是 `max-w-3xl` = 768px；`max-w-2xl` = 640px 是 web 未登录分支的值**。PC 只有一条分支，等价于 web 已登录分支 → 必须取 768px）
-  - `mx-auto w-full` → `mx-auto`（web 没写 `w-full`；但内层 `ChatInputBar` 根 div 自带 `w-full`（web `ChatInputBar.tsx:82`：`cn("w-full", className)`），PC 的 ChatInputBar 根 div 也需要确认自带 `w-full`——PC `ChatInputBar.tsx:502` 是 `<div className="px-4 pb-4 pt-2">`，**没有 `w-full`**，所以 PC **保留 `w-full` 更安全**，这一项判为「PC 保留」，只改 `max-w-2xl` → `max-w-3xl`
-  - 最终 className 串（容器）：`"border-t border-border p-4 bg-background"`；内层：`"max-w-3xl mx-auto w-full"`
-  - 预估改动：**2 行**
+- **判定**：**已一致**（**已落地** · commit `5504f93`）—— F-09 同步消
+- **怎么改**：**不改**。`max-w-2xl`（640px）→ `max-w-3xl`（768px，与 web **已登录**分支一致）；`bg-bg-base` → `bg-background`（写法对齐 web）。PC 保留 `w-full`（PC `ChatInputBar` 根 div 本身是 `w-full`，见 `src/components/chat/ChatInputBar.tsx:611`，保留不改变任何渲染结果）。
+- 预估改动：**0 行**
 
 ## H-10　已登录分支 ChatInputBar props
 
@@ -234,7 +195,7 @@
     disabled={createChatMutation.isPending}
   />
   ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:306-315`
+- **PC**：`gacode-electron/src/routes/Home.tsx:337-353`
   ```tsx
   <ChatInputBar
     ref={inputBarRef}
@@ -243,14 +204,17 @@
     onSubmit={handleSubmit}
     onAttachmentError={handleAttachmentError}
     onPlusClick={() => setPlusOpen(true)}
+    placeholder="说点什么…"
+    disabled={createMutation.isPending}
   />
   ```
-- **判定**：形态不同（props 体系整体不同 —— web 是受控 `value/onChange`，PC 是内部自持 state + `onSubmit(text, attachments)`）
-- **怎么改**：**不改**。这是两端 ChatInputBar 组件 API 的根本差异，属另一 worker 的 chat 域职责。本页只在此登记「Home 视角下的 props 对照」，改造成本与排期由 chat 域一并处理（PC 端受控化会波及 ChatDetail）。
-  - 本页只需保证 **PC ChatInputBar 接受下列可选 props**（若 chat 域改造时引入）：
-    - `placeholder?: string`（默认 `"说点什么…"`）
-    - `disabled?: boolean`（整体禁用）
-  - 预估改动：**本页 0 行（chat 域处理）**
+- **判定**：**已一致**（Home 视角需要的可选 props **全部到位** · commit `5504f93` + `6dc3c3d`）
+- **怎么改**：**不改**。本条只要求「Home 需要的可选 props PC ChatInputBar 接受」—— 已全部落地：
+  - `placeholder?: string`（`src/components/chat/ChatInputBar.tsx:159`）✅ Home 传 `"说点什么…"`
+  - `disabled?: boolean`（`:166`）✅ Home 传 `createMutation.isPending`
+  - `caption?: string`（`:164`，默认 `"AI 生成内容请核实重要信息"`）✅ web Home 不传 caption，用默认值即可
+  - 受控（web `value`/`onChange`）↔ 非受控（PC 内部自持 state + `onSubmit(text, attachments)`）的 API 形态差异，按 **S-06 选项 A** **保持不改**。
+- 预估改动：**0 行**
 
 ---
 
@@ -264,35 +228,21 @@
     <div className="px-4 pb-2">
       <div className="flex flex-wrap gap-2">
   ```
-- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:507-508`（**在 ChatInputBar 内部，输入行上方**）
+- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:616-658`（**在 ChatInputBar 内部，输入行上方**）
   ```tsx
-  {attachments.length > 0 ? (
-    <div className="mb-2 flex flex-wrap gap-1.5">
+  <div className="mx-auto max-w-3xl w-full">
+    <div className="flex flex-wrap gap-2 pb-2">
   ```
-- **判定**：形态不同（2 处：层级位置 + 间距）
-- **怎么改**：
-  - **位置差异**：web 把附件预览放在 ChatInputBar **外面**（`page.tsx:306`，是 Home 页自己的 JSX），PC 放在 ChatInputBar **里面**（`ChatInputBar.tsx:507`）。
-  - 后果：PC 的 Home 无法自己控制附件区样式（chat 域改 ChatInputBar 会同时改到 ChatDetail）。要对齐 web，附件区必须上移到 Home。
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\routes\Home.tsx`
-  - 锚点：`Home.tsx:304` 的 `<div className="border-t border-border p-4 bg-bg-base">` **内部最前面**（`<div className="max-w-2xl mx-auto w-full">` 之前）
-  - 插入：
-    ```tsx
-    {attachments.length > 0 && (
-      <div className="px-4 pb-2">
-        <div className="flex flex-wrap gap-2">
-          {/* 三态渲染，见 H-12 / H-13 / H-14 */}
-        </div>
-      </div>
-    )}
-    ```
-  - 但 PC 的附件 state 在 ChatInputBar 内部（`ChatInputBar.tsx:173` `const [attachments, setAttachments] = useState<AttachmentItem[]>([])`），Home 拿不到 → **需要 chat 域配合**：ChatInputBar 增加 `onAttachmentsChange?: (items: AttachmentItem[]) => void` prop，每次 `setAttachments` 后同步回调；或 Home 改为受控持有 attachments。
-  - **这是本清单里最大的跨域依赖**，排工时必须跟 chat 域一起排（见文末「改动量最大的前 10 条」第 1 条）。
-  - 间距：`gap-1.5`（6px）→ `gap-2`（8px）；外层 `mb-2` → `px-4 pb-2`
-  - 预估改动：**Home 端 ~10 行 + ChatInputBar 端 ~8 行（跨域，需与 chat worker 协商）**
+- **判定**：**形态不同**（**1 处残留：位置**；间距已对齐）
+- **怎么改**：**本轮未动**。已对齐的部分：间距 `gap-1.5`（6px）→ `gap-2`（8px）✅（`ChatInputBar.tsx:618`）。
+  - **剩下的只有「附件区归属」**：web 把附件预览放在 ChatInputBar **外面**（`page.tsx:306`，是 Home 页自己的 JSX），PC 放在 ChatInputBar **里面**（`ChatInputBar.tsx:616`）⇒ Home 拿不到 `attachments` state，无法自己控制附件区样式。
+  - 改法见 §9 **S-02**（附件 state 归谁 —— 待 gaga 拍板 + 与 chat 域协调，**本轮未动**）。
+  - 两条备选：① ChatInputBar 加 `onAttachmentsChange?: (items: AttachmentItem[]) => void` 上报回调，Home 只读（改动小、不破坏 ChatDetail）；② attachments state 上移到 Home、ChatInputBar 改受控（彻底对齐 web，但 ChatInputBar 大改）。
+- 预估改动：**~18 行（跨 chat 域，见 S-02）**
 
 ## H-12　上传中进度条
 
-- **web**：`gacode-web/src/app/page.tsx:311-319` 调用 `web/src/components/ui/progress.tsx:41-74`
+- **web**：`gacode-web/src/app/page.tsx:311-319` 调用 `gacode-web/src/components/ui/progress.tsx:41-74`
   ```tsx
   <ProgressBar
     key={it.id}
@@ -305,7 +255,7 @@
   轨道（`progress.tsx:55`）：`"flex-1 h-1.5 bg-bg-sunken rounded-full overflow-hidden"`
   填充（`progress.tsx:57`）：`"h-full bg-primary transition-all duration-150 ease-standard"`
   百分比（`progress.tsx:61`）：`"text-xs tabular-nums text-fg-muted shrink-0"`
-- **PC**：`gacode-electron/src/components/chat/UploadProgressBar.tsx:35-52`
+- **PC**：`gacode-electron/src/components/chat/UploadProgressBar.tsx:34-55`
   ```tsx
   className={[
     "flex items-center gap-2 px-3 py-2 rounded-full bg-bg-elevated",
@@ -314,23 +264,21 @@
   ...
   <div className="h-full bg-brand transition-[width] duration-150" ... />
   ```
-- **判定**：形态不同（2 处）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\UploadProgressBar.tsx`
-  - 锚点：`UploadProgressBar.tsx:36` 的 className 数组首项
-  - **底色**：`bg-bg-elevated`（#181818）→ `bg-bg-base`（#000000）+ 加 `shadow-sm`
-    - web 原文：`"flex items-center gap-2 px-3 py-2 rounded-full bg-bg-base shadow-sm"`
-    - PC 最终：`"flex items-center gap-2 px-3 py-2 rounded-full bg-bg-base shadow-sm"`
-    - ⚠️ **冲突类名**：PC 数组拼接没有 tailwind-merge，`shadow-sm` 与 `bg-bg-elevated` 是不同属性，无冲突，可直接替换
-  - **填充色**：`bg-brand` → `bg-primary`（同值 #FF6B35，写法对齐 web）
-  - **过渡属性**：web `transition-all duration-150 ease-standard`；PC `transition-[width] duration-150`
-    - web `ease-standard` = `cubic-bezier(0.4, 0.0, 0.2, 1)`（PC `tailwind.config.ts:195` 有同名 token）
-    - PC 最终：`"h-full bg-primary transition-all duration-150 ease-standard"`
-  - 预估改动：**2 行**
+- **判定**：**形态不同**（**本轮未动** · 仍待做）
+- **怎么改**：目标文件 `gacode-electron/src/components/chat/UploadProgressBar.tsx`：
+  - `:36` `bg-bg-elevated` → `bg-bg-base`，并追加 `shadow-sm`
+    - ⚠️ **冲突类名**：PC 数组拼接没有 tailwind-merge，`bg-bg-elevated` 与 `bg-bg-base` 同属性 ⇒ **必须替换不能追加**
+  - `:50` `bg-brand transition-[width] duration-150` → `bg-primary transition-all duration-150 ease-standard`
+    - `bg-brand` → `bg-primary`（同值 #FF6B35，写法对齐 web）
+    - `transition-[width]` → `transition-all`（同属性 ⇒ 替换）；`ease-standard` 在 PC `tailwind.config.ts:210` 有同名 token
+  - 轨道（`:48`）与百分比（`:54`）**已与 web 逐字一致**，不用动。
+  - ✅ 视觉无风险：PC 输入条外层卡片已恢复 web 的 `bg-bg-elevated`（`ChatInputBar.tsx:664`，H-19 已落地）⇒ 进度条回 `bg-bg-base` 后在卡片上仍可见。
+- **⚠️ D 批次（2026-10-26）跳过**：目标文件 `src/components/chat/UploadProgressBar.tsx` **不在本批文件所有权白名单内**（本批只准改 `Home.tsx` / `ChatInputBar.tsx` / `ChatDetail.tsx` / `home/LibraryPicker.tsx` / 本文件），且本条在台账里归属 **chat 域** ⇒ **未动手**，留给 chat 域 worker 收口。
+- 预估改动：**2 行**
 
 ## H-13　上传完成附件 chip
 
-- **web**：`gacode-web/src/app/page.tsx:321-328` + `web/src/components/chat/AttachmentChip.tsx`
+- **web**：`gacode-web/src/app/page.tsx:321-328` + `gacode-web/src/components/chat/AttachmentChip.tsx`
   ```tsx
   <AttachmentChip
     key={it.id}
@@ -341,22 +289,19 @@
   ```
   web 组件根 className（`AttachmentChip.tsx:55`）：`"inline-flex items-center gap-2 px-3 py-2 rounded-md bg-bg-base shadow-sm max-w-full"`
   缩略图 img（`:65`）：`"w-8 h-8 rounded object-cover shrink-0"`
-- **PC**：`gacode-electron/src/components/chat/AttachmentChip.tsx:50`
+- **PC**：`gacode-electron/src/components/chat/AttachmentChip.tsx:46-55`
   ```tsx
-  "inline-flex items-center gap-2 px-3 py-2 rounded-md bg-bg-elevated max-w-full",
+  "inline-flex items-center gap-2 px-3 py-2 rounded-md bg-bg-base shadow-sm max-w-full",
   ```
-- **判定**：形态不同（1 处：底色 + 阴影）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\AttachmentChip.tsx`
-  - 锚点：`AttachmentChip.tsx:50`
-  - `bg-bg-elevated` → `bg-bg-base`，并追加 `shadow-sm`
-  - PC 最终：`"inline-flex items-center gap-2 px-3 py-2 rounded-md bg-bg-base shadow-sm max-w-full"`
-  - ⚠️ **注意**：`AttachmentChip.tsx:48-50` 的注释解释了 PC 故意用 `bg-bg-elevated` 的原因（输入区底板去掉后 chip 跟页面都是 #000 看不见了）。**这一改会让 PC chip 在黑底上「消失」**，除非同时把 Home/ChatDetail 的输入区底板恢复成 web 的 `bg-bg-elevated`（见 H-16）。**两者必须一起改，否则视觉回归**。
-  - 预估改动：**1 行**
+  缩略图 img（`:68`）：`"w-8 h-8 rounded object-cover shrink-0"`
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。底色已从 PC 自选的 `bg-bg-elevated` 改回 web 的 `bg-bg-base` + `shadow-sm`（**必须与 H-19 同批**，否则 chip 在纯黑底上消失 —— H-19 已随 `5504f93` 落地，两条现在是一致的）。
+  - ℹ️ 工作树里还有一处**未提交**的 chat 域在途改动：删掉 PC 多出的「非 image 也渲染 FileText 方块」分支（web `AttachmentChip.tsx:60-72` 只有两个分支）。本条只登记状态，不动该文件。
+- 预估改动：**0 行**
 
 ## H-14　上传失败错误 chip
 
-- **web**：`gacode-web/src/app/page.tsx:330-351` + `web/src/components/common/UploadErrorChip.tsx:40-58`
+- **web**：`gacode-web/src/app/page.tsx:330-351` + `gacode-web/src/components/common/UploadErrorChip.tsx:40-58`
   ```tsx
   <Card className="border border-red-200 bg-red-50/60 w-full">
     <CardContent className="p-3 flex items-center gap-2">
@@ -370,26 +315,25 @@
     </CardContent>
   </Card>
   ```
-- **PC**：`gacode-electron/src/components/chat/UploadErrorChip.tsx:27-55`
+- **PC**：`gacode-electron/src/components/chat/UploadErrorChip.tsx:44-64`
   ```tsx
-  <div className="w-full border border-red-500/40 bg-red-500/10 rounded-md">
-    <div className="p-3 flex items-center gap-2">
-      <AlertTriangleIcon />
-      ...
-      <p className="text-xs text-red-400 truncate">上传失败 · {errorMsg}</p>
+  <Card className="border-red-200 bg-red-50/60 w-full">
+    <CardContent className="!p-3 flex items-center gap-2">
+      <AlertTriangleIcon size={16} className="text-red-600 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate">{fileName}</p>
+        <p className="text-xs text-red-700 truncate">上传失败 · {errorMsg}</p>
+      </div>
+      {onRetry ? <Button variant="ghost" size="sm" onClick={onRetry}>重试</Button> : null}
+      {onRemove ? <Button variant="ghost" size="sm" onClick={onRemove}>删除</Button> : null}
+    </CardContent>
+  </Card>
   ```
-- **判定**：形态不同（暗色等价色，但类名/结构不同）
-- **怎么改**：
-  - **色彩**：web 用的是**亮色**系 `border-red-200 bg-red-50/60 text-red-600 text-red-700`（web 是亮色底）。PC 用暗色系 `border-red-500/40 bg-red-500/10 text-red-400`。
-    - web 端 Home 默认是**暗色主题**（`bg-background` = #000），但错误 chip 用了亮色红底 —— 这是 web 的**实际行为**，PC 要 1:1 还原就得照抄亮色（亮红底 + 深红字，在纯黑背景上会很扎眼）。
-    - **建议**：照抄 web 原文（对齐优先），但把这条标「视觉存疑，需 gaga 看一眼」。
-    - PC 最终根 className：`"w-full border border-red-200 bg-red-50/60"`（去掉 `rounded-md`，web 的 `Card` 自带 `rounded-xl`，见 `web/src/components/ui/card.tsx`）
-    - 图标色：`text-red-400` → `text-red-600`；文案色：`text-red-400` → `text-red-700`
-    - ⚠️ **冲突类名**：PC 现有 `rounded-md` 与 web 的 `Card` 圆角不同；若照抄 `Card` 需 `rounded-xl`（PC `tailwind.config.ts:141` 有 `xl: "22px"`，web Card 的 `rounded-xl` 同值）
-  - **按钮样式**：web 用 `Button size="sm" variant="ghost"`（shadcn）；PC 用手写 `<button className="shrink-0 px-2 py-1 rounded text-xs text-fg hover:bg-bg-sunken transition-colors duration-150">`。
-    - 对齐方式：PC 仓无 shadcn `Button` 的 `size="sm" variant="ghost"` 组合（PC 有 `src/components/ui/Button.tsx`，支持 `variant` / `size`），可换用 PC 的 `<Button variant="ghost" size="sm">`；或保留手写 button 只改 className。
-    - PC `Button` 组件在 `src/components/ui/Button.tsx`，已被 `BottomSheet.tsx:17` 引用。
-  - 预估改动：**6 行**
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）⚠️ **观感待 gaga 真机看**
+- **怎么改**：**不改**。已落地：改用 PC `ui/Card`（`src/components/ui/Card.tsx`，已与 web `card.tsx` 1:1）+ `border-red-200 bg-red-50/60`；图标 `text-red-600`、文案 `text-red-700`；按钮改 `<Button variant="ghost" size="sm">`（PC `src/components/ui/Button.tsx` 已与 web `button.tsx` 1:1）；私有 `AlertTriangleIcon` 删除，改用共享 `src/components/ui/Glyphs.tsx:587` 的 `AlertTriangleIcon`。
+  - ⚠️ **两处 PC 特有写法（必需，不是差异）**：`!p-3`（PC 无 tailwind-merge，`CardContent` base 的 `p-6` 在 CSS 产物里排在 `.p-3` 之后，不加 `!` 压不住）；`border-red-200 bg-red-50/60` **不需要** `!`（`bg-card` 排在默认调色板之前，天然赢）。
+  - ⚠️ **待 gaga 真机看**：web 用的是**亮色**系错误 chip（亮红底 + 深红字），PC 是纯黑底 ⇒ 亮红 chip 打在黑底上的观感**未在真机验证**（详见 §12「待 gaga 真机看」表）。
+- 预估改动：**0 行**
 
 ## H-15　附件区「上传中禁止提交」拦截
 
@@ -406,26 +350,36 @@
     return;
   }
   ```
-- **PC**：`PC 缺失` —— PC `ChatInputBar.tsx:392-395` 只过滤 `kind === "done"` 的附件传给 parent，**上传中的附件被静默丢弃**，用户点发送 → 附件直接没了，没有任何提示。
-- **判定**：缺失
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-  - 锚点：`handleSend`（`ChatInputBar.tsx:388-400`），在 `const doneAtts = ...`（`:392`）之前插入：
-    ```tsx
-    const hasUploading = attachments.some((x) => x.kind === "uploading");
-    if (hasUploading) {
-      onAttachmentError?.("附件还在上传中, 请稍候几秒再发送");
-      return;
-    }
-    ```
-  - ⚠️ `onAttachmentError` 的 PC 语义是「上传失败」→ Home 的 `handleAttachmentError` 用 `variant: "danger"`（`Home.tsx:201`），web 这里用的是 `variant: "default"`。
-  - **PC toast API 无 title/description** → 必须拼单行 message：`"附件还在上传中, 请稍候几秒再发送"`
-  - **更干净的方案**：Home 侧拦截。但 attachments state 在 ChatInputBar 内（`ChatInputBar.tsx:173`），Home 拿不到 → 若采纳 H-11 的「附件区上移 Home」改造，则此项天然由 Home 接管，拦截逻辑直接写在 `Home.tsx` 的 `handleSubmit` 里。
-  - 预估改动：**5 行（ChatInputBar 内）** 或 **6 行（Home 内，依赖 H-11 先落地）**
+- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:469` + `:472-476`
+  ```tsx
+  const hasUploading = attachments.some((x) => x.kind === "uploading");
+  ...
+  if (hasUploading) {
+    onAttachmentError?.("附件还在上传中, 请稍候几秒再发送");
+    return;
+  }
+  ```
+- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **怎么改**：已落地（commit `5504f93`）：上传中点发送**不再静默丢附件**（F-02 的行为 bug 已消），改为提示 + `return`，附件保留。
+  - **残留已消**（D 批次）：toast 变体从 `danger` 改成 web 的 `default`，且改成 **title + description 两段式**。
+    - `src/components/chat/ChatInputBar.tsx:485-492`：
+      ```tsx
+      if (hasUploading) {
+        if (onSubmitNotice) {
+          onSubmitNotice("附件还在上传中", "default", "请稍候几秒再发送");
+        } else {
+          onAttachmentError?.("附件还在上传中, 请稍候几秒再发送");
+        }
+        return;
+      }
+      ```
+    - `src/routes/Home.tsx:239-248`（`handleSubmitNotice` → `toast({ title, description, variant })`）+ `src/routes/Home.tsx:375`（`onSubmitNotice={handleSubmitNotice}`）⇒ **HOME 页**拿到 web 的两段式 + `default` 变体。
+  - ⚠️ **共享组件的连带效应（已知 · 不计差异）**：PC 的发送路径是共享 `ChatInputBar`（Home 与 chat 页共用），web 的这个守卫**只在 Home 页** ⇒ PC 的 chat 页也会顺带拦住「上传中就发」。chat 页**不接** `onSubmitNotice`（web chat 页也没这两条 toast）⇒ 回落到 `onAttachmentError`，chat 页提示与改动前**完全一致**（`ChatDetail.tsx:1319`）。
+- 预估改动：**0 行（D 批次已落地）**
 
 ## H-16　附件区「部分失败仍可发送」warning
 
-- **web**：`gacode-web/src/app/page.tsx:216, 228-234`
+- **web**：`gacode-web/src/app/page.tsx:216`、`:228-234`
   ```tsx
   const hasError = upload.items.some((it) => it.status === "error");
   ...
@@ -437,121 +391,70 @@
     });
   }
   ```
-- **PC**：`PC 缺失` —— PC `ChatInputBar.tsx:392` 只取 `done`，error 项被丢掉，**不发任何 warning**。
-- **判定**：缺失
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-  - 锚点：`handleSend`（`ChatInputBar.tsx:388`）
-  - PC toast 无 `warning` 的 title/description 双字段，但 **PC Toast 有 `warning` variant**（`Toast.tsx:22`：`ToastVariant = "default" | "success" | "danger" | "warning"`）→ 拼单行 message
-  - 问题：PC 的 `onAttachmentError` 固定走 `variant: "danger"`（`Home.tsx:201`），无法表达 warning。
-  - **方案 A（推荐，改 Home 不改 ChatInputBar API）**：在 ChatInputBar 增加 prop
-    ```tsx
-    /** 提交前提示 (上传中 / 部分失败). message 已含全部信息, variant 由 parent 决定 */
-    onSubmitNotice?: (message: string, variant: "default" | "warning") => void;
-    ```
-    Home 侧：
-    ```tsx
-    const handleSubmitNotice = useCallback(
-      (message: string, variant: "default" | "warning") => {
-        toast({ message, variant });
-      },
-      [toast],
+- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:155-159`（prop 声明）+ `:485-492`（上传中守卫）+ `:512-518`（部分失败提示）
+  ```tsx
+  onSubmitNotice?: (
+    title: string,
+    variant: "default" | "warning",
+    description?: string,
+  ) => void;
+  ...
+  if (hasError) {
+    onSubmitNotice?.(
+      "部分附件上传失败",
+      "warning",
+      "已移除失败项, 正在发送其余内容",
     );
-    ```
-    并在 `Home.tsx:313` 的 `<ChatInputBar ...>` 上加 `onSubmitNotice={handleSubmitNotice}`
-  - **方案 B（简单）**：复用 `onAttachmentError`，但 Home 侧把 danger 改成按前缀判断——**不推荐**，语义混乱
-  - 最终 message 文案（对齐 web 两段拼接）：`"部分附件上传失败, 已移除失败项, 正在发送其余内容"`
-  - 预估改动：**~10 行（ChatInputBar 4 + Home 6）**
+  }
+  ```
+- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **怎么改**：已落地（commit `5504f93`）：`ChatInputBar` 的 `onSubmitNotice` prop + warning 文案；失败项不带走（只传 `kind === "done"` 的附件）。
+  - **残留已消**（D 批次）：**Home 侧接线 + 两段式**。
+    - `src/routes/Home.tsx:239-248`：
+      ```tsx
+      const handleSubmitNotice = useCallback(
+        (title: string, variant: "default" | "warning", description?: string) => {
+          toast({ title, description, variant });
+        },
+        [toast],
+      );
+      ```
+    - `src/routes/Home.tsx:375`　`onSubmitNotice={handleSubmitNotice}`
+    - `src/components/chat/ChatInputBar.tsx:155-159`　prop 改成 `(title, variant, description?)`（原来只有 `message` + `variant`，拼不出两段式）
+    - `src/components/chat/ChatInputBar.tsx:512-518`　触发时传两段：title「部分附件上传失败」/ description「已移除失败项, 正在发送其余内容」/ variant「warning」
+  - ✅ **chat 详情页不再弹这条 toast**（web 的 chat 页没有它，它只属于 web 的 Home 页）：`src/routes/ChatDetail.tsx:1307-1309` 留了说明注释，**原 `:1319` 的 `onSubmitNotice` 接线已删除**（该行现在是 `onAttachmentError`）⇒ `onSubmitNotice` 现在**只由 Home 使用**（与 web 一致）。
+  - ⚠️ chat 页对失败附件的反馈是**逐文件 chip**（PC 的 `UploadErrorChip` 已与 web 的亮色系对齐，见 H-14）⇒ 两端一致，不靠 toast。
+- 预估改动：**0 行（D 批次已落地）**
 
 ## H-17　「空文本但有附件」也允许提交
 
 - **web**：`gacode-web/src/app/page.tsx:217`　`if (!content && upload.items.length === 0) return;`
-- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:389-390`
+- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:468` + `:479`
   ```tsx
-  const trimmed = text.trim();
-  if (!trimmed) return;
+  const hasDoneAttachment = attachments.some((x) => x.kind === "done");
+  ...
+  if (!trimmed && !hasDoneAttachment) return;
   ```
-  → **PC 文本为空时直接 return，即使已经挂了附件也发不出去。**
-  （发送按钮的 disabled 条件 `ChatInputBar.tsx:642` 是 `disabled={!text.trim() && !attachments.some((x) => x.kind === "done")}` —— 按钮可点，但点了被 `handleSend` 的 `if (!trimmed) return;` 拦掉，**点发送没反应**。）
-- **判定**：形态不同（**行为 bug**）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-  - 锚点：`handleSend`（`ChatInputBar.tsx:388-390`）
-  - 改前：
-    ```tsx
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    ```
-  - 改后：
-    ```tsx
-    const trimmed = text.trim();
-    const hasDoneAttachment = attachments.some((x) => x.kind === "done");
-    if (!trimmed && !hasDoneAttachment) return;
-    ```
-  - 预估改动：**2 行**
+  （发送按钮的 disabled 条件 `:764-767` 是 `disabled={disabled || (!text.trim() && !attachments.some((x) => x.kind === "done"))}` —— 与 `handleSend` 的判定**同源**，不会再出现「按钮可点但点了没反应」）
+- **判定**：**已一致**（**已落地** · commit `5504f93`）—— F-01 同步消
+- **怎么改**：**不改**。
+- 预估改动：**0 行**
 
 ## H-18　提交后附件预览是否清空
 
-- **web**：`gacode-web/src/app/page.tsx:237-239` —— **不清空**（注释明说「这里不重置, 让 user 看到状态到 chat 页前都不丢」）
-- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:396-399`
+- **web**：`gacode-web/src/app/page.tsx:236-239` —— **不清空**（注释明说「这里不重置, 让 user 看到状态到 chat 页前都不丢」）
+- **PC**：`gacode-electron/src/routes/Home.tsx:110-115`（`createMutation.onSuccess` 里才清）+ `:181-185`（`handleSubmit` 返回 `false`）+ `src/components/chat/ChatInputBar.tsx:295-298`（`clear()`）+ `:500-506`（`if (ok !== false)` 分支）
   ```tsx
-  const ok = onSubmit(trimmed, doneAtts);
-  if (ok !== false) {
-    setText("");
-    setAttachments([]);
-  }
+  // Home.tsx onSuccess
+  inputBarRef.current?.clear();
+  navigate(`/chat/${chat.id}`);
+  ...
+  // Home.tsx handleSubmit 末尾
+  return false;   // ⇒ ChatInputBar 不自行清空
   ```
-  → PC 提交后**立即清空附件**，与 web 行为相反。
-- **判定**：形态不同
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-  - 锚点：`handleSend`（`ChatInputBar.tsx:396-399`）
-  - 保留 `setText("")`（两边一致），把 `setAttachments([])` 改成「等跳转完成再清」—— 但 PC 提交后立即 `navigate('/chat/:id')`（`Home.tsx:103`），组件卸载，附件自然消失 → **实际用户观感与 web 相同**。
-  - **判定修正**：本条实际观感一致，**降级为「已一致（行为等价）」**，但需注意一个真实差异：web 的 `handleSubmit` 在 `createChatMutation.mutate(firstMsg)` 之前**不**清空，且 createChat 失败时附件仍在（用户可重试）；PC 的 `onSubmit` 返回 `true` 后立即清空附件，**createChat 失败（`Home.tsx:105-110` toast）时附件已丢，用户无法重试**。
-  - **实际要改的**：PC `Home.tsx:114-166` 的 `handleSubmit` 返回值写死 `return true`（`:163`），应改为把 createChat 的成功与否回传给 ChatInputBar：
-    ```tsx
-    // Home.tsx handleSubmit
-    const handleSubmit = useCallback(
-      (text: string, attachments: PendingAttachment[]): boolean => {
-        ... 拼 firstMsg / sessionStorage ...
-        createMutation.mutate(undefined, {
-          onSuccess: () => navigate(`/chat/${chat.id}`),
-          onError: () => { /* toast 已有 */ },
-        });
-        return true;  // ← 改成受 createChat 结果驱动
-      },
-      [createMutation],
-    );
-    ```
-    更直接的做法：把附件清空时机交给「跳转成功」——即 `handleSubmit` 返回 `false`（保留输入），由 `createMutation.onSuccess` 里再 `inputBarRef.current?.clear()`。
-    - **需新增** `ChatInputBarHandle` 方法（改 `ChatInputBar.tsx:106-111`）：
-      ```tsx
-      export interface ChatInputBarHandle {
-        insertEmoji: (text: string) => void;
-        insertText: (text: string) => void;
-        addAttachment: (att: PendingAttachment) => void;
-        focus: () => void;
-        /** 新增: 清空文本 + 附件 (Home 在 createChat 成功后调用) */
-        clear: () => void;
-      }
-      ```
-      实现（`useImperativeHandle` 内，`ChatInputBar.tsx:186-225`）：
-      ```tsx
-      clear: () => {
-        setText("");
-        setAttachments([]);
-      },
-      ```
-    - `Home.tsx` 的 `createMutation.onSuccess`（`Home.tsx:102-104`）改为：
-      ```tsx
-      onSuccess: (chat) => {
-        inputBarRef.current?.clear();
-        navigate(`/chat/${chat.id}`);
-      },
-      ```
-      并把 `handleSubmit` 的 `return true` 改成 `return false`（让 ChatInputBar **不**自行清空）→ `ChatInputBar.tsx:396-399` 的 `if (ok !== false)` 分支自然不执行清空。
-      ⚠️ **但 `return false` 会让 ChatInputBar 保留文本**，PC 跳转后组件卸载，文本随之消失 → 观感一致。
-  - 预估改动：**~12 行（ChatInputBar 6 + Home 6）**
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）—— F-03 同步消
+- **怎么改**：**不改**。已落地：`handleSubmit` 返回 `false` ⇒ ChatInputBar 的 `if (ok !== false)` 分支不执行（文本 / 附件都保留）；真正清空挪到 `createMutation.onSuccess` 里调 `inputBarRef.current?.clear()` ⇒ **createChat 失败时用户可原地重试**，成功才清空并跳转。
+- 预估改动：**0 行**
 
 ---
 
@@ -573,42 +476,23 @@
     )}
   >
   ```
-- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:502`（外层）+ `:584`（textarea 自身）
+- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:662-672`（外层卡片）+ `:692-707`（裸 textarea）
   ```tsx
-  <div className="px-4 pb-4 pt-2">
+  <div className={[
+    "bg-bg-elevated rounded-md px-4 py-3 flex items-end gap-2",
+    "border transition-colors duration-150",
+    "focus-within:border-border",
+    isStreaming ? "border-brand/40" : "border-transparent",
+    disabled && !isStreaming ? "opacity-60" : "",
+  ].filter(Boolean).join(" ")}>
   ...
-  <textarea className="w-full resize-none bg-bg-sunken border border-border rounded-md px-3 py-2 text-sm leading-6 placeholder:text-fg-subtle focus:outline-none focus:border-brand disabled:opacity-70 max-h-32 overflow-y-auto ..." />
+  <textarea className="w-full bg-transparent text-fg placeholder:text-fg-subtle outline-none text-base leading-6 resize-none max-h-32 py-2 disabled:opacity-60 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" />
   ```
-- **判定**：形态不同（**PC 是「裸 textarea 卡片」，web 是「外层卡片包 textarea」—— 视觉结构完全不同**）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-  - 锚点：`ChatInputBar.tsx:550` 的 `<div className="flex items-end gap-2">`（input row）
-  - web 的结构：`外层卡片(bg-bg-elevated rounded-md px-4 py-3 flex items-end gap-2)` 里面直接放 `+按钮 / textarea / 发送按钮`，textarea 自己**没有底色、没有边框、没有圆角**。
-  - PC 要改成：
-    ```tsx
-    <div className={[
-      "bg-bg-elevated rounded-md px-4 py-3 flex items-end gap-2",
-      "border border-transparent transition-colors duration-150",
-      "focus-within:border-border",
-      disabled && !isStreaming && "opacity-60",
-      isStreaming && "border-brand/40",
-    ].join(" ")}>
-      {onPlusClick ? (<PlusButton />) : null}
-      <textarea className="flex-1 bg-transparent text-fg placeholder:text-fg-subtle outline-none text-base leading-6 resize-none max-h-32 py-2 disabled:opacity-60" ... />
-      {SendOrStopButton}
-    </div>
-    ```
-  - **PC 无 `cn()`** → 用 `[...].join(" ")`（本文件 `:145-150` 已有此写法先例）
-  - **PC 无 `disabled` prop** → 需新增 `disabled?: boolean`（默认 `false`），Home 传 `createMutation.isPending`
-  - textarea 要删掉的 PC 类：`bg-bg-sunken` `border` `border-border` `rounded-md` `px-3` `py-2` `text-sm` `focus:outline-none` `focus:border-brand` `overflow-y-auto` `[scrollbar-width:none]` `[&::-webkit-scrollbar]:hidden`
-    - `text-sm` → `text-base`（web 是 16px，PC 是 14px）
-    - `leading-6` 保留（web 也是 `leading-6`）
-    - `max-h-32` 保留（web `max-h-32`）
-    - `w-full` → `flex-1`
-    - `resize-none` 保留
-    - `outline-none` 保留
-  - PC 端 textarea 还需要保留 `overflow-y-auto` + 隐藏滚动条（PC 多行折叠更实用）—— web 的 textarea 在 `max-h-32` 内也会滚动但没隐藏滚动条。**建议保留 PC 的滚动条隐藏**，属 PC 既有行为，不影响 1:1 还原的判定项。
-  - 预估改动：**~25 行（ChatInputBar 内，chat 域）**
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。PC 已改成 web 的「外层卡片包裸 textarea」结构：textarea 自己的 `bg-bg-sunken` / `border` / `border-border` / `rounded-md` / `px-3 py-2` / `text-sm` / `focus:border-brand` 全部删掉，改 `text-base` + `bg-transparent` + `outline-none`；外层卡片补上 `border-transparent` / `focus-within:border-border` / `opacity-60`（disabled）。
+  - 保留 PC 既有行为：textarea 仍带 `overflow-y-auto` + 隐藏滚动条（web 不隐藏）—— 属 PC 既有增强，不影响 1:1 判定。
+  - 连带：H-13 的 chip 底色回 `bg-bg-base` 依赖本条（输入条底板恢复 `bg-bg-elevated`）—— 两条已在同一批落地。
+- 预估改动：**0 行**
 
 ## H-20　`+` 按钮形态
 
@@ -625,22 +509,14 @@
     </button>
   )}
   ```
-- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:554-565`
+- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:676-687`
   ```tsx
-  className="shrink-0 h-9 w-9 rounded-md bg-bg-sunken text-fg-muted hover:bg-bg-elevated hover:text-fg disabled:opacity-50 disabled:pointer-events-none inline-flex items-center justify-center transition-colors duration-150"
+  className="shrink-0 w-9 h-9 rounded-full text-fg-muted hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center"
   ```
-  图标：PC `PlusGlyph`（`:748-765`）`width="18" height="18" strokeWidth="1.8"`；web lucide `Plus` `w-5 h-5` = 20px，`stroke-width` 2
-- **判定**：形态不同（3 处：形状 / 底色 / 图标尺寸）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-  - 锚点：`ChatInputBar.tsx:562` 的 className 串
-  - **圆角**：`rounded-md`（16px）→ `rounded-full`（9999px）。web 是**圆形无底色**的 `+`。
-    - ⚠️ **冲突类名**：PC 无 tailwind-merge，若保留 `bg-bg-sunken` 再加 `rounded-full` 不冲突（不同属性），但 PC 当前有 `bg-bg-sunken` 底色而 web **没有** → 必须删掉 `bg-bg-sunken`，否则是「灰底圆」，web 是「裸圆图标」
-    - PC 最终：`"shrink-0 w-9 h-9 rounded-full text-fg-muted hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center"`
-  - **hover**：`hover:bg-bg-elevated` → `hover:bg-bg-sunken`（web hover 是 sunken 底）
-  - **图标尺寸**：`PlusGlyph` 的 `width="18" height="18"` → `width="20" height="20"`（web `w-5 h-5` = 20px）；`strokeWidth="1.8"` → `strokeWidth="2"`（跟 lucide 默认一致）
-  - **aria-label**：PC 是 `aria-label="添加附件"` + `title="添加附件"`；web 是 `aria-label="附件"` → 统一改成 `aria-label="附件"`
-  - 预估改动：**3 行**
+  图标：`PlusGlyph`（`:892-909`）`width="20" height="20" strokeWidth="2"`；`aria-label="附件"` / `title="附件"`（`:679-680`）
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。`rounded-md` → `rounded-full`、删掉 `bg-bg-sunken`（web 是「裸圆图标」，PC 原先是灰底圆）、`hover:bg-bg-elevated` → `hover:bg-bg-sunken`、图标 18px/sw1.8 → 20px/sw2、`aria-label` 统一成「附件」。
+- 预估改动：**0 行**
 
 ## H-21　发送按钮形态
 
@@ -661,35 +537,14 @@
     <ArrowUp className="w-4 h-4" />
   </button>
   ```
-- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:638-646`
+- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:760-771`
   ```tsx
-  className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-md bg-brand text-brand-on hover:bg-brand-hover active:opacity-80 disabled:opacity-40 disabled:pointer-events-none transition-colors duration-150"
+  className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-brand text-brand-on hover:bg-brand-hover transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
   ```
-  图标：PC `SendIcon`（`:692-709`）是**纸飞机** `m22 2-7 20-4-9-9-4Z`；web 是 lucide `ArrowUp`（向上箭头）
-- **判定**：形态不同（3 处：圆角 / 图标 / disabled 透明度）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-  - 锚点：`ChatInputBar.tsx:643` 的 className 串 + `SendIcon`（`:692-709`）
-  - **圆角**：`rounded-md` → `rounded-full`
-    - ⚠️ 冲突处理：`rounded-md` 与 `rounded-full` 是同一属性（border-radius），PC 无 tailwind-merge，**必须删掉 `rounded-md` 而不是追加 `rounded-full`**
-    - PC 最终：`"shrink-0 w-9 h-9 inline-flex items-center justify-center rounded-full bg-brand text-brand-on hover:bg-brand-hover transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"`
-  - **disabled 态**：PC `disabled:opacity-40 disabled:pointer-events-none` → web `disabled:opacity-50 disabled:cursor-not-allowed`（web 保留 pointer-events，禁用时显示 not-allowed 光标）
-  - **active 态**：web 无 `active:`，PC 有 `active:opacity-80` → 删除
-  - **图标**：web 是 lucide `ArrowUp`：
-    ```tsx
-    function ArrowUpGlyph() {
-      return (
-        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="m5 12 7-7 7 7" />
-          <path d="M12 19V5" />
-        </svg>
-      );
-    }
-    ```
-    （lucide `arrow-up` 的 path 就是这两条，PC `SendIcon` 换掉）
-  - **aria-label**：PC `aria-label="发送消息"` → web `aria-label="发送"`
-  - 预估改动：**~10 行**
+  图标：`SendIcon`（`:836-853`）= `m5 12 7-7 7 7` + `M12 19V5`（lucide `arrow-up` 真值）
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。`rounded-md` → `rounded-full`（同属性，**替换不是追加**）、删 `active:opacity-80`、`disabled:opacity-40 disabled:pointer-events-none` → `disabled:opacity-50 disabled:cursor-not-allowed`、纸飞机图标 → lucide `ArrowUp`。
+- 预估改动：**0 行**
 
 ## H-22　输入条底部 caption
 
@@ -710,65 +565,48 @@
   )}
   ```
   默认 caption（`ChatInputBar.tsx:54`）：`"AI 生成内容请核实重要信息"`
-- **PC**：`PC 缺失` —— PC `ChatInputBar.tsx:502-649` 全文没有 caption 节点。
-- **判定**：缺失
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-  - 锚点：`ChatInputBar.tsx:648` 的 `</div>`（input row 结束）之后、`{dragActive ? ...}`（`:652`）之前
-  - 插入：
-    ```tsx
-    {caption && (
-      <p className={[
-        "mt-2 text-xs text-center flex items-center justify-center gap-1.5",
-        isStreaming ? "text-brand" : "text-fg-muted opacity-50",
-      ].join(" ")}>
-        {isStreaming ? (
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand animate-pulse" aria-hidden="true" />
-        ) : null}
-        <span>{caption}</span>
-      </p>
-    )}
-    ```
-  - **需新增 prop**：`caption?: string`（默认 `"AI 生成内容请核实重要信息"`），加到 `ChatInputBarProps`（`ChatInputBar.tsx:113-145`）
-  - **PC 有 `animate-pulse` 吗**：Tailwind 默认 keyframes，PC `tailwind.config.ts:232-256` 覆盖了 `animation` 段但只列了 4 个自定义 keyframes → **Tailwind 的 `animate-pulse` 是内置 utilities，`extend.animation` 不会覆盖掉它**（extend 是合并），所以 `animate-pulse` 可用。
-  - 预估改动：**~12 行**
+- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:164`（prop）+ `:207`（默认值）+ `:775-791`（渲染）
+  ```tsx
+  <p className={[
+    "mt-2 text-xs text-center flex items-center justify-center gap-1.5",
+    isStreaming ? "text-brand" : "text-fg-muted opacity-50",
+  ].join(" ")}>
+    {isStreaming ? (
+      <span className="inline-block w-1.5 h-1.5 rounded-full bg-brand animate-pulse" aria-hidden="true" />
+    ) : null}
+    <span>{isStreaming ? "生成中 · 点击停止按钮中断" : caption}</span>
+  </p>
+  ```
+- **判定**：**已一致**（**已落地** · commit `5504f93`）⚠️ 流式圆点在 PC 上**不动**（见 §12「本轮不做」表）
+- **怎么改**：**不改**。PC 已加 `caption?: string` prop（默认 `"AI 生成内容请核实重要信息"`，与 web 逐字一致）+ 底部 caption 行 + 流式小圆点。
+  - PC 流式时显示的是「生成中 · 点击停止按钮中断」（PC 自有文案），web 直接显示 `caption` —— 属 PC 既有增强，不计差异。
+  - ⚠️ `animate-pulse` 被 PC 全局 `animation: none !important` 覆盖（`src/styles/globals.css:408-414`）⇒ PC 上是**静态圆点**。这是 gagaOS 全局禁动效的既有规范，**本轮不改**（见 §12「本轮不做」表）。
+- 预估改动：**0 行**
 
 ## H-23　输入条 placeholder 文案
 
-- **web**：`gacode-web/src/app/page.tsx:367`（Home 传参）+ `web/src/components/chat/ChatInputBar.tsx:51`（默认值）　`"说点什么…"`
-- **PC**：`gacode-electron/src/components/chat/ChatInputBar.tsx:578-582`
+- **web**：`gacode-web/src/app/page.tsx:367`（Home 传参）+ `gacode-web/src/components/chat/ChatInputBar.tsx:51`（默认值）　`"说点什么…"`
+- **PC**：`gacode-electron/src/routes/Home.tsx:349`　`placeholder="说点什么…"` + `gacode-electron/src/components/chat/ChatInputBar.tsx:159`（prop 声明）+ `:699-704`（使用）
   ```tsx
   placeholder={
-    isStreaming
-      ? "正在流式生成… 完成后再发下一条"
-      : "说点什么… (Enter 发送, Shift+Enter 换行 · 输入 / 触发命令菜单)"
+    placeholder ??
+    (isStreaming
+      ? "AI 正在回复..."
+      : "说点什么… (Enter 发送，Shift+Enter 换行)")
   }
   ```
-- **判定**：形态不同
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-  - 锚点：`ChatInputBar.tsx:578-582`
-  - 非流式态改成 `"说点什么…"`；流式态 web 是 `"说点什么…"`（web 的 placeholder prop 不随 isStreaming 变，ChatInputBar.tsx:111 是 `placeholder={placeholder}`，无流式分支）
-  - **需新增 prop**：`placeholder?: string`（默认 `"说点什么…"`，加到 `ChatInputBarProps`）
-  - 最终：
-    ```tsx
-    placeholder={placeholder}
-    ```
-    prop 默认值 `const placeholder = "说点什么…"`。
-  - ⚠️ PC 的 slash 菜单提示文案（`输入 / 触发命令菜单`）会随本条一起消失 —— 但 PC Home 不传 `onSlashCommand`（`Home.tsx:306-315` 没传），`SlashMenu` 只在 `onSlashCommand` 存在时渲染（`ChatInputBar.tsx:586`），**Home 上没有 slash 菜单**，所以文案不适用，删掉是对的。
-  - 预估改动：**2 行**
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。Home 显式传 web 的 `"说点什么…"`，PC ChatInputBar 自己的长提示降级为**默认值**（Home 不传时才用）⇒ HOME 页显示的就是 web 的文案。
+  - ℹ️ PC 的 slash 菜单提示文案（`输入 / 触发命令菜单`）随本条一起从 HOME 页消失 —— 但 Home 不传 `onSlashCommand`，`SlashMenu` 不会渲染 ⇒ 删得对。
+- 预估改动：**0 行**
 
 ## H-24　Home 输入条禁用态（创建中）
 
 - **web**：`gacode-web/src/app/page.tsx:368`　`disabled={createChatMutation.isPending}` → ChatInputBar 外层卡片 `opacity-60`（`ChatInputBar.tsx:89`）
-- **PC**：`PC 缺失` —— PC Home 没传 `disabled`（ChatInputBar 也没这个 prop），创建中用户可重复点发送 → 触发多次 `createChat`。
-- **判定**：缺失
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`（加 prop）+ `D:\gaga\gaclaw-project\gacode-electron\src\routes\Home.tsx`（传参）
-  - **需新增 prop**：`disabled?: boolean`（默认 `false`），加到 `ChatInputBarProps`
-  - ChatInputBar 内：textarea 加 `disabled={disabled}`；发送按钮 `disabled={!canSend || disabled}`；外层卡片 `disabled && !isStreaming && "opacity-60"`（跟 web `ChatInputBar.tsx:89` 对齐）
-  - Home 侧：`Home.tsx:313` 附近加 `disabled={createMutation.isPending}`
-  - 预估改动：**~8 行（ChatInputBar 6 + Home 2）**
+- **PC**：`gacode-electron/src/routes/Home.tsx:352`　`disabled={createMutation.isPending}` + `gacode-electron/src/components/chat/ChatInputBar.tsx:166`（prop）+ `:208`（默认 false）+ `:668`（外层卡片 `opacity-60`）+ `:705`（textarea `disabled={isStreaming || disabled}`）+ `:764-767`（发送按钮 `disabled={disabled || ...}`）
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。创建中整条输入条降透明度 + textarea / 发送按钮禁用（web 同款）。
+- 预估改动：**0 行**
 
 ## H-25　Home 的 `+` 点击未登录拦截
 
@@ -782,9 +620,9 @@
     setSheetOpen(true);
   };
   ```
-- **PC**：PC `Home.tsx:314`　`onPlusClick={() => setPlusOpen(true)}` —— 无未登录判断（PC 未登录进不来 Home，见 H-02）
-- **判定**：缺失（依附于 H-02 的结构级差异）
-- **怎么改**：随 S-01 一起处理。若 S-01 拍板「PC 不做未登录态」，本条**直接作废**（PC 无未登录用户）。
+- **PC**：`gacode-electron/src/routes/Home.tsx:345`　`onPlusClick={() => setPlusOpen(true)}` —— 无未登录判断（PC 未登录进不来 Home，见 H-02）
+- **判定**：**缺失**（依附于 H-02 的结构级差异）
+- **怎么改**：随 S-01 一起处理。若 S-01 拍板「PC 不做未登录态」，本条**直接作废**（PC 无未登录用户）。**本轮未动**。
 - 预估改动：**0 行（随 S-01）**
 
 ---
@@ -802,24 +640,19 @@
   <ActionButton icon={<Smile className="w-6 h-6" />} label="表情" onClick={onPickEmoji} />
   <ActionButton icon={<Library className="w-6 h-6" />} label="挂载知识库" onClick={onPickLibrary} />
   ```
-- **PC**：`gacode-electron/src/components/home/PlusSheet.tsx:71` —— **6 项**，网格 3 列
+- **PC**：`gacode-electron/src/components/home/PlusSheet.tsx:76` —— **4 项**，网格 4 列
   ```tsx
-  <div className="grid grid-cols-3 gap-y-5 gap-x-2 py-4">
+  <div className="grid grid-cols-4 gap-3 py-5 px-4" data-testid="plus-sheet">
   ```
-  6 项：拍照 / 相册 / 文件 / 表情 / 挂载知识库 / 模板
-- **判定**：形态不同（**PC 在 Sheet 顶层多了「拍照」和「模板」两项**）
-- **怎么改**：
-  - **「模板」是 PC 独有** → 按 gaga 指令不列差异，但**它会占掉 grid 位置**，影响 4 项布局。处置：保留 PC 的「模板」（不删），但把网格改成 4 列并把「拍照」降级到 MediaPicker 内（见 H-28 / S-03）。
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\PlusSheet.tsx`
-  - 锚点：`PlusSheet.tsx:71` 的 `<div className="grid grid-cols-3 gap-y-5 gap-x-2 py-4">`
-  - 网格 className → `"grid grid-cols-4 gap-3 py-5 px-4"`
-    - `gap-y-5 gap-x-2` → `gap-3`（web 统一 gap-3 = 12px）
-    - `py-4` → `py-5`（web 是 py-5 = 20px）
-    - **PC 无 `px-4`** → web SheetContent 自带 `px-4`。但 PC 的内容在 `BottomSheet` 的 `p-5` 内层（`BottomSheet.tsx:49` `... shadow-dialog p-5 ...`），所以 padding 由 BottomSheet 统一给 → PC 网格**不要**再加 `px-4`（会双层 padding）
-  - 「拍照」项处理：把 `PlusSheet.tsx:72-91` 的「拍照」`ActionBtn` **移出 Sheet**，改为在 MediaPicker 的 image 模式里提供「拍照/相册」双按钮（见 H-28）
-    - 移出后 Sheet 剩 5 项（图片/文件/表情/挂载知识库/模板）→ 网格 4 列时第 5 项单独占第二行第一格（`grid-cols-4` 自然换行）。若要跟 web 严格 4 项，**「模板」也需移走** —— 但那是 PC 独有功能，按指令不动。
-    - **实际处置建议**：网格保持 `grid-cols-4`，Sheet 保留 5 项（图片/文件/表情/挂载知识库/模板），「拍照」下沉到 MediaPicker。这样 Sheet 的**前 4 项顺序与 web 完全一致**（图片/文件/表情/挂载知识库），第 5 项是 PC 额外。
-  - 预估改动：**~10 行（PlusSheet 删拍照项 20 行 + 改 grid 1 行 + Home 派发改 1 行）**
+  4 项（`:77-96`）：图片 / 文件 / 表情 / 挂载知识库
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。已落地：
+  - 6 项 → **web 的 4 项**：删掉 PC 独有的「拍照」（下沉到 MediaPicker 的 image 模式，见 H-32）与「模板」（web 没有；按「PC 多出 web 没有的直接删」处置）。
+  - 网格 `grid grid-cols-3 gap-y-5 gap-x-2 py-4` → `grid grid-cols-4 gap-3 py-5 px-4`（与 web 逐字一致）。
+  - `PlusSheet.tsx:69-74` 的 `<BottomSheet title={undefined} contentClassName="!p-0">` —— web 的 `SheetContent` **没有标题栏**（见 H-29），且 web 的内边距挂在 SheetContent 自身（`px-4 py-5`）⇒ PC 容器 `!p-0` 让位、内层 grid 自带 `py-5 px-4`（PC 无 tailwind-merge，只能这样让位）。
+  - `PlusAction` 类型收敛为 `"image" | "file" | "emoji" | "library"`（`PlusSheet.tsx:23`）。
+  - 图标改用共享 `src/components/ui/Glyphs.tsx`（`ImageIcon` / `FileTextIcon` / `SmileIcon` / `LibraryTypeIcon`，全部 `size={24}` + `w-6 h-6`）。
+- 预估改动：**0 行**
 
 ## H-27　Sheet 单项按钮形态
 
@@ -857,16 +690,19 @@
 
 ## H-28　Sheet 图标尺寸与线宽
 
-- **web**：`gacode-web/src/components/chat/SheetActionMenu.tsx:77-94`　lucide 图标全部 `className="w-6 h-6"`（24px，`stroke-width` 默认 2）
-- **PC**：`gacode-electron/src/components/home/PlusSheet.tsx:76-198`　内联 SVG，`width="24" height="24"`，`strokeWidth="1.8"`
-- **判定**：形态不同（线宽 1.8 vs 2；图标形状也各不同）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\PlusSheet.tsx`
-  - 锚点：`PlusSheet.tsx:76-198` 每个 `ActionBtn` 的 `icon={...}` 里的 `<svg>` 标签
-  - `strokeWidth="1.8"` → `strokeWidth="2"`（**6 处**，逐个改：相机 `:83`、图片 `:103`、文件 `:123`、表情 `:143`、知识库 `:163`、模板 `:183`）
-  - 图标形状对齐 lucide：web 用 `Image`（图片）、`FileText`（文件）、`Smile`（表情）、`Library`（知识库）。PC 的内联 SVG 路径已经分别是这 4 个 lucide 图标的 path（对照 `web/src/components/common/MediaPicker.tsx:82-101` 的 ImageIcon / `:104-126` 的 FileText 可确认 PC 的 path 与 lucide 一致）→ **只改线宽即可**
-  - PC 端 `Library` 图标（知识库，`:173-177`）跟 lucide `Library`（书本+箭头）不是同一个图标 —— web 的 `Library` lucide 是「书本 + 左上箭头」。**这一项留到 H-31 一并处理**
-  - 预估改动：**6 行**
+- **web**：`gacode-web/src/components/chat/SheetActionMenu.tsx:77-93`　lucide 图标全部 `className="w-6 h-6"`（24px，`stroke-width` 默认 2）
+- **PC**：`gacode-electron/src/components/home/PlusSheet.tsx:80` / `:84` / `:89` / `:95` —— 4 个图标已改走共享 `src/components/ui/Glyphs.tsx`：
+  | 图标 | PC 组件 | 线宽 | 与 web（lucide sw2） |
+  |---|---|---|---|
+  | 图片 | `ImageIcon`（`Glyphs.tsx:963`） | sw2 | ✅ |
+  | 文件 | `FileTextIcon`（`Glyphs.tsx:939`） | sw2 | ✅ |
+  | 表情 | `SmileIcon`（`Glyphs.tsx:796`） | sw2 | ✅ |
+  | 挂载知识库 | `LibraryTypeIcon`（`Glyphs.tsx:768`） | sw2（调用点显式传 `strokeWidth={2}`） | ✅ |
+- **判定**：**已一致**（**已落地** · commit `5504f93` 收编共享 Glyphs + `6dc3c3d` 换图标 + 工作树在途改动补 `strokeWidth={2}`）
+- **怎么改**：**不改**。已落地：PC 的内联 SVG 全部删掉，改走共享 `src/components/ui/Glyphs.tsx`；线宽从 1.8 提到 2，形状与 lucide 一致；4 个图标的线宽现已全部与 web（lucide sw2）一致。
+  - ℹ️ 「挂载知识库」图标的 `strokeWidth={2}` 是**在调用点显式传**的（`src/components/home/PlusSheet.tsx:95`），**没有**改 `LibraryTypeIcon` 的默认值（1.6）—— 它还被 `src/components/home/LibraryPicker.tsx:324` 用着（那里跟 web 的 1.6 观感一致）。
+  - ⚠️ 该调用点的改动**当前是工作树未提交状态**（其它 worker 在途）⇒ 提交前请确认它被带上，否则本条会退回「知识库图标 sw1.6」。
+- 预估改动：**0 行**
 
 ## H-29　Sheet 容器形态
 
@@ -878,45 +714,27 @@
       className="rounded-t-2xl grid grid-cols-4 gap-3 py-5 px-4 border-x-0"
     >
   ```
-- **PC**：`gacode-electron/src/components/home/PlusSheet.tsx:70`
+  + `gacode-web/src/components/ui/sheet.tsx:69-74`（底部抽屉：`inset-x-0 bottom-0 max-h-[85vh] rounded-t-2xl` `bg-bg-elevated` `p-6`）+ `:102-109`（右上角**绝对定位** X：`absolute right-4 top-4`）
+- **PC**：`gacode-electron/src/components/ui/BottomSheet.tsx:166-172`（容器）+ `:145`（`showTitle`）+ `:196-205`（无标题栏时的 X）
   ```tsx
-  <BottomSheet open={open} title="添加附件" onClose={onClose}>
+  <div className={[
+    "relative w-full inset-x-0 bottom-0 rounded-t-2xl bg-bg-elevated text-fg shadow-elevation-3 flex flex-col p-6",
+    maxHeight ?? "max-h-[85vh]",
+    contentClassName ?? "",
+  ].join(" ")}>
+  ...
+  {!showTitle ? (
+    <button type="button" aria-label="关闭" onClick={onClose}
+      className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 ...">
+      <CloseIcon size={16} />
+    </button>
+  ) : null}
   ```
-  → `BottomSheet.tsx:49`：`"relative w-full max-w-2xl rounded-t-md bg-bg-elevated shadow-dialog p-5 max-h-[80vh] flex flex-col"`
-- **判定**：形态不同（4 处：圆角 / 最大宽 / 有无标题栏 / padding 归属）
-- **怎么改**：
-  - **圆角**：`rounded-t-md`（16px）→ `rounded-t-2xl`（24px，web `rounded-t-2xl`）
-    - ⚠️ 冲突类名：`rounded-t-md` 与 `rounded-t-2xl` 同属性，**必须替换不能追加**
-    - 但 `BottomSheet` 是**公共组件**（`src/components/ui/BottomSheet.tsx`），被 PlusSheet / MediaPicker / EmojiPicker / LibraryPicker / ChatDetail 多处复用 → **不能在 BottomSheet 里直接改**，否则波及 chat 域
-    - **方案**：给 `BottomSheet` 加 `contentClassName?: string` prop，默认 `""`；BottomSheet 内把 `className` 改为 `[...].join(" ")` 并追加自定义类
-      ```tsx
-      export interface BottomSheetProps {
-        open: boolean;
-        title: string;
-        onClose: () => void;
-        children: ReactNode;
-        footer?: ReactNode;
-        /** 新增: 内容区容器额外 className (用于覆盖圆角/宽度等) */
-        contentClassName?: string;
-      }
-      ```
-      渲染处（`BottomSheet.tsx:49`）：
-      ```tsx
-      <div className={[
-        "relative w-full max-w-2xl rounded-t-md bg-bg-elevated shadow-dialog p-5 max-h-[80vh] flex flex-col",
-        contentClassName ?? "",
-      ].join(" ")}>
-      ```
-      ⚠️ 无 tailwind-merge → **冲突类名靠 CSS 源码顺序决胜，不可靠**。稳妥做法：`contentClassName` 传 `!rounded-t-2xl`（Tailwind `!` 重要修饰符，PC `tailwind.config.ts` 未禁用 `important` → 可用）
-  - **最大宽**：`max-w-2xl`（640px）→ web 是**全宽**（web 的 `SheetContent` 无 `max-w-*`）。→ `contentClassName="!rounded-t-2xl !max-w-none w-full"`。
-    - ⚠️ 但 PC 是桌面端，全宽 Sheet 视觉会很怪 —— **web 的 Sheet 是移动端形态**。这条列入「视觉存疑」，建议 gaga 看一眼再定。PC 的 `max-w-2xl` + 居中（`BottomSheet.tsx:42` `flex items-end justify-center`）在桌面端是合理的。
-  - **标题栏**：web 的 `SheetActionMenu` **没有标题**（`SheetContent` 直接是网格）；PC 的 `BottomSheet` 强制渲染标题栏（`BottomSheet.tsx:50-55`）
-    - **方案**：给 `BottomSheet` 加 `title?: string` 改为可选（**默认值保持必填以免破坏其他调用方**）→ 改成 `title?: string`，当 `title` 为 `undefined` 时不渲染标题栏
-    - PlusSheet 传 `title={undefined}` → 不显示「添加附件」标题
-    - ⚠️ 其他调用方（MediaPicker / EmojiPicker / LibraryPicker / ChatDetail）都传了 title → 不受影响
-  - **padding 归属**：web 的 `SheetContent` 自己带 `px-4 py-5`；PC 的 `BottomSheet` 给 `p-5`。→ PlusSheet 的网格**不要**再写 `px-4`，只写 `py-5`（配合 BottomSheet 的 p-5 会变成 40px 上下 padding，偏大）
-    - 实际处置：网格 className 用 `"grid grid-cols-4 gap-3"`，padding 交给 BottomSheet 的 `p-5`
-  - 预估改动：**~18 行（BottomSheet 改 8 + PlusSheet 改 4 + 其他调用方排查 6）**
+- **判定**：**已一致**（**已落地** · commit `5504f93` 底座改底部抽屉形态 + `6dc3c3d` 补无标题栏 X）
+- **怎么改**：**不改**。已落地：圆角 `rounded-t-2xl`、**全宽**（底座已删掉 `max-w-2xl`）、`p-6`、`max-h-[85vh]` 与 web 的 `SheetContent` 一致；`title` 改为可选（`undefined` 时不渲染标题栏），无标题栏时补 web 的右上角 X（有标题栏时保持标题栏里的 X ⇒ 不会出现两个 X）。
+  - 影响面已核：PlusSheet / MediaPicker / EmojiPicker / chat 的 `PlusActionsSheet` 新增 X（web 同样有）；LibraryPicker / ChatList / Browser / 通知设置面板有标题栏 ⇒ 无变化。
+  - ⚠️ **本轮有意不做**（见 §12「本轮不做」表）：web `sheet.tsx:73` 的 `border-t`（没带颜色类 = currentColor 描边，会给**所有**底部面板加一条亮线）与 web `sheet.tsx:86` 的遮罩 `bg-bg-base/80 backdrop-blur-sm`（PC 是 `bg-black/60`）—— 改动会波及 ChatList / Browser / 通知设置等既有调用方。
+- 预估改动：**0 行**
 
 ## H-30　Sheet 打开 / 关闭时序
 
@@ -938,51 +756,47 @@
   />
   ```
   + `openPicker`（`:105-115`）：`setSheetOpen(false); setTimeout(() => setPickerOpen(true), 100);`
-- **PC**：`gacode-electron/src/routes/Home.tsx:169-191`
+- **PC**：`gacode-electron/src/routes/Home.tsx:195-212`
   ```tsx
   const handlePlusPick = useCallback((action: PlusAction) => {
     switch (action) {
-      case "camera": setMediaKind("camera"); setTimeout(() => setMediaOpen(true), 80); break;
-      case "gallery": setMediaKind("gallery"); setTimeout(() => setMediaOpen(true), 80); break;
-      case "file": setMediaKind("file"); setTimeout(() => setMediaOpen(true), 80); break;
-      case "emoji": setTimeout(() => setEmojiOpen(true), 80); break;
-      case "library": setTimeout(() => setLibraryOpen(true), 80); break;
+      case "image":
+        setMediaKind("image");
+        setTimeout(() => setMediaOpen(true), 100);
+        break;
+      case "file":
+        setMediaKind("file");
+        setTimeout(() => setMediaOpen(true), 100);
+        break;
+      case "emoji":
+        setTimeout(() => setEmojiOpen(true), 100);
+        break;
+      case "library":
+        setTimeout(() => setLibraryOpen(true), 100);
+        break;
     }
   }, []);
   ```
-  + `PlusSheet.tsx:59-67` `handlePick` 先 `onClose()` 再 `onPick(action)`
-- **判定**：形态不同（2 处：延时时长 / 表情与知识库是否显式关 Sheet）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\routes\Home.tsx`
-  - 锚点：`Home.tsx:169-191` 的 `handlePlusPick`
-  - **延时**：web 是 `100`，PC 是 `80` → 统一改成 `100`（**5 处**：`setTimeout(() => setMediaOpen(true), 80)` × 3 → 100；`setEmojiOpen` 1 处；`setLibraryOpen` 1 处）
-  - **表情 / 知识库**：web 显式 `setSheetOpen(false)` 再延时打开；PC 靠 `PlusSheet.handlePick` 里的 `onClose()`（`PlusSheet.tsx:60`）间接关闭 —— **PC 已等价**，本项只需统一时长
-  - 预估改动：**5 行**
+  + `PlusSheet.tsx:59-62` `handlePick` 先 `onClose()` 再 `onPick(action)`
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。延时 80 → 100 已统一（PC 现有 4 处，全是 100）；表情 / 知识库仍是「`PlusSheet.handlePick` 先 `onClose()` 再派发」，与 web 的 `setSheetOpen(false)` 等价。
+- 预估改动：**0 行**
 
 ## H-31　Sheet 「挂载知识库」图标形状
 
-- **web**：`gacode-web/src/components/chat/SheetActionMenu.tsx:92`　`<Library className="w-6 h-6" />` = lucide `Library`（书本 + 左上箭头）
-- **PC**：`gacode-electron/src/components/home/PlusSheet.tsx:172-178`
+- **web**：`gacode-web/src/components/chat/SheetActionMenu.tsx:92`　`<Library className="w-6 h-6" />` = lucide `Library`（书脊造型）
+- **PC**：`gacode-electron/src/components/ui/Glyphs.tsx:768-788`　`LibraryTypeIcon`
   ```tsx
-  <path d="m21 16-4 4-4-4" />
-  <path d="M17 20V4" />
-  <path d="m3 8 4-4 4 4" />
-  <path d="M7 4v16" />
+  <path d="m16 6 4 14" />
+  <path d="M12 6v14" />
+  <path d="M8 8v12" />
+  <path d="M4 4v16" />
   ```
-  → 这是 lucide `ArrowUpDown`（上下箭头），**不是** `Library`
-- **判定**：形态不同
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\PlusSheet.tsx`
-  - 锚点：`PlusSheet.tsx:172-178` 的 4 条 `<path>`
-  - 换成 lucide `Library` 的 path（lucide `library` = 书本形，路径为 `m16 6 4 14` / `M12 6v14` / `M8 8v12` / `M4 6v16` 组合）：
-    ```tsx
-    <path d="m16 6 4 14" />
-    <path d="M12 6v14" />
-    <path d="M8 8v12" />
-    <path d="M4 6v16" />
-    ```
-  - ⚠️ **需先在 web 侧核对 lucide `Library` 的真实 path**：`node_modules/lucide-react/dist/esm/icons/library.js`。本清单未能读取 node_modules（未在仓内找到该文件），标 **待核**；若不可核，直接用上面的近似值即可（视觉上都是「书脊」造型）。
-  - 预估改动：**4 行**
+  （PC 原先是 lucide `ArrowUpDown` 上下箭头造型 —— 形状完全不同）
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。已换成 lucide `Library` 书脊造型。
+  - ⚠️ **path 真值已核**：`gacode-web/node_modules/lucide-react/dist/esm/icons/library.js`（lucide-react 0.407.0）= `m16 6 4 14` / `M12 6v14` / `M8 8v12` / **`M4 4v16`** —— 本文件旧稿写的 `M4 6v16` 是**错值**，已订正。
+- 预估改动：**0 行**
 
 ---
 
@@ -1011,62 +825,34 @@
     </button>
   </div>
   ```
-- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:71-91` —— **一个按钮**
+  + 隐藏 input：`:254`（相册 / 文件，`accept={modeProp === "file" ? (accept || FILE_ACCEPT) : accept}`）+ `:262-267`（拍照，`accept="image/*" capture="environment"`）
+- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:107-124` —— **两个圆钮**
   ```tsx
-  <button
-    type="button"
-    onClick={() => inputRef.current?.click()}
-    className="w-40 h-24 rounded-md bg-bg-sunken hover:bg-bg-base text-fg inline-flex items-center justify-center gap-2 transition-colors duration-150"
-  >
-    ...<svg 相机 icon/>
-    <span className="text-sm">打开{meta.title}</span>
-  </button>
-  ```
-- **判定**：形态不同（**功能层差异：PC 的「拍照」入口在 Sheet 顶层，「相册」在 MediaPicker 内，image 模式内无法直接选「拍照」**）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\MediaPicker.tsx`
-  - 锚点：`MediaPicker.tsx:70` 的 `<div className="flex flex-col items-center gap-3 py-4">` 内、`MediaPicker.tsx:71` 的 button 之前
-  - PC 的 MediaPicker 需要**两个 hidden input**（跟 web 一致）：
-    ```tsx
-    const fileInputRef = useRef<HTMLInputElement | null>(null);
-    const cameraFileInputRef = useRef<HTMLInputElement | null>(null);
-    ```
-    - 相册/文件 input：`<input ref={fileInputRef} type="file" hidden accept={accept} onChange={handleFileSelect} />`
-    - 拍照 input（仅 image 模式）：`<input ref={cameraFileInputRef} type="file" hidden accept="image/*" capture="environment" onChange={handleFileSelect} />`
-  - image 模式渲染：
-    ```tsx
-    <div className="flex gap-4">
-      <button
-        type="button"
-        onClick={() => cameraFileInputRef.current?.click()}
-        className="flex flex-col items-center justify-center gap-2 w-24 h-24 rounded-full bg-white/10 hover:bg-white/20 transition-colors duration-150"
-      >
-        <CameraGlyph />
-        <span className="text-white text-sm">拍照</span>
-      </button>
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        className="flex flex-col items-center justify-center gap-2 w-24 h-24 rounded-full bg-white/10 hover:bg-white/20 transition-colors duration-150"
-      >
-        <ImageGlyph />
-        <span className="text-white text-sm">相册</span>
-      </button>
-    </div>
-    ```
-  - file 模式保持单按钮（web `MediaPicker.tsx:207-216`）：
-    ```tsx
+  <div className="flex gap-4">
+    <button
+      type="button"
+      onClick={() => cameraFileInputRef.current?.click()}
+      className="flex flex-col items-center justify-center gap-2 w-24 h-24 rounded-full bg-white/10 hover:bg-white/20 transition-colors duration-150"
+    >
+      <CameraIcon size={32} className="text-white" />
+      <span className="text-white text-sm">拍照</span>
+    </button>
     <button
       type="button"
       onClick={() => fileInputRef.current?.click()}
-      className="flex flex-col items-center justify-center gap-2 w-40 h-24 rounded-2xl bg-white/10 hover:bg-white/20 transition-colors duration-150"
+      className="flex flex-col items-center justify-center gap-2 w-24 h-24 rounded-full bg-white/10 hover:bg-white/20 transition-colors duration-150"
     >
-      <FileTextGlyph />
-      <span className="text-white text-sm">选择文件</span>
+      <ImageIcon size={32} className="text-white" />
+      <span className="text-white text-sm">相册</span>
     </button>
-    ```
-  - ⚠️ **冲突类名**：web 用 `rounded-full`（image 模式）/ `rounded-2xl`（file 模式）。PC 的 `BottomSheet` 容器是 `rounded-t-md`，内部按钮圆角不受影响 → 可直接写。
-  - 预估改动：**~40 行（MediaPicker 重写 image/file 分支 + 双 input + 两个图标函数）**
+  </div>
+  ```
+  + 双 hidden input：`:137-143`（相册 / 文件）+ `:147-156`（拍照，`accept="image/*" capture="environment"`）
+  + file 模式单钮：`:94-101`（`w-40 h-24 rounded-2xl bg-white/10`，与 web `MediaPicker.tsx:212` 一致）
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）—— F-05 同步消
+- **怎么改**：**不改**。image 模式已改「拍照 + 相册」双圆钮 + 双 hidden input（拍照带 `capture="environment"` 调起系统后置相机）；file 模式仍是单钮「选择文件」。
+  - 连带：`src/components/library/CollectSheet.tsx:299`（Photo 入口）与 `:374-381`（`<MediaPicker kind={pickerKind ?? "image"}>`）已从 `camera` 改成 `image` ⇒ **PC 采集 Sheet 的 Photo 现在也进「拍照 + 相册」双钮面板**（与 web `library/page.tsx:411-422` 一致）。
+- 预估改动：**0 行**
 
 ## H-33　MediaPicker 视觉基调（黑底白字）
 
@@ -1078,19 +864,20 @@
   >
   ```
   → **纯黑底（`bg-black`）+ 白字（`text-white`）**，圆角被去掉（`border-t-0`）
-- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:69` → `BottomSheet` 的 `bg-bg-elevated`（#181818 灰黑）+ 默认字色 `text-fg`
-- **判定**：形态不同
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\MediaPicker.tsx`
-  - 锚点：`MediaPicker.tsx:69` 的 `<BottomSheet open={open} title={meta.title} onClose={onClose}>`
-  - 用 `contentClassName`（H-29 新增 prop）覆盖：`contentClassName="!bg-black !rounded-none !max-h-[85vh] !p-0 text-white"`
-    - ⚠️ `bg-black` vs `bg-bg-elevated` 同属性 → 必须用 `!bg-black` 强制
-    - `rounded-t-md` → `!rounded-none`
-    - `p-5` → `!p-0`
-    - `max-h-[80vh]` → `!max-h-[85vh]`
-  - **标题栏**：web 的 MediaPicker **没有标题栏**（`SheetContent` 直接是内容）→ 传 `title={undefined}`（H-29 新增的可选 title）
-  - **PC 现有 `meta.title`（「拍照」/「选择图片」/「选择文件」）作为 sheet 标题** → 移除，标题文案改由内部 `<h3>` 承担（见 H-34）
-  - 预估改动：**~4 行**
+- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:79-83`
+  ```tsx
+  <BottomSheet
+    open={open}
+    onClose={onClose}
+    contentClassName="!bg-black !rounded-none !p-0 text-white"
+  >
+  ```
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）⚠️ **观感待 gaga 真机看**
+- **怎么改**：**不改**。已落地：黑底 + 白字 + 无圆角 + 无 padding + 无标题栏。
+  - ⚠️ PC 无 tailwind-merge ⇒ 三处 `!` 前缀是**必需**的（`!bg-black` 压过底座 `bg-bg-elevated`；`!rounded-none` 压过 `rounded-t-2xl`；`!p-0` 压过底座 `p-6`）。`border-t-0` 无需处理（PC 底座本来就没有 border）。
+  - ℹ️ **S-07 已结案**：PC 的 `BottomSheet` 底座在 `5504f93` 已改成 web 的底部抽屉形态（**全宽**、无 `max-w-*`）⇒ 原「黑底全宽 vs 灰底限宽」的桌面端冲突**已不存在**。
+  - ⚠️ **待 gaga 真机看**：纯黑全宽弹层 + `bg-white/10` 半透明白按钮在 PC 桌面端的观感未在真机验证。
+- 预估改动：**0 行**
 
 ## H-34　MediaPicker 标题
 
@@ -1100,21 +887,18 @@
     {modeProp === "file" ? "选择文件" : "选择图片来源"}
   </h3>
   ```
-- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:39-52` 的 `META` 表 → `title: "拍照" / "选择图片" / "选择文件"`，作为 `BottomSheet` 的 title
-- **判定**：形态不同（3 处：位置 / 文案 / 样式）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\MediaPicker.tsx`
-  - 锚点：`MediaPicker.tsx:70` 的内容区第一行（在 `<div className="flex flex-col items-center gap-3 py-4">` 内）
-  - 插入：
-    ```tsx
-    <h3 className="text-white text-base font-medium mb-2">
-      {kind === "file" ? "选择文件" : "选择图片来源"}
-    </h3>
-    ```
-  - web 的外层容器：`"flex flex-col items-center gap-4 py-8 px-4"`（`MediaPicker.tsx:202`）→ PC 现有的 `flex flex-col items-center gap-3 py-4` 改成 `flex flex-col items-center gap-4 py-8 px-4`
-  - PC `META.hint`（「调用系统相机拍照后插入图片附件」等）→ **web 没有这个 hint 文本**。PC 独有的说明文案：按 gaga 指令不列差异，但它会占垂直空间。**对齐建议**：删掉 hint `<p>`（`MediaPicker.tsx:92`），因为 web 的 image 模式布局是「标题 + 两个大圆按钮 + 取消」，PC 的 hint 会插在中间破坏对齐。
-    - ⚠️ 这属于「PC 有 web 没有」的文案，按指令不在差异清单 —— 但它**影响 1:1 还原的像素对齐**，所以在实现规格里标注处置方式（删除）。
-  - 预估改动：**~5 行**
+  + 外层容器 `:202`　`"flex flex-col items-center gap-4 py-8 px-4"`
+- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:87-89`
+  ```tsx
+  <h3 className="text-white text-base font-medium mb-2">
+    {isFileMode ? "选择文件" : "选择图片来源"}
+  </h3>
+  ```
+  + 外层容器 `:85`　`"flex flex-col items-center gap-4 py-8 px-4"`
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。标题从 `BottomSheet` 的 `title` prop 挪进内容区（`MediaPicker.tsx:79-82` 不传 `title` ⇒ 不渲染标题栏）；标题文案按 `kind` 二选一；`META` 表删除；外层容器 padding 与 web 逐字一致。
+  - ℹ️ PC 原有的 `META.hint` 说明文案（「调用系统相机拍照后插入图片附件」等，web 没有）已删 —— 它会插在中间破坏与 web 的像素对齐。
+- 预估改动：**0 行**
 
 ## H-35　MediaPicker 「取消」按钮
 
@@ -1128,22 +912,19 @@
     取消
   </button>
   ```
-- **PC**：`PC 缺失` —— PC MediaPicker 只有 `BottomSheet` 右上角的 `×`（`BottomSheet.tsx:52-54`），**没有底部「取消」文字按钮**
-- **判定**：缺失
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\MediaPicker.tsx`
-  - 锚点：image/file 按钮块之后、`</div>`（内容区结束）之前
-  - 插入：
-    ```tsx
-    <button
-      type="button"
-      onClick={onClose}
-      className="text-white/60 hover:text-white/80 text-sm mt-4 transition-colors"
-    >
-      取消
-    </button>
-    ```
-  - 预估改动：**7 行**
+- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:128-134`
+  ```tsx
+  <button
+    type="button"
+    onClick={onClose}
+    className="text-white/60 hover:text-white/80 text-sm mt-4 transition-colors"
+  >
+    取消
+  </button>
+  ```
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。底部「取消」文字按钮已补齐（className 与 web 逐字一致）。
+- 预估改动：**0 行**
 
 ## H-36　MediaPicker file 模式的 accept 白名单
 
@@ -1151,41 +932,31 @@
   ```tsx
   setPickerAccept(".pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp");
   ```
-  + `web/src/components/common/MediaPicker.tsx:254`
+  + `gacode-web/src/components/common/MediaPicker.tsx:254`
   ```tsx
   accept={modeProp === "file" ? (accept || FILE_ACCEPT) : accept}
   ```
-  → **web 实际生效的 file accept = Home 传的这串**（因为 `accept || FILE_ACCEPT` 里 `accept` 非空，组件内置的 `FILE_ACCEPT` 被绕过）：
+  → **web 实际生效的 file accept = Home 传的这串**（因为 `accept || FILE_ACCEPT` 里 `accept` 非空，组件内置的 `FILE_ACCEPT`（`MediaPicker.tsx:45` = `.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv`）被绕过）：
   `.pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp`
-- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:32`
+- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:45`
   ```tsx
-  const FILE_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv";
+  const FILE_ACCEPT = ".pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp";
   ```
-  + `MediaPicker.tsx:63`：`const accept = kind === "file" ? FILE_ACCEPT : "image/*";`
-- **判定**：形态不同（**白名单不同**：PC 有 `.xls/.xlsx/.csv` 而 web 没有；web 有 `.md/.zip/.json/.png/.jpg/.jpeg/.gif/.webp` 而 PC 没有）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\MediaPicker.tsx`
-  - 锚点：`MediaPicker.tsx:32` 的 `const FILE_ACCEPT = ...`
-  - 改成跟 web Home 实际生效值一致：
-    ```tsx
-    const FILE_ACCEPT = ".pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp";
-    ```
-  - ⚠️ **注意**：`web/src/components/common/MediaPicker.tsx:45` 的组件级 `FILE_ACCEPT`（`.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv`）在 web 里**被 Home 传参架空**。要对齐的是 **Home 实际生效的那串**，所以 PC 改成 Home 的值。
-  - ⚠️ **后端白名单**：PC `lib/upload.ts` 的 document 模式走 `/yinian/documents`，后端有 mime 白名单（PC `MediaPicker.tsx:12` 注释说「走 server mime 白名单 (跟 web MediaPicker 的 FILE_ACCEPT 对齐)」）。**放宽前端 accept 到含 `.md/.zip/.json` 后，后端是否接受需核**——`.zip` / `.json` 大概率被后端拒。**标「待核」**：需查 unified-api 的 document mime 白名单。
-    - 保守方案：只补 web 有且后端也支持的（`.md`），`.zip/.json/.png/.jpg/...` 属于「图片但走 file 模式」的怪组合。
-    - **建议**：PC 用 `.pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp`（1:1 还原），后端拒绝时由 `uploadAttachment` 的 `humanizeUploadError` 弹人话错误（PC 已有此机制，`Home.tsx:246-250`）
-  - 预估改动：**1 行**
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）⚠️ **后端 mime 白名单待核（服务端缺口）**
+- **怎么改**：**不改**。PC 已从 `.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv` 改成 web **实际生效**的那串。
+  - ⚠️ **服务端缺口**：`.zip` / `.json` 是否被后端 `/yinian/documents` 的 mime 白名单接受**未核**（`unified-api` 不在本清单可读范围）⇒ 放宽后若被拒，由 `uploadAttachment` 的 `humanizeUploadError` 弹人话错误（PC 已有此机制，见 `src/routes/Home.tsx:268-274`）。
+- 预估改动：**0 行**
 
 ## H-37　MediaPicker image 模式 accept
 
-- **web**：`gacode-web/src/app/page.tsx:107`　`setPickerAccept("image/*")` + `MediaPicker.tsx:264`　`accept="image/*"`
-- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:63`　`kind === "file" ? FILE_ACCEPT : "image/*"`
+- **web**：`gacode-web/src/app/page.tsx:107`　`setPickerAccept("image/*")` + `gacode-web/src/components/common/MediaPicker.tsx:266`　`accept="image/*"`
+- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:59`　`const accept = kind === "file" ? FILE_ACCEPT : "image/*";`（用在 `:141` 的隐藏 input）
 - **判定**：**已一致**
 - 预估改动：**0 行**
 
 ## H-38　MediaPicker 关闭时清 input value
 
-- **web**：`web/src/components/common/MediaPicker.tsx:171-176`
+- **web**：`gacode-web/src/components/common/MediaPicker.tsx:171-176`
   ```tsx
   useEffect(() => {
     if (!open) {
@@ -1194,14 +965,7 @@
     }
   }, [open]);
   ```
-- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:58-60`
-  ```tsx
-  useEffect(() => {
-    if (!open && inputRef.current) inputRef.current.value = "";
-  }, [open]);
-  ```
-- **判定**：形态不同（PC 只有 1 个 input，web 有 2 个）→ 随 H-32 的双 input 改造一并补齐
-- **怎么改**：见 H-32。改造后：
+- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:52-57`
   ```tsx
   useEffect(() => {
     if (!open) {
@@ -1210,11 +974,13 @@
     }
   }, [open]);
   ```
-- 预估改动：**3 行**
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。随 H-32 的双 input 改造一并补齐（PC 原来只有 1 个 input）。
+- 预估改动：**0 行**
 
 ## H-39　MediaPicker `onCapture` 后关闭面板
 
-- **web**：`web/src/components/common/MediaPicker.tsx:178-186`
+- **web**：`gacode-web/src/components/common/MediaPicker.tsx:178-186`
   ```tsx
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -1225,15 +991,15 @@
     e.target.value = "";
   };
   ```
-- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:101-107`
+- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:62-69`
   ```tsx
-  onChange={(e) => {
+  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
     onCapture(f);
     onClose();
-  }}
+  };
   ```
 - **判定**：**已一致**（顺序略有差别：web 先 `onCapture` 后 `onOpenChange(false)` 再清 value；PC 先清 value 再 `onCapture` 再 `onClose`；最终态相同）
 - 预估改动：**0 行**
@@ -1241,24 +1007,15 @@
 ## H-40　PC MediaPicker 的 `kind` 与 web 的 `mode` 映射
 
 - **web**：`gacode-web/src/app/page.tsx:416`　`mode={pickerKind === "file" ? "file" : "image"}`，`pickerKind` 只有 `"image" | "file"` 两态
-- **PC**：`gacode-electron/src/routes/Home.tsx:328`　`kind={mediaKind}`，`mediaKind` 是 `"camera" | "gallery" | "file"` 三态
-- **判定**：形态不同（PC 多一个 camera 态）
-- **怎么改**：
-  - 随 H-26（拍照下沉到 MediaPicker）改造后，PC 的 `MediaKind` 应改为 `"image" | "file"` 两态，与 web 对齐：
-    ```tsx
-    export type MediaKind = "image" | "file";
-    ```
-  - `MediaPicker.tsx:39-52` 的 `META` 表改为两态，`image` 态内部再分「拍照/相册」双按钮
-  - `Home.tsx:77-79` 的 `pickUploadMode(kind)` 改为：`kind === "file" ? "document" : "image"`
-  - `Home.tsx:89` 的 `useState<MediaKind>("gallery")` → `useState<MediaKind>("image")`
-  - `Home.tsx:169-191` 的 `handlePlusPick`：`camera` / `gallery` 两个 case 合并为一个 `case "image"`；`file` 不变
-  - `PlusSheet.tsx:17-23` 的 `PlusAction` 类型：`"camera" | "gallery" | "file" | ...` → `"image" | "file" | "emoji" | "library" | "template"`
-  - 预估改动：**~20 行（跨 4 文件）**
+- **PC**：`gacode-electron/src/components/home/MediaPicker.tsx:32`　`export type MediaKind = "image" | "file";` + `gacode-electron/src/routes/Home.tsx:99`　`useState<MediaKind>("image")` + `:85-87`　`pickUploadMode`（`image → image` / `file → document`）+ `:195-212`　`handlePlusPick`（`image` / `file` / `emoji` / `library` 四 case）
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。PC 原来的 `camera` / `gallery` / `file` 三态已收敛为 web 的两态（「拍照」下沉进 MediaPicker 的 image 模式，见 H-32）；`PlusAction` 同步收敛（`PlusSheet.tsx:23`）。
+- 预估改动：**0 行**
 
 ## H-41　PC 侧 50MB 上限拦截
 
-- **web**：`web/src/hooks/useAttachmentUpload.ts:182-191` —— `uploadAttachment` 内部做 size 校验（web `lib/api.ts` 的 `uploadAttachment`），**web Home 不前置拦截**
-- **PC**：`gacode-electron/src/routes/Home.tsx:226-232`
+- **web**：`gacode-web/src/hooks/useAttachmentUpload.ts` —— `uploadAttachment` 内部做 size 校验（web `lib/api.ts` 的 `uploadAttachment`），**web Home 不前置拦截**
+- **PC**：`gacode-electron/src/routes/Home.tsx:78`　`const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;` + `:247-253`
   ```tsx
   if (file.size > MAX_ATTACHMENT_BYTES) {
     toast({
@@ -1268,7 +1025,7 @@
     return;
   }
   ```
-  + `Home.tsx:70` `const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;` + 注释说明 `uploadAttachment` 的 size 校验是**同步 throw**，不在 promise 链里，必须前置拦截
+  + 注释说明 `uploadAttachment` 的 size 校验是**同步 throw**，不在 promise 链里，必须前置拦截
 - **判定**：**已一致**（PC 多了一步前置拦截，但最终行为等价：都拦 50MB、都弹错误提示）
 - 预估改动：**0 行**
 
@@ -1284,22 +1041,17 @@
     });
   },
   ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:245-251`
+- **PC**：`gacode-electron/src/components/ui/Toast.tsx:32-45`（**已支持 `title` / `description`**，commit `5504f93`；`message` 保留为 `title` 的别名，向后兼容旧调用点）+ `gacode-electron/src/routes/Home.tsx:299`（**D 批次已改成双字段**）
   ```tsx
-  const msg = err instanceof Error ? err.message : String(err);
-  if (msg === "aborted" || msg.includes("aborted")) return;
-  toast({ message: msg, variant: "danger" });
+  toast({ title: "上传失败", description: msg, variant: "danger" });
   ```
-- **判定**：形态不同（web 有 `title: "上传失败"` + `description: err`；PC 只有一整条 message）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\routes\Home.tsx`
-  - 锚点：`Home.tsx:250` 的 `toast({ message: msg, variant: "danger" });`
-  - PC toast API 无 title/description（`Toast.tsx:31`）→ 拼成单行：`toast({ message: \`上传失败: ${msg}\`, variant: "danger" });`
-  - ⚠️ **冲突**：`Home.tsx:196-198` 的注释明确说「Home 不再二次加『上传失败: 』前缀, 直接 toast」，因为 PC 的 `uploadAttachment` 内部 `humanizeUploadError` **已经**产出「图片上传失败: file too large」这类人话。
-    - → **不要加前缀**，否则变成「上传失败: 图片上传失败: ...」
-    - → 本条的正解：**改 PC Toast 组件支持 title/description**（成本更高），或**接受现状**（PC 单行 message 已经含全部信息）
-    - **结论**：本条判定为 **「形态不同，但 PC 现状可接受（信息等价）」**；若 gaga 要求 PC toast 也分两行展示，需改 `src/components/ui/Toast.tsx`（新增 `title?: string` prop + `description?: string`，渲染成两行）—— 属**全站 toast 组件改动**，会波及所有页面 → **列为结构级差异 S-05**。
-  - 预估改动：**0 行（现状可接受）/ ~30 行（改 Toast 组件，S-04）**
+- **判定**：~~形态不同~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **怎么改**：目标文件 `gacode-electron/src/routes/Home.tsx`（**只剩这 1 处调用点**）：
+  - `:292` `const msg = err instanceof Error ? err.message : String(err);` 保留
+  - `:299` `toast({ message: msg, variant: "danger" })` → `toast({ title: "上传失败", description: msg, variant: "danger" })`
+  - ⚠️ **`Home.tsx` 的注释说「Home 不再二次加『上传失败: 』前缀」** —— 改双字段后 `title` 就是「上传失败」、`description` 放原始 msg ⇒ **不会**出现「上传失败: 图片上传失败: ...」双前缀（原始 msg 直接进 description）。
+  - ℹ️ §9 的 **S-04（Toast 双字段）已结案**（`5504f93` 落地），本条剩下的只是调用点这 1 行。
+- 预估改动：**0 行（D 批次已落地）**
 
 ---
 
@@ -1318,30 +1070,20 @@
   >
   ```
   → **无标题栏**
-- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:126`
+- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:140-145`
   ```tsx
-  <BottomSheet open={open} title="选择表情" onClose={handleClose}>
+  <BottomSheet
+    open={open}
+    title={undefined}
+    onClose={handleClose}
+    maxHeight="max-h-[70vh]"
+    contentClassName="!p-0 !gap-0"
+    header={...}
+  >
   ```
-  → `BottomSheet.tsx:49` `max-h-[80vh] p-5`，且 `BottomSheet.tsx:50-55` 强制渲染标题栏
-- **判定**：形态不同（3 处：最大高 / padding / 有无标题栏）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\EmojiPicker.tsx`
-  - 锚点：`EmojiPicker.tsx:126`
-  - 改法（复用 H-29 新增的 `contentClassName` / 可选 `title` 两个 prop）：
-    ```tsx
-    <BottomSheet
-      open={open}
-      title={undefined}
-      contentClassName="!p-0 !max-h-[70vh]"
-      onClose={handleClose}
-    >
-    ```
-    - `!p-0` → 去掉 BottomSheet 的 `p-5`（web 是 `p-0`）
-    - `!max-h-[70vh]` → 覆盖 `max-h-[80vh]`
-    - `title={undefined}` → 不渲染标题栏（web 无标题）
-    - `bg-bg-elevated` 两边一致，不用改
-  - ⚠️ **标题栏的替代**：web 的 EmojiPicker **确实没有标题**（直接是搜索框 + 分类 + 网格）。若 PC 去掉标题栏后顶部会显得空，web 就是那样 → 照做。
-  - 预估改动：**3 行**
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。最大高走 `BottomSheet` 的独立 `maxHeight` prop —— **传了就不输出**底座的 `max-h-[85vh]`（`src/components/ui/BottomSheet.tsx:93-107` 注释：实测产物里 `.max-h-[70vh]`（line 557）早于 `.max-h-[85vh]`（line 565），两处同时输出时底座会赢 ⇒ 改成「传了就替换」，结果与 CSS 产物顺序无关）；`!p-0` 压过底座 `p-6`、`!gap-0` 显式声明。
+- 预估改动：**0 行**
 
 ## H-44　EmojiPicker 搜索框（图标 + 内边距）
 
@@ -1363,98 +1105,42 @@
       />
     </div>
   ```
-- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:128-135`
+- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:150-160`
   ```tsx
-  <div className="px-1 pt-1 pb-3 border-b border-border space-y-2">
-    <input
-      type="text"
-      value={search}
-      onChange={(e) => setSearch(e.target.value)}
-      placeholder="搜索表情 (例如: 笑 / heart)"
-      className="w-full rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle px-3 py-2 text-sm outline-none focus:border-brand focus:border"
-    />
+  <div className="px-4 pt-5 pb-3 border-b border-border">
+    <div className="relative">
+      <SearchFieldIcon />
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="搜索表情 (例如: 笑 / heart)"
+        className="w-full pl-9 pr-3 py-2 rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle outline-none focus:ring-1 focus:ring-brand"
+      />
+    </div>
   ```
-- **判定**：形态不同（5 处：Search 图标 / pl-9 / 容器 padding / focus 样式 / 字号）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\EmojiPicker.tsx`
-  - 锚点：`EmojiPicker.tsx:128-135`
-  - **Search 图标**：PC 需新增内联 SVG（PC 不引 lucide-react）：
-    ```tsx
-    function SearchGlyph() {
-      return (
-        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-          className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted">
-          <circle cx="11" cy="11" r="8" />
-          <path d="m21 21-4.3-4.3" />
-        </svg>
-      );
-    }
-    ```
-    （lucide `search` = 圆 + 斜线）
-  - **结构**：input 外面包一层 `<div className="relative">`（Search 图标要绝对定位）
-  - **容器**：`"px-1 pt-1 pb-3 border-b border-border space-y-2"` → `"px-4 pt-5 pb-3 border-b border-border space-y-3"`
-  - **input className**：`"w-full pl-9 pr-3 py-2 rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle outline-none focus:ring-1 focus:ring-brand"`
-    - 删 `px-3` → `pl-9 pr-3`（`pl-9` 给图标留位 36px）
-    - 删 `text-sm`（web 是默认 16px `text-base`）
-    - `focus:border-brand focus:border` → `focus:ring-1 focus:ring-brand`
-      - ⚠️ **冲突**：`focus:border` 与 `focus:border-brand` 是同属性，**替换不要追加**
-      - `focus:ring-1` 需要 `ring` 的颜色变量 —— Tailwind 默认 `ring` 用 `rgb(59 130 246 / 0.5)`（蓝），但 `focus:ring-brand` 指定了 ring 颜色 → 走 `ring-brand` token（PC `tailwind.config.ts:39-41` 有 `brand.DEFAULT`）→ 生效
-  - 预估改动：**~16 行**
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。Search 图标 / `pl-9` / `focus:ring-1 focus:ring-brand` / 去 `text-sm` 全部到位；图标改用共享 `src/components/ui/Glyphs.tsx:613` 的 `SearchFieldIcon`（lucide `search`，16px/sw2，自带 `absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted`）—— 与 H-58 共用同一个组件，**不重复实现**。
+- 预估改动：**0 行**
 
 ## H-45　EmojiPicker 分类 tab 位置
 
-- **web**：`gacode-web/src/components/chat/EmojiPicker.tsx:153-170`
+- **web**：`gacode-web/src/components/chat/EmojiPicker.tsx:154`
   ```tsx
-  {!search && (
-    <div className="flex gap-2 mt-3">
-      {CATEGORIES.map((c) => (
-        <button
-          key={c.key}
-          type="button"
-          onClick={() => setActiveCategory(c.key)}
-          className={cn(
-            "px-3 py-1 rounded-full text-xs transition-colors",
-            activeCategory === c.key
-              ? "bg-brand text-brand-on"
-              : "bg-bg-sunken text-fg-muted hover:text-fg"
-          )}
-        >
-          {c.label}
-        </button>
-      ))}
-    </div>
-  )}
+  <div className="flex gap-2 mt-3">
   ```
-- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:136-157`
-  ```tsx
-  {!search && (
-    <div className="flex gap-2">
-      ...
-      className={[
-        "px-3 py-1 rounded-full text-xs transition-colors duration-150",
-        active ? "bg-brand text-brand-on" : "bg-bg-sunken text-fg-muted hover:text-fg",
-      ].join(" ")}
-  ```
-- **判定**：形态不同（1 处：分类 tab 容器少 `mt-3`；`duration-150` 为 PC 额外，不计）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\EmojiPicker.tsx`
-  - 锚点：`EmojiPicker.tsx:137` 的 `<div className="flex gap-2">`
-  - → `"flex gap-2 mt-3"`
-  - 预估改动：**1 行**
+- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:162`　`<div className="flex gap-2 mt-3">`
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。分类 tab 容器已补 `mt-3`；web 的容器没有 `space-y-*`（tab 自带 `mt-3`），PC 也去掉了 `space-y-3` ⇒ 不会双份间距。
+- 预估改动：**0 行**
 
 ## H-46　EmojiPicker 网格区横向内边距与滚动
 
-- **web**：`gacode-web/src/components/chat/EmojiPicker.tsx:175`　`<div className="flex-1 overflow-y-auto px-4 py-3">`
-- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:161`　`<div className="py-3">` —— **无 `flex-1`、无 `overflow-y-auto`、无 `px-4`**
-- **判定**：形态不同（3 处）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\EmojiPicker.tsx`
-  - 锚点：`EmojiPicker.tsx:161`
-  - → `"px-4 py-3"`（保留 BottomSheet 的外层滚动）
-  - ⚠️ `flex-1 overflow-y-auto` **不要加**：PC `BottomSheet.tsx:56` 已有 `<div className="flex-1 min-h-0 overflow-y-auto">{children}</div>` → 加了会双层滚动条
-  - ⚠️ **残留差异**：web 是「搜索框 + 分类 tab 固定，网格单独滚」；PC 的 BottomSheet 会让搜索框跟着一起滚。要彻底对齐需给 `BottomSheet` 加 `header?: ReactNode`（固定在滚动区外）→ 见 S-05
-  - 预估改动：**2 行（简化版）/ ~20 行（彻底版，走 S-05）**
+- **web**：`gacode-web/src/components/chat/EmojiPicker.tsx:175`　`<div className="flex-1 overflow-y-auto px-4 py-3">`（搜索框 + 分类 tab 在 `SheetContent` 的固定头部，不跟着滚）
+- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:188`　`<div className="flex-1 overflow-y-auto px-4 py-3">`；搜索框 + 分类 tab 走 `BottomSheet` 的 `header` prop（`EmojiPicker.tsx:146-184` → `src/components/ui/BottomSheet.tsx:206` 的 `<div className="shrink-0">{header}</div>`，固定在滚动区 `:207` 之外）
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）—— 旧稿的「彻底版（走 S-05）」已完成
+- **怎么改**：**不改**。PC 走 `BottomSheet` 的 `header` 通道 ⇒ 与 web 的「头部固定 + 网格独立滚动」结构一致，且没有双层滚动条（旧稿担心的 `BottomSheet.tsx:56` 外层滚动问题不存在了）。
+- 预估改动：**0 行**
 
 ## H-47　EmojiPicker 选中后关闭面板
 
@@ -1465,14 +1151,14 @@
     handleOpenChange(false);
   }}
   ```
-- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:172`　`onClick={() => onSelect(e.emoji)}` —— 组件自身不关；由 `Home.tsx:262-265` 的 `handleEmojiSelect` 调 `setEmojiOpen(false)`
+- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:199-205`　`onSelect(e.emoji); handleClose();` —— 组件自身关面板（`handleClose` 同时清 search，见 `:125-128`）
 - **判定**：**已一致**（关闭动作位置不同，最终行为相同）
 - 预估改动：**0 行**
 
 ## H-48　EmojiPicker 空态
 
 - **web**：`gacode-web/src/components/chat/EmojiPicker.tsx:176-180`　`<div className="text-center text-fg-muted py-8 text-sm">没有匹配的表情</div>`
-- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:162-166`　`<div className="text-center text-fg-muted py-8 text-sm">没有匹配的表情</div>`
+- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:189-192`　`<div className="text-center text-fg-muted py-8 text-sm">没有匹配的表情</div>`
 - **判定**：**已一致**
 - 预估改动：**0 行**
 
@@ -1487,7 +1173,7 @@
   )}
   aria-label={e.keywords[0]}
   ```
-- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:174`　`"w-10 h-10 rounded-md text-2xl hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center"`
+- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:207`　`"w-10 h-10 rounded-md text-2xl hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center"`（`aria-label={e.keywords[0]}` 在 `:206`）
 - **判定**：**已一致**（`duration-150` 为 PC 额外，不计）
 - 预估改动：**0 行**
 
@@ -1500,7 +1186,7 @@
     onOpenChange(next);
   };
   ```
-- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:120-123`
+- **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:125-128`
   ```tsx
   const handleClose = () => {
     setSearch("");
@@ -1518,218 +1204,73 @@
 
 ## H-51　LibraryPicker 多选能力 —— 缺失（PC 单选）
 
-- **web**：`gacode-web/src/components/chat/LibraryPicker.tsx:63-75`（props）+ `:121-149`（`toggleItem`）+ `:280-292`（checkbox）+ `:301-320`（完成按钮）
+- **web**：`gacode-web/src/components/chat/LibraryPicker.tsx:63-75`（props）+ `:121-149`（`toggleItem`）+ `:280-292`（checkbox）+ `:300-320`（完成按钮）
   ```tsx
   onConfirm?: (items: LibraryItem[]) => void;
   /** 旧单选回调 (向下兼容). 若同时传了 onConfirm, 这个不会被调用. */
   onSelect?: (item: LibraryItem) => void;
   ```
-  ```tsx
-  const toggleItem = (item: LibraryItem) => {
-    if (onConfirm) {
-      setPendingSelected((prev) => { ... });
-      setPendingItems((prev) => { ... });
-      return;
-    }
-    if (onSelect) {
-      onSelect(item);
-      handleOpenChange(false);
-    }
-  };
-  ```
-  ```tsx
-  {onConfirm && (
-    <div className="shrink-0 w-5 h-5 rounded border flex items-center justify-center"
-      aria-hidden="true">
-      {checked && <Check className="w-3.5 h-3.5" />}
-    </div>
-  )}
-  ```
-- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:28-33`（props）—— **只有 `onSelect` 单选**
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:44-51`（props 同款）+ `:106-127`（`toggleItem`）+ `:130-134`（`handleConfirm`）+ `:137-142`（打开时清累积）+ `:283-295`（checkbox）+ `:195-214`（完成按钮）
   ```tsx
   export interface LibraryPickerProps {
     open: boolean;
     onClose: () => void;
-    onSelect: (item: LibraryItem) => void;
+    /** 旧单选回调 (向下兼容). 若同时传了 onConfirm, 这个不会被调用. */
+    onSelect?: (item: LibraryItem) => void;
+    /** 多选模式 — 点「完成」时一次性回调本次选中的 items */
+    onConfirm?: (items: LibraryItem[]) => void;
   }
   ```
-  `LibraryPicker.tsx:144-150`：点 row 立即 `onSelect(item); handleClose();`
-- **判定**：缺失
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\LibraryPicker.tsx`
-  - **需新增 props**：
-    ```tsx
-    export interface LibraryPickerProps {
-      open: boolean;
-      onClose: () => void;
-      /** 旧单选回调 (向下兼容). 若同时传了 onConfirm, 这个不会被调用. */
-      onSelect?: (item: LibraryItem) => void;
-      /** 多选模式 — 点「完成」时一次性回调本次选中的 items */
-      onConfirm?: (items: LibraryItem[]) => void;
-    }
-    ```
-  - **需新增 state**（`LibraryPicker.tsx` 组件内，`const [search, setSearch] = useState("")` 之后）：
-    ```tsx
-    /** 本次 session 累积的选中 id (不立即关 sheet, 完成按钮才关) */
-    const [pendingSelected, setPendingSelected] = useState<Set<string>>(new Set());
-    /** 关联已选 item 的轻量快照, 完成时回调出去 (父组件要拿 title 拼 marker) */
-    const [pendingItems, setPendingItems] = useState<Map<string, LibraryItem>>(new Map());
-    ```
-  - **需新增 handler**：
-    ```tsx
-    /** 切换某项选中态 — 多选模式累积, 单选模式立即回调并关闭 */
-    const toggleItem = (item: LibraryItem): void => {
-      if (onConfirm) {
-        setPendingSelected((prev) => {
-          const next = new Set(prev);
-          if (next.has(item.id)) next.delete(item.id);
-          else next.add(item.id);
-          return next;
-        });
-        setPendingItems((prev) => {
-          const next = new Map(prev);
-          if (next.has(item.id)) next.delete(item.id);
-          else next.set(item.id, item);
-          return next;
-        });
-        return;
-      }
-      if (onSelect) {
-        onSelect(item);
-        handleClose();
-      }
-    };
-    ```
-  - **需新增 handler**：
-    ```tsx
-    /** 「完成」按钮 — 把本次选中的 items 一次性回调出去并关闭面板 */
-    const handleConfirm = (): void => {
-      if (!onConfirm) return;
-      onConfirm(Array.from(pendingItems.values()));
-      handleClose();
-    };
-    ```
-  - **关闭时清空累积**（`handleClose` 改造）：
-    ```tsx
-    const handleClose = () => {
-      setSearch("");
-      setPendingSelected(new Set());
-      setPendingItems(new Map());
-      onClose();
-    };
-    ```
-  - **需新增 effect**（打开时也清空累积，避免上次残留）：
-    ```tsx
-    useEffect(() => {
-      if (open) {
-        setPendingSelected(new Set());
-        setPendingItems(new Map());
-      }
-    }, [open]);
-    ```
-    → **需新增 import**：`import { useMemo, useState, useEffect } from "react";`（PC 当前 `LibraryPicker.tsx:14` 是 `import { useMemo, useState } from "react";`）
-  - **Home 侧传参**（`gacode-electron/src/routes/Home.tsx:336-340`）：
-    ```tsx
-    <LibraryPicker
-      open={libraryOpen}
-      onClose={() => setLibraryOpen(false)}
-      onSelect={handleLibrarySelect}
-    />
-    ```
-    → 改为多选：
-    ```tsx
-    <LibraryPicker
-      open={libraryOpen}
-      onClose={() => setLibraryOpen(false)}
-      onConfirm={handleLibraryConfirm}
-    />
-    ```
-  - **需新增 handler（Home）**：
-    ```tsx
-    /** 知识库多选确认 — 逐条注入 `@[library:id] title` marker 到 textarea */
-    const handleLibraryConfirm = useCallback((items: LibraryItem[]) => {
-      for (const item of items) {
-        inputBarRef.current?.insertLibraryMarker?.(item.id, item.title);
-      }
-      setLibraryOpen(false);
-    }, []);
-    ```
-    ⚠️ **分隔符**：web Home 的单选回调（`page.tsx:402-407`）带分隔符逻辑：
-    ```tsx
-    onSelect={(item: LibraryItem) =>
-      setText((cur) => {
-        const sep = cur && !cur.endsWith(" ") && !cur.endsWith("\n") ? " " : "";
-        return `${cur}${sep}@[library:${item.id}] ${item.title}`;
-      })
-    }
-    ```
-    → PC 的 `insertText`（`ChatInputBar.tsx:479-495`）**没有分隔符逻辑**，直接插到光标处。
-    - **建议**：在 `ChatInputBarHandle` 新增专用方法 `insertLibraryMarker?: (id: string, title: string) => void`，**不要**改 `insertText`（否则 emoji 也会多空格）：
+  + Home 侧：`gacode-electron/src/routes/Home.tsx:321-324`（`handleLibrarySelect`）+ `:411`（`<LibraryPicker onSelect={handleLibrarySelect} />`）+ `gacode-electron/src/components/chat/ChatInputBar.tsx:126`（`insertLibraryMarker` 声明）+ `:242-262`（实现，带分隔符）
+- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **怎么改**：已落地（commit `5504f93`）：PC 的 LibraryPicker **组件**与 web 的组件 1:1（`onConfirm` 多选 + `pendingSelected` / `pendingItems` / `toggleItem` / `handleConfirm` / checkbox / 完成按钮 / 打开时清累积）；Home 侧注入 `@[library:id] title` marker 走 `insertLibraryMarker`（**带分隔符**，与 web `page.tsx:402-407` 同款，不是裸 `insertText`）。
+  - **残留已消**（D 批次 · gaga 2026-10-26 21:35 口径「PC 有 web 没有的必须删」）：
+    - `src/routes/Home.tsx:321-324`　`handleLibraryConfirm`（多选 ⇒ 合并 marker）**换成** `handleLibrarySelect`（单选）：
       ```tsx
-      // ChatInputBar.tsx useImperativeHandle 内
-      insertLibraryMarker: (id, title) => {
-        const ta = taRef.current;
-        const marker = `@[library:${id}] ${title}`;
-        if (!ta) { setText((prev) => prev + marker); return; }
-        const start = ta.selectionStart ?? text.length;
-        const end = ta.selectionEnd ?? text.length;
-        const before = text.slice(0, start);
-        const sep = before && !before.endsWith(" ") && !before.endsWith("\n") ? " " : "";
-        const next = before + sep + marker + text.slice(end);
-        setText(next);
-        const caret = start + sep.length + marker.length;
-        requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(caret, caret); });
-      },
+      const handleLibrarySelect = useCallback((item: LibraryItem) => {
+        inputBarRef.current?.insertLibraryMarker?.(item.id, item.title);
+        setLibraryOpen(false);
+      }, []);
       ```
-    - **需同步改 `ChatInputBarHandle` interface**（`ChatInputBar.tsx:106-111`）加这一行。
-  - 预估改动：**~60 行（LibraryPicker 40 + ChatInputBar 12 + Home 8）**
+    - `src/routes/Home.tsx:411`　`<LibraryPicker onSelect={handleLibrarySelect} />`（**不再传 `onConfirm`**）⇒ 勾选框（H-52）与底部「完成」按钮（H-53）在 HOME 页**自动消失**，副标题切成 web 单选模式的「选中后将插入到消息」—— 与 web Home 完全一致。
+    - marker 文案与分隔符规则**逐字照抄 web**（web `app/page.tsx:402-407` 的 `sep` 逻辑 = PC `ChatInputBar.insertLibraryMarker` 的 `sep` 逻辑）。
+  - ℹ️ **多选能力没有被删掉**：PC 的 chat 页走 `KnowledgeAttachSheet`（`src/components/chat/KnowledgeAttachSheet.tsx:34`）⇒ 仍传 `onConfirm` ⇒ **多选链路完整保留**（与 web 的 chat 页多选同构）。
+- 预估改动：**0 行（D 批次已落地）**
 
 ## H-52　LibraryPicker 勾选框
 
-- **web**：`gacode-web/src/components/chat/LibraryPicker.tsx:281-291`
+- **web**：`gacode-web/src/components/chat/LibraryPicker.tsx:280-292`
   ```tsx
-  <div
-    className={cn(
-      "shrink-0 w-5 h-5 rounded border flex items-center justify-center",
-      checked ? "bg-brand border-brand text-brand-on" : "border-border bg-background"
-    )}
-    aria-hidden="true"
-  >
-    {checked && <Check className="w-3.5 h-3.5" />}
-  </div>
+  {onConfirm && (
+    <div
+      className={cn(
+        "shrink-0 w-5 h-5 rounded border flex items-center justify-center",
+        checked ? "bg-brand border-brand text-brand-on" : "border-border bg-background"
+      )}
+      aria-hidden="true"
+    >
+      {checked && <Check className="w-3.5 h-3.5" />}
+    </div>
+  )}
   ```
-- **PC**：`PC 缺失`（无 checkbox 渲染）
-- **判定**：缺失
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\LibraryPicker.tsx`
-  - 锚点：`LibraryPicker.tsx:174` 的 `</div>`（`flex-1 min-w-0` 那层结束）之后、`</button>`（`:175`）之前
-  - 插入：
-    ```tsx
-    {onConfirm ? (
-      <div className={[
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:283-295`
+  ```tsx
+  {onConfirm ? (
+    <div
+      className={[
         "shrink-0 w-5 h-5 rounded border flex items-center justify-center",
         checked ? "bg-brand border-brand text-brand-on" : "border-border bg-background",
       ].join(" ")}
-        aria-hidden="true"
-      >
-        {checked ? <CheckGlyph /> : null}
-      </div>
-    ) : null}
-    ```
-  - **需新增 state**：`const checked = pendingSelected.has(item.id);`（在 `.map((item) => {` 内）
-  - **需新增图标函数**（PC 不引 lucide-react）：
-    ```tsx
-    function CheckGlyph() {
-      return (
-        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M20 6 9 17l-5-5" />
-        </svg>
-      );
-    }
-    ```
-    （lucide `check` = `M20 6 9 17l-5-5`）
-  - 预估改动：**~18 行**
+      aria-hidden="true"
+    >
+      {checked ? <CheckGlyph /> : null}
+    </div>
+  ) : null}
+  ```
+  （`CheckGlyph` = `src/components/ui/Glyphs.tsx:634`，lucide `check` 14px/sw3）
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。勾选框的尺寸 / 圆角 / 选中态 className 与 web 逐字一致；图标走共享 Glyphs。
+- 预估改动：**0 行**
 
 ## H-53　LibraryPicker 底部「完成」按钮
 
@@ -1756,44 +1297,33 @@
     </div>
   )}
   ```
-- **PC**：`PC 缺失`
-- **判定**：缺失
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\LibraryPicker.tsx`
-  - 锚点：列表区 `</div>`（`LibraryPicker.tsx:180`）之后、`</BottomSheet>`（`:181`）之前
-  - **PC 的 `BottomSheet` 有 `footer?: ReactNode` prop**（`BottomSheet.tsx:26`）→ **直接用 footer**，底部按钮固定在滚动区外：
-    ```tsx
-    <BottomSheet
-      open={open}
-      title="选择知识库"
-      subtitle={onConfirm ? "可多选, 点完成提交" : "选中后将插入到消息"}
-      onClose={handleClose}
-      footer={
-        onConfirm ? (
-          <button
-            type="button"
-            onClick={handleConfirm}
-            data-testid="library-picker-confirm"
-            disabled={pendingSelected.size === 0}
-            className={[
-              "w-full inline-flex items-center justify-center gap-2",
-              "rounded-md py-2.5 text-sm font-medium transition-colors",
-              "focus:outline-none focus:ring-1 focus:ring-brand",
-              pendingSelected.size === 0
-                ? "bg-bg-sunken text-fg-subtle cursor-not-allowed"
-                : "bg-brand text-brand-on hover:bg-brand/90",
-            ].join(" ")}
-          >
-            完成 ({pendingSelected.size})
-          </button>
-        ) : null
-      }
-    >
-    ```
-    ⚠️ **BottomSheet 的 footer 容器样式**（`BottomSheet.tsx:58`）是 `"flex items-center justify-end gap-2 mt-3 shrink-0"` —— 按钮自己 `w-full` 会撑满，`justify-end` 不冲突
-    - ⚠️ web 的 footer 条有 `border-t border-border bg-bg-elevated` 的分隔线，PC 没有 → 需给 `BottomSheet` 的 footer 容器加 `border-t border-border pt-3`（在 `BottomSheet.tsx:58` 改成 `"flex items-center justify-end gap-2 mt-3 pt-3 border-t border-border shrink-0"`）
-    - ⚠️ `mt-3` + `pt-3` 会让间距偏大 → 用 `mt-0 pt-3` 或把 `mt-3` 去掉
-  - 预估改动：**~25 行（含 BottomSheet footer 容器 2 行）**
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:195-214`（走 `BottomSheet` 的 `footer` prop）+ `gacode-electron/src/components/ui/BottomSheet.tsx:208-212`（footer 容器 `"flex items-center justify-end gap-2 mt-0 pt-3 border-t border-border shrink-0"`）
+  ```tsx
+  footer={
+    onConfirm ? (
+      <button
+        type="button"
+        onClick={handleConfirm}
+        data-testid="library-picker-confirm"
+        disabled={pendingSelected.size === 0}
+        className={[
+          "w-full inline-flex items-center justify-center gap-2",
+          "rounded-md py-2.5 text-sm font-medium transition-colors",
+          "focus:outline-none focus:ring-1 focus:ring-brand",
+          pendingSelected.size === 0
+            ? "bg-bg-sunken text-fg-subtle cursor-not-allowed"
+            : "bg-brand text-brand-on hover:bg-brand/90",
+        ].join(" ")}
+      >
+        完成 ({pendingSelected.size})
+      </button>
+    ) : null
+  }
+  ```
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。按钮 className / `data-testid` / `disabled` 条件与 web 逐字一致；`BottomSheet` 的 footer 容器补了 web 的 `border-t border-border` 分隔线（PC 原先是 `mt-3`，现为 `mt-0 pt-3`）。
+- ℹ️ **D 批次连带**：LibraryPicker 改用 web 的 sheet 内边距归属（`!p-0`，见 H-54）⇒ footer 的横向内边距不再由 `BottomSheet` 的 `p-6` 承担，改由 `src/components/home/LibraryPicker.tsx:217` 的 `<div className="w-full px-4 pb-3">` 承担 ⇒ 与 web `components/chat/LibraryPicker.tsx:301` 的 `px-4 py-3` 一致（顶部 12px 由 `BottomSheet` footer 容器的 `pt-3` 承担）。**按钮自身的 className 未动。**
+- 预估改动：**0 行**
 
 ## H-54　LibraryPicker 标题栏与副标题
 
@@ -1807,22 +1337,25 @@
       </span>
     </div>
   ```
-- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:91`　`<BottomSheet open={open} title="挂载知识库" onClose={handleClose}>` —— 标题在 BottomSheet 标题栏里，**无副标题**
-- **判定**：形态不同（3 处：标题文案 / 副标题 / 副标题文案随模式变）
-- **怎么改**：
-  - **标题文案**：web 是「选择知识库」，PC 是「挂载知识库」→ 统一成 web 的「选择知识库」
-  - **副标题**：PC 缺
-    - **推荐改法**：给 `BottomSheet` 加 `subtitle?: string` prop，渲染在标题下方一行
-      ```tsx
-      // BottomSheet.tsx — title 行之后
-      {subtitle ? (
-        <p className="text-xs text-fg-muted mb-3 shrink-0 -mt-2">{subtitle}</p>
-      ) : null}
-      ```
-      LibraryPicker 传 `subtitle={onConfirm ? "可多选, 点完成提交" : "选中后将插入到消息"}`
-  - **头部容器 padding**：`"px-1 pt-1 pb-3 border-b border-border space-y-2"` → `"pt-5 pb-3 border-b border-border space-y-3"`
-    - ⚠️ BottomSheet 内容区已有 `p-5`（`BottomSheet.tsx:49`）→ **横向 padding 由 BottomSheet 承担，PC 头部容器不要再写 `px-4`**（否则 20+16=36px 过宽）
-  - 预估改动：**~12 行（含 BottomSheet subtitle 4 行）**
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:172-178`（**自绘标题行**，走 `BottomSheet` 的 `header` 通道）
+  ```tsx
+  <div className="px-4 pt-5 pb-3 border-b border-border space-y-3">
+    <div className="flex items-center justify-between">
+      <h3 className="text-base font-medium">选择知识库</h3>
+      <span className="text-xs text-fg-muted">
+        {onConfirm ? "可多选, 点完成提交" : "选中后将插入到消息"}
+      </span>
+    </div>
+  ```
+  （配套：`src/components/home/LibraryPicker.tsx:157` `hideTitle`（只留 `title` 作 aria-label，不画内置标题栏）+ `:164` `contentClassName="!p-0 !gap-0"`）
+- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **怎么改**：已落地（commit `6dc3c3d`）：标题「挂载知识库」→ web 的「选择知识库」；副标题按模式二选一（多选 `可多选, 点完成提交` / 单选 `选中后将插入到消息`），与 web 逐字一致。
+  - **残留 1 已消**（D 批次 · 副标题位置）：web 的副标题在**标题同一行右侧**（`flex items-center justify-between`）⇒ PC 改成**自绘**标题行（放进 `BottomSheet` 的 `header` 通道），不再用内置 `title` / `subtitle`（内置的副标题落在标题**下一行**，`BottomSheet.tsx:183-185`）。
+    - `src/components/home/LibraryPicker.tsx:157` 加 `hideTitle`：`title` 只作 `aria-label`，内置标题栏不画 ⇒ 右上角关闭键走 web `components/ui/sheet.tsx:102-109` 的**绝对定位 X**（PC 原本是标题栏里的「×」按钮）。
+  - **残留 2 已消**（D 批次 · 头部容器 padding）：`src/components/home/LibraryPicker.tsx:172` 头部容器 = web 的 `"px-4 pt-5 pb-3 border-b border-border space-y-3"`（原 PC 是 `"px-1 pt-1 pb-3 border-b border-border space-y-2"`）。
+    - ⚠️ **前置条件**：要让 `px-4` / `pt-5` 真正等于 web 的 16px / 20px，必须先让 sheet 容器不再自带 `p-6` ⇒ `src/components/home/LibraryPicker.tsx:164` 加 `contentClassName="!p-0 !gap-0"`（对齐 web `components/chat/LibraryPicker.tsx:162` 的 `p-0`）。
+    - 内边距归属随之改成 web 的三段式：头部 `px-4 pt-5 pb-3` · 列表容器 `px-4 py-3`（`LibraryPicker.tsx:240`）· footer `px-4 pb-3`（`LibraryPicker.tsx:217`，顶部 12px 由 `BottomSheet` footer 容器的 `pt-3` 承担）。
+- 预估改动：**0 行（D 批次已落地）**
 
 ## H-55　LibraryPicker 列表项形态
 
@@ -1834,26 +1367,18 @@
     checked ? "border-brand bg-brand/5" : "border-border"
   )}
   ```
-- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:150`
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:252-256`
   ```tsx
-  className="w-full flex items-center gap-3 p-3 rounded-md bg-bg-sunken hover:bg-bg-base border border-border transition-colors duration-150 text-left"
+  className={[
+    "w-full flex items-center gap-3 p-3 rounded-lg",
+    "border bg-bg-sunken hover:bg-bg-base transition-colors text-left",
+    checked ? "!border-brand bg-brand/5" : "border-border",
+  ].join(" ")}
   ```
-- **判定**：形态不同（3 处：圆角 `rounded-lg` vs `rounded-md` / 选中态 `border-brand bg-brand/5` / duration）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\LibraryPicker.tsx`
-  - 锚点：`LibraryPicker.tsx:150`
-  - **圆角**：`rounded-md`（16px）→ `rounded-lg`（20px，PC `tailwind.config.ts:142` 有 `lg: "20px"`）
-    - ⚠️ `rounded-md` 与 `rounded-lg` 同属性 → **替换**
-  - **选中态**：PC 当前是写死字符串 → 改条件 className：
-    ```tsx
-    className={[
-      "w-full flex items-center gap-3 p-3 rounded-lg",
-      "border bg-bg-sunken hover:bg-bg-base transition-colors text-left",
-      checked ? "!border-brand bg-brand/5" : "border-border",
-    ].join(" ")}
-    ```
-    ⚠️ `border-border` 与 `border-brand` 同属性 → **必须用 `!border-brand` 强制**，不能靠数组顺序
-  - 预估改动：**~8 行**
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。圆角 `rounded-md` → `rounded-lg`；选中态改成条件 className。
+  - ⚠️ PC 用 `!border-brand` 强制（PC 无 tailwind-merge，`border-brand` 压不住 `border-border`）—— 这是 PC 必需的写法，不是差异。
+- 预估改动：**0 行**
 
 ## H-56　LibraryPicker 类型图标颜色
 
@@ -1868,25 +1393,20 @@
     }
   }
   ```
-- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:186-261`（`TypeIcon`）—— **所有图标都是 `stroke="currentColor"`，靠父级 `text-fg-muted`（`:152`）着色，没有类型色**
-- **判定**：形态不同
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\LibraryPicker.tsx`
-  - 锚点：`LibraryPicker.tsx:186-261` 的 `TypeIcon` 函数 + 调用处 `:152`
-  - **颜色 token 核验**：
-    - `text-brand-cyan`：PC `tailwind.config.ts:45` 有 `brand.cyan = "#0dcaf0"` → ✅ 存在
-    - `text-brand`：PC `tailwind.config.ts:39-41` `brand.DEFAULT` → ✅ 存在
-    - `text-cron`：**PC 仓没有 `cron` token**（`tailwind.config.ts:37-107` 只有 brand / bg / fg / border / success / warning / danger / shadcn 兼容段）→ ❌ 缺失
-    - `text-fg-muted`：✅ 存在
-  - **改法**：PC 的 `TypeIcon` 已经是内联 SVG（`LibraryPicker.tsx:186-261`），只需给每个 case 的 `<svg>` 加 className：
-    - `image` → `className="w-5 h-5 text-brand-cyan"`
-    - `doc` → `className="w-5 h-5 text-brand"`
-    - `link` → `className="w-5 h-5 text-brand-cyan"`（**替代 web 的 `text-cron`**）
-      - 或给 PC `tailwind.config.ts` 加 `cron: "#a78bfa"`（跟 web 对齐）→ **推荐加 token**，1 行改动
-    - `default` → `className="w-5 h-5 text-fg-muted"`
-  - **调用处**：`LibraryPicker.tsx:152` 的容器 className `"shrink-0 w-10 h-10 rounded-md bg-bg-elevated inline-flex items-center justify-center text-fg-muted"`
-    → 删掉 `text-fg-muted`（web 的容器 `LibraryPicker.tsx:256` 是 `"shrink-0 w-10 h-10 rounded-md bg-bg-elevated flex items-center justify-center"` —— **无文字色**，靠图标自带）
-  - 预估改动：**~10 行**
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:315-326`　`TypeIcon`
+  ```tsx
+  case "image": return <ImageTypeIcon />;                                   // ui/Glyphs.tsx:677 → text-brand-cyan
+  case "doc":   return <DocTypeIcon />;                                     // ui/Glyphs.tsx:699 → text-brand
+  case "link":  return <LinkCronIcon />;                                    // ui/Glyphs.tsx:733 → text-cron（紫）
+  default:      return <LibraryTypeIcon className="w-5 h-5 text-fg-muted" />; // ui/Glyphs.tsx:768（书脊造型）
+  ```
+  + token：`gacode-electron/tailwind.config.ts:79`　`cron: "#a78bfa"`（web 私有 `--color-cron`）
+  + 容器：`LibraryPicker.tsx:258` 已删掉 `text-fg-muted`（web 的容器也不写文字色，靠图标自带）
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）—— F-11 同步消
+- **怎么改**：**不改**。link 已是 web 的紫（`text-cron`，PC 补了 `cron` token）；default 已是 lucide `library` 书脊造型（path 真值见 H-31）。
+  - ⚠️ **两个 link 图标并存且必须分开**：`LinkCronIcon`（紫，**只给 LibraryPicker 用**）vs `LinkTypeIcon`（绿，`src/components/ui/Glyphs.tsx:827`）—— 后者被知识库列表页 / `src/routes/LibraryDetail.tsx` 用着（web 的 `app/(main)/library/page.tsx:124` 就是绿的），**两处不可混用**。
+  - 顺带：标签 chip 改用 web 的 `<Badge variant="secondary" className="!text-[10px]">`（`LibraryPicker.tsx:275`；PC `src/components/ui/Badge.tsx` 已与 web `badge.tsx` 1:1）。
+- 预估改动：**0 行**
 
 ## H-57　LibraryPicker 空态图标
 
@@ -1899,42 +1419,21 @@
     </div>
   </div>
   ```
-- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:134-139`
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:229-240`
   ```tsx
-  <div className="text-center text-fg-muted py-12 text-sm">
-    {search.trim() ? `没有匹配 "${search}" 的知识库` : "知识库还空空如也,去采集点内容吧"}
+  <div className="flex flex-col items-center justify-center py-12 gap-3 text-fg-muted">
+    <LibraryIcon />
+    <div className="text-sm">
+      {search.trim()
+        ? `没有匹配 "${search}" 的知识库`
+        : "知识库还空空如也,去采集点内容吧"}
+    </div>
   </div>
   ```
-- **判定**：形态不同（2 处：缺图标 / 布局）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\LibraryPicker.tsx`
-  - 锚点：`LibraryPicker.tsx:134-139`
-  - 改为：
-    ```tsx
-    <div className="flex flex-col items-center justify-center py-12 gap-3 text-fg-muted">
-      <LibraryGlyph />
-      <div className="text-sm">
-        {search.trim() ? `没有匹配 "${search}" 的知识库` : "知识库还空空如也,去采集点内容吧"}
-      </div>
-    </div>
-    ```
-  - **需新增图标函数**（lucide `library` = 书脊造型，同 H-31）：
-    ```tsx
-    function LibraryGlyph() {
-      return (
-        <svg aria-hidden="true" width="40" height="40" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"
-          className="w-10 h-10 opacity-40">
-          <path d="m16 6 4 14" />
-          <path d="M12 6v14" />
-          <path d="M8 8v12" />
-          <path d="M4 6v16" />
-        </svg>
-      );
-    }
-    ```
-    ⚠️ 同 H-31：lucide `Library` 的真实 path **待核**（未在仓内找到 node_modules/lucide-react 源文件）
-  - 预估改动：**~12 行**
+  （`LibraryIcon` = `src/components/ui/Glyphs.tsx:654`，**自带** `w-10 h-10 opacity-40` ⇒ 渲染结果与 web 逐字等价）
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。
+- 预估改动：**0 行**
 
 ## H-58　LibraryPicker 搜索框
 
@@ -1952,20 +1451,22 @@
     />
   </div>
   ```
-- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:93-99`
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:163-172`
   ```tsx
-  <input
-    type="text"
-    value={search}
-    onChange={(e) => setSearch(e.target.value)}
-    placeholder="搜索知识库标题"
-    className="w-full rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle px-3 py-2 text-sm outline-none focus:border-brand focus:border"
-  />
+  <div className="relative">
+    <SearchFieldIcon />
+    <input
+      type="text"
+      value={search}
+      onChange={(e) => setSearch(e.target.value)}
+      placeholder="搜索知识库标题"
+      className="w-full pl-9 pr-3 py-2 rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle outline-none focus:ring-1 focus:ring-brand"
+    />
+  </div>
   ```
-- **判定**：形态不同（同 H-44 的 5 处）
-- **怎么改**：与 H-44 完全同款 —— 包 `<div className="relative">` + 复用同一个 `SearchGlyph` 组件 + input className 改成 `"w-full pl-9 pr-3 py-2 rounded-md bg-bg-sunken text-fg placeholder:text-fg-subtle outline-none focus:ring-1 focus:ring-brand"`
-  - **建议**：把 `SearchGlyph` 抽到共用位置 —— PC 可放 `src/components/ui/SearchGlyph.tsx`（新建文件），或分别在 EmojiPicker / LibraryPicker 各定义一份（PC 现有风格是内联各份，如 `ChatInputBar.tsx:674-765` 有 4 个本地图标函数）。**推荐抽公共件**，避免重复实现（gaga 2026-10-22 组件意识要求）。
-  - 预估改动：**~12 行 + 共用组件 12 行**
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。与 H-44 **共用同一个** `SearchFieldIcon`（`src/components/ui/Glyphs.tsx:613`）⇒ 不重复实现（符合 gaga 2026-10-22「组件意识」要求）。
+- 预估改动：**0 行**
 
 ## H-59　LibraryPicker 类型 tab
 
@@ -1983,25 +1484,17 @@
         )}
       >
   ```
-- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:100-118` —— **逐字一致**（仅 PC 多了 `duration-150`）
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:173-192` —— **逐字一致**（仅 PC 多了 `duration-150`）
 - **判定**：**已一致**
 - 预估改动：**0 行**
 
 ## H-60　LibraryPicker 类型 tab 切换时清 search
 
 - **web**：`gacode-web/src/components/chat/LibraryPicker.tsx:196`　`onClick={() => setTypeFilter(t.key)}` —— **切 tab 不清 search**
-- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:107`　`onClick={() => handleTypeChange(t.key)}`，而 `handleTypeChange`（`:85-88`）会 `setSearch("")`
-- **判定**：形态不同（PC 多一步清空）
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\LibraryPicker.tsx`
-  - 锚点：`LibraryPicker.tsx:85-88` 的 `handleTypeChange` + `:107` 的 `onClick`
-  - 改成跟 web 一致（切 tab 不清 search）：
-    ```tsx
-    onClick={() => setTypeFilter(t.key)}
-    ```
-    并删除 `handleTypeChange` 函数（`:85-88`）
-  - ⚠️ **代价**：PC 切 tab 清 search 是为了「避免脏组合」；web 不清。1:1 还原 = 不清。
-  - 预估改动：**5 行**
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:180`　`onClick={() => setTypeFilter(t.key)}`（PC 原来的 `handleTypeChange`（会 `setSearch("")`）已删除）
+- **判定**：**已一致**（**已落地** · commit `5504f93`）—— F-10 同步消
+- **怎么改**：**不改**。切 tab 不再清搜索词，与 web 一致。
+- 预估改动：**0 行**
 
 ## H-61　LibraryPicker 列表 key 与 data-testid
 
@@ -2010,45 +1503,38 @@
   data-testid="library-picker-item"
   data-item-id={item.id}
   ```
-- **PC**：`PC 缺失` —— PC `LibraryPicker.tsx:143` 只有 `<li key={item.id}>`
-- **判定**：缺失
-- **怎么改**：
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\LibraryPicker.tsx`
-  - 锚点：`LibraryPicker.tsx:144` 的 `<button ...>`
-  - 加两个属性：`data-testid="library-picker-item"` + `data-item-id={item.id}`
-  - 预估改动：**2 行**
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:250-251`
+  ```tsx
+  data-testid="library-picker-item"
+  data-item-id={item.id}
+  ```
+- **判定**：**已一致**（**已落地** · commit `5504f93`）
+- **怎么改**：**不改**。
+- 预估改动：**0 行**
 
 ## H-62　LibraryPicker 相对时间
 
-- **web**：`gacode-web/src/components/chat/LibraryPicker.tsx:233-240`　`formatDistanceToNow(d, { addSuffix: true, locale: zhCN })` → 「3 分钟前」「大约 2 个月前」
-- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:36-50` 自实现 `formatRelative` → 「3 分钟前」「2026-08-15」
-- **判定**：形态不同（输出文案在 >30 天时不同：web 给「大约 X 个月前」，PC 给具体日期）
-- **怎么改**：
-  - **需新增依赖**：`date-fns` + `date-fns/locale`
-    - web 用的是 `date-fns`（`web/src/components/chat/LibraryPicker.tsx:5-6`：`import { formatDistanceToNow } from "date-fns"; import { zhCN } from "date-fns/locale";`）
-    - PC `package.json` **没有** date-fns（PC `LibraryPicker.tsx:9` 注释明说「electron 端没有 date-fns 依赖, 自实现 mini 相对时间」）
-    - **需新增依赖 `date-fns`**，用法：`formatDistanceToNow(new Date(item.createdAt), { addSuffix: true, locale: zhCN })`
-  - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\home\LibraryPicker.tsx`
-  - 锚点：`LibraryPicker.tsx:160` 的 `{formatRelative(item.createdAt)}`
-  - 改为：
-    ```tsx
-    {time}
-    ```
-    并在 map 回调内计算：
-    ```tsx
-    let time = "";
+- **web**：`gacode-web/src/components/chat/LibraryPicker.tsx:232-240`　`formatDistanceToNow(d, { addSuffix: true, locale: zhCN })` → 「3 分钟前」「大约 2 个月前」
+- **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:20-21`（import）+ `:58-66`（实现）+ `:266`（调用点）
+  ```tsx
+  import { formatDistanceToNow } from "date-fns";
+  import { zhCN } from "date-fns/locale";
+  ...
+  function formatRelative(iso: string): string {
     try {
-      const d = new Date(item.createdAt);
-      if (!isNaN(d.getTime())) {
-        time = formatDistanceToNow(d, { addSuffix: true, locale: zhCN });
-      }
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return "";
+      return formatDistanceToNow(d, { addSuffix: true, locale: zhCN });
     } catch {
-      time = "";
+      return "";
     }
-    ```
-  - ⚠️ **这是 PC 仓引入新依赖的唯一一条**（HOME 页范围内）。date-fns 是 tree-shakeable 的单一函数，体积影响小。
-  - ⚠️ 若 gaga 不愿引入依赖，退化方案：把 `formatRelative`（`LibraryPicker.tsx:36-50`）的 >30 天分支改成中文相对表述（如「2 个月前」），视觉接近但不逐字一致。
-  - 预估改动：**~12 行 + 1 个依赖**
+  }
+  ```
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。PC 手写的 mini `formatRelative`（>30 天给具体日期）已换成 date-fns（>30 天给「大约 X 个月前」），与 web 输出一致。
+  - ℹ️ **没有新增依赖** —— `date-fns@4.4.0` 是 `5504f93` 就进了 `package.json` 的既有依赖，C 批次只是**用它**。
+  - ⚠️ date-fns v4 的 locale 入口是 `date-fns/locale`（**不是** v2 的 `date-fns/locale/zh-CN`）。
+- 预估改动：**0 行**
 
 ---
 
@@ -2063,24 +1549,16 @@
   },
   ```
   → **firstMessage 走 URL query**
-- **PC**：`gacode-electron/src/routes/Home.tsx:58-59, 102-104, 146-157`
-  ```tsx
-  export const HOME_FIRST_MESSAGE_KEY = "gacode:home:firstMessage";
-  export const HOME_ATTACHMENTS_KEY = "gacode:home:attachments";
-  ...
-  onSuccess: (chat) => { navigate(`/chat/${chat.id}`); },
-  ...
-  sessionStorage.setItem(HOME_FIRST_MESSAGE_KEY, firstMsg);
-  ```
+- **PC**：`gacode-electron/src/routes/Home.tsx:66-67`（key 定义）+ `:110-115`（`onSuccess: (chat) => { inputBarRef.current?.clear(); navigate(`/chat/${chat.id}`); }`）+ `:164-166`（`sessionStorage.setItem(HOME_FIRST_MESSAGE_KEY, firstMsg)`）
   → **firstMessage 走 sessionStorage**
-- **判定**：形态不同（**机制不同，但两边都「端到端自洽」**：web 的 chat 页读 query，PC 的 chat 页读 sessionStorage）
-- **怎么改**：**建议不改**。
+- **判定**：**形态不同**（**机制不同，但两边都「端到端自洽」**：web 的 chat 页读 query，PC 的 chat 页读 sessionStorage）
+- **怎么改**：**建议不改**（**本轮未动**）。
   - web 用 query 的理由（`page.tsx:151-153` 注释）是「避免 URL 太长被截断 / 编码麻烦」→ 恰恰是**附件**用 sessionStorage、纯文本用 query。
   - PC 用 sessionStorage 统一带两者，也自洽。
   - 若要逐字对齐 web：firstMessage 走 query（`navigate(\`/chat/${chat.id}?firstMessage=${encodeURIComponent(firstMsg)}\`)`），附件仍走 sessionStorage。
     - **代价**：PC 的 `ChatDetail` 消费端要改（`src/routes/ChatDetail.tsx` 读 `HOME_FIRST_MESSAGE_KEY`）→ 跨文件，且 chat 域 worker 正在动这块。
     - **建议**：保留 PC 现有机制（功能等价），只确保 **sessionStorage 的 payload 结构与 web 完全一致**（见 H-64）。
-  - 预估改动：**0 行（建议保留）**
+- 预估改动：**0 行（建议保留）**
 
 ## H-64　附件 sessionStorage payload 结构
 
@@ -2097,7 +1575,7 @@
     } catch { }
   }
   ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:148-157`
+- **PC**：`gacode-electron/src/routes/Home.tsx:166-175`
   ```tsx
   if (imageUrls.length > 0 || attachedFileIds.length > 0) {
     sessionStorage.setItem(
@@ -2115,11 +1593,8 @@
 
 ## H-65　image_urls / attached_file_ids 分流逻辑
 
-- **web**：`gacode-web/src/app/page.tsx:165-179`
+- **web**：`gacode-web/src/app/page.tsx:168-179`
   ```tsx
-  const imageUrls: string[] = [];
-  const attachedFileIds: string[] = [];
-  const attachedFileNames: Array<{ fileId: string; name: string }> = [];
   for (const it of doneItems) {
     if (it.mode === "image" && it.url) imageUrls.push(it.url);
     if (it.mode === "document" && it.fileId) {
@@ -2129,54 +1604,23 @@
   }
   ```
   → **按显式 `it.mode` 分流**（2026-10-16 M-doc bug 修复）
-- **PC**：`gacode-electron/src/routes/Home.tsx:122-131`
+- **PC**：`gacode-electron/src/routes/Home.tsx:138-148`
   ```tsx
   for (const att of attachments) {
-    if (att.url && !att.fileId) {
+    const mode = att.mode ?? (att.fileId ? "document" : "image");
+    if (mode === "image" && att.url) {
       imageUrls.push(att.url);
-    } else if (att.fileId) {
+    } else if (mode === "document" && att.fileId) {
       attachedFileIds.push(att.fileId);
       attachedFileNames.push({ fileId: att.fileId, name: att.name });
     }
   }
   ```
-  → **按 `att.url && !att.fileId` 启发式分流**
-- **判定**：形态不同（实现方式不同）
-- **怎么改**：
-  - **实际行为核对**：web 注释里说的 bug 是「document 模式后端 BOTH 返 url，旧逻辑 `if (it.url)` 会把 doc URL 误入 image_urls」。
-    - PC 的条件是 `att.url && !att.fileId` —— document 模式后端既返 url 也返 fileId → `att.fileId` 存在 → 走 else 分支进 `attachedFileIds` ✅ **PC 的启发式在当前后端行为下不会出错**
-    - 但 web 改成显式 mode 是因为「后端行为一变就会静默错」（2026-10-16 修复记录）。PC 的 `PendingAttachment`（`ChatInputBar.tsx:84-95`）**没有 `mode` 字段** → 要跟 web 一样显式分流，需把 mode 透传。
-  - **要跟 web 1:1**：给 `PendingAttachment` 加 `mode` 字段
-    - 目标文件：`D:\gaga\gaclaw-project\gacode-electron\src\components\chat\ChatInputBar.tsx`
-    - 锚点：`ChatInputBar.tsx:84-95` 的 `PendingAttachment` interface
-    ```tsx
-    export interface PendingAttachment {
-      url?: string;
-      fileId?: string;
-      name: string;
-      mime?: string;
-      /** 显式上传模式 — image 走 /yinian/upload 拿 url, document 走 /yinian/documents 拿 fileId.
-       *  跟 web buildFirstMessage 按 mode 分流对齐 (2026-10-16 M-doc bug). */
-      mode?: UploadMode;
-    }
-    ```
-    - `UploadMode` 从 `../../lib/upload` import（`ChatInputBar.tsx:45` 已 import `uploadAttachment, deriveUploadMode` → 加 `type UploadMode`）
-    - `addAttachment`（`ChatInputBar.tsx:191-216`）写入时带 mode：`mode: att.mode ?? (att.fileId ? "document" : "image")`
-    - `handleDroppedFile` 的 done 态（`ChatInputBar.tsx:339-352`）写入 `mode`
-    - `handleSend` 的 `doneAtts` map（`ChatInputBar.tsx:392-394`）带上 `mode: x.mode`
-  - **Home 侧**（`Home.tsx:122-131`）改为按 mode 分流：
-    ```tsx
-    for (const att of attachments) {
-      const mode = att.mode ?? (att.fileId ? "document" : "image");
-      if (mode === "image" && att.url) imageUrls.push(att.url);
-      if (mode === "document" && att.fileId) {
-        attachedFileIds.push(att.fileId);
-        attachedFileNames.push({ fileId: att.fileId, name: att.name });
-      }
-    }
-    ```
-    ⚠️ **保留 `??` 兜底**：若某个 attachment 没有 `mode`（老数据 / 手动构造），会两个分支都不进 → 附件丢失。兜底式（`att.mode ?? (att.fileId ? "document" : "image")`）保证行为等价于现状。
-  - 预估改动：**~18 行（ChatInputBar 12 + Home 6）**
+  + mode 的来源链：`gacode-electron/src/components/chat/ChatInputBar.tsx:106`（`PendingAttachment.mode?: UploadMode`）→ `:285`（`addAttachment` 写入 `att.mode ?? (att.fileId ? "document" : "image")`）→ `:426`（拖拽上传写 mode）→ `:489`（`doneAtts` 带 `mode: x.mode`）；`gacode-electron/src/routes/Home.tsx:266`（`addAttachment` 显式传 `mode: pickUploadMode(mediaKind)`）
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
+- **怎么改**：**不改**。已落地：PC 从 `att.url && !att.fileId` 启发式改成**显式按 mode 分流**，与 web 一样；`?? (att.fileId ? "document" : "image")` 兜底**保留**（老数据 / 手工构造的 attachment 没有 mode ⇒ 少了兜底两个分支都不进，附件会静默丢失）。
+  - 文本 fallback（`descs`）同步改成按 mode 判断（`Home.tsx:153-159`），输出与 web 逐字相同（见 H-66）。
+- 预估改动：**0 行**
 
 ## H-66　firstMessage 文本 fallback 拼接
 
@@ -2189,24 +1633,25 @@
   });
   return [content, ...descs].filter(Boolean).join("\n");
   ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:136-143`
+- **PC**：`gacode-electron/src/routes/Home.tsx:153-161`
   ```tsx
   const descs = attachments
     .map((att) => {
-      if (att.url && !att.fileId) return `[图片: ${att.url}]`;
-      if (att.fileId) return `[附件: ${att.name}]`;
+      const mode = att.mode ?? (att.fileId ? "document" : "image");
+      if (mode === "image" && att.url) return `[图片: ${att.url}]`;
+      if (mode === "document" && att.fileId) return `[附件: ${att.name}]`;
       return "";
     })
     .filter(Boolean);
   const firstMsg = [content, ...descs].filter(Boolean).join("\n");
   ```
-- **判定**：**已一致**（格式串 `[图片: URL]` / `[附件: 文件名]` **逐字相同**，拼接顺序 `content` 在前、`\n` 分隔、`.filter(Boolean)` 去空 —— 全部一致）
-- 预估改动：**0 行**（若采纳 H-65 的 mode 改造，此处同步改成按 mode 判断，输出不变）
+- **判定**：**已一致**（格式串 `[图片: URL]` / `[附件: 文件名]` **逐字相同**，拼接顺序 `content` 在前、`\n` 分隔、`.filter(Boolean)` 去空 —— 全部一致；判定条件也已随 H-65 改成按 mode）
+- 预估改动：**0 行**
 
 ## H-67　无附件时不写 sessionStorage
 
-- **web**：`gacode-web/src/app/page.tsx:160-163` —— `doneItems.length === 0` 直接返文本，不写 sessionStorage
-- **PC**：`gacode-electron/src/routes/Home.tsx:148` —— `if (imageUrls.length > 0 || attachedFileIds.length > 0)` 才写
+- **web**：`gacode-web/src/app/page.tsx:182` —— `doneItems.length === 0` 直接返文本，不写 sessionStorage
+- **PC**：`gacode-electron/src/routes/Home.tsx:166` —— `if (imageUrls.length > 0 || attachedFileIds.length > 0)` 才写
 - **判定**：**已一致**
 - 预估改动：**0 行**
 
@@ -2218,7 +1663,7 @@
   // ChatDetail 进页时由 useEffect 异步调 autoTitleSession 覆盖.
   mutationFn: (_firstMsg: string) => createChat(),
   ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:100-101`　`mutationFn: () => createChat()` —— **同样不传 title**
+- **PC**：`gacode-electron/src/routes/Home.tsx:109`　`mutationFn: () => createChat()` —— **同样不传 title**
 - **判定**：**已一致**
 - 预估改动：**0 行**
 
@@ -2234,18 +1679,31 @@
     });
   },
   ```
-- **PC**：`gacode-electron/src/routes/Home.tsx:105-110`
+- **PC**：`gacode-electron/src/components/ui/Toast.tsx:32-45`（**已支持 `title` / `description`**，commit `5504f93`）+ `gacode-electron/src/routes/Home.tsx:121`（**D 批次已改成双字段**）
   ```tsx
   onError: (err) => {
     toast({
-      message: `创建对话失败: ${err instanceof Error ? err.message : String(err)}`,
+      title: "创建对话失败",
+      description: err instanceof Error ? err.message : String(err),
       variant: "danger",
     });
   },
   ```
-- **判定**：形态不同（PC 单字段拼接 vs web 双字段）
-- **怎么改**：见 H-42 的同一处置（PC toast 无 title/description）→ 归入 S-04。**当前形态信息等价，不单独改**。
-- 预估改动：**0 行（现状可接受）**
+- **判定**：~~形态不同~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **怎么改**：目标文件 `gacode-electron/src/routes/Home.tsx`（**1 处调用点**）：
+  ```tsx
+  onError: (err) => {
+    toast({
+      title: "创建对话失败",
+      description: err instanceof Error ? err.message : String(err),
+      variant: "danger",
+    });
+  },
+  ```
+  - ℹ️ §9 的 **S-04（Toast 双字段）已结案**（`5504f93` 落地），本条剩下的只是调用点。
+  - ℹ️ PC 的 Toast 是「屏幕正中 + 遮罩」形态（与 web `components/common/Toast.tsx` 1:1），与 web 一致；**字段拆分 D 批次已跟上**。
+  - ⚠️ 改双字段后不再出现「创建对话失败: xxx」的前缀式单行文案（`title` 就是「创建对话失败」，原始错误进 `description`）。
+- 预估改动：**0 行（D 批次已落地）**
 
 ## H-70　web 的未登录拦截点（3 处）
 
@@ -2261,31 +1719,35 @@
     }
   };
   ```
-- **PC**：`PC 缺失`（PC 未登录进不了 Home，见 H-02）
-- **判定**：缺失（依附 H-02）
-- **怎么改**：随 S-01 一起处理。若 S-01 拍板「PC 不做未登录态」，本条**作废**。
+- **PC**：`PC 缺失`（PC 未登录进不了 Home，见 H-02）—— `src/routes/Home.tsx:345`（`+` 无未登录判断）、`:337-353`（`<ChatInputBar>` 无未登录拦截）
+- **判定**：**缺失**（依附 H-02）
+- **怎么改**：随 S-01 一起处理。若 S-01 拍板「PC 不做未登录态」，本条**作废**。**本轮未动**。
 - 预估改动：**0 行（随 S-01）**
 
 ---
 
-# §9 结构级差异 · 需 gaga 拍
+# §9 结构级差异 · 7 条（4 条已结案 / 1 条按既有决策不改 / 2 条仍待 gaga 拍）
 
+> **本节状态一览**：S-03 ✅ 已落地（`6dc3c3d`）· S-04 ✅ 已落地（`5504f93`）· S-05 ✅ 已落地（`5504f93` + `6dc3c3d`）· S-07 ✅ 已落地（`5504f93`）· S-06 📌 按既有决策保持不改（选项 A）· S-01 ⏳ 仍待 gaga 拍 · S-02 ⏳ 仍待 gaga 拍。
+>
 > **PC 侧栏常驻已拍板保留**（gaga 2026-10-26：「PC 的 256px 常驻侧栏保留，不改成 web 的 Drawer 抽屉」）。因此「侧栏常驻 vs web 抽屉」**不在本节**，对应条目 H-03 / H-04 已标「✅ 已拍板 · PC 不还原」。侧栏**内部**的置顶可折叠分组 / pin 按钮 / 条目视觉形态 / 圆角间距 hover 态 / 计数与折叠箭头对齐，属 ChatList 侧栏域，不在本 HOME 页清单范围。
 
 ## S-01　未登录态整块缺失（Home 页形态分叉）
 
+**状态**：⏳ **仍待 gaga 拍**（本轮未动）
+
 - **web**：`gacode-web/src/app/page.tsx:425-537` —— 未登录时 Home **不跳登录**，而是渲染：
-  - 居中 Cody 头像 120px（`page.tsx:455-461`，`width={120} height={120}`）
-  - 居中标题（`page.tsx:465-467`）
+  - 居中 Cody 头像 120px（`page.tsx:456-462`，`width={120} height={120}`）
+  - 居中标题（`page.tsx:466`）
   - 居中输入框 Card（`page.tsx:471-487`，`w-full max-w-2xl`）
   - 左上 ☰ 菜单按钮 + 右上「登录」按钮（`page.tsx:428-449`）
   - 点 ☰ / 点输入框 → AlertDialog「登录后即可跟 Cody 对话」（`page.tsx:490-535`），带「再看看」「去登录」两个按钮
-- **PC**：`src/App.tsx:103-109` 用 `<Protected>` 包住 Home，未登录直接跳 `/login`；PC `Home.tsx` 无任何未登录分支
+- **PC**：`src/App.tsx:103-109` 用 `<Protected>` 包住 Home，未登录直接跳 `/login`；PC `src/routes/Home.tsx`（381 行）无任何未登录分支
 - **改造影响面**：
   - 改 `src/App.tsx:103-109` 的路由守卫（`Protected` → 允许匿名访问 Home）
   - 改 `src/routes/Home.tsx` 增加 `isAuthenticated` 分支（约 120 行 JSX + 约 60 行 state/handler）
   - 新增 PC 端 AlertDialog 组件（web 的 `page.tsx:490-535` 是**内联**在 page.tsx 里的，不是共用组件 → PC 需新写或复用 `src/components/ui/ConfirmDialog.tsx`）
-  - 需确认 PC 的 `useAuth()`（`src/lib/auth.tsx`）在 `user === null` 时是否会被 `Protected` 之外的组件安全读取（`Home.tsx:82` 已经在用 `useAuth()`）
+  - 需确认 PC 的 `useAuth()`（`src/lib/auth.tsx`）在 `user === null` 时是否会被 `Protected` 之外的组件安全读取
   - 需确认匿名状态下 `createChat()` 会不会 401（会 → 发送前必须走未登录拦截）
 - **需要 gaga 拍**：PC 端要不要做未登录态？
   - **选项 A（推荐，成本低）**：**不做**。PC 是桌面客户端，登录是必需的前置；web 做未登录态是因为它是公开落地页（要引流注册）。保持 PC `Protected` 现状 → H-02 / H-25 / H-70 三条直接作废。
@@ -2294,89 +1756,106 @@
 
 ## S-02　附件区的归属与 attachments state 所有权（跨 chat 域）
 
+**状态**：⏳ **仍待 gaga 拍**（本轮未动；H-11 的附件区位置差异保持原样）
+
 - **现状**：
   - web `page.tsx:306-357`：附件预览区在 **Home 页自己的 JSX 里**（ChatInputBar **外面**），数据源是 `useAttachmentUpload()` hook（`web/src/hooks/useAttachmentUpload.ts`），状态由 Home 持有
-  - PC `ChatInputBar.tsx:173`：`const [attachments, setAttachments] = useState<AttachmentItem[]>([])` —— 状态在 **ChatInputBar 内部**，Home 拿不到
+  - PC `src/components/chat/ChatInputBar.tsx:224`：`const [attachments, setAttachments] = useState<AttachmentItem[]>([])` —— 状态在 **ChatInputBar 内部**，Home 拿不到（`Home.tsx` 的 `<ChatInputBar>` 无 `onAttachmentsChange` 之类的上报通道）
 - **改造影响面**：
-  - 要让 PC 的附件区对齐 web（位置在输入条外面、间距 `gap-2`、Home 能自己控制），必须让 attachments state 上移到 Home
+  - 要让 PC 的附件区对齐 web（位置在输入条外面、Home 能自己控制），必须让 attachments state 上移到 Home
   - 或 ChatInputBar 增加 `onAttachmentsChange?: (items: AttachmentItem[]) => void` 回调（同步上报），Home 读 state 做渲染
-  - **两种做法都会波及 `src/routes/ChatDetail.tsx`**（它也用 ChatInputBar）→ **必须与 chat 域 worker 协调，不能两个 worker 同时改 ChatInputBar**
-  - 另外 H-15（上传中禁止提交）、H-16（部分失败 warning）依赖 attachments state 可见 → 同批解决
+  - **两种做法都会波及 `src/routes/ChatDetail.tsx`**（它也用 ChatInputBar，且 chat 域 worker 正在动这块）→ **不能两个 worker 同时改 ChatInputBar**
+  - 另外 H-15（上传中禁止提交）、H-16（部分失败 warning）里，H-16 的 **Home 侧接线**也依赖这条（`onSubmitNotice` 目前只有 `ChatDetail.tsx:1319` 接了线）
 - **需要 gaga 拍**：附件 state 归谁？
   - **选项 A（推荐）**：ChatInputBar 保持内部持有 + 新增 `onAttachmentsChange` 回调，Home 只读不改。改动小、不破坏 ChatDetail。
   - **选项 B**：attachments state 上移到 Home，ChatInputBar 改受控（`attachments` + `onAttachmentsChange`）。彻底对齐 web，但 ChatInputBar 大改 → chat 域要重排。
-- **PM 建议**：选 A。**但需明确：ChatInputBar 的改动由 chat 域 worker 执行，本清单的 H-11 / H-15 / H-16 三条是给 chat 域的输入规格，不是 Home worker 可单独完成的任务。**
+- **PM 建议**：选 A。**但需明确：ChatInputBar 的改动由 chat 域 worker 执行，本清单的 H-11 / H-16（Home 侧）两条是给 chat 域的输入规格，不是 Home worker 可单独完成的任务。**
 
 ## S-03　`+` Sheet → MediaPicker 的层级（拍照入口位置）
+
+**状态**：✅ **已落地**（commit `6dc3c3d`）—— 本条已结案，不再需要 gaga 拍
 
 - **web**：
   - `SheetActionMenu`（`web/src/components/chat/SheetActionMenu.tsx:76-95`）只有 4 项：**图片 / 文件 / 表情 / 挂载知识库** —— **Sheet 里没有「拍照」**
   - 选「图片」→ `openPicker("image")`（`page.tsx:105-115`）→ `MediaPicker` **image 模式** → MediaPicker 内部并排显示 **拍照 + 相册** 两个圆形按钮（`web/src/components/common/MediaPicker.tsx:217-239`）
   - 选「文件」→ `openPicker("file")` → MediaPicker **file 模式** → 只有「选择文件」按钮（`MediaPicker.tsx:207-216`）
-- **PC**：
-  - `PlusSheet`（`PC src/components/home/PlusSheet.tsx:72-135`）有 6 项，含顶层「拍照」
-  - 选「拍照」→ `handlePlusPick("camera")`（`Home.tsx:171-174`）→ `MediaPicker kind="camera"` → MediaPicker 显示**一个**按钮「打开拍照」
-  - MediaPicker 的 image 模式**没有并排的拍照/相册双按钮**
-- **改造影响面**：改 `PlusSheet.tsx`（删「拍照」项 + 改 `PlusAction` 类型）、改 `MediaPicker.tsx`（改 `MediaKind` 两态 + image 模式重写为双按钮）、改 `Home.tsx`（`handlePlusPick` 的 case 合并 + `pickUploadMode`）、改 `PlusSheet` 的 `PlusAction` 类型定义
-- **需要 gaga 拍**：
-  - **选项 A（推荐，1:1 还原 web）**：拍照下沉到 MediaPicker。Sheet 显示 4 项（图片/文件/表情/挂载知识库），点「图片」进 MediaPicker，MediaPicker 内并排「拍照 / 相册」。**代价**：PC 用户点「拍照」从 2 跳变 3 跳。
-  - **选项 B**：保持 PC 现状（顶层拍照 1 跳到 MediaPicker），MediaPicker 仍单按钮。**不 1:1 还原**，但操作更短。
-- **PM 建议**：选 A（gaga 明确「先 1:1 还原 web」，且 MediaPicker 双按钮本身就是 H-32 的改动，两条合并做只多改一个文件）。
+- **PC（落地后）**：
+  - `src/components/home/PlusSheet.tsx:77-96` 4 项（图片 / 文件 / 表情 / 挂载知识库），顶层「拍照」已删
+  - `src/components/home/MediaPicker.tsx:107-124` image 模式并排「拍照 + 相册」双钮；`:147-156` 拍照 input 带 `capture="environment"`
+  - `src/routes/Home.tsx:197-200` `case "image"` → MediaPicker image 模式
+- **落地结论**：选项 A（拍照下沉到 MediaPicker）已实施。对应条目 H-26 / H-32 / H-40 均已落地。
+- ⚠️ **连带影响**：PC 用户点「拍照」从 2 跳变 3 跳（Sheet → MediaPicker → 拍照钮），这是 1:1 还原 web 的代价，已接受。
 
 ## S-04　PC Toast 组件无 title / description 双字段
 
+**状态**：✅ **已落地**（commit `5504f93`）—— 本条已结案，不再需要 gaga 拍
+
 - **web**：`web/src/components/ui/Toast.tsx`（`useToast()` 返回的 `toast({ title, description, variant })`）—— 首页用到 4 处双字段 toast：
   - `page.tsx:76-82`（创建对话失败）、`:120-127`（上传失败）、`:219-226`（附件还在上传中）、`:228-234`（部分附件上传失败）
-- **PC**：`src/components/ui/Toast.tsx:31` —— `toast: (input: { message: string; variant?: ToastVariant; duration?: number }) => void`，**只有单行 message**
-- **改造影响面**：改 `src/components/ui/Toast.tsx`（新增 `title?: string` / `description?: string` 两个 prop + 渲染成两行）+ **全站所有 toast 调用点**（`variant` 已有，不受影响；只新增可选 prop → 旧调用点不用改）→ 影响面其实可控
-- **需要 gaga 拍**：
-  - **选项 A（推荐）**：给 PC Toast 加 `title` / `description` 可选 prop（向后兼容，旧调用点零改动），HOME 页 4 处 toast 改成双字段跟 web 一致。~30 行。
-  - **选项 B**：不改 Toast 组件，HOME 页沿用单行拼接（信息等价，视觉不同）。
-- **PM 建议**：选 A。改 Toast 是向后兼容的新增 prop，不破坏任何现有调用点，但能让 HOME 页 toast 跟 web 逐字一致。
+- **PC（落地后）**：`src/components/ui/Toast.tsx:32-45`
+  ```tsx
+  export interface ToastItem {
+    id: string;
+    title?: ReactNode;
+    description?: ReactNode;
+    /** 兼容旧调用点 — 单行文案 (title 缺省时顶替 title) */
+    message?: ReactNode;
+    variant?: ToastVariant;
+    duration?: number;
+  }
+  ```
+  + 视觉形态同 web（屏幕正中 + 遮罩 + 两行排版 + 2500ms 自动消失，见 `Toast.tsx:134-172`）
+- **落地结论**：选项 A（给 PC Toast 加 `title` / `description`）已实施，且**向后兼容**（`message` 保留为 `title` 的别名，全站旧调用点零改动）。
+- ⚠️ **剩下的只是 HOME 页的调用点**：H-42（上传失败）、H-69（创建对话失败）这 2 处仍是单行 `message` ⇒ 各自 1 行可改。
 
 ## S-05　BottomSheet 公共组件形态与 web SheetContent 的差距
 
+**状态**：✅ **已落地**（commit `5504f93` 底座形态 + `6dc3c3d` 补 prop）—— 本条已结案，不再需要 gaga 拍
+
 - **web**：web 的所有底部面板都基于 `web/src/components/ui/sheet.tsx` 的 `<SheetContent side="bottom" className="...">`，每个面板自己定 className，**无统一标题栏、无统一 padding**
-- **PC**：`src/components/ui/BottomSheet.tsx` 是**单一公共组件**，强制「标题栏 + `p-5` + `max-w-[80vh]` + `max-w-2xl` 居中」形态，被 PlusSheet / MediaPicker / EmojiPicker / LibraryPicker / ChatDetail 多处复用
-- **改造影响面**：
-  - 要让 HOME 页 4 个面板对齐 web 各自形态（MediaPicker 黑底无标题、EmojiPicker 无标题 `p-0 max-h-[70vh]`、LibraryPicker 有标题+副标题+底部条、PlusSheet 无标题 4 列网格），需要给 `BottomSheet` 加 4 个能力：
-    - `contentClassName?: string`（覆盖容器 className，H-29）
-    - `title?: string` 改可选（无标题时隐藏标题栏，H-43）
-    - `subtitle?: string`（标题下副标题，H-54）
-    - `header?: ReactNode`（固定在滚动区外的头部，H-46 的彻底方案）
-  - 改 `BottomSheet.tsx` 会**波及所有调用方** → 必须与 chat 域 worker 协调（ChatDetail 也在用 BottomSheet）
-- **需要 gaga 拍**：
-  - **选项 A（推荐）**：给 `BottomSheet` 加上述可选 prop（全部默认保持现有行为 → 其他调用方零改动），HOME 页 4 个面板各自传。~40 行。
-  - **选项 B**：HOME 页不用 `BottomSheet`，为 Home 单独写一套面板组件。**不推荐** —— 违反 gaga 2026-10-22「组件意识：禁止重复实现」的要求。
-- **PM 建议**：选 A。且这 4 个新 prop 建议由 **chat 域 worker 统一加**（他也在改 ChatInputBar 和 ChatDetail 的面板），避免两个 worker 同时改 `BottomSheet.tsx`。
+- **PC（落地后）**：`src/components/ui/BottomSheet.tsx:64-108` 已具备全部所需能力：
+  | prop | 用途 | 对应条目 |
+  |---|---|---|
+  | `contentClassName?: string` | 覆盖容器 className（圆角 / 最大宽 / padding） | H-29 / H-33 |
+  | `title?: string`（可选） | `undefined` 时不渲染标题栏 | H-29 / H-43 |
+  | `subtitle?: string` | 标题下副标题 | H-54 |
+  | `header?: ReactNode` | 固定在滚动区外的头部 | H-46 / H-54 |
+  | `maxHeight?: string` | 覆盖容器最大高（传了就不输出底座的 `max-h-[85vh]`） | H-43 |
+  | `titleClassName?` / `hideTitle?` | 标题样式 / 只隐藏标题栏但保留 aria-label | — |
+  + 底座本身也已改成 web 的底部抽屉形态（`BottomSheet.tsx:168`：`w-full inset-x-0 bottom-0 rounded-t-2xl bg-bg-elevated text-fg shadow-elevation-3 flex flex-col p-6`），全部默认行为不变、其它调用方零改动。
+- **落地结论**：选项 A（给 `BottomSheet` 加可选 prop）已实施，**没有为 HOME 页另写一套面板组件**（符合 gaga 2026-10-22「组件意识」要求）。
 
 ## S-06　ChatInputBar 的受控 / 非受控 API 形态
 
+**状态**：📌 **按既有决策保持不改**（选项 A）—— 本条不再需要 gaga 拍
+
 - **web**：`web/src/components/chat/ChatInputBar.tsx:20-43` —— **受控**：`value: string` + `onChange: (v: string) => void` + `onSend: () => void` + `onPlusClick?` + `onAbort?` + `placeholder?` + `disabled?` + `isStreaming?` + `caption?` + `className?` + `maxHeight?`。**ChatInputBar 内部不存 text**（源码注释 `ChatInputBar.tsx:16-17` 明说「受控组件… ChatInputBar 不存 value」）
-- **PC**：`src/components/chat/ChatInputBar.tsx:113-145` —— **非受控**：内部 `useState("")`（`:170`）+ `onSubmit: (text, attachments) => boolean | void` + `onStop` + `isStreaming`（必填）+ `canRerun` + `onRerun` + `onSlashCommand` + `onPlusClick` + `onAttachmentError`。**用 `useImperativeHandle` 暴露 `insertEmoji` / `insertText` / `addAttachment` / `focus`**（`:106-111`）
-- **改造影响面**：改成受控会波及 `src/routes/ChatDetail.tsx`（它靠 `insertText` / `addAttachment` 命令式写回 textarea）+ slash 菜单逻辑（`ChatInputBar.tsx:413-459` 依赖内部 `text`）+ 拖拽/粘贴上传（`:280-386` 依赖内部 `attachments`）→ **ChatInputBar 基本要重写**
-- **需要 gaga 拍**：
-  - **选项 A（推荐）**：**不改 API 形态**。web 的受控形态是 web 侧「Home 和 ChatDetail 共用一个组件」的设计产物；PC 的命令式形态是 PC 侧「ChatInputBar 自治 + parent 通过 ref 指挥」的设计产物。**功能上已覆盖**（H-10 已登记对照）。只补 web 有而 PC 缺的**可选 props**：`placeholder` / `disabled` / `caption` / `maxHeight`（H-22 / H-23 / H-24）。
-  - **选项 B**：改成受控 + 全部对齐。成本极高，且与 chat 域的 slash 菜单 / 拖拽上传实现强耦合。
-- **PM 建议**：选 A。**本页的 H-10 / H-19 / H-20 / H-21 / H-22 / H-23 / H-24 全部以「补可选 props + 改 className」为边界，不动 ChatInputBar 的状态模型。**
+- **PC**：`src/components/chat/ChatInputBar.tsx:137-187` —— **非受控**：内部 `useState("")`（`:216`）+ `onSubmit: (text, attachments) => boolean | void` + `onStop` + `isStreaming`（必填）+ `canRerun` / `onRerun` / `onSlashCommand` / `onPlusClick` / `onAttachmentError` / `onSubmitNotice` / `placeholder?` / `caption?` / `disabled?`。**用 `useImperativeHandle` 暴露 `insertEmoji` / `insertText` / `insertLibraryMarker` / `addAttachment` / `focus` / `clear`**（`:118-135`）
+- **改造影响面**（若要改）：改成受控会波及 `src/routes/ChatDetail.tsx`（它靠 `insertText` / `addAttachment` 命令式写回 textarea）+ slash 菜单逻辑（`ChatInputBar.tsx:520-566` 依赖内部 `text`）+ 拖拽/粘贴上传（`:313-448` 依赖内部 `attachments`）→ **ChatInputBar 基本要重写**
+- **决策**：**选 A —— 不改 API 形态**。web 的受控形态是 web 侧「Home 和 ChatDetail 共用一个组件」的设计产物；PC 的命令式形态是 PC 侧「ChatInputBar 自治 + parent 通过 ref 指挥」的设计产物。**功能上已覆盖**（H-10 已登记对照）。
+- **本清单的边界**：H-10 / H-19 / H-20 / H-21 / H-22 / H-23 / H-24 全部以「补可选 props + 改 className」为边界，**不动 ChatInputBar 的状态模型**。
 
 ## S-07　MediaPicker 的桌面端形态冲突（黑底全宽 vs 灰底限宽）
 
+**状态**：✅ **已落地**（commit `5504f93`）—— 本条已结案，不再需要 gaga 拍
+
 - **web**：`web/src/components/common/MediaPicker.tsx:200` —— `bg-black border-t-0 text-white flex flex-col gap-0 p-0 max-h-[85vh]`，**纯黑底 + 白字 + 无圆角 + 全宽**，按钮是 `bg-white/10` 半透明白
-- **PC**：`src/components/ui/BottomSheet.tsx:49` —— `bg-bg-elevated`（#181818）+ `rounded-t-md` + `p-5` + `max-w-2xl` 居中，按钮是 `bg-bg-sunken`（#0a0a0a）
-- **改造影响面**：web 的 MediaPicker 视觉是**移动端全屏底部弹层**；PC 是桌面端居中限宽弹层。1:1 抄 web 的 `bg-black` + `!rounded-none` + `!max-w-none` 会让 PC 弹层横贯整个窗口底边，**与 PC 其他三个面板（限宽居中）视觉不统一**
-- **需要 gaga 拍**：
-  - **选项 A（推荐）**：**保留 PC 的限宽居中形态**，只对齐 web 的**内容**（拍照/相册双按钮、取消按钮、标题文案、file accept 白名单），底色保留 `bg-bg-elevated`。理由：PC 是桌面端，全宽黑底弹层不符合桌面交互习惯，且会与 PlusSheet / EmojiPicker / LibraryPicker 不一致。
-  - **选项 B（严格 1:1）**：照抄 web 的 `bg-black text-white !rounded-none !max-w-none !p-0`，按钮改 `bg-white/10`。
-- **PM 建议**：选 A。**「对齐」的判定标准建议改为「内容与交互一致，容器形态按端特性保留」** —— 这一点如果 gaga 认可，本清单里 S-07、H-33、H-43 的部分 className 要求可以降级为可选项。
+- **PC（落地前）**：`src/components/ui/BottomSheet.tsx` 底座是 `bg-bg-elevated`（#181818）+ `rounded-t-md` + `p-5` + `max-w-2xl` 居中，按钮是 `bg-bg-sunken`（#0a0a0a）
+- **PC（落地后）**：`BottomSheet.tsx:168` 底座已改成 **web 的底部抽屉形态**（`w-full inset-x-0 bottom-0 rounded-t-2xl bg-bg-elevated text-fg shadow-elevation-3 flex flex-col p-6` + `max-h-[85vh]`）⇒ **「全宽 vs 限宽」的桌面端冲突本身已消失**；`MediaPicker.tsx:82` 再用 `contentClassName="!bg-black !rounded-none !p-0 text-white"` 覆盖成 web 的黑底形态。
+- **落地结论**：原本「选项 A（保留 PC 限宽）/ 选项 B（严格 1:1）」的二选一**不再需要**—— PC 底座直接对齐了 web 的形态，MediaPicker 照抄 web 即可。
+- ⚠️ **代价**：PC 的**所有**底部面板现在都是全宽（`BottomSheet` 是公共组件）—— 这是 `5504f93` 已落地的既有事实，本条只登记，不再单独讨论。
 
 ---
 
 # §10 高价值发现（已核实 · web 与 PC 行为实际不一致）
 
 > 以下 11 条都是我逐行读过两边源码后确认的**真实行为差异**，不是样式观感差异。
+>
+> **本轮状态**：✅ 已修 **10** 条 · 🟡 部分修 **0** 条 · ⏳ 未修 **1** 条（逐条见下方的「状态」行）。
 
 ### F-01　PC「有附件、没文字」时点发送按钮**完全没反应**（web 能发）
+
+- **状态**：✅ **已修**（commit `5504f93`）→ H-17（`ChatInputBar.tsx:468` / `:479`）
 
 - **web**：`page.tsx:217`　`if (!content && upload.items.length === 0) return;` —— **有附件就允许提交**，文字可为空
 - **PC**：`ChatInputBar.tsx:389-390`　`if (!trimmed) return;` —— **文字为空直接 return**
@@ -2386,6 +1865,8 @@
 
 ### F-02　PC 上传中点发送 → 附件**静默消失**，无任何提示
 
+- **状态**：✅ **已修**（commit `5504f93`）→ H-15（`ChatInputBar.tsx:485-492`）；D 批次把 toast 变体从 `danger` 改成 web 的 `default`（两段式，见 H-15）
+
 - **web**：`page.tsx:219-226` —— 检测到 `hasUploading` 就弹 toast「附件还在上传中 / 请稍候几秒再发送」并 **return（不提交）**
 - **PC**：`ChatInputBar.tsx:392-394` 只取 `kind === "done"` 的附件传给 parent，**uploading 项被丢弃**；Home `handleSubmit`（`Home.tsx:114`）收到的是不含 uploading 附件的数组 → 直接 createChat
 - **后果**：用户点发送时上传还没完 → 附件永久丢失，**没有 toast、没有警告**
@@ -2393,12 +1874,16 @@
 
 ### F-03　PC 创建对话失败时，附件已被清空，**用户无法重试**
 
+- **状态**：✅ **已修**（commit `6dc3c3d`）→ H-18（`Home.tsx:113` / `:185`）
+
 - **web**：`page.tsx:237-239` —— createChat 失败只弹 toast，**附件 state 不动**（web 注释明说「这里不重置, 让 user 看到状态到 chat 页前都不丢」）
 - **PC**：`ChatInputBar.tsx:396-399` —— `onSubmit` 返回 `true` 后立即 `setText(""); setAttachments([])`；而 `Home.tsx:163` 的 `handleSubmit` **写死 `return true`**
 - **PC 的 createChat 失败路径**：`Home.tsx:105-110` 只弹 toast → **附件和文字都已清空，用户必须重新选文件**
 - **修法**：见 H-18（`handleSubmit` 返回 `false`，createChat 成功后再 `clear()`，~12 行）
 
 ### F-04　web 的文件白名单被它自己的组件架空，PC 用的是**另一串**
+
+- **状态**：✅ **已修**（commit `6dc3c3d`）→ H-36（`MediaPicker.tsx:45`）；⚠️ 残留：后端 mime 白名单待核
 
 - **web `page.tsx:110`** 传给 MediaPicker：`".pdf,.doc,.docx,.txt,.md,.zip,.json,.png,.jpg,.jpeg,.gif,.webp"`
 - **web `MediaPicker.tsx:254`**：`accept={modeProp === "file" ? (accept || FILE_ACCEPT) : accept}` —— 因为 `accept` 非空，**组件内置的 `FILE_ACCEPT`（`.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv`）被完全绕过**
@@ -2410,6 +1895,8 @@
 
 ### F-05　PC 的 MediaPicker image 模式**只有 1 个按钮**，web 是并排 2 个
 
+- **状态**：✅ **已修**（commit `6dc3c3d`）→ H-32（`MediaPicker.tsx:107-124`）
+
 - **web `MediaPicker.tsx:217-239`**：image 模式并排「拍照（w-24 h-24 rounded-full）」+「相册（w-24 h-24 rounded-full）」两个圆形按钮
 - **PC `MediaPicker.tsx:71-91`**：**单个**按钮 `w-40 h-24 rounded-md`，文案随入口变（「打开拍照」/「打开选择图片」）
 - **后果**：PC 的 MediaPicker 在 image 模式下**看不到「拍照」和「相册」并排的入口**，拍照被提升到 PlusSheet 顶层（与 web 的层级相反，见 S-03）
@@ -2417,12 +1904,17 @@
 
 ### F-06　PC 知识库挂载是**单选立即关闭**，web 是**多选 + 完成按钮**
 
+- **状态**：✅ **已修**（D 批次 · commit 待 PM 填）→ H-51：Home 侧 PC 已改成 web Home 的**单选**（`onSelect`）；多选能力保留在 chat 页（`KnowledgeAttachSheet` 传 `onConfirm`），与 web 的 chat 页同构
+
 - **web `LibraryPicker.tsx:121-149`**：`onConfirm` 存在时点行只切换勾选，**不关面板**；底部「完成 (N)」按钮才提交
 - **PC `LibraryPicker.tsx:144-150`**：点行立即 `onSelect(item); handleClose();` —— **单选、立即关闭**
-- **后果**：PC 用户想挂 2 条知识库做不到，只能挂 1 条再重新打开
-- **修法**：见 H-51 / H-52 / H-53（~100 行三件套）
+- **订正（2026-10-26 · D 批次）**：本条当初把「web Home」当成了多选 —— 实际 **web 的 Home 传的是 `onSelect`（单选）**，多选只发生在 **web 的 chat 页**（`chat/[id]/page.tsx` 传 `onConfirm`）。⇒ PC 的 Home 才是那个「多出 web 没有的形态」，现已改回单选（`Home.tsx:411`），chat 页的多选链路（`KnowledgeAttachSheet.tsx:34`）保持不变。
+- **后果（已消）**：PC 首页与 web 首页一致 —— 点行即插 marker 并关面板
+- **修法**：见 H-51（Home 侧 1 行 + 回调改单选）
 
 ### F-07　PC 的附件区**在 ChatInputBar 内部**，Home 无法独立控制
+
+- **状态**：⏳ **未修** → H-11 / S-02（附件区仍在 `ChatInputBar` 内部）
 
 - **web `page.tsx:306-357`**：附件区是 Home 页自己的 JSX，在 ChatInputBar **外面**，`px-4 pb-2` + `flex flex-wrap gap-2`
 - **PC `ChatInputBar.tsx:507-508`**：附件区在 ChatInputBar **里面**，`mb-2 flex flex-wrap gap-1.5`
@@ -2431,12 +1923,16 @@
 
 ### F-08　PC 欢迎语文案与 web **完全不同**
 
+- **状态**：✅ **已修**（commit `5504f93`）→ H-07（`Home.tsx:322-324`）
+
 - **web `page.tsx:295`**：`HI 我是 <span className="text-primary">cody</span> 很高兴遇见你`
 - **PC `Home.tsx:292-294`**：`HI 欢迎你,<span className="text-brand">{displayName}</span>`（`displayName` = `user?.displayName || user?.username || "访客"`）
 - **后果**：PC 首页喊的是用户名，web 首页喊的是「cody」品牌名 —— **这是首页第一眼可见的文案差异**
 - **修法**：见 H-07（4 行；改完要清掉 `displayName` / `useAuth` 的未使用变量）
 
 ### F-09　PC 输入区宽度 640px，web 已登录态 768px
+
+- **状态**：✅ **已修**（commit `5504f93`）→ H-09（`Home.tsx:336`）
 
 - **web `page.tsx:361`**：`<div className="max-w-3xl mx-auto">` = **768px**
 - **PC `Home.tsx:305`**：`<div className="max-w-2xl mx-auto w-full">` = **640px**
@@ -2445,12 +1941,16 @@
 
 ### F-10　PC 切「知识库类型 tab」会清空搜索词，web 不会
 
+- **状态**：✅ **已修**（commit `5504f93`）→ H-60（`LibraryPicker.tsx:180`）
+
 - **web `LibraryPicker.tsx:196`**：`onClick={() => setTypeFilter(t.key)}` —— 不动 search
 - **PC `LibraryPicker.tsx:85-88`** 的 `handleTypeChange` 会 `setSearch("")`
 - **后果**：PC 用户「搜『报告』→ 切到『文档』tab → 搜索词被清空 → 结果全变」
 - **修法**：见 H-60（5 行）
 
 ### F-11　PC 知识库列表项**没有类型颜色**，web 按类型分色
+
+- **状态**：✅ **已修**（commit `6dc3c3d`）→ H-56（`LibraryPicker.tsx:315-326` + `tailwind.config.ts:79`）
 
 - **web `LibraryPicker.tsx:47-59`**：image=`text-brand-cyan`（青）/ doc=`text-brand`（橙）/ link=`text-cron`（紫）/ 其他=`text-fg-muted`（灰）
 - **PC `LibraryPicker.tsx:186-261`**：4 个 case 全是 `stroke="currentColor"`，靠父容器 `text-fg-muted` 着色 → **全部灰色**
@@ -2459,88 +1959,31 @@
 
 ---
 
-# §11 施工顺序索引（按预估改动量从小到大）
+# §11 剩余待办（按预估改动量从小到大）
 
-> gaga 2026-10-26 要求「清单按改动量从小到大排」。本节是**施工顺序输入**（同档内按依赖排：先做公共组件改动，再做页面）。
+> gaga 2026-10-26 要求「清单按改动量从小到大排」。本节**只列还没做的条目**（已落地的 62 条见 §12 的「已一致」清单）。
+>
+> **D 批次（2026-10-26）后状态**：Home 域能自行施工的 5 条（H-15 / H-16 / H-42 / H-54 / H-69）**已全部落地**；H-51 残留也已按 gaga 21:35 口径（PC 有 web 没有的必须删）收口。剩余条目**全部跨域或待拍板**。
 
-## 档位 0 · 0 行（已一致，不动）
+## 档位 0 · 1–2 行（纯 className / 一行逻辑）
 
-H-08 · H-27 · H-37 · H-39 · H-41 · H-47 · H-48 · H-49 · H-50 · H-59 · H-64 · H-66 · H-67 · H-68 · H-10（登记不改正）· H-42 · H-63 · H-69 · H-03 · H-04
+| 序 | 条目 | 一句话 | 归属 |
+|---|---|---|---|
+| 1 | H-12 | PC `UploadProgressBar.tsx:36` 底色 + `:50` 填充色 / 过渡属性对齐 web | chat 域（**D 批次跳过**：目标文件不在本批所有权白名单内） |
 
-## 档位 1 · 1–3 行（纯 className / 一行逻辑）
+## 档位 1 · ~6 行
 
-| 序 | 条目 | 一句话 |
-|---|---|---|
-| 1 | H-36 | PC `MediaPicker.tsx:32` 的 `FILE_ACCEPT` 换成 web 实际生效的那串（`.md/.zip/.json/...`） |
-| 2 | H-13 | PC `AttachmentChip.tsx:50` 底色 `bg-bg-elevated` → `bg-bg-base` + `shadow-sm`（**必须与 H-19 同批，否则 chip 在黑底消失**） |
-| 3 | H-45 | PC `EmojiPicker.tsx:137` 分类 tab 容器加 `mt-3` |
-| 4 | H-01 | PC `Home.tsx:274` 根容器 `min-h-full` → `min-h-screen`、`bg-bg-base` → `bg-background` |
-| 5 | H-06 | PC `Home.tsx:286-291` 头像 `w-[72px] h-[72px]` → `w-16 h-16`、`rounded-xl` → `rounded-squircle`，外层 `gap-3` → `gap-4`（**真图 `cody_512.png` 待 gagaOS 提供**） |
-| 6 | H-61 | PC `LibraryPicker.tsx:144` 加 `data-testid="library-picker-item"` + `data-item-id` |
-| 7 | H-17 | PC `ChatInputBar.tsx:389` 允许「有附件无文字」提交 |
-| 8 | H-05 | PC `Home.tsx:284` 删 `justify-center`、加 `text-center`、`lg:px-8` → `px-4`，补 `<div className="flex-1" />` |
-| 9 | H-09 | PC `Home.tsx:305` `max-w-2xl` → `max-w-3xl`、`bg-bg-base` → `bg-background` |
-| 10 | H-12 | PC `UploadProgressBar.tsx:36` 底色 + 填充色 + 过渡属性对齐 web |
-| 11 | H-43 | PC `EmojiPicker.tsx:126` 加 `contentClassName="!p-0 !max-h-[70vh]"` + `title={undefined}`（依赖 H-29） |
-| 12 | H-46 | PC `EmojiPicker.tsx:161` 网格加 `px-4` |
-| 13 | H-38 | PC `MediaPicker.tsx:58` 关闭时清双 input value（依赖 H-32） |
-| 14 | H-20 | PC `ChatInputBar.tsx:562` `+` 按钮改 `rounded-full` + 去底色 + 图标 20px |
-| 15 | H-23 | PC `ChatInputBar.tsx:578` placeholder 改 `"说点什么…"`（新增 `placeholder` prop） |
-| 16 | H-30 | PC `Home.tsx:169-191` 五处 `setTimeout(..., 80)` → `100` |
-| 17 | H-34 | PC `MediaPicker.tsx:70` 加标题 `<h3>` + 容器 padding 对齐 |
-| 18 | H-56 | PC `LibraryPicker.tsx:186-261` 类型图标加 className 颜色 + 删父级 `text-fg-muted` |
-| 19 | H-55 | PC `LibraryPicker.tsx:150` 列表项 `rounded-lg` + 选中态 `!border-brand bg-brand/5` |
-| 20 | H-60 | PC `LibraryPicker.tsx:85-88, 107` 切 tab 不清 search |
+| 序 | 条目 | 一句话 | 归属 |
+|---|---|---|---|
+| — | （空） | D 批次后无 1 档条目 | — |
 
-## 档位 2 · 4–8 行
+## 档位 2 · 跨域 / 待 gaga 拍
 
-| 序 | 条目 | 一句话 |
-|---|---|---|
-| 20 | H-31 | PC `PlusSheet.tsx:172-178` 知识库图标换成 lucide `Library` path |
-| 21 | H-07 | PC `Home.tsx:292-294` 欢迎语改「HI 我是 cody 很高兴遇见你」+ 清 `displayName` |
-| 22 | H-33 | PC `MediaPicker.tsx:69` 黑底无圆角无标题（`contentClassName`） |
-| 23 | H-35 | PC `MediaPicker.tsx` 加底部「取消」按钮 |
-| 24 | H-28 | PC `PlusSheet.tsx` 6 个 SVG `strokeWidth` 1.8 → 2 |
-| 25 | H-24 | PC `ChatInputBar.tsx` 新增 `disabled` prop + Home 传 `createMutation.isPending` |
-| 26 | H-15 | PC `ChatInputBar.tsx:392` 插入上传中拦截（`hasUploading` → `onAttachmentError` → return） |
-| 27 | H-16 | PC `ChatInputBar.tsx` + `Home.tsx` 新增 `onSubmitNotice`（部分失败 warning） |
-
-## 档位 3 · 10–18 行
-
-| 序 | 条目 | 一句话 |
-|---|---|---|
-| 28 | H-57 | PC `LibraryPicker.tsx` 空态加 `LibraryGlyph` 图标 |
-| 29 | H-54 | PC `BottomSheet` 加 `subtitle` prop + LibraryPicker 标题改「选择知识库」 |
-| 30 | H-44 | PC `EmojiPicker.tsx` 加 Search 图标 + `pl-9` + `focus:ring-brand` |
-| 31 | H-58 | PC `LibraryPicker.tsx` 加 Search 图标 + `pl-9` + `focus:ring-brand`（**与 H-44 共用 `SearchGlyph` 组件**） |
-| 32 | H-14 | PC `UploadErrorChip.tsx` 颜色对齐 web 亮色红系 |
-| 33 | H-18 | PC `Home.tsx` + `ChatInputBar.tsx` 附件清空时机改为 createChat 成功后 |
-| 34 | H-22 | PC `ChatInputBar.tsx` 加底部 caption「AI 生成内容请核实重要信息」 |
-| 35 | H-21 | PC `ChatInputBar.tsx` 发送按钮改 `rounded-full` + ArrowUp 图标 + disabled 态 |
-| 36 | H-65 | PC `PendingAttachment` 加 `mode` 字段 + Home 按 mode 分流（web M-doc bug 对齐） |
-| 37 | H-52 | PC `LibraryPicker.tsx` 加勾选框 + `CheckGlyph` |
-| 38 | H-29 | PC `BottomSheet.tsx` 加 `contentClassName` + `title` 改可选（**公共组件，chat 域协同**） |
-| 39 | H-11 | PC 附件区上移 Home + ChatInputBar 暴露附件状态（**跨 chat 域，见 S-02**） |
-| 40 | H-26 | PC `PlusSheet.tsx` 删「拍照」项 + 网格改 `grid-cols-4 gap-3` |
-
-## 档位 4 · 20 行以上
-
-| 序 | 条目 | 一句话 |
-|---|---|---|
-| 41 | H-62 | PC `LibraryPicker.tsx` 引入 `date-fns` 依赖 + 换 `formatDistanceToNow` |
-| 42 | H-40 | PC `MediaKind` 三态 → 两态（`camera/gallery/file` → `image/file`）+ `PlusAction` 联动 |
-| 43 | H-32 | PC `MediaPicker.tsx` image 模式重写为「拍照 + 相册」双按钮 + 双 hidden input |
-| 44 | H-53 | PC `LibraryPicker.tsx` 加底部「完成 (N)」按钮（用 BottomSheet footer） |
-| 45 | H-19 | PC `ChatInputBar.tsx` 外层卡片重构（`bg-bg-elevated rounded-md px-4 py-3` + 裸 textarea） |
-| 46 | H-51 | PC `LibraryPicker.tsx` 多选改造（`onConfirm` + `pendingSelected` + `pendingItems` + `toggleItem` + `handleConfirm`）+ ChatInputBar 加 `insertLibraryMarker` + Home 传 `onConfirm` |
-
-## 档位 5 · 待 gaga 拍板后再排（不占当前工时）
-
-| 序 | 条目 | 一句话 |
-|---|---|---|
-| 47 | H-02 | PC `Home.tsx` 未登录分支整块缺失（居中 Cody 120px + 居中输入框 + 右上「登录」按钮）—— 随 **S-01** 拍板 |
-| 48 | H-25 | PC `+` 点击的未登录拦截 —— 随 **S-01** 拍板（若选 A 则作废） |
-| 49 | H-70 | PC 三处未登录拦截（菜单 / `+` / 发送）+ 输入框 blur 150ms 触发 —— 随 **S-01** 拍板（若选 A 则作废） |
+| 序 | 条目 | 一句话 | 归属 |
+|---|---|---|---|
+| 2 | H-11 | 附件区上移 Home（ChatInputBar 暴露附件状态） | **chat 域** + 待 S-02 拍板 |
+| 3 | H-02 / H-25 / H-70 | 未登录态整块缺失（居中 Cody 120px + 居中输入框 + 右上「登录」按钮 + 3 处拦截） | **待 S-01 拍板** |
+| 4 | H-63 | firstMessage 改走 URL query（PC 现在走 sessionStorage） | **建议不改**（见 §12「本轮不做」） |
 
 ---
 
@@ -2548,22 +1991,140 @@ H-08 · H-27 · H-37 · H-39 · H-41 · H-47 · H-48 · H-49 · H-50 · H-59 · 
 
 | 判定 | 条数 | 明细 |
 |---|---|---|
-| **缺失** | **14** | H-02、H-03、H-04、H-15、H-16、H-22、H-24、H-25、H-35、H-51、H-52、H-53、H-61、H-70 |
-| **形态不同** | **42** | H-01、H-05~H-07、H-09~H-14、H-17~H-21、H-23、H-26、H-28~H-34、H-36、H-38、H-40、H-42~H-46、H-54~H-58、H-60、H-62、H-63、H-65、H-69 |
-| **已一致** | **14** | H-08、H-27、H-37、H-39、H-41、H-47、H-48、H-49、H-50、H-59、H-64、H-66、H-67、H-68 |
+| **已一致（已落地）** | **62** | H-01、H-05、H-06、H-07、H-08、H-09、H-10、H-13、H-14、H-15、H-16、H-17、H-18、H-19、H-20、H-21、H-22、H-23、H-24、H-26、H-27、H-28、H-29、H-30、H-31、H-32、H-33、H-34、H-35、H-36、H-37、H-38、H-39、H-40、H-41、H-42、H-43、H-44、H-45、H-46、H-47、H-48、H-49、H-50、H-51、H-52、H-53、H-54、H-55、H-56、H-57、H-58、H-59、H-60、H-61、H-62、H-64、H-65、H-66、H-67、H-68、H-69 |
+| **部分落地（已改 · 仍有残留差异）** | **0** | （本轮清空 —— H-15 / H-16 / H-51 / H-54 全部收口） |
+| **形态不同（未改）** | **3** | H-11、H-12、H-63 |
+| **缺失（未做）** | **3** | H-02、H-25、H-70 |
+| **已拍板 · PC 不还原** | **2** | H-03、H-04 |
 | **合计** | **70** | |
 
-**缺失 14 条的分布**：
-- ✅ 已拍板不还原：2 条（H-03 顶部 ☰+Drawer、H-04 顶部栏容器）—— PC 侧栏常驻已拍板保留
-- ⏳ 依附 S-01（未登录态，未拍板）：3 条（H-02 未登录分支、H-25 `+` 未登录拦截、H-70 三处未登录拦截）
-- 🔧 真缺失，需实做：9 条（H-15 上传中禁提交、H-16 部分失败 warning、H-22 caption、H-24 disabled 态、H-35 取消按钮、H-51 知识库多选、H-52 勾选框、H-53 完成按钮、H-61 data-testid）
+**已一致 62 条的落地来源**：
+- **C 批次 `6dc3c3d` 落地 —— 24 条**：H-06、H-14、H-18、H-23、H-24、H-26、H-29、H-31、H-32、H-33、H-34、H-35、H-36、H-38、H-40、H-43、H-44、H-45、H-46、H-56、H-57、H-58、H-62、H-65
+- **批 1 `5504f93` 落地 —— 17 条**：H-01、H-05、H-07、H-09、H-10、H-13、H-17、H-19、H-20、H-21、H-22、H-30、H-52、H-53、H-55、H-60、H-61
+- **本就一致（无需施工）—— 14 条**：H-08、H-27、H-37、H-39、H-41、H-47、H-48、H-49、H-50、H-59、H-64、H-66、H-67、H-68
+- **工作树在途补齐（未提交）—— 1 条**：H-28（`src/components/home/PlusSheet.tsx:95` 的 `LibraryTypeIcon` 加 `strokeWidth={2}`，其它 worker 在途改动，**提交前请确认它被带上**）
+- **D 批次落地（commit 待 PM 填）—— 6 条**：H-15、H-16、H-42、H-51、H-54、H-69
+  - H-15 / H-16：`src/components/chat/ChatInputBar.tsx:155-159`（prop 改两段式）+ `:485-492`（上传中守卫）+ `:512-518`（部分失败提示）+ `src/routes/Home.tsx:239-248` / `:375`（Home 接线）+ `src/routes/ChatDetail.tsx:1307-1309`（chat 页不再接线）
+  - H-42 / H-69：`src/routes/Home.tsx:299` / `:121`（两处 toast 改双字段）
+  - H-51：`src/routes/Home.tsx:321-324` / `:411`（Home 改单选 `onSelect`）
+  - H-54：`src/components/home/LibraryPicker.tsx:157` / `:164` / `:172-178` / `:217` / `:240`（自绘标题行 + web 的头部容器与 sheet 内边距归属）
 
-**形态不同 42 条的分布**：
-- 纯视觉 / className：约 30 条（档位 1–2，占绝大多数）
-- 结构 / 组件 API：约 7 条（H-19 / H-26 / H-29 / H-32 / H-40 / H-44 / H-54）
-- 数据通路 / 行为：约 5 条（H-11 / H-17 / H-18 / H-65 / H-63）
+**「部分落地」桶 —— 本轮清空**（D 批次前是 4 条）：
+
+| 条目 | 改前残留 | 收口方式 |
+|---|---|---|
+| H-15 | toast 变体 `danger` vs web `default` | Home 改走 `onSubmitNotice` ⇒ 两段式 + `default`（`ChatInputBar.tsx:485-492`） |
+| H-16 | **Home 侧没传** `onSubmitNotice` ⇒ HOME 页的「部分附件上传失败」永远不弹 | `Home.tsx:239-248` + `:375` 接线；chat 页那处接线删除 |
+| H-51 | Home 侧 PC 传 `onConfirm`（多选），web Home 传 `onSelect`（单选） | `Home.tsx:411` 改 `onSelect`（gaga 21:35 口径：PC 多出 web 没有的必须删） |
+| H-54 | 副标题位置（web 同行右 / PC 下一行）+ 头部容器 padding | `LibraryPicker.tsx:172-178` 自绘标题行 + `:164` `!p-0` 让 `px-4 pt-5` 真正生效 |
+
+**形态不同 3 条的分布**：
+- 跨 chat 域 / 待拍板：H-11（附件区位置，见 S-02）
+- 纯 className：**H-12**（进度条 2 行 · 目标文件 `src/components/chat/UploadProgressBar.tsx` 属 **chat 域** · D 批次**跳过**）
+- 机制差异（建议不改）：H-63（firstMessage 通道）
+
+**缺失 3 条的分布**：
+- ⏳ 依附 S-01（未登录态，未拍板）：3 条（H-02 未登录分支、H-25 `+` 未登录拦截、H-70 三处未登录拦截）
+
+**「本轮不做」**（有既定决策依据，**不计入上表合计**）：
+
+| 条目 | 事项 | 依据 |
+|---|---|---|
+| H-22（附属）· LibraryPicker 加载态 | web 的 `animate-spin`（`gacode-web/src/components/chat/LibraryPicker.tsx:213` 的 `Loader2`）/ `animate-pulse`（PC `ChatInputBar.tsx:784` 的流式圆点）在 PC 上**不动** | PC `src/styles/globals.css:408-414` 全局 `transition-property: none !important` + `animation: none !important`（gagaOS 全局禁动效规范）⇒ PC 上是**静态环 / 静态点** |
+| H-29（残留） | web `sheet.tsx:73` 的 `border-t` + `sheet.tsx:86` 的遮罩 `bg-bg-base/80 backdrop-blur-sm`（PC 是 `bg-black/60`） | 加 `border-t` 会给**所有**底部面板加一条 currentColor 亮线；改遮罩会波及 ChatList / Browser / 通知设置等既有调用方 —— `src/components/ui/BottomSheet.tsx:38-42` 已记录「有意不动」 |
+
+**「待 gaga 真机看」**（已落地但观感未在真机验证，**不计入上表合计**）：
+
+| 条目 | 事项 | 为什么需要真机 |
+|---|---|---|
+| H-14 | 上传失败 chip 照抄 web 的**亮色**系（`border-red-200 bg-red-50/60` + `text-red-700` + `text-red-600`） | PC 是纯黑底，亮红 chip 打在黑底上的观感未验证 |
+| H-33 | MediaPicker 纯黑全宽弹层 + `bg-white/10` 半透明白按钮 | 桌面端观感未验证 |
 
 **跨域依赖提醒**：
-- 本清单 70 条中，有 **17 条**落在 `src/components/chat/ChatInputBar.tsx`（H-10、H-15~H-24、H-41、H-51、H-65、H-18）→ **必须由 chat 域 worker 执行，Home worker 不可单独动**
-- 有 **6 条**落在 `src/components/ui/BottomSheet.tsx`（H-29、H-43、H-46、H-53、H-54 + S-05）→ 同样建议 chat 域统一加 prop
-- Home 独占可自行施工：**47 条**
+- 仍在 chat 域的待做条目：**H-11**（跨 chat 域，见 S-02）· **H-12**（`src/components/chat/UploadProgressBar.tsx` · D 批次跳过）
+- 仍在 `src/components/ui/BottomSheet.tsx` 的待做条目：**0 条** —— H-29 / H-43 / H-46 / H-53 / H-54 需要的 BottomSheet 能力已随 `5504f93` + `6dc3c3d` 全部落地（H-54 改用 BottomSheet 已有的 `hideTitle` + `header` + `contentClassName` 通道，**BottomSheet 本身 0 改动**）
+- Home 域可自行施工：**0 条**（D 批次后 Home 域的 5 条 H-15 / H-16 / H-42 / H-54 / H-69 全部落地）
+- 待 gaga 拍板：**H-02 / H-25 / H-70**（随 S-01）· **H-11**（随 S-02）
+- 已由 gaga 2026-10-26 21:35 拍板（不再等拍板）：**PC↔web 差异是「待办」不是「待拍项」** —— web 有 PC 没有的**必须补**，PC 有 web 没有的**必须删**（H-51 即按此口径收口）
+
+---
+
+# §13 本轮变更记录
+
+## 2026-10-26 · D 批次 · HOME 页剩余待办收口（gaga 21:35 口径）
+
+- **批次 commit**：待 PM 填 —— `feat(home): D · HOME 页剩余待办收口（两段式 toast / chat 页删 partial warning / LibraryPicker 单选 + 头部对齐 web）`
+- **执行口径**（gaga 2026-10-26 21:35）：**PC↔web 差异是「待办」不是「待拍项」** —— web 有 PC 没有的**必须补**；PC 有 web 没有的**必须删**；不端给 gaga 勾选。
+- **文件所有权**（本批只准改这 5 个路径）：`src/routes/Home.tsx` · `src/components/chat/ChatInputBar.tsx` · `src/routes/ChatDetail.tsx` · `src/components/home/LibraryPicker.tsx` · `docs/align-d-home.md`。
+- **本批改动的条目（6 条）**：
+
+  | 条目 | 改前 | 改后 | PC 侧锚点（当前工作树） |
+  |---|---|---|---|
+  | H-15 | 上传中拦截复用 `onAttachmentError` ⇒ toast 变体 `danger` + 单行文案 | 两段式 toast，`variant: "default"`，文案与 web 逐字一致；无 `onSubmitNotice` 时回落到 `onAttachmentError`（chat 页行为不变） | `src/components/chat/ChatInputBar.tsx:485-492` · `src/routes/Home.tsx:239-248` / `:375` |
+  | H-16 | Home **没传** `onSubmitNotice` ⇒ HOME 页「部分附件上传失败」永远不弹；文案是拼在一行的单行 message | Home 接线 + 两段式（title/description）；**chat 详情页删掉那处接线** ⇒ 不再弹这条 toast | `src/components/chat/ChatInputBar.tsx:155-159` / `:512-518` · `src/routes/Home.tsx:239-248` / `:375` · `src/routes/ChatDetail.tsx:1307-1309`（接线已删） |
+  | H-42 | `toast({ message: msg, variant: "danger" })` | `toast({ title: "上传失败", description: msg, variant: "danger" })` | `src/routes/Home.tsx:299` |
+  | H-69 | `toast({ message: \`创建对话失败: ${err}\`, variant: "danger" })` | `toast({ title: "创建对话失败", description: err, variant: "danger" })` | `src/routes/Home.tsx:121` |
+  | H-51 | Home 传 `onConfirm`（多选 + 勾选框 + 底部「完成」按钮）—— **PC 多出 web 没有的形态** | Home 传 `onSelect`（单选）⇒ 勾选框与「完成」按钮在 HOME 页消失，与 web Home 一致；多选链路保留在 chat 页（`KnowledgeAttachSheet`） | `src/routes/Home.tsx:321-324` / `:411` |
+  | H-54 | 副标题在标题**下一行**（BottomSheet 内置 title/subtitle）+ 头部容器 `px-1 pt-1 … space-y-2` | 副标题自绘到标题**同行右** + 头部容器 = web 的 `px-4 pt-5 pb-3 border-b border-border space-y-3`（配套 `!p-0` 让内边距归属跟 web 一致） | `src/components/home/LibraryPicker.tsx:157` / `:164` / `:172-178` / `:217` / `:240` |
+
+- **统计表变化**：
+
+  | 判定 | 改前 | 改后 |
+  |---|---|---|
+  | 已一致 | 56 | **62** |
+  | 部分落地（已改 · 仍有残留差异） | 4 | **0**（本轮清空） |
+  | 形态不同 | 5 | **3** |
+  | 缺失 | 3 | **3** |
+  | 已拍板 · PC 不还原 | 2 | **2** |
+  | 合计 | 70 | **70** |
+
+  - 顶部统计表 / §12 表 / 明细列表三处口径同步更新，并跑脚本校验自洽（合计恒 = 70）。
+  - §10 的「高价值发现」状态同步：F-06 由 🟡 部分修 → ✅ 已修；F-02 的「toast 变体残留」备注消掉 ⇒ 该节计数 9/1/1 → **10/0/1**。
+- **跳过的条目及原因**：
+  - **H-12**（进度条底色 / 填充色 / 过渡属性）—— 目标文件 `src/components/chat/UploadProgressBar.tsx` **不在本批文件所有权白名单内**，且本条在台账里归属 **chat 域** ⇒ **未动手**，留给 chat 域 worker（2 行）。
+  - **H-11 / H-02 / H-25 / H-70 / S-01 / S-02** —— 信息架构级决策，等 gaga 拍板（本批不碰）。
+  - **H-63** —— 台账写「建议不改」，本批不动。
+  - **H-03 / H-04 / H-22 附属 / H-29 残留 / H-14 / H-33** —— 已有既定决策依据（详见 §12 两张不计入合计的表），本批不动。
+- **本批的连带影响（已知 · 已记录）**：
+  1. **PC 的 chat 页也会顺带拦住「上传中就发」** —— PC 的发送路径是共享 `ChatInputBar`（Home 与 chat 共用），web 的这个守卫只在 Home 页 ⇒ PC 架构下无法按 surface 拆分（已在 H-15 条目里写明）。
+  2. **chat 页的「上传中」提示回落到 `onAttachmentError`**（`ChatDetail.tsx:1319`），提示文案与改动前**完全一致** ⇒ chat 域**零行为变化**，只有「部分附件上传失败」那条 warning 消失（= 与 web 一致）。
+  3. **LibraryPicker 的关闭键位置变了** —— 改成自绘标题行后，内置标题栏不画（`hideTitle`）⇒ 右上角走 web `components/ui/sheet.tsx:102-109` 的**绝对定位 X**（原先是标题栏里的「×」按钮）。
+  4. **`Home.tsx` 的 `未拿到附件信息` / `文件超过 50MB 上限` 两处 toast 仍是单行 `message`** —— 台账没有对应条目（web 对应位置是 `console.warn`），本批**未擅自改**；如需对齐请由 PM 决定是否单独立条。
+- **门禁**：`pnpm typecheck` 退出码 0 · `verify-md-parser.mjs` 172/172 · `verify-md-render.mjs` 180/180 · `verify-md-table-colwidth.mjs` 绿 · `git diff --name-only -- src/lib/markdown` 为空。
+
+---
+
+## 2026-10-26 · 回写 C 批次 `6dc3c3d` 的落地结果
+
+- **批次 commit**：`6dc3c3d` — `feat(home): C · HOME 页 + 共享组件对齐 web（MediaPicker 双钮 / 4 项 Sheet / 相对时间 / 紫色 link 图标）`
+  - 连带核实了上一批 `5504f93`（批 1 · HOME 页 + Toast 双字段 + BottomSheet 底部形态 + ChatInputBar 外层卡片）在本页的落地结果 —— 该批同样**没有回写**本文件。
+- **核实方法**：逐条 `git show 6dc3c3d -- <路径>` + `git show 5504f93 -- <路径>` 看两个 commit 的实际 diff，再读**当前工作树**文件（`src/routes/Home.tsx` 381 行 / `src/components/home/{MediaPicker,PlusSheet,LibraryPicker,EmojiPicker}.tsx` / `src/components/ui/BottomSheet.tsx` 216 行 / `src/components/chat/{ChatInputBar,UploadErrorChip,AttachmentChip,UploadProgressBar}.tsx` / `src/components/ui/Glyphs.tsx` / `tailwind.config.ts`）；web 侧逐条读 `gacode-web/src/app/page.tsx`（538 行）+ 对应组件源码；lucide 图标 path 以 `gacode-web/node_modules/lucide-react/dist/esm/icons/library.js`（0.407.0）为准；行号按当前工作树实际行数写。
+- **统计表变化**：
+
+  | 判定 | 改前 | 改后 |
+  |---|---|---|
+  | 已一致 | 14 | **56** |
+  | 部分落地（已改 · 仍有残留差异） | —（旧表无此桶） | **4** |
+  | 形态不同 | 42 | **5** |
+  | 缺失 | 14 | **3** |
+  | 已拍板 · PC 不还原 | （旧表并入「缺失」） | **2** |
+  | 合计 | 70 | **70** |
+
+  - §9 的 7 条结构级差异：**4 条结案**（S-03 / S-04 / S-05 / S-07）· **1 条按既有决策不改**（S-06）· **2 条仍待 gaga 拍**（S-01 / S-02）。
+  - 另新增 2 张**不计入合计**的标注表：「本轮不做」2 条 · 「待 gaga 真机看」2 条。
+- **仍然待办的条目**（编号 + 一句话原因）：
+  - **H-02 / H-25 / H-70** —— 未登录态整块缺失，等 **S-01** 拍板（要改 `src/App.tsx` 的路由守卫，信息架构级）。
+  - **H-11** —— 附件区仍在 `ChatInputBar` 内部，等 **S-02** 拍板（附件 state 归谁），且必须与 chat 域同批。
+  - **H-12** —— 进度条底色 / 填充色 / 过渡属性仍与 web 不同（2 行，chat 域文件）。
+  - **H-15** —— 上传中拦截已落地，残留 toast 变体 `danger` vs web `default`（并到 H-16 一起改）。
+  - **H-16** —— `onSubmitNotice` 组件层已落地，**Home 侧未接线** ⇒ HOME 页的「部分附件上传失败」warning 不弹（2 行）。
+  - **H-42 / H-69** —— PC Toast 已支持双字段（S-04 已结案），HOME 页这 2 处调用点仍是单行 `message`（各 1 行）。
+  - **H-51（残留）** —— 组件层已 1:1，但 **PC Home 传 `onConfirm`（多选）、web Home 传 `onSelect`（单选）** ⇒ PC 首页多一个多选形态，**需 gaga 拍**（产品取舍）。
+  - **H-54（残留）** —— 标题 / 副标题文案已对齐，剩副标题位置（web 同行右 / PC 下一行）+ 头部容器 padding（~6 行）。
+  - **H-63** —— firstMessage 走 sessionStorage vs web 的 URL query，**建议不改**（两端机制各自自洽，见「本轮不做」）。
+- **本轮新发现**（不属于本文件范围，**只记录不动手**）：
+  1. **`src/routes/Home.tsx` 的 `onSubmitNotice` 未接线** —— `ChatInputBar` 支持该 prop（`ChatInputBar.tsx:153`）、`ChatDetail.tsx:1319` 接了线，**Home 没接** ⇒ HOME 页的「部分附件上传失败」永远不弹（= H-16 的真缺口）。
+  2. **PC Home 的知识库挂载比 web 多一个「多选」形态** —— web `page.tsx:399-408` 传 `onSelect`（单选，点行即插即关），PC 传 `onConfirm`（多选，带勾选框 + 完成按钮）（= H-51 的真缺口）。
+  3. **`.zip` / `.json` 的后端 mime 白名单未核** —— H-36 已把前端 accept 放宽到 web 实际生效的那串，但 `unified-api` 的 `/yinian/documents` 白名单本次不可读（= H-36 的服务端缺口）。
+  4. **`src/components/chat/AttachmentChip.tsx` 有未提交的在途改动** —— chat 域正在删 PC 多出的「非 image 也渲染 FileText 方块」分支（web `AttachmentChip.tsx:60-72` 只有两个分支）；本文件只登记状态，未触碰该文件。
+  5. **`src/components/home/PlusSheet.tsx:95` 的 `strokeWidth={2}` 是工作树未提交改动** —— 其它 worker 在回写过程中补上了 H-28 的最后 1 处（知识库图标线宽 1.6 → 2），本文件已据此把 H-28 改判为「已一致」；**提交时请确认这处改动被带上**，否则 H-28 会退回「部分落地」。
