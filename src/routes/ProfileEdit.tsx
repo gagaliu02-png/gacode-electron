@@ -46,7 +46,11 @@ import { Avatar } from "../components/ui/Avatar";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Textarea } from "../components/ui/Textarea";
-import { SaveIcon } from "../components/ui/Glyphs";
+import {
+  CameraIcon,
+  LoaderCircleIcon,
+  SaveIcon,
+} from "../components/ui/Glyphs";
 
 // C2-34: web 端只有 3 个选项 (且不含 "other")。服务端仍允许 4 个值,
 // 已有账号 gender === "other" 的用户打开时三个按钮都不高亮 (跟 web 一致),
@@ -203,7 +207,7 @@ export function ProfileEdit() {
             className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-brand text-brand-on flex items-center justify-center shadow-elevation-2 hover:bg-brand-hover transition-colors"
             aria-label="更换头像"
           >
-            <CameraIcon />
+            <CameraIcon size={16} strokeWidth={1.6} className="w-4 h-4" />
           </button>
           <input
             ref={fileInputRef}
@@ -327,7 +331,11 @@ export function ProfileEdit() {
           disabled={saving}
         >
           {saving ? (
-            <SpinnerIcon className="w-4 h-4 animate-spin" />
+            <LoaderCircleIcon
+              size={16}
+              strokeWidth={1.6}
+              className="w-4 h-4 animate-spin"
+            />
           ) : (
             <SaveIcon className="w-4 h-4" />
           )}
@@ -339,22 +347,11 @@ export function ProfileEdit() {
 }
 
 // ────────────────────────────────────────────────────────────
-// icons (手写内联 SVG — PC 无 lucide-react)
+// icons — 本文件**不再保留**本地图标 (2026-10-27 组件意识收编)
+//   先前收编: 本地 `CameraIcon` / `SpinnerIcon` 与 components/ui/Glyphs.tsx
+//   的共享导出重复实现 ⇒ 已删, 改 import 共享组件:
+//     · CameraIcon   → 共享 <CameraIcon> (lucide v0.407.0 `camera` 真值,
+//       24px/sw2) —— 调用点显式传 size=16 / strokeWidth=1.6, 视觉零变化
+//     · SpinnerIcon  → 共享 <LoaderCircleIcon> (lucide v0.407.0
+//       `loader-circle` 真值) —— 同上, 调用点显式传 size=16 / strokeWidth=1.6
 // ────────────────────────────────────────────────────────────
-
-function CameraIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={["w-4", "h-4", className].filter(Boolean).join(" ")}>
-      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-      <circle cx="12" cy="13" r="3" />
-    </svg>
-  );
-}
-
-function SpinnerIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={["w-4", "h-4", className].filter(Boolean).join(" ")}>
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  );
-}

@@ -35,6 +35,15 @@ import {
 } from "../lib/bookmarks";
 import { createLibraryItem, summarizeLink } from "../lib/api";
 import type { BookmarkEntry } from "../../shared/types";
+import {
+  ArrowLeftBarIcon,
+  ArrowRightBarIcon,
+  BookmarkIcon,
+  FolderIcon,
+  HouseIcon,
+  RefreshCwIcon,
+  SparkleStarIcon,
+} from "../components/ui/Glyphs";
 
 const QUICK_LINKS: Array<{ label: string; url: string }> = [
   { label: "gaga 官网", url: "https://www.gaga.sale" },
@@ -577,7 +586,7 @@ export function Browser() {
               disabled={!active?.canGoBack}
               onClick={goBack}
             >
-              <ArrowLeftIcon />
+              <ArrowLeftBarIcon size={16} strokeWidth={1.6} />
             </IconButton>
             <IconButton
               ariaLabel="前进"
@@ -585,20 +594,20 @@ export function Browser() {
               disabled={!active?.canGoForward}
               onClick={goForward}
             >
-              <ArrowRightIcon />
+              <ArrowRightBarIcon size={16} strokeWidth={1.6} />
             </IconButton>
             <IconButton
               ariaLabel="主页"
               title="主页"
               onClick={goHome}
             >
-              <HomeIcon />
+              <HouseIcon size={16} strokeWidth={1.6} />
             </IconButton>
           </div>
 
           {/* 刷新 */}
           <IconButton ariaLabel="刷新" title="刷新" onClick={refresh}>
-            <RefreshIcon />
+            <RefreshCwIcon size={16} strokeWidth={1.6} />
           </IconButton>
 
           <Input
@@ -616,7 +625,11 @@ export function Browser() {
             active={isBookmarked}
             onClick={() => void toggleBookmark()}
           >
-            <BookmarkIcon filled={isBookmarked} />
+            <BookmarkIcon
+              className={isBookmarked ? "fill-current" : undefined}
+              size={16}
+              strokeWidth={1.6}
+            />
           </IconButton>
 
           {/* AI 总结按钮 */}
@@ -625,7 +638,7 @@ export function Browser() {
             title="AI 总结"
             onClick={() => void runSummarize()}
           >
-            <SparkleIcon />
+            <SparkleStarIcon size={16} strokeWidth={1.6} />
           </IconButton>
 
           {/* 查看收藏列表 */}
@@ -634,7 +647,7 @@ export function Browser() {
             title="收藏夹"
             onClick={() => setBookmarksOpen(true)}
           >
-            <FolderIcon />
+            <FolderIcon size={16} strokeWidth={1.6} />
           </IconButton>
 
           <Button
@@ -1093,135 +1106,23 @@ function hostFromUrl(url: string): string {
   }
 }
 
-function RefreshIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-      <path d="M21 3v5h-5" />
-      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-      <path d="M3 21v-5h5" />
-    </svg>
-  );
-}
-
-function ArrowLeftIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <line x1="19" y1="12" x2="5" y2="12" />
-      <polyline points="12 19 5 12 12 5" />
-    </svg>
-  );
-}
-
-function ArrowRightIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <line x1="5" y1="12" x2="19" y2="12" />
-      <polyline points="12 5 19 12 12 19" />
-    </svg>
-  );
-}
-
-function HomeIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 12L12 3l9 9" />
-      <path d="M5 10v10h14V10" />
-    </svg>
-  );
-}
-
-function BookmarkIcon({ filled }: { filled: boolean }) {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill={filled ? "currentColor" : "none"}
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-    </svg>
-  );
-}
-
-function SparkleIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z" />
-      <path d="M19 14l.7 2.1L22 17l-2.3.9L19 20l-.7-2.1L16 17l2.3-.9z" />
-    </svg>
-  );
-}
-
-function FolderIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    </svg>
-  );
-}
+// ────────────────────────────────────────────────────────────
+// icons — 本文件**不再保留**本地图标 (2026-10-27 组件意识收编)
+//   先前收编: 本文件底部 7 个本地图标与 components/ui/Glyphs.tsx 的共享导出
+//   重复实现 ⇒ 已删, 改 import 共享组件:
+//     · RefreshIcon    → 共享 <RefreshCwIcon> (lucide v0.407.0 `refresh-cw`
+//                        真值) —— 调用点传 size=16 / strokeWidth={1.6}
+//     · ArrowLeftIcon  → 共享 <ArrowLeftBarIcon> (lucide v0.407.0 `arrow-left`
+//                        真值 · 带横杆)
+//     · ArrowRightIcon → 共享 <ArrowRightBarIcon> (lucide v0.407.0
+//                        `arrow-right` 真值 · 带横杆)
+//     · HomeIcon       → 共享 <HouseIcon> (lucide v0.407.0 `house` 真值;
+//                        `home.js` 现在只是 re-export `house.js`)
+//     · BookmarkIcon   → 共享 <BookmarkIcon> (lucide v0.407.0 `bookmark` 真值)
+//                        —— 「已收藏」实心态改由调用点加 tailwind `fill-current`
+//                           (CSS 优先级高于 presentation attribute ⇒ 等价于
+//                           改前的 fill="currentColor")
+//     · SparkleIcon    → 共享 <SparkleStarIcon> (**自定义图形, 非 lucide**,
+//                        原 path 逐字保留)
+//     · FolderIcon     → 共享 <FolderIcon> (lucide v0.407.0 `folder` 真值)
+// ────────────────────────────────────────────────────────────

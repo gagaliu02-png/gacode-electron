@@ -13,7 +13,9 @@
  *   一个都不许改 ⇒ `message` 保留为 `title` 的别名 (title ?? message 作主行)。
  *   `toast()` 的返回值从 void 变成 `{ id, dismiss }` (web 同款), 老调用点忽略返回值即可。
  *
- * 不引 lucide-react (PC 无此依赖, F-2) ⇒ 4 个变体图标手写内联 SVG。
+ * 不引 lucide-react (PC 无此依赖, F-2) ⇒ 4 个变体图标走共享组件
+ * `components/ui/Glyphs.tsx` (2026-10-27 收编: 本文件原本就地手写了 5 份内联 svg,
+ * 跟共享库重复实现 ⇒ 全部改成 import).
  */
 
 import {
@@ -26,6 +28,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  AlertCircleBareIcon,
+  AlertTriangleIcon,
+  CircleCheckBigIcon,
+  CloseIcon,
+  InfoIcon,
+} from "./Glyphs";
 
 export type ToastVariant = "default" | "success" | "warning" | "danger";
 
@@ -122,7 +131,7 @@ export function useToast(): ToastContextValue {
   return ctx;
 }
 
-// ────────── 变体图标 (手写内联 SVG — PC 无 lucide-react) ──────────
+// ────────── 变体图标 (共享组件 — components/ui/Glyphs.tsx) ──────────
 
 const VARIANT_ICON_CLASS: Record<ToastVariant, string> = {
   default: "text-fg-muted",
@@ -165,7 +174,7 @@ function ToastView({ item }: { item: ToastItem }) {
         onClick={() => dismiss(item.id)}
         className="absolute right-3 top-3 w-7 h-7 rounded-full grid place-items-center text-fg-muted hover:text-fg hover:bg-white/[0.07] transition-colors duration-150"
       >
-        <CloseIcon className="h-4 w-4" />
+        <CloseIcon className="h-4 w-4" size={16} />
       </button>
     </div>
   );
@@ -193,7 +202,7 @@ function Toaster() {
   );
 }
 
-// ────────── Icons (lucide 24×24 路径, 手写) ──────────
+// ────────── Icons (共享组件 — components/ui/Glyphs.tsx) ──────────
 
 function VariantIcon({
   variant,
@@ -203,56 +212,8 @@ function VariantIcon({
   className?: string;
 }) {
   const cls = [className, VARIANT_ICON_CLASS[variant]].filter(Boolean).join(" ");
-  if (variant === "success") return <CheckCircle2Icon className={cls} />;
-  if (variant === "warning") return <AlertTriangleIcon className={cls} />;
-  if (variant === "danger") return <AlertCircleIcon className={cls} />;
-  return <InfoIcon className={cls} />;
-}
-
-function InfoIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <circle cx="12" cy="12" r="10" />
-      <path d="M12 16v-4" />
-      <path d="M12 8h.01" />
-    </svg>
-  );
-}
-
-function CheckCircle2Icon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-      <path d="m9 11 3 3L22 4" />
-    </svg>
-  );
-}
-
-function AlertTriangleIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
-      <path d="M12 9v4" />
-      <path d="M12 17h.01" />
-    </svg>
-  );
-}
-
-function AlertCircleIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="12" y1="8" x2="12" y2="12" />
-      <line x1="12" y1="16" x2="12.01" y2="16" />
-    </svg>
-  );
-}
-
-function CloseIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <path d="M18 6 6 18" />
-      <path d="m6 6 12 12" />
-    </svg>
-  );
+  if (variant === "success") return <CircleCheckBigIcon className={cls} size={15} />;
+  if (variant === "warning") return <AlertTriangleIcon className={cls} size={15} />;
+  if (variant === "danger") return <AlertCircleBareIcon className={cls} size={15} />;
+  return <InfoIcon className={cls} size={15} />;
 }

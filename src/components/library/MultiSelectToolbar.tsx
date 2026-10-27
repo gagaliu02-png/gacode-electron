@@ -13,6 +13,7 @@
 
 import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { LoaderCircleIcon } from "../ui/Glyphs";
 
 export interface MultiSelectToolbarProps {
   selectedCount: number;
@@ -63,7 +64,7 @@ export function MultiSelectToolbar({
             disabled={selectedCount === 0 || deletePending}
             onClick={onConfirmDelete}
           >
-            {deletePending ? <SpinnerIcon className="w-4 h-4 animate-spin" /> : `删除 ${selectedCount} 项`}
+            {deletePending ? <LoaderCircleIcon className="w-4 h-4 animate-spin" size={16} /> : `删除 ${selectedCount} 项`}
           </Button>
         </div>
       </div>
@@ -89,21 +90,6 @@ export function MultiSelectToolbar({
 }
 
 // SpinnerIcon — 删除 pending 态转圈 (web 用 lucide Loader2, 16px)
-function SpinnerIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className={className}
-    >
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  );
-}
+//   2026-10-27 收编: 本文件原本就地手写了一份 `SpinnerIcon` 内联 svg
+//   (lucide `loader-circle`, 16×16 / sw2), 跟共享库重复实现 ⇒ 删掉本地实现,
+//   改 import 共享组件 `LoaderCircleIcon` (用 size={16} 保持原像素)。

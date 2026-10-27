@@ -31,6 +31,7 @@ import {
   type DropdownMenuItem,
 } from "../ui/DropdownMenu";
 import { useToast } from "../ui/Toast";
+import { MoreIcon } from "../ui/Glyphs";
 import { recallMessage, deleteMessage, createLibraryItem } from "../../lib/api";
 
 // 跟 server yinian.service.js:840 RECALL_WINDOW_SEC 对齐
@@ -265,22 +266,7 @@ export function MessageMenu(props: MessageMenuProps) {
   );
 }
 
-function MoreIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="5" r="1.4" />
-      <circle cx="12" cy="12" r="1.4" />
-      <circle cx="12" cy="19" r="1.4" />
-    </svg>
-  );
-}
+// ─────────── icons (共享组件 — components/ui/Glyphs.tsx) ───────────
+//   2026-10-27 收编: 本文件原本就地手写了一份 `MoreIcon` 内联 svg
+//   (描边三点, 16×16 / sw1.6), 跟共享库 `MoreIcon` 逐字重复 ⇒ 删掉本地实现,
+//   改 import 共享组件 (组件意识铁律: 图标的唯一出处是 components/ui/Glyphs.tsx)。

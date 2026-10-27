@@ -22,50 +22,25 @@ import { Button } from "../components/ui/Button";
 import { useAuth } from "../lib/auth";
 import { authApi } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
+import {
+  CircleCheckIcon,
+  LoaderCircleIcon,
+  RefreshCwIcon,
+  SmartphoneIcon,
+} from "../components/ui/Glyphs";
 
-// 没用 lucide-react (阶段 1 没装), 直接 inline SVG, 跟 gacode-web 视觉一致
-function Spinner({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      className={`animate-spin ${className}`}
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-    >
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-    </svg>
-  );
-}
-
-function RefreshIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-      <path d="M21 3v5h-5" />
-      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-      <path d="M3 21v-5h5" />
-    </svg>
-  );
-}
-
-function PhoneIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
-      <line x1="12" y1="18" x2="12.01" y2="18" />
-    </svg>
-  );
-}
-
-function CheckIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <circle cx="12" cy="12" r="10" />
-      <path d="m9 12 2 2 4-4" />
-    </svg>
-  );
-}
+// ────────────────────────────────────────────────────────────
+// icons — 本文件**不再保留**本地图标 (2026-10-27 组件意识收编)
+//   先前收编: 本地 `Spinner` / `RefreshIcon` / `PhoneIcon` / `CheckIcon`
+//   与 components/ui/Glyphs.tsx 的共享导出重复实现 ⇒ 已删, 改 import 共享组件:
+//     · Spinner     → 共享 <LoaderCircleIcon> (lucide v0.407.0 `loader-circle`
+//                     真值) —— web `(auth)/qr-login/page.tsx` 同款
+//                     `<Loader2 className="h-8 w-8 animate-spin text-fg-muted" />`
+//     · RefreshIcon → 共享 <RefreshCwIcon> (lucide v0.407.0 `refresh-cw` 真值)
+//     · PhoneIcon   → 共享 <SmartphoneIcon> (lucide v0.407.0 `smartphone` 真值)
+//     · CheckIcon   → 共享 <CircleCheckIcon> (lucide v0.407.0 `circle-check`
+//                     真值 = web 的 `CheckCircle2`)
+// ────────────────────────────────────────────────────────────
 
 const POLL_TIMEOUT_MS = 120 * 1000;
 const POLL_INTERVAL_MS = 2 * 1000;
@@ -218,7 +193,10 @@ export function QrLogin() {
         <div className="flex flex-col items-center">
           {phase.kind === "loading" && (
             <div className="w-[280px] h-[280px] flex items-center justify-center bg-bg-elevated rounded-2xl">
-              <Spinner className="h-8 w-8 text-fg-muted" />
+              <LoaderCircleIcon
+                size={32}
+                className="h-8 w-8 animate-spin text-fg-muted"
+              />
             </div>
           )}
 
@@ -239,7 +217,7 @@ export function QrLogin() {
 
           {phase.kind === "expired" && (
             <div className="w-[280px] h-[280px] flex flex-col items-center justify-center bg-bg-elevated rounded-2xl gap-3">
-              <RefreshIcon className="h-8 w-8 text-fg-muted" />
+              <RefreshCwIcon size={24} className="h-8 w-8 text-fg-muted" />
               <p className="text-sm text-fg-muted">二维码已失效</p>
               <Button
                 variant="outline"
@@ -253,7 +231,7 @@ export function QrLogin() {
 
           {phase.kind === "success" && (
             <div className="w-[280px] h-[280px] flex flex-col items-center justify-center bg-bg-elevated rounded-2xl gap-2">
-              <CheckIcon className="h-10 w-10 text-success" />
+              <CircleCheckIcon size={24} className="h-10 w-10 text-success" />
               <p className="text-sm font-medium">登录成功</p>
               <p className="text-xs text-fg-muted">
                 欢迎回来{phase.userName ? `, ${phase.userName}` : ""}
@@ -264,7 +242,7 @@ export function QrLogin() {
 
         {phase.kind === "ready" && (
           <div className="mt-10 flex items-start gap-3 p-3 rounded-xl bg-bg-elevated/50">
-            <PhoneIcon className="h-5 w-5 text-fg-muted mt-0.5 shrink-0" />
+            <SmartphoneIcon className="h-5 w-5 text-fg-muted mt-0.5 shrink-0" />
             <div className="text-sm text-fg-muted space-y-1">
               <p>1. 打开 Gacode App</p>
               <p>2. 进入 "扫码登录" 功能</p>

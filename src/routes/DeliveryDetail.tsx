@@ -46,22 +46,20 @@ import { Badge } from "../components/ui/Badge";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import {
   ArrowLeftIcon,
-  FileTextIcon,
-  GlobeIcon,
-  ImageIcon,
-  TrashIcon,
-} from "../components/ui/Glyphs";
-import { DocumentPreview } from "../components/deliveries/DocumentPreview";
-import {
   ConstructionIcon,
   CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
+  FileTextIcon,
+  GlobeIcon,
+  ImageIcon,
   MessageSquareIcon,
   RefreshCcwIcon,
   RefreshCwIcon,
   SaveIcon,
-} from "../components/deliveries/Icons";
+  TrashIcon,
+} from "../components/ui/Glyphs";
+import { DocumentPreview } from "../components/deliveries/DocumentPreview";
 
 // 与安卓 DeliverableEntity.downloadStatus 同步使用 (见 yinian-android
 //   DeliverablesFormat.kt:53-63)。服务端目前未返该字段 —— web 端同样就地声明,

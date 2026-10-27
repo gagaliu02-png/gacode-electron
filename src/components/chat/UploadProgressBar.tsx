@@ -12,6 +12,8 @@
  * 现在跟 web 同款 — 显示文件名 + 百分比 + 取消按钮.
  */
 
+import { CloseIcon } from "../ui/Glyphs";
+
 export interface UploadProgressBarProps {
   /** 0-100 */
   value: number;
@@ -61,7 +63,7 @@ export function UploadProgressBar({
           aria-label="取消上传"
           className="shrink-0 w-6 h-6 rounded-full inline-flex items-center justify-center text-fg-muted hover:bg-bg-sunken hover:text-fg transition-colors duration-150"
         >
-          <CloseGlyph />
+          <CloseIcon size={14} />
         </button>
       ) : null}
     </div>
@@ -70,23 +72,7 @@ export function UploadProgressBar({
 
 export default UploadProgressBar;
 
-// ─────────── icons ───────────
-
-function CloseGlyph() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="18" y1="6" x2="6" y2="18" />
-      <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-}
+// ─────────── icons (共享组件 — components/ui/Glyphs.tsx) ───────────
+//   2026-10-27 收编: 本文件原本就地手写了一份 `CloseGlyph` 内联 svg
+//   (lucide `x`, 14×14 / sw2), 跟共享库 `CloseIcon` 重复实现 ⇒ 删掉本地实现,
+//   改 import 共享组件 (用 size={14} 保持原像素)。

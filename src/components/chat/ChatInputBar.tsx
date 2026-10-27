@@ -48,6 +48,13 @@ import {
   type UploadMode,
 } from "../../lib/upload";
 import { extractSingleImage } from "../../lib/clipboard";
+import {
+  ArrowUpIcon,
+  PaperclipIcon,
+  PlusIcon,
+  RotateCcwIcon,
+  StopSquareIcon,
+} from "../ui/Glyphs";
 import { SlashMenu, type SlashCommand } from "./SlashMenu";
 import { AttachmentChip } from "./AttachmentChip";
 import { UploadProgressBar } from "./UploadProgressBar";
@@ -702,7 +709,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 data-testid="chat-plus-button"
                 className="shrink-0 w-9 h-9 rounded-full text-fg-muted hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center"
               >
-                <PlusGlyph />
+                <PlusIcon />
               </button>
             ) : null}
 
@@ -763,7 +770,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 onClick={onStop}
                 className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-danger text-white hover:bg-danger/90 transition-colors duration-150"
               >
-                <StopIcon />
+                <StopSquareIcon />
               </button>
             ) : canRerun && onRerun ? (
               <button
@@ -774,7 +781,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-brand text-brand-on hover:bg-brand-hover transition-colors duration-150"
                 data-testid="rerun-button"
               >
-                <RerunIcon />
+                <RotateCcwIcon />
               </button>
             ) : (
               <button
@@ -787,7 +794,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 }
                 className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-brand text-brand-on hover:bg-brand-hover transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <SendIcon />
+                <ArrowUpIcon />
               </button>
             )}
           </div>
@@ -819,7 +826,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
           >
             <div className="absolute inset-3 rounded-md border-2 border-dashed border-brand bg-brand/10 backdrop-blur-sm" />
             <div className="relative rounded-md bg-bg-elevated border border-brand/60 px-6 py-4 shadow-dialog flex items-center gap-3">
-              <PaperclipIcon />
+              <PaperclipIcon className="text-brand shrink-0" size={22} />
               <div>
                 <p className="text-sm font-medium">拖入文件上传</p>
                 <p className="text-xs text-fg-muted">图片自动按 image 上传, 其他文件按 document</p>
@@ -832,98 +839,12 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
   },
 );
 
-// ─────────── icons (local; not pulling lucide-react) ───────────
-
-function PaperclipIcon() {
-  return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="text-brand shrink-0"
-    >
-      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-    </svg>
-  );
-}
-
-// 发送按钮图标 — 对齐 web lucide `ArrowUp` (w-4 h-4, strokeWidth 2)
-function SendIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="m5 12 7-7 7 7" />
-      <path d="M12 19V5" />
-    </svg>
-  );
-}
-
-function StopIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      stroke="currentColor"
-      strokeWidth="1.6"
-    >
-      <rect x="6" y="6" width="12" height="12" rx="2" />
-    </svg>
-  );
-}
-
-// 阶段 8 chat-id-19 — 重新生成 icon. 跟 Send 图标区分; 用一个循环箭头.
-function RerunIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M3 12a9 9 0 1 0 3-6.7" />
-      <polyline points="3 4 3 9 8 9" />
-    </svg>
-  );
-}
-
-// 0.7.5 hotfix 2 — `+` 按钮 icon. 对齐 web lucide `Plus` (w-5 h-5 = 20px, strokeWidth 2)
-function PlusGlyph() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
-    </svg>
-  );
-}
+// ─────────── icons (共享组件 — components/ui/Glyphs.tsx) ───────────
+//   2026-10-27 收编: 本文件原本就地手写了 5 份内联 svg (paperclip / arrow-up /
+//   stop 方块 / rotate-ccw / plus), 跟共享库重复实现 ⇒ 全部改成 import.
+//   逐个对照:
+//     PaperclipIcon  22×22 / sw1.6  (lucide `paperclip`)
+//     ArrowUpIcon    16×16 / sw2    (lucide `arrow-up`, 同 web ChatInputBar)
+//     StopSquareIcon 14×14 / sw1.6  (自定义图形,非 lucide — 实心方块)
+//     RotateCcwIcon  16×16 / sw1.8  (lucide `rotate-ccw`)
+//     PlusIcon       20×20 / sw2    (lucide `plus`)

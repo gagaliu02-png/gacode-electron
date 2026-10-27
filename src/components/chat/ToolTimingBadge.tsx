@@ -8,6 +8,8 @@
  * durationMs / started_at 算出 elapsedMs 后挂. 缺省 duration 时不渲染.
  */
 
+import { ClockSmallIcon } from "../ui/Glyphs";
+
 export interface ToolTimingBadgeProps {
   /** 工具耗时 ms, 必填 (>= 0) */
   elapsedMs: number;
@@ -34,27 +36,14 @@ export function ToolTimingBadge({ elapsedMs, compact }: ToolTimingBadgeProps) {
       data-testid="tool-timing-badge"
       title={`耗时 ${text}`}
     >
-      <ClockIcon />
+      <ClockSmallIcon />
       {compact ? null : <span>{text}</span>}
     </span>
   );
 }
 
-function ClockIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="11"
-      height="11"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="9" />
-      <polyline points="12 7 12 12 15 14" />
-    </svg>
-  );
-}
+// ─────────── icons (共享组件 — components/ui/Glyphs.tsx) ───────────
+//   2026-10-27 收编: 本文件原本就地手写了一份 `ClockIcon` 内联 svg
+//   (11×11 / sw1.7, circle r=9 + polyline `12 7 12 12 15 14`),
+//   跟共享库重复实现 ⇒ 删掉本地实现, 改 import 共享组件 `ClockSmallIcon`
+//   (自定义图形,非 lucide —— lucide 的 `clock` 是 r=10 + `12 6 12 12 16 14`)。

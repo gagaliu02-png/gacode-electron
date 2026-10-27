@@ -52,7 +52,18 @@ import { useAuth } from "../lib/auth";
 import { useToast } from "../components/ui/Toast";
 import { Button } from "../components/ui/Button";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
-import { SettingsIcon, TrashIcon } from "../components/ui/Glyphs";
+import {
+  BellIcon,
+  CameraIcon,
+  CheckGlyph,
+  ChevronRightIcon,
+  CopyIcon,
+  LockIcon,
+  PackageBoxIcon,
+  SettingsIcon,
+  SquarePenIcon,
+  TrashIcon,
+} from "../components/ui/Glyphs";
 
 const GENDER_LABEL: Record<string, string> = {
   male: "男",
@@ -161,7 +172,7 @@ export function Profile() {
           aria-label="通知中心"
           className="relative w-9 h-9 rounded-full text-fg-muted hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center"
         >
-          <BellIcon />
+          <BellIcon strokeWidth={1.6} />
           {unreadCount > 0 ? (
             <span className="absolute top-1.5 right-1.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[10px] font-semibold bg-brand text-brand-on">
               {formatUnreadBadge(unreadCount)}
@@ -200,7 +211,7 @@ export function Profile() {
             className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-brand text-brand-on flex items-center justify-center hover:bg-brand-hover transition-colors duration-150 disabled:opacity-50"
             aria-label="更换头像"
           >
-            <CameraIcon />
+            <CameraIcon size={16} strokeWidth={1.6} />
           </button>
           <input
             ref={fileInputRef}
@@ -237,7 +248,7 @@ export function Profile() {
       {/* 操作入口 (PC 独有) */}
       <div className="space-y-2 mt-6">
         <ActionRow
-          icon={<EditIcon />}
+          icon={<SquarePenIcon />}
           label="编辑资料"
           onClick={() => navigate("/profile/edit")}
         />
@@ -252,12 +263,12 @@ export function Profile() {
         {/* profile-5: 新增三个入口. 头像设置复用顶部 file picker 逻辑,
             走 handlePickAvatar (跟相机按钮同一份代码路径). */}
         <ActionRow
-          icon={<CameraIcon />}
+          icon={<CameraIcon size={16} strokeWidth={1.6} />}
           label="头像设置"
           onClick={handlePickAvatar}
         />
         <ActionRow
-          icon={<DeliveriesIcon />}
+          icon={<PackageBoxIcon />}
           label="交付中心"
           onClick={() => navigate("/deliveries")}
         />
@@ -351,7 +362,7 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
       <span className="text-sm font-medium shrink-0">{label}</span>
       <span className="flex items-center gap-2 min-w-0">
         <span className="text-sm text-fg-muted truncate max-w-[200px]">{value}</span>
-        {rightSlot ?? (interactive ? <ChevronRightIcon /> : null)}
+        {rightSlot ?? (interactive ? <ChevronRightIcon strokeWidth={1.6} className="text-fg-muted" /> : null)}
       </span>
     </Wrapper>
   );
@@ -395,7 +406,11 @@ function CopyUidButton({ uid }: { uid: string }) {
       aria-label="复制 UID"
       className="shrink-0 w-7 h-7 rounded-full text-fg-muted hover:bg-bg-sunken hover:text-fg transition-colors duration-150 inline-flex items-center justify-center"
     >
-      {copied ? <CheckIcon /> : <CopyIcon />}
+      {copied ? (
+        <CheckGlyph size={14} strokeWidth={2} className="text-success" />
+      ) : (
+        <CopyIcon size={14} strokeWidth={1.6} />
+      )}
     </button>
   );
 }
@@ -505,7 +520,7 @@ function ActionRow({
         {icon}
       </span>
       <span className="flex-1 text-sm font-medium">{label}</span>
-      <ChevronRightIcon />
+      <ChevronRightIcon strokeWidth={1.6} className="text-fg-muted" />
     </button>
   );
 }
@@ -518,76 +533,26 @@ function formatDate(iso: string): string {
 }
 
 // ────────────────────────────────────────────────────────────
-// icons
+// icons — 本文件**不再保留**本地图标 (2026-10-27 组件意识收编)
+//   先前收编: 本地 `BellIcon` / `CameraIcon` / `EditIcon` / `LockIcon` /
+//   `DeliveriesIcon` / `ChevronRightIcon` / `CopyIcon` / `CheckIcon` 与
+//   components/ui/Glyphs.tsx 的共享导出重复实现 ⇒ 已删, 改 import 共享组件:
+//     · BellIcon         → 共享 <BellIcon> (lucide v0.407.0 `bell` 真值,
+//                          20px/sw2) —— 调用点传 strokeWidth={1.6}
+//     · CameraIcon       → 共享 <CameraIcon> (lucide v0.407.0 `camera` 真值,
+//                          24px/sw2) —— 调用点传 size=16 / strokeWidth={1.6}
+//     · EditIcon         → 共享 <SquarePenIcon> (lucide v0.407.0 `square-pen`
+//                          真值, 20px/sw1.6)
+//     · LockIcon         → 共享 <LockIcon> (lucide v0.407.0 `lock` 真值,
+//                          20px/sw1.6)
+//     · DeliveriesIcon   → 共享 <PackageBoxIcon> (lucide v0.407.0 `package`
+//                          真值, 20px/sw1.6)
+//     · ChevronRightIcon → 共享 <ChevronRightIcon> (lucide v0.407.0
+//                          `chevron-right` 真值, 16px/sw2) —— 调用点传
+//                          strokeWidth={1.6} + 保留原 className `text-fg-muted`
+//     · CopyIcon         → 共享 <CopyIcon> (lucide v0.407.0 `copy` 真值,
+//                          14px/sw2) —— 调用点传 strokeWidth={1.6}
+//     · CheckIcon        → 共享 <CheckGlyph> (lucide v0.407.0 `check` 真值,
+//                          14px/sw3) —— 调用点传 strokeWidth={2} + 保留原
+//                          className `text-success`
 // ────────────────────────────────────────────────────────────
-
-function BellIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-    </svg>
-  );
-}
-
-function CameraIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-      <circle cx="12" cy="13" r="3" />
-    </svg>
-  );
-}
-
-function EditIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-    </svg>
-  );
-}
-
-function LockIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="11" width="18" height="11" rx="2" />
-      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-    </svg>
-  );
-}
-
-function DeliveriesIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-      <line x1="12" y1="22.08" x2="12" y2="12" />
-    </svg>
-  );
-}
-
-function ChevronRightIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="text-fg-muted">
-      <path d="m9 18 6-6-6-6" />
-    </svg>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-success">
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}

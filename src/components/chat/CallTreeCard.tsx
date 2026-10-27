@@ -21,6 +21,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { BranchIcon } from "../ui/Glyphs";
 import { ToolTimingBadge } from "./ToolTimingBadge";
 
 export interface CallTreeNode {
@@ -147,24 +148,8 @@ function TreeRow({
   );
 }
 
-function BranchIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="12"
-      height="12"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="6" cy="6" r="2" />
-      <circle cx="6" cy="18" r="2" />
-      <circle cx="18" cy="12" r="2" />
-      <path d="M6 8v8" />
-      <path d="M8 12h8" />
-    </svg>
-  );
-}
+// ─────────── icons (共享组件 — components/ui/Glyphs.tsx) ───────────
+//   2026-10-27 收编: 本文件原本就地手写了一份 `BranchIcon` 内联 svg
+//   (12×12 / sw1.7, 三个 r=2 圆点 + 两条直线), 跟共享库重复实现 ⇒
+//   删掉本地实现, 改 import 共享组件 `BranchIcon`
+//   (自定义图形,非 lucide —— lucide 的 `git-branch` 画法不同)。

@@ -42,20 +42,18 @@ import { Card, CardContent } from "../components/ui/Card";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { Tabs } from "../components/ui/Tabs";
 import {
+  ConstructionIcon,
+  DownloadIcon,
   FileTextIcon,
   GlobeIcon,
   ImageIcon,
+  LayoutGridIcon,
+  LoaderCircleIcon,
   PackageOpenIcon,
+  RefreshCwIcon,
   SearchIcon,
 } from "../components/ui/Glyphs";
 import { CardMenu } from "../components/deliveries/CardMenu";
-import {
-  ConstructionIcon,
-  DownloadIcon,
-  LayoutGridIcon,
-  Loader2Icon,
-  RefreshCwIcon,
-} from "../components/deliveries/Icons";
 
 // =========================================================================
 // tab — 跟 web 一致 (全部 / 图片 / 网站 / 文档)
@@ -486,7 +484,7 @@ function DocumentCard({
           aria-label="下载文档"
         >
           {busy ? (
-            <Loader2Icon className="w-5 h-5 text-brand-yellow animate-spin" />
+            <LoaderCircleIcon className="w-5 h-5 text-brand-yellow animate-spin" />
           ) : (
             <FileTextIcon className="w-5 h-5 text-brand-yellow" />
           )}
@@ -521,7 +519,7 @@ function DocumentCard({
           className="shrink-0 !w-9 !h-9 !p-0 rounded-full text-fg-muted hover:bg-muted transition-colors duration-150"
         >
           {busy ? (
-            <Loader2Icon className="w-4 h-4 animate-spin" />
+            <LoaderCircleIcon className="w-4 h-4 animate-spin" />
           ) : (
             <DownloadIcon className="w-4 h-4" />
           )}
@@ -568,7 +566,7 @@ function LoadMore({ onLoad, loading }: { onLoad: () => void; loading: boolean })
         className="inline-flex items-center gap-2 text-sm text-fg-muted hover:text-fg disabled:opacity-50 transition-colors duration-150"
       >
         {loading ? (
-          <Loader2Icon className="w-4 h-4 animate-spin" />
+          <LoaderCircleIcon className="w-4 h-4 animate-spin" />
         ) : (
           <PackageOpenIcon className="w-4 h-4" />
         )}

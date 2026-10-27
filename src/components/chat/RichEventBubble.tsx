@@ -18,6 +18,7 @@
  */
 
 import type { ReactNode } from "react";
+import { FileIcon, LinkBareIcon, WrenchIcon } from "../ui/Glyphs";
 import { ToolTimingBadge } from "./ToolTimingBadge";
 
 export interface RichEvent {
@@ -63,7 +64,7 @@ function ToolStartCard({ event }: { event: RichEvent }) {
   return (
     <div className="my-1 rounded-md bg-bg-sunken/60 px-3 py-2 text-xs">
       <div className="flex items-center gap-2">
-        <ToolIcon />
+        <WrenchIcon className="text-brand" size={14} strokeWidth={1.6} />
         <span className="font-mono text-fg">{tool}</span>
         {title && <span className="text-fg-muted truncate">{title}</span>}
       </div>
@@ -88,7 +89,7 @@ function ToolEndCard({ event }: { event: RichEvent }) {
         : null;
   return (
     <div className="my-1 rounded-md bg-bg-sunken/60 px-3 py-2 text-xs flex items-center gap-2">
-      <ToolIcon />
+      <WrenchIcon className="text-brand" size={14} strokeWidth={1.6} />
       <span className="font-mono text-fg">{tool}</span>
       <span
         className={
@@ -121,7 +122,7 @@ function FileCard({ event }: { event: RichEvent }) {
       rel="noopener noreferrer"
       className="my-1 inline-flex items-center gap-2 rounded-md bg-bg-sunken/60 px-3 py-2 hover:bg-bg-sunken transition-colors duration-150"
     >
-      <FileIcon />
+      <FileIcon className="text-fg-muted" size={14} strokeWidth={1.6} />
       <span className="text-sm truncate max-w-[280px]">{name}</span>
       {sizeBytes != null ? (
         <span className="text-xs text-fg-muted">{formatBytes(sizeBytes)}</span>
@@ -155,7 +156,7 @@ function WebPreviewCard({ event }: { event: RichEvent }) {
       className="my-1 block rounded-md bg-bg-sunken/60 px-3 py-2 hover:bg-bg-sunken transition-colors duration-150"
     >
       <div className="flex items-center gap-2 text-sm font-medium truncate">
-        <LinkIcon />
+        <LinkBareIcon className="text-fg-muted" size={14} strokeWidth={1.6} />
         <span className="truncate">{title ?? url ?? "link"}</span>
       </div>
       {snippet ? (
@@ -233,61 +234,9 @@ function riskColor(level: string): string {
   }
 }
 
-// ─────────── icons ───────────
-
-function ToolIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="text-brand"
-    >
-      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-    </svg>
-  );
-}
-function FileIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="text-fg-muted"
-    >
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-    </svg>
-  );
-}
-function LinkIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="text-fg-muted"
-    >
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-    </svg>
-  );
-}
+// ─────────── icons (共享组件 — components/ui/Glyphs.tsx) ───────────
+//   2026-10-27 收编: 本文件原本就地手写了 3 份内联 svg, 跟共享库重复实现 ⇒
+//   全部改成 import. 逐个对照:
+//     WrenchIcon  14×14 / sw1.6  (lucide `wrench`)
+//     FileIcon    14×14 / sw1.6  (lucide `file` — 共享库已有, 直接复用)
+//     LinkBareIcon 14×14 / sw1.6 (lucide `link` — 裸版, className 原样透传)

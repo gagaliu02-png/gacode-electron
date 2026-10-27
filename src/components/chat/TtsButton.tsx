@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { Volume2Icon, VolumeXIcon } from "../ui/Glyphs";
 import { useToast } from "../ui/Toast";
 
 export interface TtsButtonProps {
@@ -91,46 +92,13 @@ export function TtsButton({ content, disabled }: TtsButtonProps) {
       data-testid="tts-button"
       className="w-7 h-7 inline-flex items-center justify-center rounded-full text-fg-muted hover:text-fg hover:bg-bg-sunken transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
     >
-      {playing ? <StopSpeakerIcon /> : <SpeakerIcon />}
+      {playing ? <VolumeXIcon /> : <Volume2Icon />}
     </button>
   );
 }
 
-function SpeakerIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
-    </svg>
-  );
-}
-
-function StopSpeakerIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-      <line x1="22" y1="9" x2="16" y2="15" />
-      <line x1="16" y1="9" x2="22" y2="15" />
-    </svg>
-  );
-}
+// ─────────── icons (共享组件 — components/ui/Glyphs.tsx) ───────────
+//   2026-10-27 收编: 本文件原本就地手写了 2 份内联 svg, 跟共享库重复实现 ⇒
+//   全部改成 import. 逐个对照:
+//     Volume2Icon 14×14 / sw1.6 (lucide `volume-2` — 朗读)
+//     VolumeXIcon 14×14 / sw1.6 (lucide `volume-x` — 停止朗读)
