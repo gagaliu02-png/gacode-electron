@@ -25,7 +25,7 @@
  * 与 web 的 `window.open(url, "_blank")` 行为一致。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { zhCN } from "date-fns/locale";
@@ -84,6 +84,8 @@ export function Deliveries() {
   const [tab, setTab] = useState<TabKey>("all");
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<Deliverable[]>([]);
+  /** 已消费过的 data 快照 — placeholderData 回填上一页时避免同一页被累加两次 */
+  const consumedDataRef = useRef<Awaited<ReturnType<typeof listDeliverables>> | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [keyword, setKeyword] = useState("");
   // web 端搜索框默认收起 (web:111 `useState(false)`)
@@ -96,6 +98,12 @@ export function Deliveries() {
     setItems([]);
     setPage(1);
     setHasMore(true);
+    // ⚠️ 清空后必须让「新 tab / 新关键词的 data」能重新入列 ——
+    //   react-query 的结构共享 (structuralSharing) 会把「内容没变」的响应
+    //   复用成**同一个 data 引用** ⇒ consumedDataRef 守卫会当成重复消费跳过,
+    //   结果列表清空后不回来 (空白列表). ⇒ 这里重置守卫, 由累积 effect 的
+    //   isFetching 依赖触发重跑 (拉取中不消费, 拉完再消费).
+    consumedDataRef.current = null;
   }, [tab, keyword]);
 
   const { data: pageData, isLoading, isFetching } = useQuery({
@@ -113,15 +121,24 @@ export function Deliveries() {
   });
 
   // 分页累积 (web:171-179)
+  // ⚠️ 守卫照抄 Library.tsx:181-194 (isFetching 依赖 + consumedDataRef) ——
+  //   placeholderData 会把「内容没变」的上一页响应复用成同一引用, 不守的话
+  //   点「加载更多」/ 切 tab 时上一页数据会被二次累加 (列表出现重复卡片).
   useEffect(() => {
     if (!pageData) return;
+    // 拉取中不消费 — placeholderData 会把上一页的 data 回填进来
+    //   (点「加载更多」/ 切 tab 时), 这时消费会把同一页累加两次.
+    if (isFetching) return;
+    // placeholderData 回填上一页数据时 data 引用不变 → 跳过, 避免同一页被累加两次
+    if (consumedDataRef.current === pageData) return;
+    consumedDataRef.current = pageData;
     setHasMore(pageData.hasMore);
     if (page === 1) {
       setItems(pageData.items || []);
     } else {
       setItems((cur) => [...cur, ...(pageData.items || [])]);
     }
-  }, [pageData, page]);
+  }, [pageData, page, isFetching]);
 
   // ────── 单条删除 (web:152-169) ──────
   const deleteMutation = useMutation({
