@@ -28,7 +28,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTmpDir, writeModule } from "./lib/schedule-loader.mjs";
 import { stripComments } from "./lib/strip-comments.mjs";
-import { extractFunction } from "./lib/source-scan.mjs";
+import { extractFunction, extractIfBranch } from "./lib/source-scan.mjs";
 
 let fail = 0;
 let passCount = 0;
@@ -347,11 +347,19 @@ const chatDetailCode = repoCode("src/routes/ChatDetail.tsx");
     ? pass("★ 409 分支单独处理 (收卡不报错)")
     : miss("409 分支没单独处理");
 
-  const conflictBranch = fn
-    ? fn.slice(fn.indexOf('verdict.kind === "conflict"'))
-    : "";
+  // ⚠️ PM 复核 (2026-10-28) 修掉的**断言脆点** —— 原来这里切的是**固定 400 字符窗口**:
+  //   `fn.slice(idx, idx + 400)` 从 `verdict.kind === "conflict"` 起数 400 字符。
+  //   而**真失败分支**(网络 / 5xx)的 `variant: "danger"` 就在第 381 位 ⇒ 落在窗口内
+  //   ⇒ 断言恒红, 但**盯的不是 409 分支** —— 属于「因为错误原因变红」的假绿。
+  //   (web 定稿版 78b01cb 早就用 AST 切了, PC 这条漏抄 —— 窗口大小还是拍的。)
+  // 现在用 AST 取**这一个 if 分支的真实文本**, 与行尾 (LF / CRLF) 无关。
+  const conflictBranch = extractIfBranch(
+    fn || "",
+    'verdict.kind === "conflict"',
+    "src/routes/ChatDetail.tsx",
+  );
   conflictBranch &&
-  !/variant:\s*"danger"/.test(conflictBranch.slice(0, 400))
+  !/variant:\s*"danger"/.test(conflictBranch)
     ? pass("★ 409 分支不用 danger toast (不报错给用户)")
     : miss("409 分支用了 danger toast");
 
