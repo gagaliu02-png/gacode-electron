@@ -241,6 +241,13 @@ function LibraryInner() {
     setPage(1);
     setItems([]);
     setSelectedIds(new Set());
+    // ⚠️ 清空后必须重置守卫 (照抄 web library/page.tsx:190-193):
+    //   react-query 的结构共享 (structuralSharing) 会把「内容没变」的响应
+    //   复用成**同一个 data 引用** ⇒ consumedDataRef 守卫会当成重复消费跳过,
+    //   结果列表清空后不回来 (空白列表).
+    //   当前切 tab/keyword 会换 queryKey ⇒ 新 cache entry ⇒ 新 data 引用 ⇒ 暂不可观测;
+    //   但将来 queryKey 若复用同一 entry, 就会出「清空后空白列表」⇒ 先堵上.
+    consumedDataRef.current = null;
   };
 
   // ────── 多选 toggle ──────

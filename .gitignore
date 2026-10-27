@@ -28,6 +28,7 @@ scripts/*
 !scripts/verify-md-table-colwidth.mjs
 !scripts/verify-md-parser.mjs
 !scripts/verify-md-render.mjs
+!scripts/verify-pagination-guard.mjs
 check-gacode.ps1
 
 # Intermediate icon-resize PNGs (only icon-source.png + icon-256.png + icon.ico committed)
