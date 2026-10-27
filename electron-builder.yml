@@ -28,16 +28,20 @@
 # 0.7.10 (PC↔web 逐页 1:1 收口: M11/M12/A1b/A3/A4 + C 域待办 + 图标形状对齐 web):
 #   - output 改 release-align-v10/ 绕 Search Indexer 锁旧目录
 #   - buildVersion bump 0.7.10 (package.json 同步)
+# 0.7.11 (交付中心分页守卫 + 内联 svg 全量收编 + A 域 5 条 PC 多出项删除 +
+#          knowledge_refs 发送侧/读侧接线):
+#   - output 改 release-align-v11/ 绕 Search Indexer 锁旧目录 (v10 被锁死清不掉)
+#   - buildVersion bump 0.7.11 (package.json 同步)
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.10
+buildVersion: 0.7.11
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
-  # 0.7.10 (PC↔web 逐页 1:1 收口 + 图标形状对齐 web): 隔离输出目录
-  output: release-align-v10
+  # 0.7.11: 隔离输出目录 (v10 被 Windows Search Indexer 锁死, EnsureEmptyDir 失败)
+  output: release-align-v11
 
 files:
   - dist/**/*
