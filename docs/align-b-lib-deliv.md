@@ -2521,9 +2521,15 @@
 
 # 五、共享组件逐个对
 
+> **⚠️ 编号消歧（2026-10-27）**：本域用 **B-S01~B-S10**；A 域用 `A-S01~A-S08`；C 域用 `C-S1~C-S12`；D 域用 `D-S01~D-S07` —— **四套编号互不相同**，跨域引用必须带域前缀。
+>
+> **两条例外（2026-10-27 定）**：
+> ① **历史复核记录段**（§11.2 / §11.6 / §13.6 等「**文档原话** / **源码真相** / **应该怎么改**」三段式）**逐字保留 2026-10-26 的旧编号**，行尾加括注写明现编号 ⇒ **不改写历史**；括注里已给出现编号（`B-S0X`），检索不受影响。
+> ② 文中 **`S10`（无连字符）= 分组计数记法**（如 `（L75+B22+D27+E13+S10）`）= 「S 组共 10 条」的**条数**，**不是条目编号** ⇒ 保持原样不动。
+
 ## 5.1 CreateFab
 
-### S-01 · PC 无统一 FAB 组件，各页各写一套
+### B-S01 · PC 无统一 FAB 组件，各页各写一套
 - **web**：`gacode-web/src/components/common/CreateFab.tsx`（57 行）
   ```tsx
   export const FAB_CLASS =
@@ -2548,7 +2554,7 @@
 
 ## 5.2 MediaPicker
 
-### S-02 · web MediaPicker 与 PC home/MediaPicker：拍照入口 + sheet 视觉
+### B-S02 · web MediaPicker 与 PC home/MediaPicker：拍照入口 + sheet 视觉
 - **web**：`gacode-web/src/components/common/MediaPicker.tsx`（276 行）
   - 容器：`Sheet` + `SheetContent side="bottom"` → `"bg-black border-t-0 text-white flex flex-col gap-0 p-0 max-h-[85vh]"`（**黑底白字**）
   - 内容区：`"flex flex-col items-center gap-4 py-8 px-4"`
@@ -2570,15 +2576,15 @@
 - **怎么改**：**已落地** —— PC `src/components/home/MediaPicker.tsx` 与 web `src/components/common/MediaPicker.tsx` 已 1:1：image 模式并排「拍照 + 相册」双钮（`:107-124`）+ 拍照 input 带 `capture="environment"`（`:147-156`）+ 黑底白字 sheet（`:82` `!bg-black !rounded-none !p-0 text-white`）+ 标题在内容里（`:87-89`）+ 底部「取消」文字钮（`:128-134`）+ 关闭时清两个 input 的 value（`:52-57`）。
 - **预估改动**：约 90 行（含 BottomSheet 扩展）
 
-### S-03 · MediaPicker 缺「相册」与「拍照」并存入口（知识库采集复用）
-- 见 L-68（知识库采集缺 capture）与 S-02（PC 单按钮 vs web 双按钮）
+### B-S03 · MediaPicker 缺「相册」与「拍照」并存入口（知识库采集复用）
+- 见 L-68（知识库采集缺 capture）与 B-S02（PC 单按钮 vs web 双按钮）
 - **判定**：**已一致**（`6dc3c3d` 落地）
 - **怎么改**：**已落地** —— 「相册」与「拍照」并存入口已补齐（`src/components/home/MediaPicker.tsx:107-124`），并被知识库采集复用（`src/components/library/CollectSheet.tsx:295-302` 走 `MediaPicker` image 模式）≡ web `library/page.tsx:435-446`。
-- **预估改动**：已计入 S-02
+- **预估改动**：已计入 B-S02
 
 ## 5.3 UploadErrorChip
 
-### S-04 · UploadErrorChip：PC 用红 /10 + 灰字，web 用红 /50 + 红字
+### B-S04 · UploadErrorChip：PC 用红 /10 + 灰字，web 用红 /50 + 红字
 - **web**：`gacode-web/src/components/common/UploadErrorChip.tsx`（60 行）
   ```tsx
   <Card className="border border-red-200 bg-red-50/60 w-full">
@@ -2614,7 +2620,7 @@
 
 ## 5.4 UploadProgressBar
 
-### S-05 · PC UploadProgressBar vs web `ui/progress.tsx`
+### B-S05 · PC UploadProgressBar vs web `ui/progress.tsx`
 - **web**：`gacode-web/src/components/ui/progress.tsx`（78 行）—— **已核**（2026-10-27 待核解除）—— 知识库/交付中心范围内没有直接引用，PC 端该组件对应 chat 上传进度，不在本次范围；web 原文见下「怎么改」栏
 - **PC**：`gacode-electron/src\components\chat\UploadProgressBar.tsx`（93 行）—— 自实现胶囊条
 - **判定**：**形态不同**（2 处：底色 + 填充过渡）
@@ -2628,7 +2634,7 @@
 
 ## 5.5 LibraryPicker
 
-### S-06 · LibraryPicker：PC 单选，web 多选 + 「完成 (N)」按钮
+### B-S06 · LibraryPicker：PC 单选，web 多选 + 「完成 (N)」按钮
 - **web**：`gacode-web/src/components/chat\LibraryPicker.tsx`（327 行）
   - props：`{ open, onOpenChange, onConfirm?: (items: LibraryItem[]) => void, onSelect?: (item: LibraryItem) => void }`
   - 多选：`pendingSelected: Set<string>` + `pendingItems: Map<string, LibraryItem>`；点击只 toggle，**不关 sheet**
@@ -2662,7 +2668,7 @@
   - ℹ️ **HOME 侧按 web Home 走单选**：`src/routes/Home.tsx:411` 传 `onSelect`（`0424bfe` 落地）⇒ HOME 页没有多选形态，与 web Home 一致；多选能力保留在 chat 页（`KnowledgeAttachSheet` 传 `onConfirm`），与 web chat 页同构。
 - **预估改动**：约 120 行
 
-### S-07 · Toast 组件结构：web `title`/`description` 两段，PC 只有 `message` 单行
+### B-S07 · Toast 组件结构：web `title`/`description` 两段，PC 只有 `message` 单行
 - **web**：`gacode-web/src/components/common/Toast.tsx`（**未读**，从用法可确认 API：`toast({ title, description?, variant })`，variant ∈ `default` / `success` / `warning` / `danger`）
   证据：`library/page.tsx:281`（`title` + `variant: "warning"`）、`library/page.tsx:295-299`（`title` + `description` + `variant`）
 - **PC**：`gacode-electron/src\components\ui\Toast.tsx`（**未读**，从用法可确认 API：`toast({ message, variant })`，无 description）
@@ -2671,7 +2677,7 @@
 - **怎么改**：**已落地** —— PC `src/components/ui/Toast.tsx:41-51` 的 `ToastItem` 支持 `title` + `description`（`message` 保留为 `title` 的别名，向后兼容）≡ web `src/components/common/Toast.tsx`（`toast({ title, description?, variant })`）；B 域的调用点已全部改两段式（L-60 / L-61 / L-62 / L-64 / L-12）。
 - **预估改动**：约 40 行
 
-### S-08 · Input 组件底色：web `bg-bg-elevated`，PC `bg-bg-sunken`
+### B-S08 · Input 组件底色：web `bg-bg-elevated`，PC `bg-bg-sunken`
 - **web**：`gacode-web/src/components/ui/input.tsx:23-35`
   ```
   "flex w-full rounded-md border border-border bg-bg-elevated px-4 py-3 text-base",
@@ -2693,7 +2699,7 @@
 - **怎么改**：**已落地** —— PC `src/components/ui/Input.tsx:26-27` = `"flex w-full rounded-md border border-border bg-bg-elevated px-4 py-3 text-base"` + `"placeholder:text-fg-subtle shadow-sm"` ≡ web `src/components/ui/input.tsx:23-35` **逐项一致**（底色 + `shadow-sm` 都已补齐）。
 - **预估改动**：2 行
 
-### S-09 · PlusSheet（PC）vs web SheetActionMenu
+### B-S09 · PlusSheet（PC）vs web SheetActionMenu
 - **web**：`gacode-web/src/components/chat/SheetActionMenu.tsx`（99 行）
   - **4 项**：图片 / 文件 / 表情 / 挂载知识库
   - 容器：`SheetContent side="bottom"` → `"rounded-t-2xl grid grid-cols-4 gap-3 py-5 px-4 border-x-0"`
@@ -2710,7 +2716,7 @@
 
 ## 5.6 DocumentPreview
 
-### S-10 · PC 缺 DocumentPreview 组件
+### B-S10 · PC 缺 DocumentPreview 组件
 - **web**：`gacode-web/src/components/deliveries/DocumentPreview.tsx`（216 行）
 - **PC**：`gacode-electron/src\components\deliveries\` — 只有 `DeliveriesDropZone` / `MultiSelectToolbar` / `ShareSheet` / `StarButton`，**无 DocumentPreview**
 - **判定**：**已一致**（`9f29dcb` 落地）
@@ -2725,7 +2731,7 @@
 
 > **PC 侧栏常驻（256px）已由 gaga 拍板保留，不在此列**（该拍板只决定「常驻 vs 抽屉」的形态；侧栏内部的置顶分组 / pin 按钮 / 条目视觉等属聊天侧栏，不在本 worker 的 2 组页面范围内）。
 
-> **编号说明（2026-10-26 复核，E-6）**：本节原用 S-01 ~ S-07，与第五节的 S-01 ~ S-10 **撞号**（同一文档里出现两个 S-01）⇒ 本节编号统一改为 **X-01 ~ X-07**，第五节的 S-01 ~ S-10 保持不变。
+> **编号说明（2026-10-26 复核，E-6）**：本节原用 S-01 ~ S-07，与第五节的 S-01 ~ S-10 **撞号**（同一文档里出现两个 S-01）⇒ 本节编号统一改为 **X-01 ~ X-07**，第五节的 S-01 ~ S-10 保持不变。（括注：以上为 2026-10-26 原文；**§五 编号已于 2026-10-27 加域前缀 → B-S01~B-S10**，§六 → X-01~X-07）
 > **归类说明（2026-10-26 复核）**：本节原有 7 条中 —— **X-02 / X-04 不是结构级差异**（与 §一 的「形态不同」同类，只是视觉高度差）⇒ 已移入 §七 的「形态不同」统计；**X-05 是产品路径分叉**，不是结构级差异 ⇒ 单列在 6.2「产品决策」。**本节真正剩下的结构级差异 = 4 条：X-01 / X-03 / X-06 / X-07。**
 
 ## 6.1 结构级差异（4 条）
@@ -2760,7 +2766,7 @@
 - **PC**：`gacode-electron/src/components/home/PlusSheet.tsx:71-201` — 拍照 / 相册 / 文件 / 表情 / 挂载知识库 / 模板
 - **差异本质**：PC 拆了「拍照 + 相册」两项并多一个「模板」；web 是「图片」一项（图片走 MediaPicker 的拍照/相册双入口）
 - **改造影响面**：
-  1. 删「拍照」「模板」→ `PlusSheet.tsx` 改 `grid-cols-4 gap-3 py-5 px-4`（「图片」合并为一个入口 → 走 **§五 S-02** 的 MediaPicker 双按钮）
+  1. 删「拍照」「模板」→ `PlusSheet.tsx` 改 `grid-cols-4 gap-3 py-5 px-4`（「图片」合并为一个入口 → 走 **§五 B-S02** 的 MediaPicker 双按钮）
   2. 但 PC 的「模板」有 toast 占位逻辑（「模板功能即将推出」）—— 删了就没这个提示位
   3. PC 的「拍照」有实际功能（`MediaPicker kind="camera"`），删掉会丢功能
 - **需 gaga 拍**：1:1 还原成 web 4 项（丢「模板」占位 + 合并「拍照/相册」），还是保留 PC 的 6 项。
@@ -2809,8 +2815,8 @@
 | 五、共享组件 | 10 | 1 | 1 | 8 | 0 |
 | **合计** | **147** | **2** | **3** | **142** | **0** |
 
-> **「不计入」桶已清空（2026-10-27）**：旧表把 D-26 / D-27 / E-13（PC 增强 3 条）+ L-75 / S-05（待核 2 条）5 条排除在合计外 —— 本轮逐条核到当前代码后，这 5 条**全部有了确定判定并计入合计**：D-26 / D-27 / E-13 = 已一致（PC 多出项已删，删的理由按新口径逐条写在该条里）；L-75 = 已一致（待核解除）；S-05 = 形态不同（待核解除）。**条目总数仍是 147**（判定行未增删，只改分类）。
-> **本轮仅剩的 5 条差异**：缺失 2 条（L-11 上传中提示条 / S-01 共享 FAB 组件）—— 都是 **待补 · 排期补，不催**；形态不同 3 条（D-06 列表容器缺 `overflow-y-auto`（PC 由 AppShell 承担滚动，**功能等价 ⇒ 2026-10-27 11:20 PM 决定明确不做、保留现状**，代价 0）/ D-12 ⋮ 菜单容器 className（共享 `DropdownMenu`，影响多个调用方）/ S-05 进度条底色与过渡（chat 域文件，与 D 域 H-12 同一条））。
+> **「不计入」桶已清空（2026-10-27）**：旧表把 D-26 / D-27 / E-13（PC 增强 3 条）+ L-75 / B-S05（待核 2 条）5 条排除在合计外 —— 本轮逐条核到当前代码后，这 5 条**全部有了确定判定并计入合计**：D-26 / D-27 / E-13 = 已一致（PC 多出项已删，删的理由按新口径逐条写在该条里）；L-75 = 已一致（待核解除）；B-S05 = 形态不同（待核解除）。**条目总数仍是 147**（判定行未增删，只改分类）。
+> **本轮仅剩的 5 条差异**：缺失 2 条（L-11 上传中提示条 / B-S01 共享 FAB 组件）—— 都是 **待补 · 排期补，不催**；形态不同 3 条（D-06 列表容器缺 `overflow-y-auto`（PC 由 AppShell 承担滚动，**功能等价 ⇒ 2026-10-27 11:20 PM 决定明确不做、保留现状**，代价 0）/ D-12 ⋮ 菜单容器 className（共享 `DropdownMenu`，影响多个调用方）/ B-S05 进度条底色与过渡（chat 域文件，与 D 域 H-12 同一条））。
 > **形态不同归位 2 条（2026-10-26 复核）**：X-02 / X-04 原列在第六节「结构级差异」，经复核判定**二者不是结构级差异**（只是视觉高度差，不涉及信息架构分叉），与 §一 的「形态不同」同类 ⇒ 已移入本节的「形态不同」统计，分别对应 §一 的 **L-35**（行内多一行「类型 chip + #id」）与 **L-71**（编辑弹窗多一段只读 meta），两条的判定行已同步改写为「形态不同」。故 §一 形态不同 52 → 54、不计入 3 → 1；合计形态不同 94 → 96、不计入 7 → 5。**条目总数仍是 147**（判定行未增删，只改分类）。　→ **2026-10-27 回写**：X-02 / X-04 涉及的 PC 多出项**已删**（`049dfe0` / `5504f93`）⇒ 对应的 L-35 / L-71 现均判「已一致」。
 > **结构级差异 4 条**（X-01 / X-03 / X-06 / X-07）单独列在第六节 6.1，不计入上表；**产品决策 1 条**（X-05）在第六节 6.2，同样不计入上表。　→ **2026-10-27 回写：5 条全部结案**（X-01 `049dfe0` / X-03 `9f29dcb` / X-06 `6dc3c3d` / X-07 `33dd1fe` / X-05 `9f29dcb`）。
 > 校核方式：对本文件逐行正则统计 `- **判定**：` 前缀，共 147 条，与条目编号数（L75+B22+D27+E13+S10）一致。　→ **2026-10-27 复核：仍为 147 条**（判定行未增删；本轮新增条目 0、删除条目 0、X 条目 7 条全部保留）。
@@ -2838,20 +2844,20 @@
 | 1 | **B-15** | ~~web `Markdown.tsx`（459 行，react-markdown 9）整套能力搬到 PC `LibraryMarkdownTableCard`~~ → **口径已反转**：PC 不再搬 web 能力，改为**统一到安卓基准**（自研 markdown 管线：`parser.ts` 解析层 + `renderer.tsx` 渲染层）；web 侧的 emoji 短码 / 图片 Lightbox / `ExpandableCell` 6 行折叠 / task-list 真 checkbox / 真 `<ul>/<ol>` 嵌套 / H4-H6 / 语法高亮 **全部削平**；代码块语言徽章 + 复制按钮由自研渲染层 `MdCodeCard` 提供 | **已交付**（M3 批 commit `b29207f`；PC `LibraryMarkdownTableCard.tsx` 111 行 → 59 行，**0 依赖**，6 个第三方包已摘除） |
 | 2 | **D-08 + D-09 + D-10 + D-11 + D-12** | 交付中心列表拆成 web 的 `ImageCard`（1:1 图）/ `WebCard`（16:9 图 + 渐变占位）/ `DocumentCard`（横排文件卡 + 下载按钮）/ `CardMenu`（⋮ 只含删除），替换 PC 统一的 `DeliveryCard`；连带 6 个 lucide svg 函数 | ≈220 |
 | 3 | **L-38 ~ L-41** | 知识库列表行新增 web 形态的浮层上下文菜单组件 `LibraryRowMenu.tsx`（fixed z-[70] 定位 + Esc/外部点击关闭 + 详情/编辑/在新窗口打开/删除 4 项 + 分隔线），并把 `LibraryCard` 的右键从「直接开编辑」改成「弹菜单」 | ≈90 |
-| 4 | **E-07 + S-10** | 新建 `src/components/deliveries/DocumentPreview.tsx`：PDF → Google Docs Viewer iframe（min(80vh,800px)）+ TXT 直链 fetch/UTF-8 解码 + 短 id 走 server `/yinian/documents/:id/text` + 加载/错误/空三态；PC `api.ts` 需新增 `getDocumentText` | ≈130 + 1 api 函数 |
+| 4 | **E-07 + B-S10** | 新建 `src/components/deliveries/DocumentPreview.tsx`：PDF → Google Docs Viewer iframe（min(80vh,800px)）+ TXT 直链 fetch/UTF-8 解码 + 短 id 走 server `/yinian/documents/:id/text` + 加载/错误/空三态；PC `api.ts` 需新增 `getDocumentText` | ≈130 + 1 api 函数 |
 | 5 | **E-08** | 交付详情页操作区重排成 web 的竖排全宽按钮组：打开（按类型换文案）/ 复制链接（web）/ 保存到相册（image）/ 下载原文件·导出到下载文件夹·重试下载（按 `downloadStatus` 三态互斥）/ 跳到源对话 / 删除改 outline+红字；PC `Deliverable` 类型需加 `downloadStatus` 字段；7 个 svg 函数 | ≈90 |
 | 6 | **L-54 ~ L-57** | 知识库采集改两段式：FAB →「采集内容」3 宫格入口 sheet（Text/Photo/File）→ 再开表单层；新建 `CollectSheet` 的 `step` 状态机 + 3 个 lucide 图标 + 100ms 延迟切层 | ≈130 |
 | 7 | **B-01 ~ B-09** | 知识库详情页补齐 web 顶栏（sticky + 返回 + 类型图标标题 + 铅笔 + 垃圾桶）+ 页内编辑模式（4 个 state + `handleSaveEdit` + 表单区）；含 **9** 个 svg 函数（ArrowLeft/Image/FileText/Link/Pencil/Trash2/X/Save/Spinner） | ≈280~320 |
-| 8 | **S-06（§五 LibraryPicker）** | `LibraryPicker` 改多选：扩 props（`onConfirm` / `onSelect`）、`pendingSelected`/`pendingItems` 两个集合、行内勾选框 + checked 态、底部「完成 (N)」按钮、类型图标上色（含 PC 缺 `cron` token）；调用方 Home.tsx 需跟进 | ≈120 |
+| 8 | **B-S06（§五 LibraryPicker）** | `LibraryPicker` 改多选：扩 props（`onConfirm` / `onSelect`）、`pendingSelected`/`pendingItems` 两个集合、行内勾选框 + checked 态、底部「完成 (N)」按钮、类型图标上色（含 PC 缺 `cron` token）；调用方 Home.tsx 需跟进 | ≈120 |
 | 9 | **L-24 + L-25 + L-26** | 知识库列表**翻页后列表被替换而非累积**（高价值 bug）：加 `items` state + 累积 effect + 选中项清理 effect + `resetFilters` 清空；PAGE_SIZE 24→30 | ≈25 |
-| 10 | **S-07 + S-08 + L-69 + S-02/S-09** | 共享基建三件套：① `Toast` 扩 `title`/`description` 两段（解锁 6 处文案升级 —— §五 **S-07**）② `Input` 底色 `bg-bg-sunken`→`bg-bg-elevated` + `shadow-sm`（§五 **S-08**）③ web `AlertDialog` 在 PC 落地（§一 **L-69**；`ConfirmDialog` 形态差：圆角 `rounded-2xl` vs `rounded-md`、`shadow-2xl` vs `shadow-dialog`、按钮 `h-9 px-4` vs `h-10 px-4`）+ `BottomSheet` 加 `hideHeader`/`sheetClassName`（§五 **S-02 / S-09**） | ≈250~280 |
+| 10 | **B-S07 + B-S08 + L-69 + B-S02/B-S09** | 共享基建三件套：① `Toast` 扩 `title`/`description` 两段（解锁 6 处文案升级 —— §五 **B-S07**）② `Input` 底色 `bg-bg-sunken`→`bg-bg-elevated` + `shadow-sm`（§五 **B-S08**）③ web `AlertDialog` 在 PC 落地（§一 **L-69**；`ConfirmDialog` 形态差：圆角 `rounded-2xl` vs `rounded-md`、`shadow-2xl` vs `shadow-dialog`、按钮 `h-9 px-4` vs `h-10 px-4`）+ `BottomSheet` 加 `hideHeader`/`sheetClassName`（§五 **B-S02 / B-S09**） | ≈250~280 |
 
 **「纯 className 一行改」快车道（剩余 33 条，合计 ≈30 行，半天内可做完）**：
 L-07 / L-08 / L-09 / L-10 / L-13 / L-16 / L-19 / L-20 / L-22 / L-26 / L-31 / L-33 / L-36 / L-47 / L-48 / L-49 / L-50 / L-53 / L-58 / L-65 / L-66 / L-73 / L-74 / B-08 / B-19 / B-20 / D-01 / D-05 / D-06 / D-07 / E-02 / E-04 / E-12
 
 **「全局组件层」批次（2026-10-26 复核，从快车道移出）**：以下 **6 条**落在**全局共享组件**（`src/components/ui/`），影响面超出知识库/交付中心两页，且互相耦合，不能当「一行 className 改」处理：
 - **L-01 ~ L-05** → 改 `src/components/ui/Tabs.tsx`（Tabs 容器去 `border-b` / 按钮内距 / 下划线内缩 / hover 底色 / 字号字重）—— **5 条必须同批改**，改一半会出半吊子视觉
-- **S-08** → 改 `src/components/ui/Input.tsx`（底色 `bg-bg-sunken` → `bg-bg-elevated` + `shadow-sm`）—— 全局组件，所有引用页一起变
+- **B-S08** → 改 `src/components/ui/Input.tsx`（底色 `bg-bg-sunken` → `bg-bg-elevated` + `shadow-sm`）—— 全局组件，所有引用页一起变
 
 **⚠️ 依赖标注（2026-10-26 复核）**：
 - **D-01 需与 L-01 ~ L-05 同批落地** —— D-01 是交付中心改用 `<Tabs variant="underline">`，其最终视觉**完全依赖** L-01 ~ L-05 对 `Tabs.tsx` 的改造；L-01 ~ L-05 没落地前，D-01 单独改只会得到「下划线满宽、按钮内距不对」的半成品。
@@ -2868,13 +2874,13 @@ L-07 / L-08 / L-09 / L-10 / L-13 / L-16 / L-19 / L-20 / L-22 / L-26 / L-31 / L-3
 | 2 | `gacode-web/src/components/ui/card.tsx` | L-17 / D-15 / E-06 / E-10（Card / CardContent 的整串 className） |
 | 3 | `gacode-web/src/components/ui/skeleton.tsx` | L-16 / D-17（Skeleton 是否自带 animate-pulse） |
 | 4 | `gacode-web/src/components/ui/dropdown-menu.tsx` | D-12（DropdownMenuContent / DropdownMenuItem 整串） |
-| 5 | `gacode-web/src/components/ui/progress.tsx` | S-05（UploadProgressBar 对照物） |
-| 6 | `gacode-web/src/components/common/Toast.tsx` | S-07（Toast 两段结构的确切 DOM） |
+| 5 | `gacode-web/src/components/ui/progress.tsx` | B-S05（UploadProgressBar 对照物） |
+| 6 | `gacode-web/src/components/common/Toast.tsx` | B-S07（Toast 两段结构的确切 DOM） |
 | 7 | `gacode-web/src/lib/deliverable-download-name.ts` | D-14（下载文件名挑选规则原文） |
 | 8 | `gacode-web/src/lib/api.ts` 的 `getDocumentText` | E-07（PC 侧 `api.ts` 需新增同款函数） |
-| 9 | `gacode-electron/src/components/ui/Toast.tsx` | S-07（PC Toast 现支持哪些 variant、是否已有 title/description） |
+| 9 | `gacode-electron/src/components/ui/Toast.tsx` | B-S07（PC Toast 现支持哪些 variant、是否已有 title/description） |
 | 10 | `gacode-electron/src/components/layout/AppShell.tsx` | L-28（PC 顶栏标题机制，决定改动 5 行还是 20 行） |
-| 11 | `gacode-electron/src/routes/Home.tsx` | S-02 / S-09（MediaPicker / PlusSheet 的调用点） |
+| 11 | `gacode-electron/src/routes/Home.tsx` | B-S02 / B-S09（MediaPicker / PlusSheet 的调用点） |
 | 12 | `gacode-electron/src/styles/globals.css` 的 `.md-table-*` | B-15（PC 是否已有 `md-table-td-clamp` / `md-table-td-toggle`） |
 | 13 | `gacode-electron/src/lib/api.ts` 的 `Deliverable` 类型 | E-08（是否有 `downloadStatus` / `prompt` / `sessionId` 字段） |
 | 14 | PC 主进程 preload 是否有 download IPC | D-14（Electron 内 `<a download>` 不触发系统下载） |
@@ -2921,7 +2927,7 @@ L-07 / L-08 / L-09 / L-10 / L-13 / L-16 / L-19 / L-20 / L-22 / L-26 / L-31 / L-3
 - **文档原话**（改前 4 处挂着同一阻塞说明）：
   - `:294`（L-14 内）：「**阻塞点**：…服务端 `GET /yinian/library` 回来的 `type` 到底是 `doc` 还是 `text`，PC 端无法从代码判定。落地前必须打一次 `GET /yinian/library` 看真实 `type` 值再决定 PC 端「文本」tab 走 `it.type === "text"` 还是 `it.url?.startsWith("text://")`。」
   - `:2299`（B-13 内）：「⚠️ **阻塞点**：需实测 `GET /yinian/library/:id?withContent=true` 返回的 `type` 值。若服务端对纯文本条目返回 `text` → 现状已一致，无需改；若返回 `doc` → 必须去掉 type 判断，否则正文丢失」
-  - `:4144`（第六节 S-01 内）：「**数据通路未知点**：…**无法从源码判定**，必须实测一次接口」
+  - `:4144`（第六节 X-01 内）：「**数据通路未知点**：…**无法从源码判定**，必须实测一次接口」（括注：以上为 2026-10-26 原文引用；原写「S-01」指第六节原第一条，该节已于 2026-10-26 改为 **X-01~X-07** ⇒ **2026-10-27 一并改准**；§五 编号已于 2026-10-27 加域前缀 → **B-S01~B-S10**）
   - `:4265`（§十 第 2 条）：「→ B-13（**必须先实测接口**）」
 - **源码真相**（全部可从源码判定，无需实测）：
   - `unified-api/src/modules/yinian/library.routes.js:121` `const webType = MODALITY_TO_WEB_TYPE[atom.modality] || 'link';`
@@ -2931,7 +2937,7 @@ L-07 / L-08 / L-09 / L-10 / L-13 / L-16 / L-19 / L-20 / L-22 / L-26 / L-31 / L-3
 - **应该怎么改**：4 处阻塞说明全部改成确定结论 ——「服务端 `type` 值域恒为 `image | doc | link` → PC 的 `item.type === "text"` 是死条件 → 纯文本正文必然不渲染」；**B-13 的改法（去掉 type 判断、只看 `item.content`）可以直接执行，不必等实测接口**。
 - **顺带在 B-13 记下两条 PC 侧死码**：`src/lib/api.ts:818` 的 type 联合里的 `"text"` 应删；`src/routes/LibraryDetail.tsx:450-455` 的 `TYPE_LABEL.text` 永不可达。
 
-## 11.2 E-2（严重）· L-14 / S-01 的「怎么改」照原样实现会做出恒空的 tab
+## 11.2 E-2（严重）· L-14 / X-01 的「怎么改」照原样实现会做出恒空的 tab（括注：原写「S-01」，指第六节原第一条 = 现 **X-01**，2026-10-27 一并改准；§五 编号已于 2026-10-27 加域前缀 → **B-S01~B-S10**）
 
 - **文档原话**（改前 `:291-293` / `:4138`）：「只需让 `filteredItems` 的过滤分支能匹配 `text`」；「1:1 还原 = 删掉 PC 的「链接」tab、加上「文本」tab」
 - **源码真相**：
@@ -2946,7 +2952,7 @@ L-07 / L-08 / L-09 / L-10 / L-13 / L-16 / L-19 / L-20 / L-22 / L-26 / L-31 / L-3
 - **应该怎么改**：
   1. **`serverType` 改为按 tab 分别传**（文本 → `'text'`、图片 → `'image'`、文档 → `'file'`）
   2. **客户端不再二次过滤**，或改用服务端已返回的原始 `modality` 字段
-  3. **S-01 的框架要换**：web 的「文本」tab 语义 = 服务端 modality='text'（URL 条目 + 安卓纯文本）；**PC 现有的「链接」tab 在语义上已经等于 web 的「文本」tab** ⇒ 1:1 还原**不是**原文档说的「删掉链接、加文本」，而是**给 PC 的 tab 改 serverType + 改文案**
+  3. **X-01 的框架要换**：web 的「文本」tab 语义 = 服务端 modality='text'（URL 条目 + 安卓纯文本）；**PC 现有的「链接」tab 在语义上已经等于 web 的「文本」tab** ⇒ 1:1 还原**不是**原文档说的「删掉链接、加文本」，而是**给 PC 的 tab 改 serverType + 改文案**（括注：同上，原写「S-01」指第六节原第一条 = 现 **X-01**，2026-10-27 一并改准）
 - **连带**：在 §十 新增一条原文档完全漏掉的真 bug ——「PC 的图片 tab 与链接 tab 恒为空（serverType 恒为 'file'）」。
 
 ## 11.3 E-3 · L-25 的用户可见后果站不住，判定降级
@@ -2970,11 +2976,11 @@ L-07 / L-08 / L-09 / L-10 / L-13 / L-16 / L-19 / L-20 / L-22 / L-26 / L-31 / L-3
 - **M3 批后现状**（2026-10-26，commit `b29207f`）：PC **整条第三方 markdown 体系已摘除** —— `react-markdown` / `remark-gfm` / `remark-emoji` / `rehype-highlight` / `rehype-sanitize` / `highlight.js` 六个包从 `package.json` 移除；`LibraryMarkdownTableCard.tsx`（111 行 → **59 行**）也不再引用 `remarkPlugins`，改走自研管线 `src/lib/markdown.tsx` → `src/lib/markdown/renderer.tsx` → `src/lib/markdown/parser.ts`
 - **应该怎么改**：本条纠正**作废**；B-15 / §八 第 1 行已改写为「PC 已归并到自研 markdown 管线，emoji 短码等 web 能力按安卓基准全部削平」（**不是**「接进 `remarkPlugins`」）
 
-## 11.6 E-6 · S- 编号双占（§五 S-01~S-10 与 §六 S-01~S-07 撞号）+ §八 第 10 行指错条目
+## 11.6 E-6 · S- 编号双占（§五 S-01~S-10 与 §六 S-01~S-07 撞号）+ §八 第 10 行指错条目（括注：以上为 2026-10-26 原文；**§五 → B-S01~B-S10**（2026-10-27 加域前缀）、**§六 → X-01~X-07**（2026-10-26 已改））
 
-- **文档原话**：§五 用 S-01~S-10，§六 又用 S-01~S-07 ⇒ 同一文档里两个 S-01；§八 第 10 行（改前 `:4233`）写「S-02 + S-03 + S-04 + S-07」
-- **源码真相**：§八 第 10 行的实际内容是 —— Toast 扩两段（§五 **S-07**）+ Input 底色（§五 **S-08**）+ web AlertDialog 落地（**L-69**，在 §一）+ BottomSheet 扩展（§五 **S-02 / S-09**）
-- **应该怎么改**：**§六 的 7 条编号改成 X-01 ~ X-07**（§六 内部交叉引用一并改，§一/§二/§三/§五 指向 §六 的引用同步改）；§八 第 10 行改成「**S-07 + S-08 + L-69 + S-02/S-09**」。
+- **文档原话**：§五 用 S-01~S-10，§六 又用 S-01~S-07 ⇒ 同一文档里两个 S-01；§八 第 10 行（改前 `:4233`）写「S-02 + S-03 + S-04 + S-07」（括注：以上为 2026-10-26 原文引用；§五 现编号 **B-S01~B-S10**）
+- **源码真相**：§八 第 10 行的实际内容是 —— Toast 扩两段（§五 **S-07**）+ Input 底色（§五 **S-08**）+ web AlertDialog 落地（**L-69**，在 §一）+ BottomSheet 扩展（§五 **S-02 / S-09**）（括注：以上为 2026-10-26 原文；§八 第 10 行现为 **B-S07 + B-S08 + L-69 + B-S02/B-S09**）
+- **应该怎么改**：**§六 的 7 条编号改成 X-01 ~ X-07**（§六 内部交叉引用一并改，§一/§二/§三/§五 指向 §六 的引用同步改）；§八 第 10 行改成「**S-07 + S-08 + L-69 + S-02/S-09**」。（括注：以上为 2026-10-26 原文；§八 第 10 行现为 **B-S07 + B-S08 + L-69 + B-S02/B-S09**）
 
 ## 11.7 E-7 · §八 第 7 行「6 个 svg 函数」后面列了 9 个名字
 
@@ -3001,7 +3007,7 @@ L-07 / L-08 / L-09 / L-10 / L-13 / L-16 / L-19 / L-20 / L-22 / L-26 / L-31 / L-3
 # 十二、web 端 UI 原件（待核清单 #1~#8 补全）
 
 > 本节是**另一个 worker 实测抄出的 web 端原文**（该 worker 因「不要改文档」的约束没落盘，现转补到本文件）。
-> **逐字抄录**，供 PC 侧直接对照落地。**对应 §九「待核清单」第 1 ~ #8 项 —— 这 8 项的「待核」状态到此解除**（B-07 / B-12 / E-05 / L-17 / D-15 / E-06 / E-10 / D-12 / D-14 / E-07 / S-05 / S-07 均可按本节原文落地）。
+> **逐字抄录**，供 PC 侧直接对照落地。**对应 §九「待核清单」第 1 ~ #8 项 —— 这 8 项的「待核」状态到此解除**（B-07 / B-12 / E-05 / L-17 / D-15 / E-06 / E-10 / D-12 / D-14 / E-07 / B-S05 / B-S07 均可按本节原文落地）。
 
 ## #1 `gacode-web/src/components/ui/badge.tsx`（45 行，cva）
 - base：`"inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-bg-base"`
@@ -3035,14 +3041,14 @@ function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>)
 - 外层 `"flex items-center gap-2 px-3 py-2 rounded-full bg-bg-base shadow-sm"`；文件名 `"text-xs text-fg truncate max-w-[120px]"`；轨道 `"flex-1 h-1.5 bg-bg-sunken rounded-full overflow-hidden"`；填充 `"h-full bg-primary transition-all duration-150 ease-standard"` + `style={{ width: `${clamped}%` }}`；百分比 `"text-xs tabular-nums text-fg-muted shrink-0"`
 - 取消按钮 `"shrink-0 w-6 h-6 rounded-full inline-flex items-center justify-center text-fg-muted hover:bg-bg-sunken hover:text-fg transition-colors duration-150"` + `<X className="w-3.5 h-3.5" />`
 - Props：`{ value: number; fileName?: string; onCancel?: () => void; className?: string }`
-- **PC 侧注意事项**：S-05 的「待核」到此解除 —— web 这不是 shadcn 的 `progress`，是自写的 `ProgressBar`（胶囊形、带文件名 + 百分比 + 取消按钮），PC 侧要抄的是这一整套，不是 `h-2 w-full rounded-full` 那种。
+- **PC 侧注意事项**：B-S05 的「待核」到此解除 —— web 这不是 shadcn 的 `progress`，是自写的 `ProgressBar`（胶囊形、带文件名 + 百分比 + 取消按钮），PC 侧要抄的是这一整套，不是 `h-2 w-full rounded-full` 那种。
 
 ## #6 `gacode-web/src/components/common/Toast.tsx`（174 行）
 - `ToastVariant = "default" | "success" | "warning" | "danger"`；`ToastItem = { id: string; title?: ReactNode; description?: ReactNode; variant?: ToastVariant; duration?: number }`；`toast(item: Omit<ToastItem,"id">)` 返回 `{ id, dismiss }`，默认 2500ms
 - 卡片：`role="status" aria-live="polite" data-state="open" data-toast-variant={variant}` + `"pointer-events-auto relative w-full max-w-[360px] rounded-2xl bg-bg-elevated p-5 pr-10 shadow-dialog"` + `"animate-fade-in"`；内层 `"flex items-start gap-2"` → 图标 `w-[15px] h-[15px] shrink-0 mt-[3px]` + 变体色（default `text-fg-muted` / success `text-success` / warning `text-warning` / danger `text-danger`；lucide Info / CheckCircle2 / AlertTriangle / AlertCircle）→ `"min-w-0 flex-1"` → title `<h3 className="m-0 text-base font-medium leading-6">` / description `<p className="m-0 mt-1 text-[13.5px] leading-5 text-fg-muted break-words">`
 - 关闭按钮 `"absolute right-3 top-3 w-7 h-7 rounded-full grid place-items-center text-fg-muted hover:text-fg hover:bg-white/[0.07] transition-colors duration-150"` + `<X className="h-4 w-4" />`
 - 遮罩 `<div aria-hidden className="pointer-events-none fixed inset-0 z-[9998] bg-black/60" />` + 容器 `pointer-events-none fixed inset-0 z-[9999] flex items-center justify-center px-5` + 堆叠 `flex flex-col-reverse items-center gap-3 max-h-[80vh] overflow-y-auto`；导出 `ToastRoot as ToastProvider, Toaster, ToastCard`
-- **PC 侧注意事项**：S-07（Toast 扩 `title`/`description` 两段）与 L-64 / L-70 / D-19 / D-20 等文案升级条目按这份原件抄；web 的 variant 枚举是 **`default | success | warning | danger`**（PC 现有 `Button`/Toast 的 variant 名要逐一对齐，注意 PC 用的是 `danger` 而非 `destructive`）。
+- **PC 侧注意事项**：B-S07（Toast 扩 `title`/`description` 两段）与 L-64 / L-70 / D-19 / D-20 等文案升级条目按这份原件抄；web 的 variant 枚举是 **`default | success | warning | danger`**（PC 现有 `Button`/Toast 的 variant 名要逐一对齐，注意 PC 用的是 `danger` 而非 `destructive`）。
 
 ## #7 `gacode-web/src/lib/deliverable-download-name.ts`（30 行）
 ```ts
@@ -3071,7 +3077,7 @@ export const getDocumentText = (fileId: string) =>
   request<DocumentTextResponse>(`/yinian/documents/${fileId}/text`);
 ```
 （端点 `GET /yinian/documents/{id}/text`，server 侧 `unified-api/src/modules/yinian/yinian.routes.js:441-445`，auth-gated；PC 侧同名函数需自行加）
-- **PC 侧注意事项**：E-07 / S-10 的 `DocumentPreview` 要用这个接口 —— PC 侧在 `src/lib/api.ts` 加**同名同签名**的 `getDocumentText`（端点路径与字段名照抄，`format` / `truncated` 两个可选字段别漏）。
+- **PC 侧注意事项**：E-07 / B-S10 的 `DocumentPreview` 要用这个接口 —— PC 侧在 `src/lib/api.ts` 加**同名同签名**的 `getDocumentText`（端点路径与字段名照抄，`format` / `truncated` 两个可选字段别漏）。
 
 ---
 
@@ -3112,9 +3118,9 @@ export const getDocumentText = (fileId: string) =>
 
 ## 13.6 §八 快车道 40 条里 6 条落在禁改区
 
-- **文档原话**：§八 快车道列了 40 条，其中 **L-01 ~ L-05** 要改 `src/components/ui/Tabs.tsx`、**S-08** 要改 `src/components/ui/Input.tsx` —— 都在**全局共享组件**里，属禁改区。
+- **文档原话**：§八 快车道列了 40 条，其中 **L-01 ~ L-05** 要改 `src/components/ui/Tabs.tsx`、**S-08** 要改 `src/components/ui/Input.tsx` —— 都在**全局共享组件**里，属禁改区。（括注：以上为 2026-10-26 原文引用；§五 现编号 **B-S01~B-S10**）
 - **实际情况**：而 **D-01**（交付中心改用 `<Tabs variant="underline">`）的最终视觉又**完全依赖** L-01 ~ L-05 ⇒ D-01 单跑只会得到「下划线满宽、按钮内距不对」的半成品。
-- **怎么改**：标注「**D-01 需与 L-01 ~ L-05 同批落地**」，并把 **L-01 ~ L-05 / S-08 从快车道清单移到「全局组件层」批次**（已改，§八 快车道段落重排为：快车道 33 条 + 全局组件层 6 条 + 依赖标注）。
+- **怎么改**：标注「**D-01 需与 L-01 ~ L-05 同批落地**」，并把 **L-01 ~ L-05 / S-08 从快车道清单移到「全局组件层」批次**（已改，§八 快车道段落重排为：快车道 33 条 + 全局组件层 6 条 + 依赖标注）。（括注：以上为 2026-10-26 原文；§五 现编号 **B-S01~B-S10**）
 
 ## 13.7 B-20 的 fallback 口径两处不一致
 
@@ -3193,7 +3199,7 @@ export const getDocumentText = (fileId: string) =>
 | E-11 加载态骨架 | 形态不同 | ✅ 已落地 | `DeliveryDetail.tsx` |
 | E-12 删除后跳转 + 清缓存 | 形态不同 | ✅ 已落地（`removeQueries(["deliverable", id])`） | `DeliveryDetail.tsx` |
 | **E-13 ShareSheet / StarButton** | 不列差异（PC 增强） | 🔴 **已删**（新口径） | — |
-| S-10 缺 DocumentPreview | 缺失 | ✅ 已落地 | `components/deliveries/DocumentPreview.tsx` |
+| B-S10 缺 DocumentPreview | 缺失 | ✅ 已落地 | `components/deliveries/DocumentPreview.tsx` |
 | X-03 卡片三型 | 结构级差异 | ✅ 已解决 | — |
 | X-05 卡片点击行为 | 产品决策 | ✅ 已解决（选 web 的「开原链接」） | — |
 
@@ -3299,11 +3305,11 @@ export const getDocumentText = (fileId: string) =>
 | commit | 内容 | 直接改判的条目 |
 |---|---|---|
 | `f57f2ec` | Glyphs 44→59 导出（图标形状逐个对齐 web / lucide v0.407.0）+ 撤 electron 交付物自动下载 IPC + 死代码清理（删 DeliverableStrip / SyncStatusBadge / LibraryMarkdownTableCard / SortMenu / TagFilter / api.ts 的 listSessionDeliverables）+ ConfirmDialog 加 `description` 与 `loadingStyle` 三态 + Tabs underline 补 focus ring + AttachmentChip 删 PC 独有分支 | L-06 / L-07 / L-18 / L-30 / L-32 / L-38 / L-40 / L-42 / L-53 / L-56 / L-69 / L-73 / L-74 / L-75 |
-| `77a83fc` | 知识库+交付中心：交付中心换回共享 `<Tabs variant="underline">`；api.ts 补 `LibraryItem.modality`；知识库详情数据源改 web 同端点 `GET /yinian/library/:id?withContent=true` → `GET /yinian/memories/:id`（新增 `mapMemoryAtomToLibraryItem`）；Library.tsx L-13 刷新清空（+ isFetching 守卫 + consumedDataRef）；LibraryDetail.tsx 包 ErrorBoundary；删除弹窗 pending 形态 | L-12 / L-13 / L-15 / L-27 / D-01 ~ D-05 / D-19 / D-20 / E-01 ~ E-13 / B-21 / B-22 / S-07 |
-| `0424bfe` | HOME 域剩余待办：部分附件上传失败提示回到 web 的归属（Home 补两段式 toast，ChatDetail 删接线）；「附件还在上传中」守卫；HOME 知识库挂载改单选；LibraryPicker 头部形态对齐 web；toast 变体文案；删 SlashMenu「收藏」命令 | S-06（HOME 侧单选收口）· D 域 H-15 / H-16 / H-42 / H-51 / H-54 / H-69（见 `docs/align-d-home.md` §13） |
+| `77a83fc` | 知识库+交付中心：交付中心换回共享 `<Tabs variant="underline">`；api.ts 补 `LibraryItem.modality`；知识库详情数据源改 web 同端点 `GET /yinian/library/:id?withContent=true` → `GET /yinian/memories/:id`（新增 `mapMemoryAtomToLibraryItem`）；Library.tsx L-13 刷新清空（+ isFetching 守卫 + consumedDataRef）；LibraryDetail.tsx 包 ErrorBoundary；删除弹窗 pending 形态 | L-12 / L-13 / L-15 / L-27 / D-01 ~ D-05 / D-19 / D-20 / E-01 ~ E-13 / B-21 / B-22 / B-S07 |
+| `0424bfe` | HOME 域剩余待办：部分附件上传失败提示回到 web 的归属（Home 补两段式 toast，ChatDetail 删接线）；「附件还在上传中」守卫；HOME 知识库挂载改单选；LibraryPicker 头部形态对齐 web；toast 变体文案；删 SlashMenu「收藏」命令 | B-S06（HOME 侧单选收口）· D 域 H-15 / H-16 / H-42 / H-51 / H-54 / H-69（见 `docs/align-d-home.md` §13） |
 | `a7363a0` | **交付中心分页二次累加守卫**（真 bug）：`src/routes/Deliveries.tsx` 照抄 `Library.tsx` 既有守卫（isFetching + consumedDataRef 判重 + 依赖补 isFetching + tab/keyword 重置 effect 清守卫） | D-23 / D-25 |
 | `8cfcb64` | 删掉 5 处「PC 有 web 没有」的 UI（审批 banner 提示行 / ↓跳到底浮动按钮 / 消息列表空态 / 侧栏导航项 active 高亮 / 侧栏对话条目行首气泡图标） | **B 域无对应条目**（这 5 处属 chat 域，已记在 `docs/align-a-chat.md`） |
-| `a7fc845` | 剩余内联 svg 全量收编进共享 Glyphs（20 文件 · chat 域 22 处 + routes 域 21 处）+ 删 `src/components/deliveries/Icons.tsx`；Glyphs 导出 59→84 | S-05（X 钮收编）/ L-23 / L-50 / D-16 / D-17 的图标来源 |
+| `a7fc845` | 剩余内联 svg 全量收编进共享 Glyphs（20 文件 · chat 域 22 处 + routes 域 21 处）+ 删 `src/components/deliveries/Icons.tsx`；Glyphs 导出 59→84 | B-S05（X 钮收编）/ L-23 / L-50 / D-16 / D-17 的图标来源 |
 | `7c22841` | knowledge_refs 发送侧 + 读侧接线（`sse.ts` 加 knowledgeRefs + body「字段存在才发」；api.ts ChatMessage 加 knowledgeRefs + getHistory 解析 metadata.knowledge_refs；ChatDetail 新增 extractKnowledgeRefIdsFromMessage） | **B 域无对应条目**（属 chat 域，已记在 `docs/align-a-chat.md`） |
 | `7f79add` | **Library.tsx `resetFilters()` 补 `consumedDataRef` 重置**（照抄 web `library/page.tsx:190-193`）+ 抄 web 的 `scripts/verify-pagination-guard.mjs`（按 PC 命名参数化） | L-13 / L-24 |
 
@@ -3320,7 +3326,7 @@ export const getDocumentText = (fileId: string) =>
 
 - **旧统计（2026-10-26）**：缺失 36 / 形态不同 96 / 已一致 10 / 不计入 5 ⇒ **本轮**：缺失 2 / 形态不同 3 / 已一致 142 / 不计入 0。
 - **条目总数 147 不变**（本轮新增 0 条、删除 0 条；第六节 X-01 ~ X-07 共 7 条结构级条目**全部保留**，只是状态改为「已落地」）。
-- **剩余 5 条差异（全部「排期补，不催」级）**：L-11（上传中提示条）· S-01（共享 FAB 组件）· D-06（列表容器 `overflow-y-auto`）· D-12（⋮ 菜单容器 className）· S-05（进度条底色 / 过渡，与 D 域 H-12 同一条）。
+- **剩余 5 条差异（全部「排期补，不催」级）**：L-11（上传中提示条）· B-S01（共享 FAB 组件）· D-06（列表容器 `overflow-y-auto`）· D-12（⋮ 菜单容器 className）· B-S05（进度条底色 / 过渡，与 D 域 H-12 同一条）。
 
 ## 15.3 新口径下「该删 → 可保留」的条目（本轮 0 条）
 
@@ -3334,5 +3340,5 @@ export const getDocumentText = (fileId: string) =>
 4. **旧稿 L-24「PC 端翻页会丢数据」的真 bug 已修**：PC 累积 effect 与 web 同构（`src/routes/Library.tsx:181-194`），并按 web 10-27 的做法补了 `isFetching` 守卫 + `consumedDataRef` 判重。
 5. **旧稿 X-01 的「连带真 bug（图片 / 链接 tab 恒空）」已修**（`serverType` 按 tab 分别传，`src/routes/Library.tsx:162-166`）。
 6. **旧稿 B-13 的「纯文本正文在 PC 端必然不渲染」已修**（判定改成「content 存在即渲染」，`src/routes/LibraryDetail.tsx:375`）。
-7. **旧稿 S-05 / L-75 的「待核」状态已解除**：S-05 = 形态不同（2 处），L-75 = 已一致。
-8. **旧稿 S-05 顶部「web：未读」已改为「已核」**：web `src/components/ui/progress.tsx`（78 行）原文已核（`:43` 根容器 / `:57` 填充），与同条「怎么改」栏给出的出处一致 —— 原稿「未读 · 不在本次范围」与「待核已解除」自相矛盾，本轮订正。
+7. **旧稿 B-S05 / L-75 的「待核」状态已解除**：B-S05 = 形态不同（2 处），L-75 = 已一致。
+8. **旧稿 B-S05 顶部「web：未读」已改为「已核」**：web `src/components/ui/progress.tsx`（78 行）原文已核（`:43` 根容器 / `:57` 填充），与同条「怎么改」栏给出的出处一致 —— 原稿「未读 · 不在本次范围」与「待核已解除」自相矛盾，本轮订正。
