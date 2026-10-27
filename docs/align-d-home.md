@@ -38,7 +38,7 @@
 
 > 「部分落地」桶**本轮清空**（H-15 / H-16 / H-51 / H-54 全部收口）⇒ 该桶保留在表里但计数为 0，便于跟历史批次对照。
 
-另：§9 结构级差异 7 条 —— **4 条已落地结案**（D-S03 / D-S04 / D-S05 / D-S07）· **1 条按既有决策不改**（D-S06）· **2 条不再需要 gaga 拍**（D-S01 未登录态 / D-S02 附件 state 归属 —— 分层口径下归 PM 排期，见 §9）。
+另：§9 结构级差异 7 条 —— **5 条已落地结案**（D-S02 / D-S03 / D-S04 / D-S05 / D-S07）· **1 条按既有决策不改**（D-S06）· **1 条不再需要 gaga 拍**（D-S01 未登录态 —— 分层口径下归 PM 排期，见 §9）。
 「PC 侧栏常驻 vs web 抽屉」一项**已拍板保留**，不进 §9。
 另：**2 类不计入上表合计**的标注 —— 「本轮不做」2 条 · 「待 gaga 真机看」2 条（见 §12 末尾两张表）。
 
@@ -242,9 +242,10 @@
 - **判定**：**形态不同**（**1 处残留：位置**；间距已对齐）
 - **怎么改**：**本轮未动**。已对齐的部分：间距 `gap-1.5`（6px）→ `gap-2`（8px）✅（`ChatInputBar.tsx:618`）。
   - **剩下的只有「附件区归属」**：web 把附件预览放在 ChatInputBar **外面**（`page.tsx:306`，是 Home 页自己的 JSX），PC 放在 ChatInputBar **里面**（`ChatInputBar.tsx:616`）⇒ Home 拿不到 `attachments` state，无法自己控制附件区样式。
-  - 改法见 §9 **D-S02**（附件 state 归谁 —— **不再等 gaga 拍板**，按分层口径归 PM 排期；落法 = 选 A：ChatInputBar 加 `onAttachmentsChange` 上报回调，Home 只读，~18 行，排进下一批；本轮未动）。
+  - 改法见 §9 **D-S02**（附件 state 归谁 —— **不再等 gaga 拍板**，按分层口径归 PM 排期；落法 = 选 A：ChatInputBar 加 `onAttachmentsChange` 上报回调，Home 只读，~18 行；**已随 `557033e` 落地**）。
   - 两条备选：① ChatInputBar 加 `onAttachmentsChange?: (items: AttachmentItem[]) => void` 上报回调，Home 只读（改动小、不破坏 ChatDetail）；② attachments state 上移到 Home、ChatInputBar 改受控（彻底对齐 web，但 ChatInputBar 大改）。
-- 预估改动：**~18 行（跨 chat 域，见 D-S02）**
+- **本条状态（2026-10-27 · 代次 1 `557033e`）**：**通道已就位**（ChatInputBar 新增 `onAttachmentsChange` prop + effect 上报；Home 接一份**只读**镜像，以 `data-attachments-count` 暴露在 DOM 上，零视觉变化）；**「附件区本体位置」差异仍未收口**（web 把附件区放在 ChatInputBar **外面**，PC 仍在**里面**）⇒ H-11 仍是「形态不同」，**排期补（归代次 2）**，不催。
+- 预估改动：**~18 行（跨 chat 域，见 D-S02）**—— 已完成（`557033e`）
 
 ## H-12　上传中进度条
 
@@ -1737,7 +1738,7 @@
 
 > **⚠️ 编号消歧（2026-10-27 10:40）**：本域用 **D-S01~D-S07**；chat 域用 **A-S01~A-S08**；个人中心/通知域用 **C-S1~C-S12** —— **三套编号互不相同**，跨域引用必须带域前缀。**状态 / 落法 / 排期代次**统一见 PM 侧状态表：`D:\gaga\gaclaw-project\docs\pm\2026-10-27-PC端结构级条目状态表-供PM排期.md`
 
-> **本节状态一览**：D-S03 ✅ 已落地（`6dc3c3d`）· D-S04 ✅ 已落地（`5504f93`）· D-S05 ✅ 已落地（`5504f93` + `6dc3c3d`）· D-S07 ✅ 已落地（`5504f93`）· D-S06 📌 按既有决策保持不改（选项 A）· **D-S01 📌 不再需要 gaga 拍**（不现在做，排到「PC 追上 web」那一代）· **D-S02 📌 不再需要 gaga 拍**（选 A，排进下一批）。
+> **本节状态一览**：D-S02 ✅ 已落地（`557033e` · 落法 A）· D-S03 ✅ 已落地（`6dc3c3d`）· D-S04 ✅ 已落地（`5504f93`）· D-S05 ✅ 已落地（`5504f93` + `6dc3c3d`）· D-S07 ✅ 已落地（`5504f93`）· D-S06 📌 按既有决策保持不改（选项 A）· **D-S01 📌 不再需要 gaga 拍**（不现在做，排到「PC 追上 web」那一代）。
 >
 > **PC 侧栏常驻已拍板保留**（gaga 2026-10-26：「PC 的 256px 常驻侧栏保留，不改成 web 的 Drawer 抽屉」）。因此「侧栏常驻 vs web 抽屉」**不在本节**，对应条目 H-03 / H-04 已标「✅ 已拍板 · PC 不还原」。侧栏**内部**的置顶可折叠分组 / pin 按钮 / 条目视觉形态 / 圆角间距 hover 态 / 计数与折叠箭头对齐，属 ChatList 侧栏域，不在本 HOME 页清单范围。
 
@@ -1767,7 +1768,7 @@
 
 ## D-S02　附件区的归属与 attachments state 所有权（跨 chat 域）
 
-**状态**：📌 **不再需要 gaga 拍板**（2026-10-27 分层对齐口径：PC = -2 弱对齐 ⇒ 进度差异类归 PM 排期，不是待拍项）—— **落法：选 A（ChatInputBar 加 `onAttachmentsChange` 上报回调，Home 只读，~18 行，排进下一批）**；H-11 的附件区位置差异随之在下一批收口。
+**状态**：✅ **已落地（commit `557033e`，2026-10-27 · 代次 1）** —— 落法 A（ChatInputBar 加 `onAttachmentsChange` 上报回调，Home 只读），**不再需要 gaga 拍板**（2026-10-27 分层对齐口径：PC = -2 弱对齐 ⇒ 进度差异类归 PM 排期，不是待拍项）。⚠️ **落法 A 只把「Home 看得见附件状态」的通道接好**（ChatInputBar 新增 `onAttachmentsChange` prop + effect 上报，回调走 ref 兜最新引用以避免死循环；Home 接只读镜像 `data-attachments-count`，附件区本体**仍在 ChatInputBar 内**）⇒ **H-11 的位置差异仍未收口，排期补（代次 2）**。
 
 > ⚠️ 下面的「需要 gaga 拍」段是 2026-10-26 的历史稿：**结论保留、状态已改**。
 > ℹ️ **选 A 的依据是采信 PM 判断（总 PM 已知并接受），本台账未独立核过 A / B 两个选项。**
@@ -1928,7 +1929,7 @@
 
 ### F-07　PC 的附件区**在 ChatInputBar 内部**，Home 无法独立控制
 
-- **状态**：⏳ **未修** → H-11 / D-S02（附件区仍在 `ChatInputBar` 内部）
+- **状态**：🟡 **部分修**（`557033e`）→ **通道已就位**（ChatInputBar 上报 `onAttachmentsChange` + Home 只读镜像 `data-attachments-count`），**「附件区本体位置」差异仍未收口** ⇒ H-11 排期补（代次 2），不催
 
 - **web `page.tsx:306-357`**：附件区是 Home 页自己的 JSX，在 ChatInputBar **外面**，`px-4 pb-2` + `flex flex-wrap gap-2`
 - **PC `ChatInputBar.tsx:507-508`**：附件区在 ChatInputBar **里面**，`mb-2 flex flex-wrap gap-1.5`
@@ -1995,7 +1996,7 @@
 
 | 序 | 条目 | 一句话 | 归属 |
 |---|---|---|---|
-| 2 | H-11 | 附件区上移 Home（ChatInputBar 暴露附件状态） | **chat 域** + 待 D-S02 拍板 |
+| 2 | H-11 | 附件区上移 Home（ChatInputBar 暴露附件状态） | **chat 域** · D-S02 已落地（通道到位 `557033e`）· **本体上移排代次 2** |
 | 3 | H-02 / H-25 / H-70 | 未登录态整块缺失（居中 Cody 120px + 居中输入框 + 右上「登录」按钮 + 3 处拦截） | **待 D-S01 拍板** |
 | 4 | H-63 | firstMessage 改走 URL query（PC 现在走 sessionStorage） | **建议不改**（见 §12「本轮不做」） |
 
@@ -2055,10 +2056,10 @@
 | H-33 | MediaPicker 纯黑全宽弹层 + `bg-white/10` 半透明白按钮 | 桌面端观感未验证 |
 
 **跨域依赖提醒**：
-- 仍在 chat 域的待做条目：**H-11**（跨 chat 域，见 D-S02）· **H-12**（`src/components/chat/UploadProgressBar.tsx` · D 批次跳过）
+- 仍在 chat 域的待做条目：**H-11**（跨 chat 域 · D-S02 通道已就位 `557033e` · **本体上移排代次 2**）· **H-12**（`src/components/chat/UploadProgressBar.tsx` · D 批次跳过）
 - 仍在 `src/components/ui/BottomSheet.tsx` 的待做条目：**0 条** —— H-29 / H-43 / H-46 / H-53 / H-54 需要的 BottomSheet 能力已随 `5504f93` + `6dc3c3d` 全部落地（H-54 改用 BottomSheet 已有的 `hideTitle` + `header` + `contentClassName` 通道，**BottomSheet 本身 0 改动**）
 - Home 域可自行施工：**0 条**（D 批次后 Home 域的 5 条 H-15 / H-16 / H-42 / H-54 / H-69 全部落地）
-- 待 gaga 拍板：**H-02 / H-25 / H-70**（随 D-S01）· **H-11**（随 D-S02）
+- 待 gaga 拍板：**H-02 / H-25 / H-70**（随 D-S01）—— **H-11 不再待拍**（D-S02 已落地 `557033e`，落法 A）
 - 已由 gaga 2026-10-26 21:35 拍板（不再等拍板）：**PC↔web 差异是「待办」不是「待拍项」** —— web 有 PC 没有的**必须补**，PC 有 web 没有的**必须删**（H-51 即按此口径收口）
 
 ---

@@ -1817,7 +1817,8 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
       nav.client(router, "/profile");
     },
   ```
-  → **保存时若选了新头像会再上传一次**（web 的 `avatarMutation` 在选文件时就上传过一次，`saveMutation` 里**又传一次**），并把返回的 URL 一起写进 `applyPatch`（`useAuthStore.updateProfile`，`gacode-web/src/lib/store.ts:130-133`）→ **本地 store 立刻更新**，不等 refetch
+  → **保存时上传一次头像**，并把返回的 URL 一起写进 `applyPatch`（`useAuthStore.updateProfile`，`gacode-web/src/lib/store.ts:130-133`）→ **本地 store 立刻更新**，不等 refetch
+  - ⚠️ **事实订正（2026-10-27 · PM 实测）**：本条原写「web 保存时**再上传一次**（`avatarMutation` 选文件时已传过）」⇒ **不成立**。实测 `gacode-web/src/app/(main)/profile/edit/page.tsx`：`avatarMutation` 定义在 `:82-83`，全文件**只有 `:148` 读它的 `isPending`，从未 `mutate()` 调用**（死代码）；真正上传在 `saveMutation.mutationFn` `:105-106` ⇒ **web 只上传一次**。
 - **PC 端**：`gacode-electron/src/routes/ProfileEdit.tsx:104-122`
   ```tsx
   const saveMutation = useMutation({
@@ -1828,11 +1829,13 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
       navigate("/profile");
     },
   ```
-  → PC **不重复上传**（`avatarMutation` 已在选文件时上传过），也**没有本地 store 立即更新**（只有 `invalidateQueries`）
-- **差异判定**：**形态不同**（数据通路 · **残留**，见 `S-5`）
-- **怎么改**：**部分落地（commit `7b74547`）** —— **本轮不派工，归 `S-5` 待 gaga 拍**。
-  - PC 侧锚点：`src/routes/ProfileEdit.tsx:118-132`（`saveMutation.mutationFn`）
-  - 实际形态：PC 改成「**保存时上传一次**头像 + 提交 profile」（`uploadAvatar(avatarFile)` → `updateProfile(input)`），**选文件时不再直传** ⇒ 同一张头像只写一次磁盘（web 是选文件 + 保存共写两次）。**残留**：PC 没有「本地 store 立即更新」（PC 的 `useAuth` 无 `updateProfile` / `updateAvatar` patch 方法，只能靠 `queryClient.invalidateQueries(["profile"])` 回填 ⇒ **渲染结果等价**）。
+  → PC **也是「保存时上传一次」**（选文件只做本地 dataURL 预览，见 `7b74547` 落地的 C2-41 / C2-44），但**没有本地 store 立即更新**（只有 `invalidateQueries`）
+  - ⚠️ **事实订正（2026-10-27 · PM 实测）**：本条原写 PC「`avatarMutation` 已在选文件时上传过」⇒ **不成立** —— PC 的 `handleFileChange`（`ProfileEdit.tsx:108-124`）只 `setAvatarFile(file)` + `FileReader` 本地预览，**上传发生在保存时** ⇒ 两端本来就都是「传一次」。
+- **差异判定**：**已一致**（数据通路 · 残留已清，见 `S-5` / C-S5）
+- **怎么改**：**已落地（commit `557033e`）** —— 落法 b（总PM 排期：代次 1 = C-S5 + D-S02）。
+  - PC 侧锚点：`src/routes/ProfileEdit.tsx:144-160`（`saveMutation.onSuccess`）+ `src/lib/auth.tsx`（新增 `patchUser`）
+  - 实际形态：PC 的「**保存时上传一次**头像 + 提交 profile」（`uploadAvatar(avatarFile)` → `updateProfile(input)`）**保持不变**（本就与 web 一致）；本批**只补 web 的「本地 store 立即更新」语义** —— `src/lib/auth.tsx` 新增 `patchUser(patch)`（浅合并、不重拉 `/auth/me`，语义同 web `store.ts:130-133`），`onSuccess` 里把 `displayName` / `avatar` 写回 auth store ⇒ 侧栏 / 顶栏立刻是新头像，不等下次拉取。
+  - 两点有意偏差（代码注释已写明）：① web 的 `applyPatch` 还带 `gender` / `bio`，但 PC 的 `User` 类型（`src/lib/api.ts:213-220`）**无此二字段** ⇒ PC 只 patch `displayName` + `avatar`（UI 无缺口：性别 / 简介在 Profile 页读 `["profile"]` query，该 query 保存成功时被 invalidate）；② web 的 `applyPatch` 传 `displayName.trim() || undefined`（**键存在、值为 undefined** ⇒ 本地会被清空），PC 只传**有值**字段 ⇒ 与 PC 自己的 C2-32「留空 = 不更新，不是清空」一致，且与服务端行为（不更新）一致。
 
 ---
 
@@ -1909,6 +1912,7 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 
 ### 组 2b 小结
 > **2026-10-27 回写**：组 2b **21 条中 19 条已落地**；`C2-36`（零视觉差）与 `C2-44`（归 `S-5`）为残留。
+> **2026-10-27 追加（代次 1 落地后）**：`C2-44` 的残留已清（`557033e` 落地 C-S5 落法 b）⇒ 组 2b **剩 `C2-36` 1 条**（零视觉差，本轮不做）。
 
 | 编号 | 判定 | 落地 / 残留 |
 |---|---|---|
@@ -1929,7 +1933,7 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 | C2-41 | 已一致 | `7b74547` |
 | C2-42 | 已一致 | `7b74547` + `ba2701b` 二次收口（Profile 页直传入口同步 2MB） |
 | C2-43 | 已一致 | `7b74547` |
-| C2-44 | 形态不同（数据通路 · 残留） | `7b74547` 部分落地（改为保存时上传 1 次）⇒ **归 `S-5` 待 gaga 拍** |
+| C2-44 | 已一致 | `7b74547`（改为保存时上传 1 次）+ `557033e`（补「本地 store 立即更新」）⇒ 归 `S-5` / C-S5 **已结案** |
 | C2-45 | 已一致 | `7b74547` + `00b2b5a` |
 | C2-46 | 已一致 | `7b74547` |
 | C2-47 | 已一致 | 本来就一致 |
@@ -3232,7 +3236,7 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 | S-2 | ✅ **落法已落地（方案 b）** —— Profile 信息区改成多张独立卡 + `space-y-2`，**保留** PC 独有的「邮箱」「注册时间」两行（`src/routes/Profile.tsx:232-246`） |
 | S-3 | ✅ **已拍板且两端已统一** —— 两端都用 `/auth/account`（web `gacode-web/src/lib/api.ts:1365-1366`，web 仓 commit `b84f872`（2026-10-26）已改） |
 | S-4 | ✅ **无需拍** —— `Button` / `ConfirmDialog` 已按 web 形态重排（`C2-40` / `C2-20`），全站按钮与弹窗视觉同步变了，这是本轮**已接受的连带改动** |
-| S-5 | 🔄 **PM 自决 + 排期（不再等 gaga 拍）** —— 落法取 (b)：**PC 保持「保存时上传 1 次头像」（磁盘只写一次）**，同时补上 web 的「本地 store 立即更新」语义（PC 的 `useAuth` 需加 `updateProfile` patch 方法 · `C2-44` 残留）—— 照抄 web 的 (a) 严格 1:1 会让同一张头像 POST 两次（多一次网络往返 + 多一次写盘），**严格更差** ⇒ 进度差异类，PM 自决，排进下一批 |
+| S-5 | ✅ **已落地**（`557033e`，2026-10-27 · 代次 1）—— 落法 b：**PC 保持「保存时上传 1 次头像」（磁盘只写一次）**，同时补上 web 的「本地 store 立即更新」语义（`src/lib/auth.tsx` 新增 `patchUser`）。⚠️ 原定落法依据的两条前提经 PM 实测**均不成立**（web 的 `avatarMutation` 从未被调用 ⇒ **web 只传一次**；PC 是「选文件只本地预览」⇒ **两端本就一致**）⇒ 落法 b **不涉及避免重复上传**，只补 store patch |
 | S-6 | ✅ **已拍板并落地** —— PC 三态（已开启 / 未开启 / 系统不支持）+ 通知页顶部常驻卡 + 「不做自动弹窗」 |
 | S-7 | ✅ **已按 (a) 前端改落地** —— PC 弃用 5 个 `category` tab，改成按服务端 `type` 分三组；`CategoryTabs.tsx` 已删 |
 | S-8 | ✅ **已落地** —— SSE 客户端改成 `fetch` + `Last-Event-ID` 续传（`78d6b8c`）⇒ 瞬时断流不再丢通知 |
@@ -3307,11 +3311,20 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 
 ### S-5 · 头像保存时**重复上传** —— 照抄 web 会让同一张头像写两次磁盘
 
-- **web**：`gacode-web/src/app/(main)/profile/edit/page.tsx:76` 选文件时 `setAvatarFile(file)` + 本地预览；`:84-89` `avatarMutation` 立即上传一次；`:104-108` 保存时 `mutationFn` 里**又上传一次**；`:116-122` `onSuccess` 把两次的结果写进 store
-- **PC**：`gacode-electron/src/routes/ProfileEdit.tsx:70-82`（选文件即上传）+ `:104-122`（保存不重复上传）
-- **后果**：照抄 web → **同一张头像 POST 两次**（服务端 `gacode/gacode.profile.routes.js:191` `const filename = \`${userId}.${ext}\`;` 是固定路径，第二次覆盖第一次 → 磁盘无膨胀，但多一次网络往返 + 多一次文件写）
-- **两种落法**：(a) 照抄 web（严格 1:1，接受重复上传）；(b) PC 保持不重复上传，但补上 web 的「本地 store 立即更新」语义（PC 的 `useAuth` 没有 `updateProfile` patch 方法 → 需要新增）
-- **影响面**：PC 侧 `ProfileEdit.tsx` 的 `saveMutation` + PC 的 auth store 是否加 patch 方法
+**状态**：✅ **已落地（commit `557033e`，2026-10-27）** —— **落法 b**（总PM 排期：代次 1 = C-S5 + D-S02）。**不再需要 gaga 拍**（分层对齐模型下 PC = -2 ⇒ 进度差异类归 PM 排期）。
+
+> ⚠️ **事实订正（2026-10-27 · PM 实测 + 独立复核）**：本条原先的前提**有两处不成立**，落法因此改变。
+> 1. **web 不重复上传** —— `gacode-web/src/app/(main)/profile/edit/page.tsx` 的 `avatarMutation` 定义在 `:82-83`，全文件**只有 `:148` 读它的 `isPending`，从未 `mutate()` 调用**（死代码）；真正上传在 `saveMutation.mutationFn` `:105-106` ⇒ **web 只传一次**。
+> 2. **PC 不是「选文件即上传」** —— `ProfileEdit.tsx:108-124` 的 `handleFileChange` 只 `setAvatarFile(file)` + `FileReader` 本地预览，**上传发生在保存时**（`7b74547` 落地的 C2-41 / C2-44）⇒ **两端本来就都是「传一次」，上传侧无差异**。
+> ⇒ 真正残留的差异只有一条：**web 有「本地 store 立即更新」，PC 没有** ⇒ 落法 b 落地（**不**涉及「避免重复上传」，因为没有第二次上传可避免）。
+
+- **web**：`gacode-web/src/app/(main)/profile/edit/page.tsx:76` 选文件时 `setAvatarFile(file)` + 本地预览；`:102-115` 保存时 `mutationFn` 里**上传一次**（`uploadAvatar(avatarFile)` → `uploadedUrl`）；`:116-126` `onSuccess` 把 `displayName` / `gender` / `bio` / `avatar` 写进 `applyPatch`（`useAuthStore.updateProfile`，`gacode-web/src/lib/store.ts:130-133`）→ **本地 store 立刻更新**，不等 refetch
+- **PC**：`gacode-electron/src/routes/ProfileEdit.tsx:108-124`（选文件只本地预览）+ `:129-143`（保存时上传一次）+ `:144-160`（`onSuccess` 调 `patchUser`）
+- **后果（落地前）**：PC 缺「本地 store 立即更新」⇒ 改完头像后侧栏 / 顶栏仍是旧值，要等下次 `/auth/me` 或重启才刷新
+- **两种落法**：(a) 照抄 web（严格 1:1，接受重复上传）；(b) PC 保持不重复上传，但补上 web 的「本地 store 立即更新」语义（PC 的 `useAuth` 没有 `updateProfile` patch 方法 → 需要新增）—— **实际落地 = (b)**（因事实订正，两端上传次数本就一致，(a) 无对象）
+- **落法 b 的实现**：`src/lib/auth.tsx` 新增 `patchUser(patch: Partial<User>)`（`useCallback` 浅合并 `setUser`，**不重拉 `/auth/me`**，语义同 web `store.ts:130-133`）+ `AuthContextValue` 加同名成员；`ProfileEdit.tsx` 的 `saveMutation.onSuccess` 改为 `({ uploadedUrl }, variables) =>`，先 `patchUser({ ...(variables.displayName ? { displayName } : {}), ...(uploadedUrl ? { avatar: uploadedUrl } : {}) })`，再 `invalidateQueries(["profile"])` / toast / navigate
+- **影响面**：`src/routes/ProfileEdit.tsx`（onSuccess）+ `src/lib/auth.tsx`（auth store 加 patch 方法）—— 共 2 文件
+- **有意偏差**：web 的 `applyPatch` 还带 `gender` / `bio`，但 PC 的 `User` 类型（`src/lib/api.ts:213-220`）**无此二字段** ⇒ PC 只 patch `displayName` + `avatar`；UI 无缺口（性别 / 简介走 `["profile"]` query，保存成功时被 invalidate）。另 web 传 `displayName.trim() || undefined`（键存在值为 undefined ⇒ 本地被清空），PC 只传有值字段 ⇒ 与 PC 自己的 C2-32 一致，也与服务端一致
 - **相关条目**：C2-41、C2-44
 
 ---
@@ -3533,7 +3546,7 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 | C4-09 | 25 行 | ✅ 已落地（`78d6b8c`）· 主进程 `gacode:is-focused` 焦点桥 |
 | C2-40 | 20 行 | ✅ 已落地（`7b74547`）· `Button` variant / size 全量重排 |
 | C2-41 | 18 行 | ✅ 已落地（`7b74547`）· 头像本地预览 |
-| C2-44 | 10 行 | ⚠️ **部分落地**（保存时上传 1 次）· 归 `S-5` 待 gaga 拍 |
+| C2-44 | 10 行 | ✅ **已落地**（`7b74547` 保存时上传 1 次 + `557033e` 补本地 store 立即更新）· 归 `S-5` / C-S5 **已结案** |
 
 ---
 
@@ -3684,10 +3697,10 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 |---|---|---|
 | `C4-08` | **缺失** —— AI 回复到达通知 PC 没有 | 归 `S-11` 待 gaga 拍（本轮不派工） |
 | `C2-36` | 形态不同（**视觉无差**）—— 残留 1 个 `duration-150` | 本轮不做（PC 全局禁动效 ⇒ 零视觉差） |
-| `C2-44` | 形态不同（数据通路）—— 「本地 store 立即更新」那一半没做 | 归 `S-5` 待 gaga 拍 |
+| `C2-44` | ✅ **已一致**（`557033e` 补「本地 store 立即更新」后结案） | — |
 | `C2-24` | 已一致，但**版本号字面量过期**：`src/routes/Profile.tsx:318` 写死 `v0.7.8`，`package.json:3` 现为 `0.7.11` | 残留 · 不影响判定 |
 | `C2-21` | 已一致，但与 web 仍差 **1 个空格**（web JSX 换行折叠出来的） | 残留 · 不影响判定 |
-| `S-5` / `S-11` / `S-12` | 仍待 gaga 拍 | 见「S-1 ~ S-12 状态回写」表 |
+| `S-5` / `S-11` / `S-12` | ✅ **均已由 PM 自决 / 排期，不再等 gaga 拍**（`S-5` 已落地 `557033e`；`S-11` / `S-12` 见「S-1 ~ S-12 状态回写」表） | — |
 
 ### 12.4 本轮**明确没做**的事（边界）
 
