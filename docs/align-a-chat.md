@@ -2898,7 +2898,7 @@ className={cn(
   3. **文案逐字对齐 web**：PC「文档」→ web「**文件**」；PC「知识库」→ web「**挂载知识库**」。
   4. **删掉第 3 行灰色描述**（PC 独有的「JPEG · PNG · GIF …」格式说明行）—— web 的按钮只有「图标 + 文案」两行。
   5. 保留 PC 的容器结构（`contentClassName="!p-0"` + 内层 grid）—— web 把 `px-4 py-5` 挂在 SheetContent 自身，PC 挂在内层 grid，视觉等价。
-- **最终状态**：已一致（4 项 / 4 列 / 图标（lucide `Image` / `FileText` / `Smile` / `Library` 的内联等价 svg，24px）/ 文案 与 web `SheetActionMenu.tsx:76-95` 逐条一致）。
+- **最终状态**：已一致（4 项 / 4 列 / 图标（lucide `Image` / `FileText` / `Smile` / `Library` 的等价图标，24px）/ 文案 与 web `SheetActionMenu.tsx:76-95` 逐条一致）。**2026-10-27 起这 4 个图标已收编进共享库 `src/components/ui/Glyphs.tsx`**，本文件不再就地手写内联 svg。
 
 ---
 
@@ -2906,7 +2906,7 @@ className={cn(
 | 项 | 值 |
 |---|---|
 | web | `src/components/chat/SheetActionMenu.tsx:77` |
-| PC | `src/components/chat/PlusActionsSheet.tsx:137-155` |
+| PC | `src/components/chat/PlusActionsSheet.tsx:73-88`（4 个图标的调用点） |
 | 判定 | 已一致 |
 
 **web 源码**
@@ -2918,33 +2918,17 @@ className={cn(
   onClick={onPickImage}
 />
 ```
-**当前 PC 源码**（`src/components/chat/PlusActionsSheet.tsx:137-155`）
+**当前 PC 源码**（`src/components/chat/PlusActionsSheet.tsx:73`，图标已收编进共享库）
 
 ```tsx
-function ImageIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-      <circle cx="9" cy="9" r="2" />
-      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-    </svg>
-  );
-}
+    icon: <ImageIcon size={24} />,
 ```
 
+（4 个入口的图标全部来自共享库 `src/components/ui/Glyphs.tsx`：`:73` `<ImageIcon size={24} />` / `:78` `<FileTextIcon size={24} />` / `:83` `<SmileIcon size={24} />` / `:88` `<LibraryTypeIcon size={24} strokeWidth={2} />`；import 见 `:37` `import { FileTextIcon, ImageIcon, LibraryTypeIcon, SmileIcon } from "../ui/Glyphs";` —— 本文件**不再就地手写内联 svg**，说明见文件内 `:137-146`）
+
 **怎么改**
-- 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
-- 备注：6 个自绘图标统一 24×24 / `strokeWidth="2"`（= web lucide `w-6 h-6` 默认 strokeWidth 2）
+- 已落地（见 §十二.2 / §12.7）—— PC 侧与 web 源码语义等价（web 用 lucide `w-6 h-6`，共享库图标默认 24×24 / `strokeWidth=2`），**无需改动**。
+- **2026-10-27 变更（commit `a7fc845`）**：本文件原先就地手写的内联 svg **全部收编进 `src/components/ui/Glyphs.tsx`** —— `ImageIcon` / `FileTextIcon` / `SmileIcon` / `LibraryTypeIcon` 改为从共享库 import；调用点显式传 `size` / `strokeWidth`（`LibraryTypeIcon` 是 20×20 / sw1.6，故显式覆盖）。「拍照 / 模板」两个入口在 2026-10-26 批次已删，对应的 `CameraIcon` / `TemplateIcon` 一并移除。
 
 ---
 
@@ -3631,73 +3615,84 @@ function RiskBadge({ level }: { level: ApprovalRequest["riskLevel"] }) {
 
 ---
 
-#### A2-D2-12 · web 审批 banner「多个工具共用同一个决策」提示（PC 位置对，文案不同）
+#### A2-D2-12 · 审批 banner「多个工具共用同一个决策 (任选其一即可)」提示行 —— **已删除**（web / 安卓两端均无）
 | 项 | 值 |
 |---|---|
-| web | `src/components/chat/ApprovalBanner.tsx`（无此提示，web 标题已含数量） |
-| PC | `src/components/chat/ApprovalBanner.tsx:190-194` |
-| 判定 | PC 多出（web 无）→ **不列入** |
+| web | `src/components/chat/ApprovalBanner.tsx`（无此提示行，web 标题已含数量） |
+| PC | `src/components/chat/ApprovalBanner.tsx`（提示行已删；按钮区收尾在 `:182-193`） |
+| 判定 | **已一致**（2026-10-27 按 gaga 21:35 口径删除 PC 多出项 ⇒ PC↔web 已对齐） |
 
-**说明**：web 端没有这句提示。按「不列 PC 增强」规则，此条不计入差异。
-
-**当前 PC 源码**（`src/components/chat/ApprovalBanner.tsx:190-194`）
-
-```tsx
-        {/* 注: 只对列表里第一条 approval 调决策 (跟 web ApprovalBanner + Android
-             同款). gaclaw 收到后会 cancel 整个 batch 的 _waiters, 所以"任一按钮
-             触发 → 整批清空"语义在 server 侧保证. */}
-        {requests.length > 1 ? (
-          <p className="text-[11px] text-fg-subtle pt-0.5">
-```
+**说明**
+- **依据（web / 安卓都没有 ⇒ 纯 PC 自创）**：web 端 `src/components/chat/ApprovalBanner.tsx` 没有这句提示（web 全仓 grep「任选其一」**零命中**）；安卓端 `yinian-android/app/src/main/` grep「任选其一 / 多个工具共用」**零命中** ⇒ PC 是唯一带这行提示的地方。
+- **处置**：按 gaga 2026-10-26 21:35 口径「web 有 PC 必须有；**PC 有 web 没有的直接删**」⇒ 本轮（commit `8cfcb64`）**删除** PC 侧提示行 ⇒ PC↔web 对齐。
 
 **怎么改**
-- 不改（按 gaga 口径：PC 有、web 没有 ⇒ 不进差异清单，保留不动）。
+- **已删除**（commit `8cfcb64`，2026-10-27）。删除的是 `{requests.length > 1 ? (<p className="text-[11px] text-fg-subtle pt-0.5">多个工具共用同一个决策 (任选其一即可)</p>) : null}` 这段提示行（连同它上面的注释块）。
+- 删后的当前 PC 源码（`src/components/chat/ApprovalBanner.tsx:182-193`）：
+
+```tsx
+          <button
+            type="button"
+            disabled={!!busy}
+            onClick={() => void handleAction("always", requests[0])}
+            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-brand text-brand-on shadow hover:bg-brand/90 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            data-testid="approval-always"
+          >
+            永久
+          </button>
+        </div>
+      </div>
+    </div>
+```
 
 ---
 
-#### A2-D2-13 · 消息列表「跳到底」按钮（PC 有，web 无）
+#### A2-D2-13 · 消息列表「↓ 跳到底」浮动按钮 —— **已删除**（web / 安卓两端均无）
 | 项 | 值 |
 |---|---|
-| web | `src/components/chat/MessageList.tsx`（无） |
-| PC | `src/components/chat/MessageList.tsx:174-184` |
-| 判定 | PC 多出（web 无）→ **不列入** |
+| web | `src/components/chat/MessageList.tsx`（无此按钮） |
+| PC | `src/components/chat/MessageList.tsx`（按钮已删；文件现 155 行，滚动区收尾在 `:150-153`） |
+| 判定 | **已一致**（2026-10-27 按 gaga 21:35 口径删除 PC 多出项 ⇒ PC↔web 已对齐） |
 
-**当前 PC 源码**（`src/components/chat/MessageList.tsx:174-184`）
-
-```tsx
-      {/* "跳到底" 浮动按钮 — 用户向上滚时显示 */}
-      {!autoFollow ? (
-        <button
-          type="button"
-          onClick={handleJumpToBottom}
-          aria-label="跳到底部"
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-bg-elevated text-fg shadow-elevation-2 px-3 py-1.5 text-xs hover:bg-bg-sunken transition-colors duration-150"
-        >
-          ↓ 跳到底
-        </button>
-      ) : null}
-```
+**说明**
+- **依据（web / 安卓都没有 ⇒ 纯 PC 自创）**：web 全仓 grep「跳到底」**零命中**；安卓端 `yinian-android/app/src/main/` grep「跳到底」**零命中** ⇒ PC 是唯一有这个浮动按钮的地方。
+- **处置**：按 gaga 21:35 口径「PC 有 web 没有的直接删」⇒ 本轮（commit `8cfcb64`）**删除**该按钮（含 `handleJumpToBottom` 的调用点）⇒ PC↔web 对齐。
 
 **怎么改**
-- 不改（按 gaga 口径：PC 有、web 没有 ⇒ 不进差异清单，保留不动）。
+- **已删除**（commit `8cfcb64`，2026-10-27）。删掉的是 `{!autoFollow ? (<button … aria-label="跳到底部">↓ 跳到底</button>) : null}` 这段浮动按钮。
+- 删后的当前 PC 源码（`src/components/chat/MessageList.tsx:150-153`）：
+
+```tsx
+          <div ref={bottomRef} aria-hidden="true" />
+        </div>
+      </div>
+    </div>
+```
 
 ---
 
-#### A2-D2-14 · web 消息列表空态：PC 有「暂无消息 — 在底部输入框开始你的第一条消息」（web 无）
+#### A2-D2-14 · 消息列表空态「暂无消息 — 在底部输入框开始你的第一条消息」 —— **已删除**（web / 安卓两端均无）
 | 项 | 值 |
 |---|---|
-| web | `src/components/chat/MessageList.tsx`（无空态） |
-| PC | `src/components/chat/MessageList.tsx:134` |
-| 判定 | PC 多出（web 无）→ **不列入** |
+| web | `src/components/chat/MessageList.tsx`（无空态分支） |
+| PC | `src/components/chat/MessageList.tsx`（空态已删；消息区直接渲染，见 `:121-148`） |
+| 判定 | **已一致**（2026-10-27 按 gaga 21:35 口径删除 PC 多出项 ⇒ PC↔web 已对齐） |
 
-**当前 PC 源码**（`src/components/chat/MessageList.tsx:134`）
-
-```tsx
-              暂无消息 — 在底部输入框开始你的第一条消息
-```
+**说明**
+- **依据（web / 安卓都没有 ⇒ 纯 PC 自创）**：web 端 `src/components/chat/MessageList.tsx` 无空态（web 全仓 grep「暂无消息 / 在底部输入框」**零命中**）；安卓端 grep「暂无消息」**零命中** ⇒ 空态文案是 PC 自创。
+- **处置**：按 gaga 21:35 口径，本轮（commit `8cfcb64`）**删除**该空态 ⇒ PC↔web 对齐。
 
 **怎么改**
-- 不改（按 gaga 口径：PC 有、web 没有 ⇒ 不进差异清单，保留不动）。
+- **已删除**（commit `8cfcb64`，2026-10-27）。原 `MessageList.tsx:134` 的「暂无消息 — 在底部输入框开始你的第一条消息」整块空态删除。
+- 删后的当前 PC 源码（`src/components/chat/MessageList.tsx:121-124`）：
+
+```tsx
+              messageId={m.id}
+              role={m.role}
+              content={m.content}
+```
+
+（消息区直接 `messages.map(...)` 渲染，无空态分支）
 
 ---
 
@@ -3753,19 +3748,15 @@ chatInputRef.current?.insertText(markerText);
       });
 ```
 
-**PC 现状（已落地）**
+**PC 现状（已落地 · 注释 2026-10-27 再订正）**
 ```tsx
-// ChatDetail.tsx:944-953
+// ChatDetail.tsx（注释节选，2026-10-27 已订正）
       // A2-D3-02 — 把知识库 marker 注入输入框
-      //   2026-10-26 订正: 「server 未识别 knowledge_refs」是**过期事实** —— 服务端自 2026-10-14 起
-      //   已支持该字段 (unified-api yinian.chat.routes.js:405 schema + :1366-1389 取 atom 原文注入上下文)。
-      //   但 PC **发送侧不发** knowledge_refs (src/lib/sse.ts:149-156 只发 image_urls + attached_file_ids),
-      //   web 发 (gacode-web/src/lib/api.ts:797-799 + chat/[id]/page.tsx:763-768)
-      //   ⇒ 在 PC 上 marker 是**唯一**通道, 不再只是「兜底」。
-      //   该差异 owner = 总PM (服务端解析口径落定后 PC 再补该字段) —— 本批**不实现**, 仅订正注释。
-      //   对齐 web `src/app/(main)/chat/[id]/page.tsx:1124-1129` (chatInputRef.insertText
-      //   → 多个 marker 换行分隔, 用户后续可在输入框编辑).
-      //   PC 的 ChatInputBar handle 暴露 insertText (与 insertEmoji 同实现, 按光标插入)。
+      //   ...
+      //   2026-10-27 订正: 服务端**不仅支持** knowledge_refs, 还把它落进 user message
+      //   2026-10-26 已上线) ⇒ PC 现在**发送侧也发** (src/lib/sse.ts 走 knowledgeRefs 字段),
+      //   且发送侧会同时从文本里解析 marker id 合并进 knowledge_refs (web 同款两路合并)。
+      //   ...
       if (items.length > 0) {
         const markerText = items
           .map((it) => `@[library:${it.id}] ${it.title || "未命名"}`)
@@ -3778,24 +3769,32 @@ chatInputRef.current?.insertText(markerText);
 - **锚点更正**：注入点不是 `handleKnowledgePick`（PC 里**不存在**这个函数），而是多选 sheet 的 `onConfirm` = `handleKnowledgeConfirm`（`ChatDetail.tsx:798`、调用处 `:1220`）。
 - **写法更正**：旧文档建议用 `insertEmoji`，但 PC 的 `ChatInputBarHandle` **已有** `insertText`（声明 `src/components/chat/ChatInputBar.tsx:118-135`，`insertText` 在 `:117`；handle 暴露 `:241`；本体 `insertTextAtCursor` `:586-590`）⇒ 已改用 `insertText`，与 web `chatInputRef.current?.insertText(...)` 逐字对应。
 - marker 格式 `@[library:${id}] ${title || "未命名"}`、多行用 `\n` 连接 ⇒ 与 web 一致。
-- **本批（2026-10-26）注释订正**：原注释「(server 未识别 knowledge_refs 时的兜底通道)」是**过期事实** —— 服务端自 2026-10-14 起**已识别**该字段 ⇒ 已改成当前事实（PC 发送侧不发该字段，marker 在 PC 上是唯一通道；该差异待服务端口径落定后再对齐）。
-- **改动量**：0 行（marker 注入行为本身**未改**，只改注释）
+- **本批（2026-10-26）注释订正**：原注释「(server 未识别 knowledge_refs 时的兜底通道)」是**过期事实** —— 服务端自 2026-10-14 起**已识别**该字段。
+- **2026-10-27 再订正**：注释里「PC **发送侧不发** knowledge_refs ⇒ marker 是**唯一**通道 / owner=总PM / 本批**不实现**」这一整段**已作废** —— 发送侧已在 commit `7c22841` 接线（见下方「本条附带的 PC↔web 差异」块）。
+- **改动量**：marker 注入行为本身**未改**（0 行）；只随 10-27 批次更新注释。
 
 ---
 
-**⚠️ 本条附带的 PC↔web 差异（2026-10-26 新记）· PC 发送侧不发 `knowledge_refs` 字段**
+**⚠️ 本条附带的 PC↔web 差异 · `knowledge_refs` 发送 / 读取 —— **已一致**（2026-10-27 落地 · commit `7c22841`）**
 | 项 | 值 |
 |---|---|
-| web | `src/lib/api.ts:797-799`（`sendMessageStream` 把 `opts.knowledge_refs` 拼进 body）+ `src/app/(main)/chat/[id]/page.tsx:278`（handleSend 走 `opts.knowledge_refs`，正文见 `:758-770`） |
-| PC | `src/lib/sse.ts:149-156`（body 只拼 `image_urls` + `attached_file_ids`，**无** `knowledge_refs`） |
-| 服务端 | `unified-api/src/modules/yinian/yinian.chat.routes.js:405`（schema）+ `:1366-1389`（取 atom 原文注入上下文）—— **2026-10-14 起已支持** |
-| 状态 | 形态不同（PC 少发一个字段）—— ⚠️ 此行**不计入** 179 条的判定复算（复算只统计条目块首张表的 `\| 判定 \|` 行） |
-| owner | **总PM** —— 待服务端解析口径落定后 PC 再补该字段 |
+| web | 发送 `src/lib/api.ts:797-799`（`sendMessageStream` 拼 `opts.knowledge_refs`）+ `src/app/(main)/chat/[id]/page.tsx:759-774`（两路合并去重）；读取 `src/lib/api.ts:552` + `:577`（解析 `metadata.knowledge_refs`） |
+| PC | 发送 `src/lib/sse.ts:80-83`（`UseChatStreamOptions.knowledgeRefs?: string[]`）+ `:168-169`（body 走「字段存在才发」）；读取 `src/lib/api.ts:338-342`（`ChatMessage.knowledgeRefs`）+ `:578-611`（`getHistory` 解析 `metadata.knowledge_refs`）；合并 `src/routes/ChatDetail.tsx:195`（`extractKnowledgeRefIdsFromMessage`）+ `:509-527`；映射 `src/routes/ChatDetail.tsx:293-295` |
+| 安卓 | `StreamChatRequest.kt:86-94` —— id 用**字符串形式的 BigInt**（与 PC 一致） |
+| 服务端 | `unified-api/src/modules/yinian/yinian.chat.routes.js:1248-1263` —— **早已把 `knowledge_refs` 落进 user message 的 `metadata`**（commit `45fa31b`，2026-10-26 已上线），落的是**实际生效**的 atom id |
+| 状态 | **已一致**（2026-10-27 落地）—— ⚠️ 此块**不计入** 179 条的判定复算（复算只统计条目块首张表的 `\| 判定 \|` 行） |
+| owner | **已关闭**（总PM 2026-10-27 核实并裁决 ⇒ PC 侧本轮直接接线落地） |
 
 **说明**
-- **真正的差异点**：服务端**已支持**（schema `:405` + 解析注入 `:1366-1389`），web **在发**（`lib/api.ts:797-799`），PC **不发**（`sse.ts:149-156`）⇒ 在 PC 上 markdown marker（`@[library:id] title`）是**唯一**通道，不再只是「兜底」。
-- **本轮不实现**：PC 补该字段涉及服务端解析口径 ⇒ 由**总PM**与总 PM 协调，本批**只订正注释**（`src/routes/ChatDetail.tsx:947-954`），**未改发送行为**。
-- **附：读侧也是一处差异（本批只订正注释，未实现）**：服务端**仍不把** `knowledge_refs` 落进 message metadata（`yinian.chat.routes.js:1193-1195` 只写 `image_urls` + `attached_file_ids`）⇒ 历史回看没有 `knowledge_refs` 可解析。web 在 `src/lib/api.ts:552` + `:577` 是解析的；PC `src/lib/api.ts:getHistory`（`:567-607`）**没有**解析 `metadata.knowledge_refs`，`src/routes/ChatDetail.tsx:270-285` 也没把它映射进 `ChatMessageModel` ⇒ PC 的知识库引用折叠条（`src/components/chat/ReferenceFold.tsx`）当前**恒不渲染**。
+- **旧判定作废的原因**：旧台账写「服务端仍不把 `knowledge_refs` 落进 metadata」是 **2026-10-14 的过期事实** —— 服务端**早就**落了（`yinian.chat.routes.js:1248-1263`，commit `45fa31b`，2026-10-26 已上线），落的是**实际生效**的 atom id。
+- **PC 恒不渲染的真实原因只有一条**：**发送侧不发**。读侧 web 一直在解析 metadata，只是 PC 历史上没发过 ⇒ 知识库引用折叠条（`src/components/chat/ReferenceFold.tsx`）恒不渲染。
+- **本轮已落地内容**（commit `7c22841`）：
+  1. **发送侧** `src/lib/sse.ts`：`UseChatStreamOptions` 加 `knowledgeRefs?: string[]`，body 走「字段存在才发」模式（跟 web `src/lib/api.ts:797-799` 同款）；id 用**字符串形式的 BigInt**（与安卓 `StreamChatRequest.kt:86-94` 一致）。
+  2. **读侧** `src/lib/api.ts`：`getHistory` 解析 `metadata.knowledge_refs`（跟 web `src/lib/api.ts:552` 同款）+ `ChatMessage` 加 `knowledgeRefs?: string[]`。
+  3. **`src/routes/ChatDetail.tsx`**：发送时**两路来源合并去重**（跟 web `src/app/(main)/chat/[id]/page.tsx:759-774` 同款）—— ① 用户经 `KnowledgeAttachSheet` 挂的 `pendingKnowledgeRefs`；② 用户直接在输入框粘的 `@[library:id]` marker（新增 `extractKnowledgeRefIdsFromMessage`，与 web 同一正则）；历史回看时映射进 `ChatMessageModel.knowledgeRefs`。
+  4. **`src/components/chat/ReferenceFold.tsx`**：过期注释已重写（`:4-24`）。
+- **不是差异的一项**：**assistant 轮的 metadata 仍不落 `knowledge_refs`**（web / 安卓同款）⇒ 不计入差异。
+- **改动量**：发送侧 + 读侧 + 合并 + 注释，共 4 个文件（落地记录见 §12.7）。
 
 ---
 
@@ -4424,21 +4423,32 @@ web `src/components/layout/Drawer.tsx`（383 行）+ `src/components/layout/Head
 
 ---
 
-#### A3-D1-06 · 菜单项 active 高亮：PC 有（web Drawer 无 active 态）
+#### A3-D1-06 · 侧栏**导航菜单项** active 高亮 —— **已删除**（web / 安卓两端均无）
 | 项 | 值 |
 |---|---|
-| web | `src/components/layout/Drawer.tsx:381`（无 active 分支） |
-| PC | `src/components/layout/AppShell.tsx:322` |
-| 判定 | PC 多出（web 无）→ **不列入** |
+| web | `src/components/layout/Drawer.tsx:368-388`（`DrawerNavItem` 无 active 分支，只有 `hover:bg-bg-base`） |
+| PC | `src/components/layout/AppShell.tsx`（active 分支已删；nav 按钮现在 `:366-377`） |
+| 判定 | **已一致**（2026-10-27 按 gaga 21:35 口径删除 PC 多出项 ⇒ PC↔web 已对齐） |
 
-**当前 PC 源码**（`src/components/layout/AppShell.tsx:322`）
-
-```tsx
-                    ? "bg-bg-sunken text-fg"
-```
+**说明**
+- **依据（web / 安卓都没有 ⇒ 纯 PC 自创）**：web `src/components/layout/Drawer.tsx:368-388` 的 `DrawerNavItem` 只有 `hover:bg-bg-base`，**没有** active 高亮分支；安卓端 `yinian-android/app/src/main/java/com/yinian/app/ui/drawer/AppDrawer.kt` grep「selected / active / isSelected / highlight」**零命中**（命中项全是背景色用法）⇒ 侧栏**导航菜单项**的 active 高亮是 PC 自创。
+- **处置**：按 gaga 2026-10-26 21:35 口径「web 有 PC 必须有；**PC 有 web 没有的直接删**」⇒ 本轮（commit `8cfcb64`）删除 PC 侧 nav 项的 active 高亮分支 ⇒ PC↔web 对齐。
+- **⚠️ 与 A4-D3-01 是两回事**：本条删的是**侧栏导航菜单项**（对话列表 / 知识库 / 日程 等入口）的高亮；**对话条目**（聊天列表里每一行会话）的 `isActive` 高亮**两端都有、保留不动** —— web `src/components/chat/ChatItem.tsx:48`（`isActive && "bg-accent"`）、PC `src/components/chat/ChatItem.tsx:74`（`isActive ? "bg-accent" : ""`）。
 
 **怎么改**
-- 不改（按 gaga 口径：PC 有、web 没有 ⇒ 不进差异清单，保留不动）。
+- **已删除**（commit `8cfcb64`，2026-10-27）。删掉的是 nav 按钮 className 里那段 `isActive ? "bg-bg-sunken text-fg" : "text-fg-muted hover:bg-bg-base"` 二分支（改前在 `AppShell.tsx:322`）。
+- 删后的当前 PC 源码（`src/components/layout/AppShell.tsx:366-377`）：
+
+```tsx
+              <button
+                key={item.to.toString()}
+                type="button"
+                onClick={() => navigate(item.to)}
+                className="w-full flex items-center gap-3 px-3 py-2 text-base font-medium rounded-md hover:bg-bg-base transition-colors duration-150"
+              >
+```
+
+（与 web `Drawer.tsx:378-381` 的 `DrawerNavItem` 语义一致：只有 `hover:bg-bg-base`，无 active 分支）
 
 ---
 
@@ -4446,17 +4456,18 @@ web `src/components/layout/Drawer.tsx`（383 行）+ `src/components/layout/Head
 | 项 | 值 |
 |---|---|
 | web | `src/components/layout/Drawer.tsx:381` |
-| PC | `src/components/layout/AppShell.tsx:323` |
+| PC | `src/components/layout/AppShell.tsx:370` |
 | 判定 | 已一致 |
 
-**当前 PC 源码**（`src/components/layout/AppShell.tsx:323`）
+**当前 PC 源码**（`src/components/layout/AppShell.tsx:370`）
 
 ```tsx
-                    : "text-fg-muted hover:bg-bg-base",
+                className="w-full flex items-center gap-3 px-3 py-2 text-base font-medium rounded-md hover:bg-bg-base transition-colors duration-150"
 ```
 
 **怎么改**
-- 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
+- 已落地（见 §十二.2 / §12.7）—— PC 侧与 web 源码语义等价，**无需改动**。
+- 注：2026-10-27 删掉 nav 项 active 分支后，className 由三行三元表达式**合并成一行**（行号随之漂移，定位以 className 串为准）。
 
 ---
 
@@ -5541,23 +5552,31 @@ export interface ChatItemProps {
 
 ---
 
-#### A4-D3-01 · 侧栏条目行首 `ChatBubbleIcon`（web 无此图标 → PC 多出）
+#### A4-D3-01 · 侧栏条目行首 `ChatBubbleIcon` —— **已删除**（web / 安卓两端均无）
 | 项 | 值 |
 |---|---|
-| web | `src/components/chat/ChatItem.tsx:51-74`（无图标） |
-| PC | `src/components/chat/ChatItem.tsx:76` |
-| 判定 | PC 多出（web 无）→ **不列入** |
+| web | `src/components/chat/ChatItem.tsx`（行首无图标，第一列就是标题；只有 `isActive && "bg-accent"` 见 `:48`） |
+| PC | `src/components/chat/ChatItem.tsx`（图标已删；行首容器现在 `:77`） |
+| 判定 | **已一致**（2026-10-27 按 gaga 21:35 口径删除 PC 多出项 ⇒ PC↔web 已对齐） |
 
-**说明**：web 的 ChatItem 行首没有气泡图标（第一列就是标题）。按「不列 PC 增强」规则不计入差异；若要 1:1 则删掉 `<ChatBubbleIcon />`（`AppShell.tsx:450`），属删减，列入 A4-D3-01 的「怎么改」提示而不单列为差异。
+**说明**
+- **依据（web / 安卓都没有 ⇒ 纯 PC 自创）**：web `src/components/chat/ChatItem.tsx` 行首没有气泡图标（第一列即标题，全文件无 svg / Icon 导入）；安卓端 `yinian-android/app/src/main/java/com/yinian/app/ui/drawer/ChatItem.kt` 里的图标只有多选勾选框（`:84-85`）和置顶（`:132-133`），**行首没有气泡图标** ⇒ PC 自创。
+- **处置**：按 gaga 2026-10-26 21:35 口径「PC 有 web 没有的直接删」⇒ 本轮（commit `8cfcb64`）删除 `<ChatBubbleIcon />` 及其位置 ⇒ PC↔web 对齐。
+- **连带删除**：`src/components/ui/Glyphs.tsx` 的 `ChatBubbleIcon` 导出**随之删除**（该文件的删除说明留在 `src/components/ui/Glyphs.tsx:278`；`ChatBubbleIcon` 不再是任何调用点的依赖）。
+- **保留的 PC 侧内容（不是差异，勿动）**：
+  1. `locale: zhCN`（`src/components/chat/ChatItem.tsx` 顶部 `import { zhCN } from "date-fns/locale"` + `formatDistanceToNow(..., { locale: zhCN })`）—— **web 缺 locale 会把相对时间显示成英文**，这是 **web 的缺陷**，不是 PC 的差异；PC 保留。
+  2. `aria-current={isActive ? "page" : undefined}`（`src/components/chat/ChatItem.tsx:71`）—— 无障碍属性，保留。
+  3. 对话条目的 `isActive` 高亮（`src/components/chat/ChatItem.tsx:74` `isActive ? "bg-accent" : ""`）—— **两端已一致**（web `src/components/chat/ChatItem.tsx:48`），与 **A3-D1-06（导航菜单项高亮）不是一回事**，那条已删、这条保留。
 
-**当前 PC 源码**（`src/components/chat/ChatItem.tsx:76`）
+**怎么改**
+- **已删除**（commit `8cfcb64`，2026-10-27）。删掉的是 `ChatItem.tsx` 行首容器里的 `<ChatBubbleIcon />`（改前在 `:76`）。
+- 删后的当前 PC 源码（`src/components/chat/ChatItem.tsx:77`）：
 
 ```tsx
       <div className="flex items-center gap-2">
 ```
 
-**怎么改**
-- 不改（按 gaga 口径：PC 有、web 没有 ⇒ 不进差异清单，保留不动）。
+（第一列直接是标题；`Glyphs.tsx` 的 import 同步改成 `import { PinIcon, PinOffIcon } from "../ui/Glyphs";`）
 
 ---
 
@@ -5565,10 +5584,10 @@ export interface ChatItemProps {
 | 项 | 值 |
 |---|---|
 | web | `src/components/chat/ChatItem.tsx`（独立组件） |
-| PC | `src/components/chat/ChatItem.tsx:2-21` + `src/components/layout/AppShell.tsx:40` + `src/components/layout/AppShell.tsx:477` |
+| PC | `src/components/chat/ChatItem.tsx:2-22` + `src/components/layout/AppShell.tsx`（两处调用点 `:529` / `:555` 传 `isActive`） |
 | 判定 | 已一致 |
 
-**当前 PC 源码**（`src/components/chat/ChatItem.tsx:2-21`）
+**当前 PC 源码**（`src/components/chat/ChatItem.tsx:2-22`）
 
 ```tsx
  * components/chat/ChatItem.tsx — 侧边栏「对话条目」组件
@@ -5579,22 +5598,24 @@ export interface ChatItemProps {
  *     按 A4-D3-02 抽成独立文件, props 与 web 对齐.
  *
  * 结构 (跟 web 一致):
- *   第一行: 气泡图标 + 标题 + 「有新消息」圆点 + 置顶按钮
+ *   第一行: 标题 + 「有新消息」圆点 + 置顶按钮
  *   第二行: 相对时间 (text-xs text-muted-foreground)
  *
- * 保留的 PC 增强 (doc A4-D3-01 判为「PC 多出 → 不列入差异」):
- *   - 行首 <ChatBubbleIcon /> (web 没有)
+ * 保留的 PC 增强:
  *   - relativeTime 用 date-fns + locale zhCN (web ChatItem 没传 locale)
  *     → 若要严格 1:1 改成 `formatDistanceToNow(new Date(updatedAt), { addSuffix: true })`
  *   - aria-current={isActive ? "page" : undefined}
  *
- * 依赖: date-fns (PC 已有), components/ui/Glyphs (PinIcon / PinOffIcon / ChatBubbleIcon)
+ * A4-D3-01 — 行首气泡图标已删 (web / 安卓都没有 ⇒ PC 自创).
+ *
+ * 依赖: date-fns (PC 已有), components/ui/Glyphs (PinIcon / PinOffIcon)
  */
 import type { KeyboardEvent } from "react";
 ```
 
 **怎么改**
-- 已落地（见 §十二.2）—— PC 侧与 web 源码逐字/语义等价，**无需改动**。
+- 已落地（见 §十二.2 / §12.7）—— PC 侧与 web 源码语义等价，**无需改动**。
+- 2026-10-27 变更：头部注释里「气泡图标」一行与 `ChatBubbleIcon` 依赖已随之删除（见 A4-D3-01）。
 
 ---
 
@@ -5622,11 +5643,11 @@ web `src/components/chat/*` ↔ PC `src/components/chat/*`（同名件）+ PC �
 | `EmojiPicker.tsx` | 203 | `src/components/home/EmojiPicker.tsx` | — | 已一致 | A2-D1-34 ~ A2-D1-37 |
 | `LibraryPicker.tsx` | 327 | `src/components/home/LibraryPicker.tsx` + `src/components/chat/KnowledgeAttachSheet.tsx` | — | 已一致（多选 + 「完成 (N)」+ 类型 tab + 搜索） | A5-D3-01、A5-D3-02 |
 | `AttachmentChip.tsx` | 100 | `src/components/chat/AttachmentChip.tsx` | — | 已一致 | A2-D1-26 |
-| `ApprovalBanner.tsx` | 141 | `src/components/chat/ApprovalBanner.tsx` | — | 已一致 | A2-D1-20 ~ A2-D1-24、A2-D2-08 ~ A2-D2-11（A2-D2-12 是 PC 多出，不列入） |
+| `ApprovalBanner.tsx` | 141 | `src/components/chat/ApprovalBanner.tsx` | — | 已一致 | A2-D1-20 ~ A2-D1-24、A2-D2-08 ~ A2-D2-12（A2-D2-12 的 PC 多出提示行**已删**，见 §12.7） |
 | `ExecutionTimeline.tsx` | 155 | `src/components/chat/ExecutionTimeline.tsx`（组件本体已建 **且已挂载**到 assistant 气泡） | — | 已一致（M3 批 `b29207f`） | A2-D4-02 |
 | `StreamingErrorBanner.tsx` | 166 | `src/components/chat/StreamingErrorBanner.tsx` | — | 已一致 | A2-D1-15 ~ A2-D1-19 |
 | `SheetActionMenu.tsx` | 97 | `src/components/chat/PlusActionsSheet.tsx` | — | 已一致（以 `BottomSheet` 承接 web `Sheet`） | A2-D1-30、A2-D1-31、A2-D3-05、A2-D3-06、A2-D4-01 |
-| `ChatItem.tsx` | 79 | `src/components/chat/ChatItem.tsx`（已抽成独立组件，`AppShell.tsx` 两处调用） | — | 已一致 | A4-D1-01 ~ A4-D1-05、A4-D2-01 ~ A4-D2-06、A4-D3-02（A4-D3-01 是 PC 多出，不列入） |
+| `ChatItem.tsx` | 79 | `src/components/chat/ChatItem.tsx`（已抽成独立组件，`AppShell.tsx` 两处调用） | — | 已一致 | A4-D1-01 ~ A4-D1-05、A4-D2-01 ~ A4-D2-06、A4-D3-01 ~ A4-D3-02（A4-D3-01 的行首气泡图标**已删**，见 §12.7） |
 | `RichEventBubble.tsx` | — | `src/components/chat/RichEventBubble.tsx` | — | **不在本次范围** | — |
 
 ### A5 · D3 档 · 补状态与交互
@@ -5948,34 +5969,37 @@ function typeIcon(type: LibraryItem["type"]) {
 
 **判定分布**
 
+> 「改后」列 = **当前**（已含 2026-10-27「PC 多出直接删」批次，见 §12.7）。
+
 | 判定 | 改前 | 改后 | Δ |
 |---|---|---|---|
 | 形态不同 | 116 | **5** | -111 |
 | 缺失 | 33 | **1** | -32 |
-| 已一致 | 25 | **168** | +143 |
-| PC 多出（按 gaga 口径不进差异清单） | 4 | **5** | +1 |
+| 已一致 | 25 | **173** | +148 |
+| PC 多出（按 gaga 口径不进差异清单） | 4 | **0** | -4 |
 | 待核 | 1 | **0** | -1 |
 | **合计** | **179** | **179** | — |
 
-**分布复算（2026-10-26 全量核实 + 同日「以 web 为准」批次后）**
+**分布复算（2026-10-26 全量核实 + 同日「以 web 为准」批次 + 2026-10-27「PC 多出直接删」批次后）**
 
 - **复算方式**：脚本逐条解析正文 `#### A?-D?-??` 条目块内的 `| 判定 | … |` 行，按前缀归并（`已一致（…）` / `缺失（…）` / `PC 多出（…）` 分别归 `已一致` / `缺失` / `PC 多出`）。**只统计 179 个条目块内的行** —— `结构级差异 · 需 gaga 拍` 的 S-01~S-08（8 行）与「改动量汇总」表自身的 `| 判定 | 条数 |` 行（1 行）**不计入**。
-- **复算结果**：缺失 **1** + 形态不同 **5** + 已一致 **168** + PC 多出 **5** + 待核 **0** = **179** = 条目总数 ✓
+- **复算结果（当前）**：缺失 **1** + 形态不同 **5** + 已一致 **173** + PC 多出 **0** + 待核 **0** = **179** = 条目总数 ✓
 - **各节逐条归并**（与正文逐条自洽）：
   - A1（62 条）：已一致 **61** / 缺失 **0** / 形态不同 **1** / PC 多出 **0** / 待核 **0**
-  - A2（71 条）：已一致 **65** / 缺失 **0** / 形态不同 **3** / PC 多出 **3** / 待核 **0**
-  - A3（31 条）：已一致 **29** / 缺失 **1** / 形态不同 **0** / PC 多出 **1** / 待核 **0**
-  - A4（13 条）：已一致 **12** / 缺失 **0** / 形态不同 **0** / PC 多出 **1** / 待核 **0**
+  - A2（71 条）：已一致 **68** / 缺失 **0** / 形态不同 **3** / PC 多出 **0** / 待核 **0**
+  - A3（31 条）：已一致 **30** / 缺失 **1** / 形态不同 **0** / PC 多出 **0** / 待核 **0**
+  - A4（13 条）：已一致 **13** / 缺失 **0** / 形态不同 **0** / PC 多出 **0** / 待核 **0**
   - A5（2 条）：已一致 **1** / 缺失 **0** / 形态不同 **1** / PC 多出 **0** / 待核 **0**
 - **各档位逐条归并**（档位 = 条目所在小节，与判定无关）：D1 **92** / D2 **52** / D3 **25** / D4 **10** = **179** ✓
-- **改前 → 改后**：判定变更 **145 条**，其中
-  - 形态不同 → 已一致 **111 条**
+- **2026-10-27 批次增量（gaga 21:35 口径「PC 多出直接删」）**：原 5 条 PC 多出（A2-D2-12 / A2-D2-13 / A2-D2-14 / A3-D1-06 / A4-D3-01）**全部删除 PC 侧多出 UI**（commit `8cfcb64`）⇒ 判定由「PC 多出」改为「已一致」⇒ **PC 多出 5 → 0、已一致 168 → 173**，**条目总数 179 不变**。落地记录见 §12.7。
+- **改前 → 改后（累计）**：判定变更 **149 条**，其中
+  - 形态不同 → 已一致 **112 条**（含 A3-D1-06 —— 10-26 快照里它落在「PC 多出」桶，10-27 删掉该 PC 多出项后归入本桶）
   - 缺失 → 已一致 **32 条**
+  - **PC 多出 → 已一致 4 条**（A2-D2-12 / A2-D2-13 / A2-D2-14 / A4-D3-01 —— 2026-10-27 批次）
   - 待核 → 形态不同 **1 条**（A5-D3-02 —— 本批按 web 补齐了类型图标配色，判定按改前口径回退）
-  - 形态不同 → PC 多出 **1 条**（A3-D1-06 —— web 的 `DrawerNavItem` 无 active 分支，PC 侧栏 active 高亮属 PC 多出；原先被误记为「形态不同」，按五桶口径归位）
-  - 判定不变 **34 条**（含本批回退的 4 条：原判定就是「形态不同」，改齐后仍按改前口径记「形态不同」）
-  - ⇒ 形态不同 -111、缺失 -32、已一致 +143、PC 多出 +1、待核 -1
-- **本批（2026-10-26「以 web 为准」批次）新增的 5 条回退**：A1-D2-05 / A2-D1-30 / A2-D2-04 / A2-D3-05 / A5-D3-02 —— 这 5 条在上一轮被记成「已一致」，实际与 web 不一致；本批已把 PC 改齐到 web（**最终状态 = 已一致**），台账判定按**改前口径**回退为「形态不同」⇒ 已一致 173 → **168**，形态不同 0 → **5**。详见 §12.4 ①~⑤ 与 §12.2 的「本批判定回退」表。
+  - 判定不变 **30 条**（已一致 25 + 形态不同 4 + 缺失 1）
+  - ⇒ 形态不同 -111、缺失 -32、已一致 +148、PC 多出 -4、待核 -1
+- **本批（2026-10-26「以 web 为准」批次）新增的 5 条回退**：A1-D2-05 / A2-D1-30 / A2-D2-04 / A2-D3-05 / A5-D3-02 —— 这 5 条在上一轮被记成「已一致」，实际与 web 不一致；本批已把 PC 改齐到 web（**最终状态 = 已一致**），台账判定按**改前口径**回退为「形态不同」⇒ 10-26 快照为已一致 168 / 形态不同 5；**2026-10-27 批次后已一致 173 / 形态不同 5**。详见 §12.4 ①~⑤ 与 §12.2 的「本批判定回退」表。
 
 **结构级差异（需 gaga 拍）**：8 条（S-01 ~ S-08）
 
@@ -5983,14 +6007,14 @@ function typeIcon(type: LibraryItem["type"]) {
 
 ## 剩余未落地工作量 Top10
 
-> **口径（2026-10-26 全量核实后）**：本表按**剩余未落地工作量**排序 —— 已落地、且本次已**逐条读源码核实**的条目**不再进表**。
-> 全量核实后，A 域 179 条里**真正还没做的只剩 1 条**（且 PM 已拍板本轮不做），另有 1 条 PM 拍板不改、5 条 PC 多出保留不动 ⇒ 不足 10 条，下面就是全部。
+> **口径（2026-10-26 全量核实后；2026-10-27 更新）**：本表按**剩余未落地工作量**排序 —— 已落地、且本次已**逐条读源码核实**的条目**不再进表**。
+> 全量核实后，A 域 179 条里**真正还没做的只剩 1 条**（且 PM 已拍板本轮不做），另有 1 条 PM 拍板不改；原 5 条 PC 多出项已于 2026-10-27 **全部删除并对齐**（见 §12.7）⇒ 不足 10 条，下面就是全部。
 
 | # | 条号 | 一句话说清要动什么 | 剩余预估 |
 |---|---|---|---|
 | 1 | A3-D2-04 | 侧栏「日程中心」入口缺失 —— **PM 拍板本轮不做**（PC 无 `/schedule` 路由，前置页面未建） | 40 行（挂起） |
 | 2 | A2-D2-07 | web 重命名弹窗保存按钮的「保存中...」文案 —— **PM 拍板不改**（通用 `ConfirmDialog` 不加页面专属文案） | 0 行（不改） |
-| 3 | A3-D1-06 / A4-D3-01 / A2-D2-12~14 | PC 多出项（侧栏 active 高亮 / 行首气泡图标 / 「跳到底」按钮 / 消息列表空态 / 多工具决策提示）—— **按 gaga 口径保留不动，不进差异清单** | 0 行 |
+| 3 | ~~A3-D1-06 / A4-D3-01 / A2-D2-12~14~~ | ✅ **已完成（2026-10-27）**：这 5 条 PC 多出项（侧栏 nav active 高亮 / 行首气泡图标 / 「跳到底」按钮 / 消息列表空态 / 多工具决策提示）已按 gaga 21:35 口径**全部删除 PC 侧 UI**（commit `8cfcb64`）⇒ 判定改为「已一致」，**不再是待办** | 0 行（已清零） |
 
 > 结构级条目里 **S-05（web 全局 store vs PC 组件内 state）** 与 **S-03（全局 Header vs ChatDetail 自管 header）** 的改动面比上表任何单条都大（各 >150 行、跨 4 个文件），建议在排期时与上表并列看待。
 >
@@ -6017,7 +6041,7 @@ function typeIcon(type: LibraryItem["type"]) {
 
 ---
 
-### 12.2 已落地条目清单（168 条 · 判定 = 已一致）
+### 12.2 已落地条目清单（173 条 · 判定 = 已一致）
 
 > PC 列为**快照时刻**的真实 `file:line`（HEAD `6e46219`，`src/` 工作区另有未提交改动（本快照已一并计入））。
 
@@ -6087,7 +6111,7 @@ function typeIcon(type: LibraryItem["type"]) {
 | A1-D4-03 | `src/routes/ChatList.tsx:380-392` | — |
 | A1-D4-04 | `src/components/layout/AppShell.tsx:67` + `src/App.tsx:112` + `src/components/layout/AppShell.tsx:156-158` | — |
 
-**A2 · 65 条**
+**A2 · 68 条**
 
 | 条号 | PC 侧 file:line（快照） | 备注 |
 |---|---|---|
@@ -6157,7 +6181,7 @@ function typeIcon(type: LibraryItem["type"]) {
 | A2-D4-05 | `src/routes/ChatDetail.tsx:756` + `src/components/chat/MessageMenu.tsx:96` | — |
 | A2-D4-06 | `src/components/chat/MessageBubble.tsx:407` + `src/components/chat/MessageBubble.tsx:87` + `src/routes/ChatDetail.tsx:431` | 工具函数 `stripUrlQuery` / `normalizeUrls` / `stripReferencedImageUrls` 已抄 web `MessageBubble.tsx:141-198`（剥 `![alt](URL)` / `[text](URL)` / 裸 URL 三形态，URL 比较先剥 `?exp=…&sig=…`）；父层 `ChatDetail.tsx` 算 `userImageUrls` 并集并下传给 `MessageList` → `MessageBubble`。⚠️ M3 批已随提交 `b29207f` 进入 HEAD |
 
-**A3 · 29 条**
+**A3 · 30 条**
 
 | 条号 | PC 侧 file:line（快照） | 备注 |
 |---|---|---|
@@ -6191,7 +6215,7 @@ function typeIcon(type: LibraryItem["type"]) {
 | A3-D3-03 | `src/components/layout/AppShell.tsx:467` | — |
 | A3-D3-04 | `src/components/layout/AppShell.tsx:493-532` | — |
 
-**A4 · 12 条**
+**A4 · 13 条**
 
 | 条号 | PC 侧 file:line（快照） | 备注 |
 |---|---|---|
@@ -6226,15 +6250,17 @@ function typeIcon(type: LibraryItem["type"]) {
 | A2-D3-05 | `src/components/ui/BottomSheet.tsx:32,141` + `home/EmojiPicker.tsx:132` + `home/LibraryPicker.tsx:146` | `BottomSheet` 加 `maxHeight` 覆盖（70 / 80 / 85vh） |
 | A5-D3-02 | `src/components/ui/Glyphs.tsx:723-741` | 类型图标按 web 上色（link：brand-cyan → brand-green） |
 
-**PC 多出（按 gaga 口径保留不动，不进差异清单）· 5 条**
+**已清零（原 PC 多出 · 5 条 · 2026-10-27 批次删除 PC 多出项 ⇒ 判定改为「已一致」）**
 
-| 条号 | PC 侧 file:line（快照） |
-|---|---|
-| A2-D2-12 | `src/components/chat/ApprovalBanner.tsx:190-194` |
-| A2-D2-13 | `src/components/chat/MessageList.tsx:174-184` |
-| A2-D2-14 | `src/components/chat/MessageList.tsx:134` |
-| A3-D1-06 | `src/components/layout/AppShell.tsx:322` |
-| A4-D3-01 | `src/components/chat/ChatItem.tsx:76` |
+> 这 5 条已在 2026-10-27 批次（commit `8cfcb64`）**删除 PC 侧多出 UI** ⇒ 判定由「PC 多出」改为「已一致」，**已计入上面 A2 / A3 / A4 分节的条数**（A2 +3 / A3 +1 / A4 +1）。落地记录见 §12.7。
+
+| 条号 | PC 侧 file:line（2026-10-27 改后） | 备注 |
+|---|---|---|
+| A2-D2-12 | `src/components/chat/ApprovalBanner.tsx`（提示行已删；按钮区收尾 `:182-193`） | 「多个工具共用同一个决策 (任选其一即可)」提示行删除 |
+| A2-D2-13 | `src/components/chat/MessageList.tsx`（按钮已删；滚动区收尾 `:150-153`） | 「↓ 跳到底」浮动按钮删除 |
+| A2-D2-14 | `src/components/chat/MessageList.tsx`（空态已删；消息区 `:121-148`） | 「暂无消息 — 在底部输入框开始你的第一条消息」空态删除 |
+| A3-D1-06 | `src/components/layout/AppShell.tsx`（nav 按钮 `:366-377`，无 active 分支） | 侧栏**导航菜单项** active 高亮删除（对话条目的 `isActive` 高亮**保留**，见 A4-D3-01） |
+| A4-D3-01 | `src/components/chat/ChatItem.tsx`（行首容器 `:77`） | 行首 `ChatBubbleIcon` 删除（`src/components/ui/Glyphs.tsx` 导出同步删除） |
 
 ---
 
@@ -6268,26 +6294,26 @@ function typeIcon(type: LibraryItem["type"]) {
 ### 12.5 本次对文档的修正（复算记录）
 
 1. **条目总数不变**：179 条（A1 62 / A2 71 / A3 31 / A4 13 / A5 2）—— 只改判定 / PC `file:line` / 「怎么改」栏 / **条目标题**，**没有新增、删除、移动任何条目**。
-2. **判定分布（改前 → 改后）**：形态不同 116 → **5**（-111）；缺失 33 → **1**（-32）；已一致 25 → **168**（+143）；PC 多出 4 → **5**（+1）；待核 1 → **0**（-1）。
+2. **判定分布（改前 → 改后 · 2026-10-26 快照）**：形态不同 116 → **5**（-111）；缺失 33 → **1**（-32）；已一致 25 → **168**（+143）；PC 多出 4 → **5**（+1）；待核 1 → **0**（-1）。—— ⚠️ **2026-10-27 批次后的当前分布 = 已一致 173 / 形态不同 5 / 缺失 1 / PC 多出 0 / 待核 0 = 179**（5 条 PC 多出已删除，见 §12.7 ①）。
 3. **自洽校验**：5 + 1 + 168 + 5 + 0 = **179** ✓；逐条解析正文 `| 判定 | … |` 行（**只统计 179 个条目块内的行**，`结构级差异 · 需 gaga 拍` 的 S-01~S-08 与「改动量汇总」表自身的 `| 判定 |` 行不计入）的归并结果与上表**完全一致**，无未归类判定值。
 4. **档位分布不变**：D1 92 / D2 52 / D3 25 / D4 10 = 179 ✓（档位 = 条目所在小节，判定改成「已一致」的条目仍留在原小节，便于回溯）。
 5. **PC `file:line` 全量刷新**：179 条的 PC 侧行号按内容锚点重抓（脚本现场抓取，代码块与行号同源）；web 侧行号未动。
 6. **Top10 重排**：由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条里 **9 条**已落地 → 整表重排（见上）。
-7. **PC 多出项按口径保留**：A2-D2-12 / A2-D2-13 / A2-D2-14 / A4-D3-01 原判定已是「PC 多出」，保留；**A3-D1-06**（侧栏 active 高亮，web 的 `DrawerNavItem` 无 active 分支）原被误记为「形态不同」，本次按五桶口径归入「PC 多出」—— **不是改口径，是把已有口径落到正确的桶**。
+7. **PC 多出项按口径保留**：A2-D2-12 / A2-D2-13 / A2-D2-14 / A4-D3-01 原判定已是「PC 多出」，保留；**A3-D1-06**（侧栏 active 高亮，web 的 `DrawerNavItem` 无 active 分支）原被误记为「形态不同」，本次按五桶口径归入「PC 多出」—— **不是改口径，是把已有口径落到正确的桶**。⚠️ **该口径已被 gaga 2026-10-26 21:35 拍板作废**：5 条 PC 多出项在 2026-10-27 批次**全部删除 PC 侧 UI**，判定改为「已一致」（见 §12.7 ①）。
 8. **条目标题中性化**：初稿标题写的是「PC 现状 vs web 目标」的差异陈述（如「空态描述文案缺失」「PC `Button` base 与 web 不一致」），判定回写后会与「已一致」自相矛盾 ⇒ 已把 163 条标题改成**中性检查项**（只写「比什么」，不断言 PC 当前状态），并在头部加了「标题口径」说明；**条目 ID / 条数 / 分档全部不变**。
 9. **M3 批口径更新**：并发 worker 的 M3 批（markdown 全栈自研接线）已随提交 `b29207f` 进入 HEAD，工作区 `src/` 另有未提交改动（本快照已一并计入） ⇒ A2-D4-02 / 03 / 04 / 06 的判定后缀由「M3 批在途 · 工作区未提交」改为「**M3 批已提交**」（§12.4 ⑧ 同步更新）。
 10. **「以 web 为准」批次（2026-10-26，同日）**：gaga 拍板 **web 是唯一事实源**（web 有什么 PC 必须有什么；PC 多出来的直接删掉）⇒ 上一轮被记成「已一致」但**实际不一致**的 5 条（A1-D2-05 / A2-D1-30 / A2-D2-04 / A2-D3-05 / A5-D3-02）已在本批把 PC 改齐，**判定按改前口径回退为「形态不同」**（最终状态 = 已一致，见各条「怎么改」栏）；§12.4 ①~⑤ 的「待 gaga 勾选」措辞已清掉；判定分布由 173/0/1/5/0 改为 **168 已一致 / 5 形态不同 / 1 缺失 / 5 PC 多出 / 0 待核 = 179**（脚本复算，见「改动量汇总」的分布复算段）。
 
 ### 12.6 本批（2026-10-26 · 过期注释订正 + 死代码清理）落地记录
 
-> **本批不改任何条目 ID / 条数 / 分档**（179 条、判定分布 168 / 5 / 1 / 5 / 0 = 179 **全部不变**）—— 只做四件事：① 订正**过期事实**注释 ② 删 PC 独有的分支 / 组件 ③ 给共享组件补**可选** prop（默认行为不变）④ 把台账订正回与代码一致。
+> **本批不改任何条目 ID / 条数 / 分档**（179 条、判定分布 168 / 5 / 1 / 5 / 0 = 179 **全部不变** —— 这是 **2026-10-26 的快照**；2026-10-27 批次后当前分布 = 173 / 5 / 1 / 0 / 0，见 §12.7）—— 只做四件事：① 订正**过期事实**注释 ② 删 PC 独有的分支 / 组件 ③ 给共享组件补**可选** prop（默认行为不变）④ 把台账订正回与代码一致。
 > **口径**：**代码是事实源，台账是索引** —— 本批的每条结论都带 `file:line` 依据。
 
 | # | 项 | 改前 | 改后 | 依据 |
 |---|---|---|---|---|
 | ① | `src/components/chat/MessageMenu.tsx:154-158` | 注释写「yinian-android YinianApi.kt 那边走的是 `/messages/:id/save-to-kb`」 | 改成「yinian-android **全仓无此端点** —— 安卓唯一的 `saveToKnowledgeBase` 是 `DocumentViewerActivity.kt:170` 的本地函数，走文档文本入库的另一条路」 | 安卓全仓 grep `save-to-kb` **零命中**；`saveToKnowledgeBase` 唯一命中 `yinian-android/app/src/main/java/com/yinian/app/ui/documents/DocumentViewerActivity.kt:170`（本地函数）。**代码零改动** |
-| ② | `src/components/chat/ReferenceFold.tsx:8-13` | 注释写「server **暂未写** knowledge_refs / UI 解析就位 (`lib/api.ts:getHistory`)」 | 改成当前事实：服务端 2026-10-14 起**已支持**（schema `:405` + 解析注入 `:1366-1389`）；但**仍不落 metadata**（`:1193-1195` 只写 `image_urls` + `attached_file_ids`），PC 读侧也**没接**（`getHistory:567-607` 不解析、`ChatDetail.tsx:270-285` 不映射）⇒ 该折叠条当前**恒不渲染** | `unified-api/src/modules/yinian/yinian.chat.routes.js:405` / `:1366-1389` / `:1193-1195`；PC `src/lib/api.ts:getHistory`、web `src/lib/api.ts:552`+`:577`（web 是解析的）。**代码零改动** |
-| ③ | `src/routes/ChatDetail.tsx:947-954` | 注释写「(server 未识别 knowledge_refs 时的兜底通道)」 | 改成当前事实：服务端**已识别**；PC **发送侧不发**该字段 ⇒ marker 在 PC 上是**唯一**通道；该差异 **owner = 总PM**，本批不实现 | 见 **A2-D3-02** 的「本条附带的 PC↔web 差异」块。**行为零改动** |
+| ② | `src/components/chat/ReferenceFold.tsx:8-13` | 注释写「server **暂未写** knowledge_refs / UI 解析就位 (`lib/api.ts:getHistory`)」 | 改成当前事实：服务端 2026-10-14 起**已支持**（schema `:405` + 解析注入 `:1366-1389`）；但**仍不落 metadata**（`:1193-1195` 只写 `image_urls` + `attached_file_ids`），PC 读侧也**没接**（`getHistory:567-607` 不解析、`ChatDetail.tsx:270-285` 不映射）⇒ 该折叠条当前**恒不渲染** | `unified-api/src/modules/yinian/yinian.chat.routes.js:405` / `:1366-1389` / `:1193-1195`；PC `src/lib/api.ts:getHistory`、web `src/lib/api.ts:552`+`:577`（web 是解析的）。**代码零改动** —— ⚠️ **本行结论已被 2026-10-27 批次作废**：服务端早已落 metadata（`:1248-1263`）且 PC 读侧已接 ⇒ 折叠条**不再恒不渲染**，见 §12.7 ④ |
+| ③ | `src/routes/ChatDetail.tsx:947-954` | 注释写「(server 未识别 knowledge_refs 时的兜底通道)」 | 改成当前事实：服务端**已识别**；PC **发送侧不发**该字段 ⇒ marker 在 PC 上是**唯一**通道；该差异 **owner = 总PM**，本批不实现 | 见 **A2-D3-02** 的「本条附带的 PC↔web 差异」块。**行为零改动** —— ⚠️ **本行结论已被 2026-10-27 批次作废**：PC 发送侧已发该字段（commit `7c22841`），见 §12.7 ④ |
 | ④ | `src/components/chat/AttachmentChip.tsx:69-72` | PC 独有第三分支（**没有** `thumbnailUrl` 时也渲染 32×32 `FileText` 方块） | **删除** ⇒ 与 web 同为两分支 | web `src/components/chat/AttachmentChip.tsx:60-72` + `app/page.tsx:325`（文档类型不传 `thumbnailUrl` ⇒ web 不渲染图标）。见 **A2-D1-26** / **A2-OK-08** |
 | ⑤ | `src/components/ui/ConfirmDialog.tsx` + `src/routes/Profile.tsx` | 只有 `message` 一段（标题/描述挤在一句里）；pending 恒为「spinner + 文字」，与 web 的两种形态**都不完全一致** | 加**可选** `description`（第二段）+ `loadingStyle?: "spinner+text" \| "spinner-only" \| "text-only"`（默认 `"spinner+text"` ⇒ 现有调用点零改动）；`Profile.tsx` 注销弹窗传 `loadingStyle="text-only"` | web `src/components/ui/alert-dialog.tsx:115-121` + `:149-159`（标题 + 描述两段）、`:173-199`（Action 只切文案、无 spinner）；`app/(main)/library/page.tsx:1255-1256`（spinner-only）、`app/(main)/profile/page.tsx:284`（text-only）；PC `src/components/ui/Button.tsx:101-107`（spinner + **保留** children 并存） |
 | ⑥ | `src/lib/clipboard.ts:4` | 注释写「ChatInputBar / LibraryDropZone / DeliveriesDropZone 共用」 | 删掉已删文件的引用 | `DeliveriesDropZone` 组件本轮已删（web 交付中心没有拖放入库） |
@@ -6301,11 +6327,59 @@ function typeIcon(type: LibraryItem["type"]) {
 
 ---
 
+### 12.7 本批（2026-10-27 · gaga 21:35「PC 多出直接删」+ svg 收编 + 分页守卫 + `knowledge_refs` 接线）落地记录
+
+> **本批不改任何条目 ID / 条数 / 分档**（179 条不变）—— 做四件事：① 删除 5 处「PC 有 web 没有」的 UI（判定由「PC 多出」改为「已一致」，**PC 多出 5 → 0、已一致 168 → 173**，总数仍 179）② 把剩余内联 svg **全部收编**进共享 `Glyphs.tsx` ③ 交付中心分页二次累加守卫 ④ `knowledge_refs` 发送侧 + 读侧接线（知识库引用折叠条不再恒不渲染）。
+> **口径**：**代码是事实源，台账是索引** —— 每条结论都带 `file:line` 依据。快照 HEAD = `7c22841`（本批 4 个 commit：`a7363a0` / `8cfcb64` / `a7fc845` / `7c22841`）。
+
+**① 5 处「PC 有 web 没有」的 UI 已删除（commit `8cfcb64`）**
+
+| 条号 | 删除的 PC 多出项 | web / 安卓对照 | 依据 |
+|---|---|---|---|
+| A2-D2-12 | 审批 banner「多个工具共用同一个决策 (任选其一即可)」提示行 | web `src/components/chat/ApprovalBanner.tsx` 无；安卓 grep「任选其一 / 多个工具共用」零命中 | ⇒ 纯 PC 自创 ⇒ 删 |
+| A2-D2-13 | 消息列表「↓ 跳到底」浮动按钮 | web `src/components/chat/MessageList.tsx` 无；安卓 grep「跳到底」零命中 | ⇒ 纯 PC 自创 ⇒ 删 |
+| A2-D2-14 | 消息列表空态「暂无消息 — 在底部输入框开始你的第一条消息」 | web `src/components/chat/MessageList.tsx` 无空态；安卓 grep「暂无消息」零命中 | ⇒ 纯 PC 自创 ⇒ 删 |
+| A3-D1-06 | 侧栏**导航菜单项** active 高亮 | web `src/components/layout/Drawer.tsx:368-388`（`DrawerNavItem` 无 active 分支）；安卓 `ui/drawer/AppDrawer.kt` grep「selected / active / isSelected / highlight」零命中 | ⇒ 纯 PC 自创 ⇒ 删 |
+| A4-D3-01 | 侧栏对话条目行首 `ChatBubbleIcon` | web `src/components/chat/ChatItem.tsx` 行首无图标；安卓 `ui/drawer/ChatItem.kt` 只有多选勾选框（`:84-85`）+ 置顶（`:132-133`），行首无气泡图标 | ⇒ 纯 PC 自创 ⇒ 删 |
+
+- **连带**：`src/components/ui/Glyphs.tsx` 的 `ChatBubbleIcon` 导出随之删除（删除说明留在 `src/components/ui/Glyphs.tsx:278`）。
+- **保留（不是差异，勿动）**：① `locale: zhCN`（web 缺 locale 会显示英文 ⇒ **web 缺陷**）② `aria-current` ③ 对话条目的 `isActive` 高亮（两端已一致，与 A3-D1-06 是两回事）。
+- **⚠️ 未在本批处理（留给 PM 拍板）**：台账里另有两处散落的「PC 多出」叙述 —— ① A1-D4-01 与 A5 映射表备注：「单条删除仍走 `ConfirmDialog` 属 PC 多出，不进差异清单」；② A2-D1-26 改动记录里的「PC 多出一个图标块」（该分支**已在 10-26 批次删除**，属历史叙述）。按 gaga 21:35 口径，① 里的 `ConfirmDialog` 用法理论上也该删，但它**不在本轮 5 条清单内**、且牵涉删除确认交互 ⇒ **本轮未擅自处理，请 PM 拍板**。
+
+**② 剩余内联 svg 全部收编进共享 `Glyphs.tsx`（commit `a7fc845`）**
+
+- **范围**：全仓非 `Glyphs.tsx` 文件的 `<svg` 从 **18 文件 47 处 → 0**；`src/components/ui/Glyphs.tsx` 导出数 **59 → 84**（新增 26 个：chat 域 12 + routes 域 14；另 `ChatBubbleIcon` 随 A4-D3-01 删除）。
+- **`src/components/deliveries/Icons.tsx` 整个文件删除** —— 它本来就是 10 个内联 svg 的重复实现：先退成转发层，本轮把 `src/routes/Deliveries.tsx` / `src/routes/DeliveryDetail.tsx` 的 import 改成直接引 `Glyphs` 后就没有存在理由。
+- **图标形状真值 = lucide-react@0.407.0**（web 端同款，见 `gacode-web/package.json`），逐个核对源文件。
+- **4 个自定义图形**（lucide 无对应）path **逐字保留**：`StopSquareIcon`（实心方块）/ `ClockSmallIcon`（r=9 小钟）/ `BranchIcon`（3 点分支）/ `SparkleStarIcon`（四角星）。
+- **尺寸纪律**：默认 `size` 取该图标**原本的实际渲染像素**，默认 `strokeWidth` 取原值；调用点尺寸不同的显式传 `size` / `strokeWidth`（例：`src/components/chat/PlusActionsSheet.tsx:88` `<LibraryTypeIcon size={24} strokeWidth={2} />`）。
+- **PC 无 tailwind-merge** ⇒ 需要自由的调用点用「裸导出」约定：`AlertCircleBareIcon` / `LinkBareIcon`。
+- **全仓剩余 `<svg` 只有 2 处**：`src/components/ui/Glyphs.tsx`（共享库本体，**84 处** / 84 个导出）+ `src/lib/markdown/renderer.tsx`（**2 处**，**收编禁区** —— web 要逐字搬这三个文件）。
+- **本台账内的逐文件更新**：A 域台账里逐条贴出内联 svg 代码块的只有 **A2-D1-31**（`PlusActionsSheet.tsx`），已改成共享库调用点骨架；`Toast.tsx` / `Profile.tsx` / `Browser.tsx` / `QrLogin.tsx` / `ProfileEdit.tsx` / `TtsButton.tsx` / `MessageMenu.tsx` / `UploadProgressBar.tsx` / `ToolTimingBadge.tsx` / `CallTreeCard.tsx` / `AttachmentChip.tsx` / `AttachmentPicker.tsx` / `MultiSelectToolbar.tsx` / `RichEventBubble.tsx` / `ChatInputBar.tsx` 的逐文件清单在 **C 域台账** `docs/align-c-profile-notify.md`（**另一 worker 独占，本轮不碰**）。
+
+**③ 交付中心分页二次累加守卫（commit `a7363a0`）**
+
+- PC 交付中心页补了 `consumedDataRef` 守卫（**照抄** `src/routes/Library.tsx:181-194` 既有守卫）：依赖补 `isFetching`（拉取中不消费 placeholder 回填）+ `consumedDataRef` 判重（同一 data 引用只消费一次）+ `tab` / `keyword` 重置 effect 里清空守卫（否则结构共享会让「内容没变」的响应复用同一引用 ⇒ 清空后列表不回来）。
+- 实现位置：`src/routes/Deliveries.tsx:85-86`（ref 声明）+ `:101-104`（重置 effect）+ `:122-139`（消费守卫）。
+- **修的是真 bug**：点「加载更多」/ 切 tab 时上一页 items 被**二次累加**（列表出现重复卡片）。
+- **⚠️ web 端同一个 bug 仍在**（`gacode-web/src/app/(main)/deliveries/page.tsx:171-179`），已通报 WEB端PM；web 知识库列表页（`gacode-web/src/app/(main)/library/page.tsx:200-218`）也有同源 bug。
+
+**④ `knowledge_refs` 发送侧 + 读侧接线（commit `7c22841`）**
+
+- **事实订正**：服务端**早已**把 `knowledge_refs` 落进 user message 的 `metadata`（`unified-api/src/modules/yinian/yinian.chat.routes.js:1248-1263`，commit `45fa31b`，2026-10-26 已上线），落的是**实际生效**的 atom id ⇒ 旧台账「服务端不落 metadata」是 **2026-10-14 的过期事实**。PC 恒不渲染的真实原因**只有一条：发送侧不发**。
+- **发送侧** `src/lib/sse.ts`：`:80-83`（`UseChatStreamOptions.knowledgeRefs?: string[]`）+ `:168-169`（body 走「字段存在才发」模式，跟 web `src/lib/api.ts:797-799` 同款）；id 用**字符串形式的 BigInt**（与安卓 `StreamChatRequest.kt:86-94` 一致）。
+- **读侧** `src/lib/api.ts`：`:338-342`（`ChatMessage.knowledgeRefs?: string[]`）+ `:578-611`（`getHistory` 解析 `metadata.knowledge_refs`，跟 web `src/lib/api.ts:552` 同款）。
+- **`src/routes/ChatDetail.tsx`**：`:195`（新增 `extractKnowledgeRefIdsFromMessage`，与 web 同一正则）+ `:509-527`（发送时**两路来源合并去重**，跟 web `src/app/(main)/chat/[id]/page.tsx:759-774` 同款：① `KnowledgeAttachSheet` 挂的 `pendingKnowledgeRefs` ② 输入框里粘的 `@[library:id]` marker）+ `:293-295`（历史回看映射进 `ChatMessageModel.knowledgeRefs`）。
+- **`src/components/chat/ReferenceFold.tsx`**：过期注释已重写（`:4-24`）。
+- **不是差异**：**assistant 轮的 metadata 仍不落 `knowledge_refs`**（web / 安卓同款）⇒ 不计入差异。
+
+---
+
 ## 附：本次文档修正的复算记录
 
 1. **条目总数不变**：179 条（A1 62 / A2 71 / A3 31 / A4 13 / A5 2）—— 只改判定 / PC `file:line` / 「怎么改」栏 / **条目标题**，**没有新增 / 删除 / 移动条目**，各节条数不变。
-2. **判定分布（改前 → 改后）**：形态不同 116 → **5**（-111）；缺失 33 → **1**（-32）；已一致 25 → **168**（+143）；PC 多出 4 → **5**（+1）；待核 1 → **0**（-1）。
-3. **自洽校验**：5 + 1 + 168 + 5 + 0 = **179** = 条目总数 ✓。
+2. **判定分布（改前 → 当前）**：形态不同 116 → **5**（-111）；缺失 33 → **1**（-32）；已一致 25 → **173**（+148）；PC 多出 4 → **0**（-4）；待核 1 → **0**（-1）。（当前值已含 2026-10-27 批次：5 条 PC 多出 → 已一致，见 §12.7 ①）
+3. **自洽校验**：5 + 1 + 173 + 0 + 0 = **179** = 条目总数 ✓。
 4. **档位分布不变**：D1 92 / D2 52 / D3 25 / D4 10 = 179 ✓（档位 = 条目所在小节，判定改成「已一致」的条目仍留在原小节）。
 5. **PC `file:line` 全量刷新**：179 条的 PC 侧行号按内容锚点重抓；web 侧行号未动。
 6. **改动量 Top10 已重排**：口径由「预估改动量」改为「**剩余未落地工作量**」，原表 10 条中 **9 条**已落地 → 整表重排（见上表）。
