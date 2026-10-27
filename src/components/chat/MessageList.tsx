@@ -55,8 +55,6 @@ interface Props {
   messages: ChatMessageModel[];
   /** 当前正在流式的 assistant message id (本地临时 id), 用于 pulse 光标 + typing dots. */
   streamingAssistantId?: string | null;
-  /** 用户已主动向上滚动的状态 (own 滚动观察). 用于"跳到底"按钮的显示控制. */
-  onAutoScrollChange?: (sticky: boolean) => void;
   /**
    * A2-D4-06 · 当前 chat 中所有 user message 已上传过的 imageUrls 并集.
    * 透传给每条 MessageBubble 的 `stripImageUrls`: assistant 气泡渲染前把 AI
@@ -76,14 +74,12 @@ interface Props {
 export function MessageList({
   messages,
   streamingAssistantId,
-  onAutoScrollChange,
   onMessageAction,
   stripImageUrls,
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [autoFollow, setAutoFollow] = useState(true);
-  const lastDistanceFromBottom = useRef<number>(0);
 
   // 自动滚到底 — 在 messages 改变时
   // 对齐 web MessageList.tsx:55-57 — `scrollIntoView({ behavior: "smooth" })`.
@@ -99,26 +95,16 @@ export function MessageList({
     if (!el) return;
     const onScroll = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-      lastDistanceFromBottom.current = distance;
       // 阈值 80px: 距离 > 80 视为用户在看历史 → 停自动滚
       const sticky = distance < 80;
       setAutoFollow((prev) => {
         if (prev === sticky) return prev;
         return sticky;
       });
-      onAutoScrollChange?.(sticky);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [onAutoScrollChange]);
-
-  const handleJumpToBottom = () => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    setAutoFollow(true);
-    onAutoScrollChange?.(true);
-  };
+  }, []);
 
   return (
     <div className="relative h-full">
@@ -129,12 +115,6 @@ export function MessageList({
       >
         {/* 消息内容容器 — 对齐 web MessageList.tsx:79 `max-w-3xl mx-auto space-y-4` */}
         <div className="max-w-3xl mx-auto space-y-4">
-          {messages.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-fg-muted text-sm">
-              暂无消息 — 在底部输入框开始你的第一条消息
-            </div>
-          ) : null}
-
           {messages.map((m) => (
             <MessageBubble
               key={m.id}
@@ -170,18 +150,6 @@ export function MessageList({
           <div ref={bottomRef} aria-hidden="true" />
         </div>
       </div>
-
-      {/* "跳到底" 浮动按钮 — 用户向上滚时显示 */}
-      {!autoFollow ? (
-        <button
-          type="button"
-          onClick={handleJumpToBottom}
-          aria-label="跳到底部"
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-bg-elevated text-fg shadow-elevation-2 px-3 py-1.5 text-xs hover:bg-bg-sunken transition-colors duration-150"
-        >
-          ↓ 跳到底
-        </button>
-      ) : null}
     </div>
   );
 }

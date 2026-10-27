@@ -147,7 +147,10 @@ export function ApprovalBanner({
           </div>
         ) : null}
 
-        {/* 4 按钮横排等宽 — 对齐 web ApprovalBanner.tsx:109 */}
+        {/* 4 按钮横排等宽 — 对齐 web ApprovalBanner.tsx:109.
+            注: 决策只作用于列表里第一条 approval (requests[0]). gaclaw 收到后会
+            cancel 整个 batch 的 _waiters, 所以「任一按钮触发 → 整批清空」语义在
+            server 侧保证. */}
         <div className="grid grid-cols-4 gap-1.5 mt-3">
           <button
             type="button"
@@ -186,15 +189,6 @@ export function ApprovalBanner({
             永久
           </button>
         </div>
-
-        {/* 注: 只对列表里第一条 approval 调决策 (跟 web ApprovalBanner + Android
-             同款). gaclaw 收到后会 cancel 整个 batch 的 _waiters, 所以"任一按钮
-             触发 → 整批清空"语义在 server 侧保证. */}
-        {requests.length > 1 ? (
-          <p className="text-[11px] text-fg-subtle pt-0.5">
-            多个工具共用同一个决策 (任选其一即可)
-          </p>
-        ) : null}
       </div>
     </div>
   );

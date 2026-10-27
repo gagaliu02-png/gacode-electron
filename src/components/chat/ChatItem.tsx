@@ -7,21 +7,22 @@
  *     按 A4-D3-02 抽成独立文件, props 与 web 对齐.
  *
  * 结构 (跟 web 一致):
- *   第一行: 气泡图标 + 标题 + 「有新消息」圆点 + 置顶按钮
+ *   第一行: 标题 + 「有新消息」圆点 + 置顶按钮
  *   第二行: 相对时间 (text-xs text-muted-foreground)
  *
- * 保留的 PC 增强 (doc A4-D3-01 判为「PC 多出 → 不列入差异」):
- *   - 行首 <ChatBubbleIcon /> (web 没有)
+ * 保留的 PC 增强:
  *   - relativeTime 用 date-fns + locale zhCN (web ChatItem 没传 locale)
  *     → 若要严格 1:1 改成 `formatDistanceToNow(new Date(updatedAt), { addSuffix: true })`
  *   - aria-current={isActive ? "page" : undefined}
  *
- * 依赖: date-fns (PC 已有), components/ui/Glyphs (PinIcon / PinOffIcon / ChatBubbleIcon)
+ * A4-D3-01 — 行首气泡图标已删 (web / 安卓都没有 ⇒ PC 自创).
+ *
+ * 依赖: date-fns (PC 已有), components/ui/Glyphs (PinIcon / PinOffIcon)
  */
 import type { KeyboardEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import { ChatBubbleIcon, PinIcon, PinOffIcon } from "../ui/Glyphs";
+import { PinIcon, PinOffIcon } from "../ui/Glyphs";
 
 export interface ChatItemProps {
   id: string;
@@ -74,7 +75,6 @@ export function ChatItem({
       ].join(" ")}
     >
       <div className="flex items-center gap-2">
-        <ChatBubbleIcon />
         <span className="truncate font-medium text-sm flex-1 min-w-0">
           {title || "新对话"}
         </span>

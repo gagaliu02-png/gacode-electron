@@ -274,25 +274,12 @@ export function ClockIcon({ className, size = 14, strokeWidth = 1.6 }: GlyphProp
   );
 }
 
-/** lucide `message-circle` 简化版 (对话气泡) — 14×14 / sw1.6 */
-export function ChatBubbleIcon({ className, size = 14, strokeWidth = 1.6 }: GlyphProps) {
-  return (
-    <svg
-      aria-hidden="true"
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={strokeWidth}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={["shrink-0 text-fg-muted", className].filter(Boolean).join(" ")}
-    >
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
-  );
-}
+/**
+ * ⚠️ `ChatBubbleIcon` 已删除 (2026-10-27) —— 侧栏对话条目的行首气泡图标是
+ *   PC 独有、web 没有 (web ChatItem 第一列直接是标题) ⇒ 按「PC 有 web 没有的
+ *   直接删」口径随 A4-D3-01 一起移除, 本导出随之成为死代码, 一并清掉。
+ *   同形不同规格的 `MessageSquarePlusIcon` 仍在库里。
+ */
 
 /** lucide `log-out` — 14×14 / sw1.6 */
 export function LogoutIcon({ className, size = 14, strokeWidth = 1.6 }: GlyphProps) {

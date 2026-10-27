@@ -7,15 +7,15 @@
  * 渲染:
  *   256px sidebar
  *     ├─ 顶 brand bar (gacode + 铃铛 + badge)
- *     ├─ 主菜单 (知识库 / 交付中心 / 通知 / 浏览器 / 我的) — active 高亮
+ *     ├─ 主菜单 (知识库 / 交付中心 / 通知 / 浏览器 / 我的)
  *     ├─ 置顶 (可折叠, 默认展开)
  *     ├─ 最近 (默认前 5, "show more" 展开)
  *     └─ 用户卡 + 注销
  *   56px header (返回 + 居中标题 + 右 slot)  ← 父路由内容自己负责右 slot
  *   flex-1 main: children (路由 outlet)
  *
- * 当前 chat 高亮: pathname `/chat/:id` 时匹配唯一 id, 仍按 /chat active 走;
- *   在侧边 chat 列表里额外给当前 id 加 brand 左侧高亮.
+ * 当前 chat 高亮: pathname `/chat/:id` 时匹配唯一 id, 在侧边 chat 列表里
+ *   给当前 id 加高亮 (ChatItem isActive → bg-accent).
  */
 
 import {
@@ -135,7 +135,6 @@ function initials(displayName: string): string {
 interface NavItem {
   label: string;
   to: To;
-  match: (pathname: string) => boolean;
   /** 左侧图标 — 对齐 web Drawer.tsx:383 `Icon w-5 h-5 text-fg-muted` */
   icon: ReactNode;
 }
@@ -145,31 +144,26 @@ const NAV_ITEMS: NavItem[] = [
     label: "知识库",
     to: "/library",
     icon: <BookOpenIcon />,
-    match: (p) => p === "/library" || p.startsWith("/library/"),
   },
   {
     label: "交付中心",
     to: "/deliveries",
     icon: <PackageOpenIcon />,
-    match: (p) => p === "/deliveries" || p.startsWith("/deliveries/"),
   },
   {
     label: "通知",
     to: "/notifications",
     icon: <BellIcon />,
-    match: (p) => p === "/notifications",
   },
   {
     label: "浏览器",
     to: "/browser",
     icon: <GlobeIcon />,
-    match: (p) => p === "/browser",
   },
   {
     label: "我的",
     to: "/profile",
     icon: <UserIcon />,
-    match: (p) => p.startsWith("/profile"),
   },
 ];
 
@@ -368,18 +362,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         {/* 主菜单 — 对齐 web Drawer.tsx:205 `rounded-md bg-bg-elevated m-3 mb-0 p-2 space-y-1` */}
         <nav className="rounded-md bg-bg-elevated m-3 mb-0 p-2 space-y-1">
           {NAV_ITEMS.map((item) => {
-            const active = item.match(location.pathname);
             return (
               <button
                 key={item.to.toString()}
                 type="button"
                 onClick={() => navigate(item.to)}
-                className={[
-                  "w-full flex items-center gap-3 px-3 py-2 text-base font-medium rounded-md transition-colors duration-150",
-                  active
-                    ? "bg-bg-sunken text-fg"
-                    : "text-fg-muted hover:bg-bg-base",
-                ].join(" ")}
+                className="w-full flex items-center gap-3 px-3 py-2 text-base font-medium rounded-md hover:bg-bg-base transition-colors duration-150"
               >
                 <span className="w-5 h-5 shrink-0 text-fg-muted inline-flex items-center justify-center">
                   {item.icon}
