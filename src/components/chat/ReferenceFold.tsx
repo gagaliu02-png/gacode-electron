@@ -5,14 +5,21 @@
  * server chat route 解析后注入 LLM 上下文). 视觉跟 web MessageBubble.tsx:443-489
  * 1:1 对齐: 折叠态 "📚 引用了 N 条知识库", 展开态列出每条 id (title 暂无可用字段).
  *
- * ✅ 2026-10-26 订正（旧注释写于 2026-10-19, 事实已过期）: 服务端**已支持** knowledge_refs ——
+ * ✅ 2026-10-27 订正（旧注释写于 2026-10-19, 事实已过期）: 服务端**早已支持**
+ *   knowledge_refs, 且**会落进 message metadata** ——
  *   schema: unified-api/src/modules/yinian/yinian.chat.routes.js:405
  *   解析 + 取 atom 原文 + 注入 LLM 上下文: 同文件 :1366-1389 (getMemoryAtomsForChat)。
- *   ⚠️ 但服务端**仍不把 knowledge_refs 落进 message metadata**（:1193-1195 只写
- *   image_urls + attached_file_ids）⇒ 历史回看没有 knowledge_refs 可解析。
- *   PC 读侧也**还没接**: lib/api.ts:getHistory 不解析 metadata.knowledge_refs,
- *   ChatDetail.tsx:270-285 也没把它映射进 ChatMessageModel ⇒ 本组件目前恒不渲染。
- *   组件形态与 web MessageBubble.tsx:443-489 一致, 等读侧接线后即生效。
+ *   落库: 同文件 :1248-1263 (commit 45fa31b, 2026-10-26 已上线) —— 落进 **user
+ *   message 的 metadata.knowledge_refs**, 且存的是**实际生效**的 atom id
+ *   (与注入 AI 上下文同一份解析结果 ⇒ 端侧显示条数 = AI 真看到的条数)。
+ *   ⚠️ assistant 轮的 metadata 不落 knowledge_refs (web / 安卓同款) ⇒ 不是差异。
+ *
+ * ✅ 2026-10-27 接线完成: 本组件**已生效** ——
+ *   发送侧: ChatDetail.tsx 把「用户挂载的 id + 文本里的 `@[library:id]` marker」
+ *     合并去重后经 src/lib/sse.ts 发给 server (跟 web chat/[id]/page.tsx:759-774 同口径)。
+ *   读侧: lib/api.ts:getHistory 解析 metadata.knowledge_refs
+ *     (跟 web api.ts:552 同口径) → ChatDetail.tsx 映射进 ChatMessageModel.knowledgeRefs
+ *     → MessageList → MessageBubble 挂本组件。
  *
  * 父组件拿到 knowledgeRefs.length > 0 时挂这个组件。解析端不区分 role。
  */

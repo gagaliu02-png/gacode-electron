@@ -333,6 +333,13 @@ export interface ChatMessage {
   imageUrls?: string[];
   attachedFileIds?: string[];
   attachedFileNames?: Array<{ fileId: string; name: string }>;
+  /**
+   * 知识库引用 id 列表 (atom id, 字符串形式的 BigInt) — 来自服务端
+   * `metadata.knowledge_refs`. server 落的是**实际生效**的 atom id
+   * (与注入 AI 上下文同一份解析结果 ⇒ 端侧显示条数 = AI 真看到的条数).
+   * 缺失 ⇒ undefined (不是空数组, 免得渲出空折叠条容器).
+   */
+  knowledgeRefs?: string[];
   phasesJson?: string | null;
   /**
    * A2-D4-02 · 思考 / 工具时间线 —— server 落库的 `phases_json` 解析结果.
@@ -568,12 +575,15 @@ export async function getHistory(chatId: string): Promise<{
     let imageUrls: string[] | undefined;
     let attachedFileIds: string[] | undefined;
     let attachedFileNames: Array<{ fileId: string; name: string }> | undefined;
+    let knowledgeRefs: string[] | undefined;
     if (m.metadata) {
       try {
         const meta = typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata;
         if (Array.isArray(meta?.image_urls)) imageUrls = meta.image_urls as string[];
         if (Array.isArray(meta?.attached_file_ids))
           attachedFileIds = meta.attached_file_ids as string[];
+        // 知识库引用 id — 跟 web api.ts:552 同一口径 (只认数组, 元素原样透传).
+        if (Array.isArray(meta?.knowledge_refs)) knowledgeRefs = meta.knowledge_refs as string[];
         if (Array.isArray(meta?.attached_files)) {
           attachedFileNames = (
             meta.attached_files as Array<{ file_id?: unknown; filename?: unknown }>
@@ -596,6 +606,9 @@ export async function getHistory(chatId: string): Promise<{
       imageUrls,
       attachedFileIds,
       attachedFileNames,
+      // chat-id-9: 知识库引用 id — server 落进 user message 的
+      //   metadata.knowledge_refs (存的是实际生效的 atom id).
+      knowledgeRefs,
       // 阶段 8: 撤回态 — server listChatMessages 已过滤 deletedAt,
       //   recalled 这条可选字段透传到 client, 用于 MessageBubble 占位 + 关闭菜单.
       recalled: m.recalled ?? false,

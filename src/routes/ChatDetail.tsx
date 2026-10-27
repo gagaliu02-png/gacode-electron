@@ -186,6 +186,23 @@ function extractFileNames(msg: ChatMessage): Array<{ fileId: string; name: strin
   return msg.attachedFileNames ?? [];
 }
 
+/**
+ * 从消息文本里提取 `@[library:id] title` 形式的 marker, 拿 id 列表.
+ * 跟 web `src/app/(main)/chat/[id]/page.tsx:196-206` 同款实现 (同一正则),
+ * 作用是当「用户直接在输入框里粘 marker」这条路径的解析入口 ——
+ * 这类 id 用户没走过 LibraryPicker, 不在 pendingKnowledgeRefs 里.
+ */
+function extractKnowledgeRefIdsFromMessage(message: string): string[] {
+  const ids: string[] = [];
+  // `@[library:123] title` 或 `@[library:abc-uuid] 标题`
+  const re = /@\[library:([^\]\s]+)\][^\n]*/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(message)) !== null) {
+    if (m[1]) ids.push(m[1]);
+  }
+  return ids;
+}
+
 /** 把 approval_request rich_event 抽成 ApprovalRequest; 缺字段兜底. */
 function toApprovalRequest(ev: Record<string, unknown>): ApprovalRequest | null {
   const pendingId =
@@ -273,6 +290,9 @@ export function ChatDetail() {
       imageUrls: extractImageUrls(m),
       attachedFileIds: extractFileIds(m),
       attachedFileNames: extractFileNames(m),
+      // chat-id-9: 知识库引用 id — api.getHistory 已从 metadata.knowledge_refs
+      //   解析出来 (存的是 server 侧实际生效的 atom id).
+      knowledgeRefs: m.knowledgeRefs,
       createdAt: m.createdAt,
       recalled: m.recalled ?? false,
       recalledAt: m.recalledAt ?? null,
@@ -482,12 +502,29 @@ export function ChatDetail() {
         });
       }
 
+      // M3 3B: 知识库引用 id 列表 — 合并两条来源 (跟 web chat/[id]/page.tsx:759-774 同款):
+      //   ① 用户本轮通过 KnowledgeAttachSheet 挂的 (pendingKnowledgeRefs)
+      //   ② 用户在输入框里直接粘的 markdown marker `@[library:id] title` (兜底)
+      //   两条合并去重 (id 形式天然唯一); 空 ⇒ undefined (server 走原路径).
+      const knowledgeRefs = (() => {
+        const markerIds = extractKnowledgeRefIdsFromMessage(text);
+        const explicitIds = pendingKnowledgeRefs.map((r) => r.id);
+        const seen = new Set<string>();
+        const uniq = [...explicitIds, ...markerIds].filter((id) => {
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+        return uniq.length > 0 ? uniq : undefined;
+      })();
+
       try {
         await stream.start({
           sessionId: chatId,
           message: text,
           imageUrls,
           attachedFileIds: fileIds,
+          knowledgeRefs,
           onChunk: (chunk: ChatChunk) => {
             // waiting first frame → 收到任意 chunk 即结束 typing
             setWaitingFirstFrame(false);
@@ -635,7 +672,7 @@ export function ChatDetail() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chatId, queryClient, addPendingApproval, clearPendingApprovals],
+    [chatId, queryClient, addPendingApproval, clearPendingApprovals, pendingKnowledgeRefs],
   );
 
   // ────────────── 发送 / 停止 / 重试 / 重生 ──────────────
@@ -935,12 +972,12 @@ export function ChatDetail() {
         return next;
       });
       // A2-D3-02 — 把知识库 marker 注入输入框
-      //   2026-10-26 订正: 「server 未识别 knowledge_refs」是**过期事实** —— 服务端自 2026-10-14 起
-      //   已支持该字段 (unified-api yinian.chat.routes.js:405 schema + :1366-1389 取 atom 原文注入上下文)。
-      //   但 PC **发送侧不发** knowledge_refs (src/lib/sse.ts:149-156 只发 image_urls + attached_file_ids),
-      //   web 发 (gacode-web/src/lib/api.ts:797-799 + chat/[id]/page.tsx:763-768)
-      //   ⇒ 在 PC 上 marker 是**唯一**通道, 不再只是「兜底」。
-      //   该差异 owner = 总PM (服务端解析口径落定后 PC 再补该字段) —— 本批**不实现**, 仅订正注释。
+      //   2026-10-27 订正: 服务端**不仅支持** knowledge_refs, 还把它落进 user message
+      //   的 metadata (unified-api yinian.chat.routes.js:1248-1263, commit 45fa31b,
+      //   2026-10-26 已上线) ⇒ PC 现在**发送侧也发** (src/lib/sse.ts 走 knowledgeRefs 字段),
+      //   与 web api.ts:797-799 / chat/[id]/page.tsx:759-774 同口径。
+      //   marker 注入**仍保留** —— 它是「用户直接在输入框粘 marker」的兜底通道,
+      //   且发送侧会同时从文本里解析 marker id 合并进 knowledge_refs (web 同款两路合并)。
       //   对齐 web `src/app/(main)/chat/[id]/page.tsx:1124-1129` (chatInputRef.insertText
       //   → 多个 marker 换行分隔, 用户后续可在输入框编辑).
       //   PC 的 ChatInputBar handle 暴露 insertText (与 insertEmoji 同实现, 按光标插入)。

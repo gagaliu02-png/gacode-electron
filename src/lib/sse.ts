@@ -73,6 +73,14 @@ export interface UseChatStreamOptions {
   imageUrls?: string[];
   /** 已上传文档 file_id 列表 (走 /yinian/documents 拿到的 file_id) */
   attachedFileIds?: string[];
+  /**
+   * 知识库引用 id 列表 (atom id, **字符串形式的 BigInt**) —— 跟 web
+   * `src/lib/api.ts:797-799` 同口径, 也跟安卓 `StreamChatRequest.kt:86-94`
+   * 一致 (id 超 2^53 会在 JS 侧丢精度 ⇒ 必须传字符串).
+   * server 端会把它落进 user message 的 `metadata.knowledge_refs`
+   * (存的是**实际生效**的 atom id), 端侧再从 metadata 读回来渲染折叠条.
+   */
+  knowledgeRefs?: string[];
   /** 主动中止回调 (取消按钮 / 组件卸载) */
   signal?: AbortSignal;
   /** chunk 回调 (任意先后顺序) */
@@ -153,6 +161,12 @@ export function useChatStream(): ChatStreamHandle {
     }
     if (opts.attachedFileIds && opts.attachedFileIds.length > 0) {
       body.attached_file_ids = opts.attachedFileIds;
+    }
+    // M3 3B: 知识库引用 id 列表 (server 端按 id 查 atom 原文, 走 RAG 排除双写).
+    //   跟 web api.ts:797-799 同一 spread 模式, 缺失时 (legacy 客户端) server
+    //   拿到 undefined 走原路径. id 用字符串形式的 BigInt (安卓同款).
+    if (opts.knowledgeRefs && opts.knowledgeRefs.length > 0) {
+      body.knowledge_refs = opts.knowledgeRefs;
     }
 
     try {
