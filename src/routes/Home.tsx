@@ -32,6 +32,12 @@
  *   - H-32 MediaPicker 改 image 模式 (拍照 + 相册并排), MediaKind 两态
  *   - H-65 附件按 mode 分流 image_urls / attached_file_ids (不再用 url/fileId 启发式)
  *
+ * 2026-10-27 (docs/align-d-home.md · D-S02 / H-11, 落法 A):
+ *   - ChatInputBar 新增 `onAttachmentsChange` 上报回调, Home 接一份**只读**镜像
+ *     (附件区本体仍在 ChatInputBar 内, 本批**不**上移, 渲染位置不变).
+ *   - 镜像只以 `data-attachments-count` 暴露在 DOM 上 (零视觉变化) —— 通道就位,
+ *     下一批「附件区上移 Home」时直接用这份 state 渲染, 不用再动 ChatInputBar 的 state.
+ *
  * 提交流 (home-13 P0):
  *   1. ChatInputBar.onSubmit(text, attachments) → Home.handleSubmit
  *   2. 把 firstMessage + attachments(imageUrls / fileIds / names) 写到 sessionStorage
@@ -51,6 +57,7 @@ import { createChat, type LibraryItem } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
 import {
   ChatInputBar,
+  type AttachmentItem,
   type ChatInputBarHandle,
   type PendingAttachment,
 } from "../components/chat/ChatInputBar";
@@ -103,6 +110,16 @@ export function Home() {
   // 0.7.6 — ChatInputBar 命令式 handle ref. EmojiPicker / LibraryPicker 选中后
   //   通过 ref 调 insertEmoji / insertText 注入 textarea, 不再用占位 chip.
   const inputBarRef = useRef<ChatInputBarHandle>(null);
+
+  // ────────────── D-S02 / H-11 (落法 A) — 附件 state 只读镜像 ──────────────
+  //
+  //   attachments 实体仍在 ChatInputBar 内部 (附件区本体**不上移到** Home,
+  //   见 docs/align-d-home.md D-S02 / H-11), Home 只通过 onAttachmentsChange
+  //   读一份**副本**, 不回写 (不改成受控) ⇒ 不破坏 ChatDetail 的现有用法.
+  //   本批 Home 侧不改变附件区的渲染位置 (web 把附件区放在 ChatInputBar 外面,
+  //   Home 自己渲染 —— 那是「附件区上移」那一代的活); 这里只把「Home 能看见
+  //   附件状态」的通道接好, 状态以 data-attachments-count 暴露在 DOM 上 (零视觉变化).
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
 
   // ────────────── createChat mutation ──────────────
   const createMutation = useMutation({
@@ -360,7 +377,10 @@ export function Home() {
           2026-10-21 对齐 web §1.1 (`page.tsx:360-361`): 外层补 `border-t border-border
           p-4 bg-bg-base` 底分隔, 输入区限宽居中. */}
       <div className="border-t border-border p-4 bg-background">
-        <div className="max-w-3xl mx-auto w-full">
+        <div
+          className="max-w-3xl mx-auto w-full"
+          data-attachments-count={attachments.length}
+        >
           <ChatInputBar
             ref={inputBarRef}
             isStreaming={false}
@@ -369,6 +389,8 @@ export function Home() {
             }}
             onSubmit={handleSubmit}
             onAttachmentError={handleAttachmentError}
+            // D-S02 / H-11 (落法 A): 附件状态上报 (Home 只读, 不回写).
+            onAttachmentsChange={setAttachments}
             // H-15 / H-16 (对齐 web `app/page.tsx:219-234`): HOME 页的
             //   「附件还在上传中」(default) 与「部分附件上传失败」(warning)
             //   两条两段式 toast —— 之前 Home 没接这个 prop ⇒ 永远不弹.

@@ -85,6 +85,16 @@ interface AuthContextValue {
    * AuthProvider 启动 hydrate 就能自动恢复登录态.
    */
   setSession: (input: { user: User; accessToken: string; refreshToken: string }) => void;
+  /**
+   * 局部更新当前 user — 跟 web `useAuthStore().updateProfile(patch)` 同款语义
+   * (gacode-web/src/lib/store.ts:130-133: 只做浅合并, **不**重新拉 /auth/me).
+   *
+   * C-S5 落法 b: 头像**只上传一次** (磁盘只写一次), 但补上 web 的
+   * 「本地 store 立即更新」语义 —— 改完头像/昵称后侧栏 (AppShell 的
+   * displayName) / 任何读 `useAuth().user` 的地方**立刻**是新值,
+   * 不等下次 /auth/me 或重启.
+   */
+  patchUser: (patch: Partial<User>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -363,6 +373,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void clearPersistedRefreshToken();
   }, [refreshToken]);
 
+  // C-S5 落法 b — 本地 store 立即更新 (web `store.ts:130-133` 同款浅合并).
+  //   只合并传入的字段, 不重新拉 /auth/me ⇒ 改完头像后侧栏/顶栏立刻刷新.
+  //   ⚠️ 语义跟 PC 自己的 C2-32 一致: **调用方只传有值的字段**
+  //   (留空 = 服务端不更新 ⇒ 本地也不该把旧值抹掉).
+  const patchUser = useCallback((patch: Partial<User>) => {
+    setUser((cur) => (cur ? { ...cur, ...patch } : cur));
+  }, []);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -380,8 +398,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // (跟 password login 路径保持完全一致 — auth.tsx:308-311)
         void persistRefreshToken(nextRefreshToken, nextUser.id);
       },
+      patchUser,
     }),
-    [user, accessToken, loading, login, register, logout],
+    [user, accessToken, loading, login, register, logout, patchUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

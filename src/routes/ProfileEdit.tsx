@@ -28,6 +28,14 @@
  *   - C2-45: 保存/失败 toast 文案跟 web 一致 (title + description)
  *   - C2-46: 单层容器 + 逐块 margin
  *
+ * 2026-10-27 (docs/align-c-profile-notify.md · C-S5, 落法 b):
+ *   - 头像**只上传一次** (仍是保存时那一次, 磁盘只写一次) —— 不照抄 web
+ *     「选文件传一次 + 保存再传一次」的重复上传写法.
+ *   - 补上 web 的「本地 store 立即更新」语义: 保存成功后把头像/昵称写回
+ *     `useAuth()` 的 user (新增 `patchUser`, 见 lib/auth.tsx) ⇒ 侧栏
+ *     (AppShell 的 displayName) / 任何读 useAuth().user 的地方立刻刷新,
+ *     不等下次 /auth/me.
+ *
  * ⚠️ PC 独有 (按 gaga 指示不列入差异, 保留): 只读邮箱字段 + 简介字数计数器。
  */
 
@@ -46,6 +54,7 @@ import { Avatar } from "../components/ui/Avatar";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Textarea } from "../components/ui/Textarea";
+import { useAuth } from "../lib/auth";
 import {
   CameraIcon,
   LoaderCircleIcon,
@@ -68,6 +77,8 @@ export function ProfileEdit() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  // C-S5 落法 b — 本地 store 立即更新 (web `useAuthStore().updateProfile` 同款)
+  const { patchUser } = useAuth();
 
   const { data: profile, isLoading } = useQuery({
     queryKey: ["profile"],
@@ -130,7 +141,18 @@ export function ProfileEdit() {
       await updateProfile(input);
       return { uploadedUrl };
     },
-    onSuccess: () => {
+    onSuccess: ({ uploadedUrl }, variables) => {
+      // C-S5 落法 b — 补上 web 的「本地 store 立即更新」语义.
+      //   web `app/(main)/profile/edit/page.tsx:117-122` 的 applyPatch({...})
+      //   把刚存的值写回 useAuthStore ⇒ 侧栏/顶栏立刻是新头像, 不等下次拉取.
+      //   PC 的 auth store 之前没有 patch 方法 ⇒ 本批在 lib/auth.tsx 新增 patchUser.
+      //   ⚠️ 头像**只上传一次** (上面 mutationFn 里那一次) ⇒ 同一张头像不会 POST 两次,
+      //      磁盘也只写一次 (服务端是固定路径 `${userId}.${ext}`).
+      //   ⚠️ 只传**有值**的字段 (跟 PC 自己的 C2-32 一致: 留空 = 不更新, 不是清空).
+      patchUser({
+        ...(variables.displayName ? { displayName: variables.displayName } : {}),
+        ...(uploadedUrl ? { avatar: uploadedUrl } : {}),
+      });
       queryClient.invalidateQueries({ queryKey: ["profile"] });
       toast({ title: "资料已保存", variant: "success" });
       navigate("/profile");

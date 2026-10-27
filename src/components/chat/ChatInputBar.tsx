@@ -154,6 +154,14 @@ export interface ChatInputBarProps {
   /** Attachment upload failed (parent usually toasts) */
   onAttachmentError?: (msg: string) => void;
   /**
+   * D-S02 / H-11 (落法 A) — 附件状态**上报**回调 (parent 只读).
+   *
+   * attachments state 仍在 ChatInputBar 内部 (附件区本体**不上移到** Home,
+   * 见 docs/align-d-home.md D-S02 / H-11), Home 只是通过这个回调拿一份**副本**,
+   * 不回写 (不改成受控) ⇒ 不破坏 ChatDetail 现有用法.
+   */
+  onAttachmentsChange?: (items: AttachmentItem[]) => void;
+  /**
    * 提交前提示 (上传中拦截 / 部分失败仍可发送).
    * 两段式 title + description —— 对齐 web `app/page.tsx:219-234` 的
    * toast({ title, description, variant }) (PC Toast 已支持双字段, S-04 已结案).
@@ -215,6 +223,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
       onStop,
       onSubmit,
       onAttachmentError,
+      onAttachmentsChange,
       onSubmitNotice,
       placeholder,
       caption = "AI 生成内容请核实重要信息",
@@ -235,6 +244,14 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
     // 0.7.6 — 三态合一: uploading / done / error 共用一个 attachments 列表.
     //   旧 chips+progress 模型只支持单文件上传, 不支持错误重试.
     const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+    // D-S02 / H-11 (落法 A) — 附件状态上报 (parent 只读通道).
+    //   ⚠️ 回调走 ref 兜住: parent 传内联箭头函数时 identity 每次渲染都变,
+    //   直接进 deps 会造成「上报 → parent setState → 重渲 → 再上报」的循环.
+    const onAttachmentsChangeRef = useRef(onAttachmentsChange);
+    onAttachmentsChangeRef.current = onAttachmentsChange;
+    useEffect(() => {
+      onAttachmentsChangeRef.current?.(attachments);
+    }, [attachments]);
     const [dragActive, setDragActive] = useState(false);
     const taRef = useRef<HTMLTextAreaElement | null>(null);
     // drag enter/leave counter: 嵌套 child element 多次触发时确保 stable
