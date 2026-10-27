@@ -13,21 +13,28 @@
  *   行高 / 内边距 13px·14px / 圆角 --r-lg / 勾选圈 22px 2px 描边 /
  *   标题 15px·500·两行截断 / 元信息 12px 灰色一行 flex-wrap / 头像 24px 圆.
  *
- * 交互 (B3 范围):
+ * 交互 (B3 起, B6 补表单入口):
  *   - 点勾选圈 = 完成 / 取消完成 (原型 B1.3 #2「点勾选圈 → 切换完成, 不离开当前视图」)
  *   - 点卡片本体 = **进详情页** —— ⚠️ PC 端的日程详情页是 B6 才有的路由,
  *     所以 B3 **不传** `onOpenDetail` ⇒ 退化成 web 的旧行为「整行点 = 切换完成」
  *     (见 web `ScheduleRow.tsx:66` 的 `openRow`)。B6 落地后把 onOpenDetail 接上即可。
- *   - ⋮ 菜单 = 标记进行中 · 标记完成 · 删除
- *     ⚠️ **不渲染**「编辑」/「改 DDL」(B6 的表单) 与「归档」(B7) ——
- *        这三项在 B3 没有可用端点/落点, 渲染出来就是死按钮。
- *        (归档更不能给: PC 端没有归档查看/恢复入口 (ArchivedSheet 是 B7),
- *          归档完就再也找不回来了。)
+ *   - ⋮ 菜单 = 标记进行中 · 标记完成 · [**改 DDL** · **编辑**] · 删除
+ *     ⚠️ 「改 DDL」/「编辑」是 **B6 的表单** ⇒ 两个 prop **可选**:
+ *        **不传 = 那一项根本不渲染** (不是灰的、不是哑弹) —— 零死按钮。
+ *     ⚠️ **不渲染**「归档」(= B7): PC 端还没有归档查看·恢复入口 (ArchivedSheet 是 B7),
+ *        归档完就再也找不回来了。
  */
 
 import { OwnerAvatar } from "./OwnerAvatar";
 import { RowActionMenu, type RowMenuItem } from "./RowActionMenu";
-import { BellIcon, CheckGlyph, CircleIcon, TrashIcon } from "../ui/Glyphs";
+import {
+  BellIcon,
+  CalendarClockIcon,
+  CheckGlyph,
+  CircleIcon,
+  PencilIcon,
+  TrashIcon,
+} from "../ui/Glyphs";
 import type { ScheduleItem } from "../../lib/schedule-api";
 
 interface ScheduleRowProps {
@@ -46,6 +53,10 @@ interface ScheduleRowProps {
   /** 点行主体 → 进详情页 (原型 B1.3 #1)。不传 = 退化成「整行点 = 切换完成」(旧行为)。 */
   onOpenDetail?: (item: ScheduleItem) => void;
   onMarkProgress: (item: ScheduleItem) => void;
+  /** 改 DDL (只含 DDL 日期 + 时间两字段的弹窗) — **不传 = 不渲染「改 DDL」这一项** */
+  onChangeDdl?: (item: ScheduleItem) => void;
+  /** 编辑 (按 kind 给字段) — **不传 = 不渲染「编辑」这一项** */
+  onEdit?: (item: ScheduleItem) => void;
   onDelete: (item: ScheduleItem) => void;
 }
 
@@ -59,13 +70,16 @@ export function ScheduleRow({
   onToggleDone,
   onOpenDetail,
   onMarkProgress,
+  onChangeDdl,
+  onEdit,
   onDelete,
 }: ScheduleRowProps) {
   const done = status === "done";
   /** 点行主体: 有详情页就进详情页, 没有就退回「切换完成」。 */
   const openRow = () => (onOpenDetail ? onOpenDetail(item) : onToggleDone(item));
 
-  // 原型 B1.3 #5-#10: 日程行的 ⋮ 菜单 (B3 只保留三个可用项)
+  // 原型 B1.3 #5-#10: 日程行的 ⋮ 菜单
+  // ⚠️ 「改 DDL」/「编辑」**按回调存在与否**追加 —— 没传回调 ⇒ 那一项根本不进菜单。
   const menuItems: RowMenuItem[] = [
     {
       key: "progress",
@@ -79,15 +93,31 @@ export function ScheduleRow({
       icon: <CheckGlyph size={14} strokeWidth={2} className="w-[14px] h-[14px]" />,
       onSelect: () => onToggleDone(item),
     },
-    {
-      key: "delete",
-      label: "删除",
-      icon: <TrashIcon size={14} className="w-[14px] h-[14px]" />,
-      danger: true,
-      separatorBefore: true,
-      onSelect: () => onDelete(item),
-    },
   ];
+  if (onChangeDdl) {
+    menuItems.push({
+      key: "ddl",
+      label: "改 DDL",
+      icon: <CalendarClockIcon size={14} className="w-[14px] h-[14px]" />,
+      onSelect: () => onChangeDdl(item),
+    });
+  }
+  if (onEdit) {
+    menuItems.push({
+      key: "edit",
+      label: "编辑",
+      icon: <PencilIcon size={14} className="w-[14px] h-[14px]" />,
+      onSelect: () => onEdit(item),
+    });
+  }
+  menuItems.push({
+    key: "delete",
+    label: "删除",
+    icon: <TrashIcon size={14} className="w-[14px] h-[14px]" />,
+    danger: true,
+    separatorBefore: true,
+    onSelect: () => onDelete(item),
+  });
 
   return (
     <div

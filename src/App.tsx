@@ -25,6 +25,13 @@ import { DeliveryDetail } from "./routes/DeliveryDetail";
 import { ScheduleToday } from "./routes/ScheduleToday";
 import { ScheduleCalendar } from "./routes/ScheduleCalendar";
 import { ScheduleBoard } from "./routes/ScheduleBoard";
+import {
+  ScheduleCronDetailRoute,
+  ScheduleMilestoneDetailRoute,
+  ScheduleScheduleDetailRoute,
+  ScheduleSubtaskDetailRoute,
+  ScheduleTaskDetailRoute,
+} from "./routes/ScheduleDetailRoutes";
 import { Notifications } from "./routes/Notifications";
 import { Profile } from "./routes/Profile";
 import { ProfileEdit } from "./routes/ProfileEdit";
@@ -162,9 +169,7 @@ export function App() {
                 }
               />
               {/* 日程中心 (B3: 今日待办入口页) — 侧栏「日程中心」落在 /schedule。
-                  ⚠️ 日程**详情页**是 B6, 现在还没有路由 ——
-                     通知里的日程深链仍按 `src/lib/notifications.ts` 的口径兜回
-                     `kind="none"` + rawLink (跳不存在的路由会被 path="*" 兜回首页) */}
+                  ⚠️ 详情页 = B6, 现在**已有** 5 条显式路由 (见下)。 */}
               <Route
                 path="/schedule"
                 element={
@@ -174,7 +179,7 @@ export function App() {
                 }
               />
               {/* 日程中心 · 日历页 (B4) — 周视图 + 月视图。
-                  详情页跳转本批只弹 toast 占位 (B6), 不跳路由。 */}
+                  详情页跳转 B6 起跳真路由。 */}
               <Route
                 path="/schedule/calendar"
                 element={
@@ -184,13 +189,58 @@ export function App() {
                 }
               />
               {/* 日程中心 · 任务看板 (B5) — 4 列看板 + 5 个状态筛选 pill + 任务树。
-                  详情页跳转本批只弹 toast 占位 (B6), 不跳路由;
-                  「新建任务」/「编辑」/「改 DDL」/「归档」入口本批一律不渲染 (B6 / B7)。 */}
+                  B6 起: 新建任务 / 编辑 / 改 DDL 都开真表单, 详情跳真路由;
+                  「归档」入口仍不渲染 (B7)。 */}
               <Route
                 path="/schedule/board"
                 element={
                   <Protected>
                     <ScheduleBoard />
+                  </Protected>
+                }
+              />
+              {/* 日程中心 · 详情页 (B6) — 5 条**显式**路由 (不用 :kind 通配:
+                  通配会跟 /schedule/calendar · /schedule/board 歧义)。
+                  四个 kind 共用同一个 ScheduleDetailPage + 一个 cron 只读页。
+                  顶栏标题走 AppShell.resolveTitle() (pathname.startsWith("/schedule")
+                  ⇒ 「日程中心」), 页面自己不用设。 */}
+              <Route
+                path="/schedule/task/:id"
+                element={
+                  <Protected>
+                    <ScheduleTaskDetailRoute />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/schedule/subtask/:id"
+                element={
+                  <Protected>
+                    <ScheduleSubtaskDetailRoute />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/schedule/milestone/:id"
+                element={
+                  <Protected>
+                    <ScheduleMilestoneDetailRoute />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/schedule/schedule/:id"
+                element={
+                  <Protected>
+                    <ScheduleScheduleDetailRoute />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/schedule/cron/:id"
+                element={
+                  <Protected>
+                    <ScheduleCronDetailRoute />
                   </Protected>
                 }
               />

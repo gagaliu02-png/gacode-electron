@@ -5,8 +5,8 @@
  *   - `lucide-react` → PC 图标唯一出处是 `components/ui/Glyphs.tsx`
  *     (`CircleDot` → `CircleDotIcon` **逐字同形** (2026-10-27 补画, 见 Glyphs.tsx) /
  *      `Check` → `CheckGlyph` / `Archive` → `ArchiveIcon` /
- *      `CalendarClock` → `CalendarIcon` **近似替代** /
- *      `Pencil` → `PencilIcon` / `Trash2` → `TrashIcon`)
+ *      `CalendarClock` → `CalendarClockIcon` **逐字同形** (B6 补画; B5 期间是
+ *      `CalendarIcon` 近似替代) / `Pencil` → `PencilIcon` / `Trash2` → `TrashIcon`)
  *
  * 原型的 ⋮ 菜单项 (按 kind 分):
  *   任务 / 子任务   → 标记进行中 · 标记完成 · 归档 · 改 DDL · 编辑 · 删除
@@ -37,7 +37,7 @@
 import { RowActionMenu, type RowMenuItem } from "./RowActionMenu";
 import {
   ArchiveIcon,
-  CalendarIcon,
+  CalendarClockIcon,
   CheckGlyph,
   CircleDotIcon,
   PencilIcon,
@@ -115,7 +115,11 @@ export function buildNodeMenuItems(opts: {
     items.push({
       key: "ddl",
       label: "改 DDL",
-      icon: <CalendarIcon size={14} className="w-[14px] h-[14px]" />,
+      // ⚠️ B6: `CalendarClock` → `CalendarClockIcon` (B6 新画, path 逐字取自 lucide)。
+      //    B5 期间这里用的是 `CalendarIcon` **近似替代** (纯日历, 没有时钟指针) ——
+      //    现在有逐字等价的图标了 ⇒ 换掉, 让「改 DDL」在今日待办 / 看板 / 详情页
+      //    三处的图标**完全一致**。
+      icon: <CalendarClockIcon size={14} className="w-[14px] h-[14px]" />,
       onSelect: opts.onChangeDdl,
     });
   }

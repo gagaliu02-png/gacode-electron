@@ -195,13 +195,16 @@ async function isWindowFocused(): Promise<boolean> {
  * notificationClickTarget —— 算这条通知点了之后该去哪 (C4-11)。
  *
  * 跟 web `WebNotificationWatcher.tsx:121-130` 同口径:
- *   - 会话 / 日程 → 站内路由 path (PC 没日程模块 ⇒ 日程落到 kind="none")
+ *   - 会话 / 日程 → 站内路由 path (B6 起日程也有落点了)
  *   - 外链 → http(s) URL (主进程用 shell.openExternal 打开)
  *   - 其余 → null (点了只恢复窗口, 不跳路由)
  */
 function notificationClickTarget(n: NotificationItem): string | null {
   const target = notificationTarget(n);
   if (target.kind === "chat") return target.href;
+  // ⚠️ B6: 日程通知的落点是**站内路由** (`/schedule/schedule/{id}`) ——
+  //    不加这一行的话桌面通知点日程会拿到 null ⇒ 点不动 (B6 前日程本来就没落点)。
+  if (target.kind === "schedule") return target.href;
   if (target.kind === "url") return target.url;
   return null;
 }

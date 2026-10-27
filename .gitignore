@@ -33,6 +33,12 @@ scripts/*
 #   同款三级解锁 —— 父目录 `scripts/lib/` 先放行, 再用 `scripts/lib/*` 重新忽略其内容,
 #   最后只豁免要入库的两个文件 (逐个列出, 不用通配, 不用 `git add -f`)。
 !scripts/verify-schedule-endpoint-set.mjs
+# 日程中心 B6 批 (2026-10-27): 表单 12 组合 / 详情页 / 工程约束 三支断言。
+#   同款声明式例外 —— 父目录 `scripts/` 已放行 + `scripts/*` 已重新忽略, 这里逐个豁免。
+#   理由与 B1 同款: 回归断言必须入库, 否则 clone 下来这些判据形同虚设。
+!scripts/verify-schedule-form-b6.mjs
+!scripts/verify-schedule-detail-b6.mjs
+!scripts/verify-schedule-b6-engineering.mjs
 !scripts/lib/
 scripts/lib/*
 !scripts/lib/schedule-loader.mjs

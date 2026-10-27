@@ -9,7 +9,9 @@
  * ⚠️ **B3 相对 web 的删减** (PM 拍板, 剩下的都是 B6 / B7 的活):
  *   - **已归档条 + 归档计数** → 不渲染 (B7 才有 ArchivedSheet / 归档入口;
  *     PC 现在没有归档查看·恢复入口, 渲染出来点进去是死路)
- *   - **归档 / 改 DDL / 编辑** → 不渲染 (B6 的表单 + B7 的归档)
+ *   - **归档** → 不渲染 (B7)
+ *   - **改 DDL / 编辑** → B6 起由页面层通过 `onChangeDdl` / `onEdit` 传进来;
+ *     **不传 = 行菜单里没有这两项** (不是灰的、不是哑弹) ⇒ 零死按钮。
  *   ⇒ 留下的每一项都有真端点可打, 没有死按钮。
  *
  * 布局 / 分组顺序 1:1 对齐原型 renderToday():
@@ -53,6 +55,10 @@ interface TodayTodoListProps {
   /** 点行主体 → 进日程详情页 (B6 才落地; 不传 = 整行点 = 切换完成) */
   onOpenDetail?: (item: ScheduleItem) => void;
   onMarkProgress: (item: ScheduleItem) => void;
+  /** 改 DDL (B6 的表单) —— **不传 = 行菜单里不渲染「改 DDL」这一项** */
+  onChangeDdl?: (item: ScheduleItem) => void;
+  /** 编辑 (B6 的表单) —— **不传 = 行菜单里不渲染「编辑」这一项** */
+  onEdit?: (item: ScheduleItem) => void;
   onDeleteSchedule: (item: ScheduleItem) => void;
   onToggleCron: (job: CronJob) => void;
   onDeleteCron: (job: CronJob) => void;
@@ -87,6 +93,8 @@ export function TodayTodoList({
   onToggleDone,
   onOpenDetail,
   onMarkProgress,
+  onChangeDdl,
+  onEdit,
   onDeleteSchedule,
   onToggleCron,
   onDeleteCron,
@@ -237,6 +245,8 @@ export function TodayTodoList({
                     onToggleDone={onToggleDone}
                     onOpenDetail={onOpenDetail}
                     onMarkProgress={onMarkProgress}
+                    onChangeDdl={onChangeDdl}
+                    onEdit={onEdit}
                     onDelete={onDeleteSchedule}
                   />
                 ))}

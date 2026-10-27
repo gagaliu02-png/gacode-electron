@@ -35,9 +35,11 @@
  *   四个层级 (任务 / 子任务 / 关键节点 / 日程) **全挂同一个** `ScheduleNodeMenu`
  *   —— web 就是这么写的 (web `ScheduleTaskCard.tsx:208 / 348 / 468 / 579`)。
  *   `ScheduleNodeMenu` 的「归档 / 改 DDL / 编辑」三个 prop **可选**:
- *   **没传回调 ⇒ 那一项根本不渲染** (不是灰的、不是哑弹) ⇒ 本批自然只有 3 项
+ *   **没传回调 ⇒ 那一项根本不渲染** (不是灰的、不是哑弹) ⇒ B5 只有 3 项
  *   (标记进行中 · 取消完成·标记完成 · 删除), **零死按钮**;
- *   B6 (表单) / B7 (归档) 补上回调 ⇒ 自然恢复 web 的 6 项。
+ *   **B6 起** 页面层传 `onChangeDdl` / `onEdit` ⇒ 自然恢复 web 的 5 项
+ *   (标记进行中 · 标记完成 · 改 DDL · 编辑 · 删除);
+ *   **「归档」仍不传** (= B7) ⇒ 菜单里**没有**「归档」这一项 (不是灰的、不是哑弹)。
  *   ⇒ 一套菜单实现两批通吃 (组件意识: 禁止重复实现 —— 不另写第二份菜单)。
  */
 
@@ -61,11 +63,10 @@ const CHIP = "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px
 
 /**
  * 写操作意图 —— 组件只报意图, 真正的 mutation 由页面层持有。
- * ⚠️ 本批只接「改状态」和「删除」两项 (归档 = B7 / 改 DDL·编辑 = B6, 那三项的菜单
- *    入口本批不渲染 ⇒ 也没有对应的 action 可报)。B6/B7 落地时再把
- *    "archive" / "change_ddl" / "edit" 加回来。
+ * ⚠️ B5 只接「改状态」和「删除」两项 (归档 = B7); **B6 起补上「改 DDL」和「编辑」**
+ *    (两个表单动作)。「归档」仍然**不报** (= B7, PC 还没有归档查看·恢复入口)。
  */
-export type NodeAction = "set_status" | "delete";
+export type NodeAction = "set_status" | "change_ddl" | "edit" | "delete";
 
 export interface NodeActionTarget {
   kind: ScheduleNodeKind;
@@ -240,6 +241,17 @@ export function ScheduleTaskCard({
                 nextStatus: s,
               })
             }
+            onChangeDdl={() =>
+              emit("change_ddl", {
+                kind: "task",
+                id: task.id,
+                title: task.title,
+                status: task.status,
+              })
+            }
+            onEdit={() =>
+              emit("edit", { kind: "task", id: task.id, title: task.title, status: task.status })
+            }
             onDelete={() =>
               emit("delete", { kind: "task", id: task.id, title: task.title, status: task.status })
             }
@@ -382,6 +394,22 @@ function SubtaskNode({
                 nextStatus: s,
               })
             }
+            onChangeDdl={() =>
+              onNodeAction("change_ddl", {
+                kind: "subtask",
+                id: subtask.id,
+                title: subtask.title,
+                status: subtask.status,
+              })
+            }
+            onEdit={() =>
+              onNodeAction("edit", {
+                kind: "subtask",
+                id: subtask.id,
+                title: subtask.title,
+                status: subtask.status,
+              })
+            }
             onDelete={() =>
               onNodeAction("delete", {
                 kind: "subtask",
@@ -482,6 +510,22 @@ function MilestoneNode({
                 nextStatus: s,
               })
             }
+            onChangeDdl={() =>
+              onNodeAction("change_ddl", {
+                kind: "milestone",
+                id: milestone.id,
+                title: milestone.title,
+                status,
+              })
+            }
+            onEdit={() =>
+              onNodeAction("edit", {
+                kind: "milestone",
+                id: milestone.id,
+                title: milestone.title,
+                status,
+              })
+            }
             onDelete={() =>
               onNodeAction("delete", {
                 kind: "milestone",
@@ -568,6 +612,22 @@ function ScheduleLeaf({
                   title: schedule.title,
                   status,
                   nextStatus: s,
+                })
+              }
+              onChangeDdl={() =>
+                onNodeAction("change_ddl", {
+                  kind: "schedule",
+                  id: schedule.id,
+                  title: schedule.title,
+                  status,
+                })
+              }
+              onEdit={() =>
+                onNodeAction("edit", {
+                  kind: "schedule",
+                  id: schedule.id,
+                  title: schedule.title,
+                  status,
                 })
               }
               onDelete={() =>

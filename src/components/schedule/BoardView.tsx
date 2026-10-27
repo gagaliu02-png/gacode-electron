@@ -19,14 +19,14 @@
  * ⚠️ 手机端横向滚动位置不能在 re-render 后丢失 (契约 §6.1 v5):
  *   容器记 scrollLeft, 数据变化后恢复。
  *
- * ⚠️ **本批刻意不渲染的入口** (PM 拍板 —— B6 / B7 的活, 不留死按钮):
- *   - **FAB「新建任务」整个不渲染** (web `board/page.tsx:307` 的 `openCreateForm`)
- *     —— 表单是 B6 ⇒ 页面上没有任何「新建」入口。
- *   - **「已归档」按钮 + 计数条不渲染** —— PC 的归档查看/恢复入口是 B7;
- *     现在归档完就找不回 ⇒ 提示条只留说明文案。
- *   - **详情页跳转不实现** —— `onOpenDetail` 由页面层传 toast 占位, 不 navigate
- *     (PC 没有 `/schedule/schedule/:id` 这类路由, 跳过去会被 `App.tsx` 的 `path="*"`
- *     兜回首页 ⇒ 静默跳走)。
+ * ⚠️ **B6 起恢复的入口** (PM 拍板 —— B5 刻意不渲染, 表单落地后补回来):
+ *   - **FAB「新建任务」** —— 右下角悬浮按钮, 跟知识库 / 今日待办同款
+ *     (契约 G4: 看板有新建任务入口)。**只在页面层传了 `onNewTask` 时才渲染**
+ *     ⇒ 没有真落点时**不留死按钮** (PC 一贯口径)。
+ *   - **卡片「编辑」/「改 DDL」** —— 走 `ScheduleTaskCard` 的 `onNodeAction`
+ *     通道 (action = "edit" / "change_ddl"), 页面层持有真正的 mutation。
+ *   - **「已归档」按钮 + 计数条** 仍不渲染 —— PC 的归档查看/恢复入口是 B7。
+ *   - 详情页跳转 B6 起跳真路由 (`/schedule/<kind>/<id>`), 不再是 toast 占位。
  *
  * 视觉基线 = docs/prototype/schedule-center.html (mockup v6 定稿):
  *   桌面 4 列 1fr 满屏; 手机 4 列 100vw 横滑 + scroll-snap。
@@ -34,6 +34,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { InfoIcon } from "../ui/Glyphs";
+import { CreateFab } from "../common/CreateFab";
 import {
   ScheduleTaskCard,
   type NodeAction,
@@ -124,9 +125,15 @@ export interface BoardViewProps {
    * 初始树状态 (可选) —— 不传就从 localStorage 读 (契约 §6.3)。
    */
   initialTreeState?: BoardTreeState;
-  /** ⋮ 菜单动作 (写操作意图) —— 页面层持有真正的 mutation */
+  /**
+   * 新建任务入口 (打开「新建任务」表单) —— **不传 = 不渲染 FAB**
+   * (不留死按钮; PC 一贯口径)。
+   */
+  onNewTask?: () => void;
+  /** ⋮ 菜单动作 (写操作意图) —— 页面层持有真正的 mutation。
+   *  ⚠️ B6 起 channel 里多了两个 action: `change_ddl` / `edit` (两个表单动作)。 */
   onNodeAction?: (action: NodeAction, target: NodeActionTarget) => void;
-  /** 点标题进详情页 —— 页面层负责拼路由 (PC 本批只弹 toast 占位, 不跳路由) */
+  /** 点标题进详情页 —— 页面层负责拼路由 (B6 起跳真路由 `/schedule/<kind>/<id>`) */
   onOpenDetail?: (kind: ScheduleNodeKind, id: string) => void;
 }
 
@@ -134,6 +141,7 @@ export function BoardView({
   columns,
   serverTime,
   initialTreeState,
+  onNewTask,
   onNodeAction,
   onOpenDetail,
 }: BoardViewProps) {
@@ -306,6 +314,19 @@ export function BoardView({
           })}
         </div>
       </div>
+
+      {/* ---------------- 新建任务入口 ----------------
+          原型 v6 的看板视图里, 「新建」是**右下角悬浮 FAB** (schedule-center.html
+          `.fab` + `#fab`), 三个视图共用同一个 FAB, 按所在页面分流建什么
+          (今日待办→待办 / 日程中心→日程 / 看板→任务)。
+
+          契约 §6.1 写的是「Row 1 (sticky): 左侧状态筛选 pill + 右侧 [+ 新建任务]」——
+          web 与本实现都按原型 + gaga 反馈把新建入口做成 FAB (三处「新建」完全同款),
+          Row 1 只保留 5 个筛选 pill。
+          data-board-new-task 标记保留 (断言脚本按它定位新建入口)。
+
+          ⚠️ **不传 `onNewTask` 就不渲染** ⇒ 没有真落点时不留死按钮 (PC 一贯口径)。 */}
+      {onNewTask && <CreateFab label="新建任务" onClick={onNewTask} data-board-new-task="" />}
     </div>
   );
 }

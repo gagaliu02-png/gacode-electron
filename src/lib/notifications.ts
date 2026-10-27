@@ -1,14 +1,14 @@
 /**
  * lib/notifications.ts — 站内通知 adapter (PC 端)
  *
- * 1:1 抄 gacode-web/src/lib/notifications.ts 的归一 / 判定 / 跳转目标解析,
- * 按 PC 实际情况做了两处必要偏差 (都有文档依据):
- *   ① scheduleTarget —— PC **没有日程模块** (src/App.tsx 路由表无 /schedule),
- *      照抄 web 的 /schedule/schedule/{id}/ 只会命中 path="*" 被兜回首页
- *      (静默跳走)。按 align-c-profile-notify.md 的 S-12 短期兜底口径,
- *      返回 kind="none" + rawLink → 调用方弹「无法识别的链接」(跟 web 对
- *      认不出的 deep link 同一套处理)。
- *   ② NotificationTarget 不再保留 "schedule" 分支 (PC 没有落点, 留着就是死代码)。
+ * 1:1 抄 gacode-web/src/lib/notifications.ts 的归一 / 判定 / 跳转目标解析。
+ *
+ * ⚠️ **B6 变更 (2026-10-27)**: 日程详情路由落地了 (`/schedule/schedule/:id`,
+ *   见 `src/App.tsx` 的 5 条显式详情路由) ⇒ `scheduleTarget` 从「兜底成
+ *   kind="none" + rawLink」**改回真路由**, `NotificationTarget` 也**加回**
+ *   `kind: "schedule"` 分支。
+ *   改之前的口径 (PC 没有日程模块 → 返回 kind="none") 已过时, 现在跟 web 一致:
+ *   点日程通知 → 跳 `/schedule/schedule/{id}` (带 reminderId / fireAt 定位参数)。
  *
  * ---------------------------------------------------------------------------
  * 后端真源 (别猜, 照着这几处抄)
@@ -218,6 +218,14 @@ export function parseYinianDeepLink(
 /** 通知点击后的落点。 */
 export type NotificationTarget =
   | {
+      kind: "schedule";
+      scheduleId: string;
+      reminderId: string | null;
+      fireAt: string | null;
+      /** PC 端日程详情路由 (跟 App.tsx 路由表 /schedule/schedule/:id 一致)。 */
+      href: string;
+    }
+  | {
       kind: "chat";
       sessionId: string;
       /** PC 端会话路由 (跟 App.tsx 路由表 /chat/:id 一致)。 */
@@ -237,15 +245,14 @@ export type NotificationTarget =
     };
 
 /**
- * scheduleTarget —— 日程详情落点。
+ * scheduleTarget — 日程详情落点。
  *
- * ⚠️ **PC 端现在只有日程中心的入口页** (`/schedule` = 今日待办, B3 已落地;
- *   见 `src/App.tsx` 的路由表 + `src/routes/ScheduleToday.tsx`),
- *   **日程详情页 (`/schedule/schedule/{id}/`) 是 B6 才有的路由** ——
- *   照抄 web 的详情路径现在只会命中 `path="*"` 被兜回首页
- *   —— 静默跳走, 用户以为没生效。按文档 S-12 的短期兜底口径: 返回
- *   `kind="none"` + `rawLink`, 由调用方弹「无法识别的链接」提示。
- *   (B6 详情页落地时, 这里再连同真路由一起换掉。)
+ * 路由跟日程中心**既有**路由对齐: `src/App.tsx` 的
+ * `/schedule/schedule/:id` ⇒ `/schedule/schedule/{id}`。
+ * `reminderId` / `fireAt` 跟安卓 (`yinian://schedule/calendar/{scheduleId}?reminderId=&fireAt=`)
+ * 同名同义, 作为**定位参数**挂在 query 上。
+ *
+ * ⚠️ PC 是 `HashRouter` ⇒ **不带尾斜杠** (web 的 Next.js `trailingSlash: true` 才带)。
  */
 export function scheduleTarget(
   scheduleId: string,
@@ -259,11 +266,11 @@ export function scheduleTarget(
   if (fireAt) params.set("fireAt", String(fireAt));
   const qs = params.toString();
   return {
-    kind: "none",
-    href: null,
-    rawLink: `${DEEP_LINK_SCHEDULE_SCHEME}${encodeURIComponent(id)}${
-      qs ? `?${qs}` : ""
-    }`,
+    kind: "schedule",
+    scheduleId: id,
+    reminderId: reminderId ? String(reminderId) : null,
+    fireAt: fireAt ? String(fireAt) : null,
+    href: `/schedule/schedule/${encodeURIComponent(id)}${qs ? `?${qs}` : ""}`,
   };
 }
 
@@ -284,7 +291,7 @@ export function chatTarget(sessionId: string): NotificationTarget {
  * 判定顺序 (跟安卓 `NotificationPresentation.resolveTarget` 同优先级):
  *   ① `actionType='url'`          → **外链** (开新窗口)
  *   ② `actionValue` 是 `yinian://` deep link → 会话 / 日程详情
- *   ③ `type='schedule_reminder'` → payload.scheduleId → 日程 (PC 无落点)
+ *   ③ `type='schedule_reminder'` → payload.scheduleId → 日程详情
  *   ④ `type='cron_result'` → payload.sessionId / payload.originSessionId → 会话
  *   ⑤ 其它 → 没有落点 (只标已读)
  *

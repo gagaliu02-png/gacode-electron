@@ -2722,3 +2722,121 @@ export function ChevronLeftIcon({ className, size = 16, strokeWidth = 2 }: Glyph
   );
 }
 
+// ════════════════════════════════════════════════════════════
+// B6 日程中心 · 表单 / 详情页用的三个新图标 (2026-10-27)
+// ════════════════════════════════════════════════════════════
+
+/**
+ * lucide `calendar-clock` — 20×20 / sw2
+ *
+ * 日程中心 · 表格「改 DDL」菜单项的图标 (web `components/schedule/ScheduleRow.tsx:91`
+ * 与 `form/ScheduleFormSheet.tsx` 的 `BellIcon` 替身都用 lucide `CalendarClock`)。
+ *
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/calendar-clock.js`:
+ *   "M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5" ·
+ *   "M16 2v4" · "M8 2v4" · "M3 10h5" · "M17.5 17.5 16 16.3V14" · circle(16,16,r6)。
+ *
+ * ⚠️ **同名不同形 → 分开导出**: 既有 `CalendarIcon` (纯日历, 无时钟指针) 保持不动,
+ *    本图标多一圈时钟 + 指针 —— 两者不能合并 (合并会改视觉)。
+ */
+export function CalendarClockIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5" />
+      <path d="M16 2v4" />
+      <path d="M8 2v4" />
+      <path d="M3 10h5" />
+      <path d="M17.5 17.5 16 16.3V14" />
+      <circle cx="16" cy="16" r="6" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `check-square` — 20×20 / sw2
+ *
+ * 日程中心 · 表单「通知渠道」里 `in_app` 渠道的图标
+ * (web `components/schedule/form/ScheduleFormSheet.tsx:620` 的
+ *  `<CheckSquare className="w-[13px] h-[13px]" />`)。
+ *
+ * ⚠️ lucide v0.407.0 的 `check-square.js` 是**转发文件**:
+ *   `export { default } from './square-check-big.js';`
+ *   ⇒ path 取自 `dist/esm/icons/square-check-big.js`:
+ *   "m9 11 3 3L22 4" + "M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"。
+ *
+ * ⚠️ 既有 `CheckGlyph` 是**实心勾 + 勾选圈**语义 (strokeWidth 默认 3, 形状不同),
+ *    不能拿来顶替本图标 (同名不同形 → 分开导出)。
+ */
+export function CheckSquareIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="m9 11 3 3L22 4" />
+      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `calendar-days` — 20×20 / sw2
+ *
+ * 日程中心 · 表单日期选择器触发器右侧的图标
+ * (web `components/schedule/form/DatePickerField.tsx:136` 的
+ *  `<CalendarDays className="w-[14px] h-[14px]" />`)。
+ *
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/calendar-days.js`:
+ *   "M8 2v4" · "M16 2v4" · rect(3,4,18,18,rx2) · "M3 10h18" ·
+ *   "M8 14h.01" · "M12 14h.01" · "M16 14h.01" ·
+ *   "M8 18h.01" · "M12 18h.01" · "M16 18h.01"。
+ *
+ * ⚠️ **同名不同形 → 分开导出**: 既有 `CalendarIcon` (纯日历, 无格子) 保持不动。
+ */
+export function CalendarDaysIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M8 2v4" />
+      <path d="M16 2v4" />
+      <rect width="18" height="18" x="3" y="4" rx="2" />
+      <path d="M3 10h18" />
+      <path d="M8 14h.01" />
+      <path d="M12 14h.01" />
+      <path d="M16 14h.01" />
+      <path d="M8 18h.01" />
+      <path d="M12 18h.01" />
+      <path d="M16 18h.01" />
+    </svg>
+  );
+}
+

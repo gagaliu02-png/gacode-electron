@@ -1,9 +1,8 @@
 /**
- * routes/ScheduleToday.tsx — 日程中心入口页 (今日待办) · PC 端 B3
+ * routes/ScheduleToday.tsx — 日程中心入口页 (今日待办) · PC 端 B3 + B6
  *
  * 抄自 web `gacode-web/src/app/(main)/schedule/page.tsx`, 只换 PC 写法:
  *   - `next/navigation` 的 `useRouter` → `react-router-dom` 的 `useNavigate`
- *     (B3 没有详情页路由, 所以实际不跳 —— B6 落地时再接)
  *   - `useToast` from `@/components/common/Toast` → `../components/ui/Toast`
  *     (PC toast API: `toast({ title?, message?, description?, variant? })`)
  *   - `useUIStore((s) => s.setHeaderTitle(...))` → PC 没有 store
@@ -14,32 +13,41 @@
  *   /schedule           = 今日待办  ← 本页
  *   /schedule/calendar  = 日程中心  (B4)
  *   /schedule/board     = 任务看板  (B5)
- *
- * 本轮范围 (B3): 今日待办。数据全部走 src/lib/schedule-api.ts (DTO 唯一入口)。
+ *   /schedule/<kind>/<id> = 详情页   (B6: task/subtask/milestone/schedule/cron)
  *
  * 写操作: 完成 / 取消完成 / 删除, 定时任务的 暂停·启用 + 删除 —— 全部走真端点
  *   (PATCH /schedules/:id、PATCH /crons/:id、DELETE …)。归档 / 恢复 / 提醒 CRUD
- *   的实现见 schedule-api.ts (本页面暂未挂 UI 入口)。
+ *   的实现见 schedule-api.ts (归档入口是 B7, 本页不挂)。
  *
  * 三态: loading = 骨架占位; error = 按后端 error.code 分支的可读文案
  *   (契约 §9.4b 的 4 个码); empty = 空态占位, 不让页面「啥也没有」地空白。
  *
- * ⚠️ **B3 明确不做** (PM 拍板, 剩下的都是 B6 / B7 的活):
- *   - FAB「新建待办」        → 整个不渲染 (B6 表单)
- *   - 卡片行的「编辑」/「改 DDL」 → 不渲染 (B6 表单)
- *   - 归档入口 / ArchivedSheet → 不渲染 (B7)
- *   - 日程详情页路由          → 不存在 (B6) ⇒ 卡片整行点 = 切换完成 (web 旧行为)
+ * ⚠️ **B6 接上的入口** (PM 拍板):
+ *   - FAB「新建待办」→ 打开**新建日程**表单 (kind=schedule / mode=create,
+ *     defaultDate = 今天)
+ *   - 行菜单「编辑」/「改 DDL」→ 打开表单 (mode=edit / mode=delay)
+ *   - 点卡片整行 → 跳**真详情路由** `/schedule/schedule/{id}`
+ *   ⚠️ **归档入口仍不渲染** (= B7) ⇒ 菜单里**没有**「归档」这一项。
  */
 
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ScheduleTabs } from "../components/schedule/ScheduleTabs";
 import { TodayTodoList } from "../components/schedule/TodayTodoList";
 import { ScheduleConfirmDialog } from "../components/schedule/ScheduleConfirmDialog";
+import { CreateFab } from "../components/common/CreateFab";
 import { useToast } from "../components/ui/Toast";
 import { dateToYmd } from "../components/schedule/calendar-utils";
 import {
+  ScheduleFormSheet,
+  type FormMode,
+  type FormValues,
+} from "../components/schedule/form/ScheduleFormSheet";
+import { ddlIso, endDateOf, scheduleBody, syncReminders } from "../components/schedule/form/scheduleFormBody";
+import {
   buildScheduleTreeIndex,
+  createSchedule,
   deleteCronJob,
   deleteSchedule,
   describeScheduleError,
@@ -48,8 +56,10 @@ import {
   listSubtasks,
   listTasks,
   listTodayTodos,
+  scheduleLocalToIso,
   setScheduleStatus,
   toggleCronJobState,
+  updateSchedule,
 } from "../lib/schedule-api";
 import type { CronJob, ItemStatus, ScheduleItem } from "../lib/schedule-api";
 
@@ -80,6 +90,7 @@ function ScheduleEmpty() {
 
 export function ScheduleToday() {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   // 时钟锚点 —— 与 web 同款走**本机时间** (web `schedule/page.tsx:93` 的 `new Date()`)。
@@ -177,6 +188,76 @@ export function ScheduleToday() {
   const askDeleteCron = (job: CronJob) =>
     setPendingDelete({ kind: "cron", id: job.id, title: job.title });
 
+  // ---------------------------------------------------------------------------
+  // 表单 (新建 / 编辑 / 改 DDL) —— B6
+  //
+  // ⚠️ 本页的表单**只有 kind=schedule** (今日待办里全是日程条目)。
+  //    任务的表单在看板页 (kind=task), 分层新建在详情页。
+  // ---------------------------------------------------------------------------
+  const [form, setForm] = useState<{
+    mode: FormMode;
+    node: ScheduleItem | null;
+  } | null>(null);
+
+  const openCreateForm = () => setForm({ mode: "create", node: null });
+  const openEditForm = (item: ScheduleItem) => setForm({ mode: "edit", node: item });
+  const openDdlForm = (item: ScheduleItem) => setForm({ mode: "delay", node: item });
+
+  const formMutation = useMutation({
+    mutationFn: async ({
+      mode,
+      node,
+      values,
+    }: {
+      mode: FormMode;
+      node: ScheduleItem | null;
+      values: FormValues;
+    }) => {
+      if (mode === "create") {
+        const created = await createSchedule({
+          title: values.title.trim(),
+          date: values.date,
+          startAt: scheduleLocalToIso(values.date, values.start),
+          // ⚠️ **有意偏离 web 的今日待办页** (web `schedule/page.tsx:233` 用的是
+          //    `scheduleLocalToIso(values.date, values.end)` —— 把结束时间落在**开始日期**上,
+          //    跨天日程的结束日期被丢掉)。
+          //    web 的**日历页**与**详情页**都用 `endDateOf(values)` (结束日期 + 结束时间),
+          //    契约 §9.4 (gaga P0-F 跨天日程) 也是这个口径 ⇒ 这里取**多数派 + 契约**口径。
+          endAt: scheduleLocalToIso(endDateOf(values), values.end),
+          ownerType: values.ownerType,
+          note: values.note.trim() || null,
+          ddl: ddlIso(values),
+          statusOverride: values.status === "pending" ? null : values.status,
+        });
+        if (values.remindOn) {
+          await syncReminders("schedule", created.id, values, []);
+        }
+        return created;
+      }
+      if (!node) return null;
+      await updateSchedule(node.id, scheduleBody(values, mode));
+      // ⚠️ **只在 edit 模式同步提醒** (delay 只改 DDL, 表单里根本没有提醒开关,
+      //    同步 = 凭空改 / 造提醒)。
+      if (mode === "edit") {
+        await syncReminders("schedule", node.id, values, node.reminders);
+      }
+      return node;
+    },
+    onSuccess: async (_d, vars) => {
+      await refresh();
+      setForm(null);
+      const name = vars.mode === "create" ? `已创建「${vars.values.title}」` : "已保存";
+      toast({
+        title: name,
+        description: "看板 / 日程中心 / 今日待办已同步",
+        variant: "success",
+      });
+    },
+    onError: (err) => {
+      toast({ title: "保存失败", description: describeScheduleError(err), variant: "danger" });
+    },
+  });
+
   // 五桶 + cron 全空 = empty 态 (否则页面「啥也没有」地空白)
   const isEmpty =
     !!data &&
@@ -216,7 +297,10 @@ export function ScheduleToday() {
               status: cur === "done" ? "pending" : "done",
             });
           }}
+          onOpenDetail={(item) => navigate(`/schedule/schedule/${item.id}`)}
           onMarkProgress={(item) => statusMutation.mutate({ id: item.id, status: "in_progress" })}
+          onChangeDdl={openDdlForm}
+          onEdit={openEditForm}
           onDeleteSchedule={askDeleteSchedule}
           onToggleCron={(job) => cronToggleMutation.mutate(job)}
           onDeleteCron={askDeleteCron}
@@ -244,6 +328,24 @@ export function ScheduleToday() {
           }
         }}
       />
+
+      {/* 新建待办 / 编辑 / 改 DDL 表单 —— 原型 .sheet (底部弹层 + 自绘日期/时间 picker + 自定义下拉) */}
+      <ScheduleFormSheet
+        open={!!form}
+        mode={form?.mode ?? "create"}
+        kind="schedule"
+        node={form?.node ?? null}
+        defaultDate={todayYmd}
+        submitting={formMutation.isPending}
+        onClose={() => setForm(null)}
+        onSubmit={(values) => {
+          if (!form) return;
+          formMutation.mutate({ mode: form.mode, node: form.node, values });
+        }}
+      />
+
+      {/* 新建待办入口 —— 全站统一的 <CreateFab> (原型 v6 `.fab`), 跟 知识库 / 任务看板 同款。 */}
+      <CreateFab label="新建待办" onClick={openCreateForm} />
     </div>
   );
 }
