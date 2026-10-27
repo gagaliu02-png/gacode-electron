@@ -1234,6 +1234,39 @@ export function CircleIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps
   );
 }
 
+/**
+ * lucide `circle-dot` — 20×20 / sw2 (日程中心看板「标记进行中」菜单项)
+ *
+ * ⚠️ **与 `CircleIcon` 不是同一个图形** —— 按铁律「同名不同形 → 分开导出」:
+ *   `CircleIcon`   = 只有外圈 (circle r10)
+ *   `CircleDotIcon` = 外圈 (circle r10) + **中心小点** (circle r1)
+ *   菜单里 14px 下能看出差别 (web 用的是 lucide `circle-dot`)。
+ *
+ * path 逐字取自 gacode-web/node_modules/lucide-react@0.407.0
+ * `dist/esm/icons/circle-dot.js`:
+ *   ["circle", { cx: "12", cy: "12", r: "10" }]
+ *   ["circle", { cx: "12", cy: "12", r: "1" }]
+ */
+export function CircleDotIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="1" />
+    </svg>
+  );
+}
+
 // ════════════════════════════════════════════════════════════
 // 2026-10-26 图标收编批次 (重复实现收编)
 //   path 逐字取自 gacode-web/node_modules/lucide-react@0.407.0

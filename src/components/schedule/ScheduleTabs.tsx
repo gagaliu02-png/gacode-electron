@@ -12,12 +12,14 @@
  *   今日待办 / 日程中心 / 任务看板
  *   (⚠️ 第二个 tab 也叫「日程中心」, 跟侧栏入口同名 —— 这是 web 现状, 不改。)
  *
- * ⚠️ **B3 只做今日待办 · B4 已落地日历页** (PM 拍板):
+ * ⚠️ **三个 tab 全部已落地** (PM 一批一批解禁, 顺序 B3 → B4 → B5):
  *   B3 时「日程中心」/「任务看板」两个 tab **渲染出来但 disabled**, 点击弹 toast 占位提示
  *   —— **不跳到不存在的路由** (跳过去会命中 `path="*"` 被兜回首页 ⇒ 静默跳走)。
- *   **B4 (日历页) 已落地** ⇒ 「日程中心」tab 的 `path` 从 `null` 换成真路由
- *   `/schedule/calendar`, 点击直接进日历页 (见 `routes/ScheduleCalendar.tsx`)。
- *   「任务看板」**保持 `path: null`** —— B5 才解禁, 现在点它仍然只弹占位提示。
+ *   **B4 (日历页) 已落地** ⇒ 「日程中心」tab 的 `path` 换成 `/schedule/calendar`
+ *   (见 `routes/ScheduleCalendar.tsx`)。
+ *   **B5 (任务看板) 已落地** ⇒ 「任务看板」tab 的 `path` 换成 `/schedule/board`
+ *   (见 `routes/ScheduleBoard.tsx`) —— 三个 tab 现在都是真路由, 点击直接进对应页。
+ *   (B6 详情页 / B7 归档还没落地 ⇒ 那些入口本批**不渲染**, 不占 tab 位。)
  *
  * 吸顶三件套 (gaga 2026-10-21 反馈: 「tab 栏没有吸顶, 内容从下面穿过去」):
  *   1. top-0 —— 滚动容器是 AppShell 的 `<main>` (overflow-y-auto), 全局 header 在 main
@@ -48,12 +50,12 @@ const TABS: {
   key: ScheduleTabKey;
   label: string;
   icon: typeof ListTodoIcon;
-  /** 真路由 (B3 today + B4 calendar 有); null = 尚未落地, 点击只弹占位提示 */
+  /** 真路由 (B3 today + B4 calendar + B5 board 都有); null = 尚未落地, 点击只弹占位提示 */
   path: string | null;
 }[] = [
   { key: "today", label: "今日待办", icon: ListTodoIcon, path: "/schedule" },
   { key: "calendar", label: "日程中心", icon: CalendarRangeIcon, path: "/schedule/calendar" },
-  { key: "board", label: "任务看板", icon: KanbanSquareIcon, path: null },
+  { key: "board", label: "任务看板", icon: KanbanSquareIcon, path: "/schedule/board" },
 ];
 
 export function ScheduleTabs({ active, className }: ScheduleTabsProps) {

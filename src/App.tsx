@@ -24,6 +24,7 @@ import { Deliveries } from "./routes/Deliveries";
 import { DeliveryDetail } from "./routes/DeliveryDetail";
 import { ScheduleToday } from "./routes/ScheduleToday";
 import { ScheduleCalendar } from "./routes/ScheduleCalendar";
+import { ScheduleBoard } from "./routes/ScheduleBoard";
 import { Notifications } from "./routes/Notifications";
 import { Profile } from "./routes/Profile";
 import { ProfileEdit } from "./routes/ProfileEdit";
@@ -161,7 +162,7 @@ export function App() {
                 }
               />
               {/* 日程中心 (B3: 今日待办入口页) — 侧栏「日程中心」落在 /schedule。
-                  ⚠️ 日程详情页 / 看板页 是 B5/B6, 这批没有路由 ——
+                  ⚠️ 日程**详情页**是 B6, 现在还没有路由 ——
                      通知里的日程深链仍按 `src/lib/notifications.ts` 的口径兜回
                      `kind="none"` + rawLink (跳不存在的路由会被 path="*" 兜回首页) */}
               <Route
@@ -179,6 +180,17 @@ export function App() {
                 element={
                   <Protected>
                     <ScheduleCalendar />
+                  </Protected>
+                }
+              />
+              {/* 日程中心 · 任务看板 (B5) — 4 列看板 + 5 个状态筛选 pill + 任务树。
+                  详情页跳转本批只弹 toast 占位 (B6), 不跳路由;
+                  「新建任务」/「编辑」/「改 DDL」/「归档」入口本批一律不渲染 (B6 / B7)。 */}
+              <Route
+                path="/schedule/board"
+                element={
+                  <Protected>
+                    <ScheduleBoard />
                   </Protected>
                 }
               />
