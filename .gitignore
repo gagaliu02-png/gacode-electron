@@ -39,6 +39,10 @@ scripts/*
 !scripts/verify-schedule-form-b6.mjs
 !scripts/verify-schedule-detail-b6.mjs
 !scripts/verify-schedule-b6-engineering.mjs
+# 日程中心 B7 批 (2026-10-27): 归档面板 + 归档动作断言。
+#   同款声明式例外。⚠️ 该脚本入库前已把硬编码绝对路径改成从
+#   scripts/lib/schedule-loader.mjs 导入 ROOT —— 否则换个 checkout 路径就跑不了。
+!scripts/verify-schedule-b7-archived.mjs
 !scripts/lib/
 scripts/lib/*
 !scripts/lib/schedule-loader.mjs

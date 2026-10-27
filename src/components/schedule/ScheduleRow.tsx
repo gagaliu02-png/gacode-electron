@@ -18,16 +18,16 @@
  *   - 点卡片本体 = **进详情页** —— ⚠️ PC 端的日程详情页是 B6 才有的路由,
  *     所以 B3 **不传** `onOpenDetail` ⇒ 退化成 web 的旧行为「整行点 = 切换完成」
  *     (见 web `ScheduleRow.tsx:66` 的 `openRow`)。B6 落地后把 onOpenDetail 接上即可。
- *   - ⋮ 菜单 = 标记进行中 · 标记完成 · [**改 DDL** · **编辑**] · 删除
- *     ⚠️ 「改 DDL」/「编辑」是 **B6 的表单** ⇒ 两个 prop **可选**:
+ *   - ⋮ 菜单 = 标记进行中 · 标记完成 · [**归档** · **改 DDL** · **编辑**] · 删除
+ *     ⚠️ 「归档」/「改 DDL」/「编辑」三个 prop **可选**:
  *        **不传 = 那一项根本不渲染** (不是灰的、不是哑弹) —— 零死按钮。
- *     ⚠️ **不渲染**「归档」(= B7): PC 端还没有归档查看·恢复入口 (ArchivedSheet 是 B7),
- *        归档完就再也找不回来了。
+ *     ⚠️ B7 起「归档」由页面层传进来 ⇒ 菜单恢复 web 的 6 项。
  */
 
 import { OwnerAvatar } from "./OwnerAvatar";
 import { RowActionMenu, type RowMenuItem } from "./RowActionMenu";
 import {
+  ArchiveIcon,
   BellIcon,
   CalendarClockIcon,
   CheckGlyph,
@@ -53,6 +53,8 @@ interface ScheduleRowProps {
   /** 点行主体 → 进详情页 (原型 B1.3 #1)。不传 = 退化成「整行点 = 切换完成」(旧行为)。 */
   onOpenDetail?: (item: ScheduleItem) => void;
   onMarkProgress: (item: ScheduleItem) => void;
+  /** 归档 (级联所有后代, 可恢复) — **不传 = 不渲染「归档」这一项** */
+  onArchive?: (item: ScheduleItem) => void;
   /** 改 DDL (只含 DDL 日期 + 时间两字段的弹窗) — **不传 = 不渲染「改 DDL」这一项** */
   onChangeDdl?: (item: ScheduleItem) => void;
   /** 编辑 (按 kind 给字段) — **不传 = 不渲染「编辑」这一项** */
@@ -70,6 +72,7 @@ export function ScheduleRow({
   onToggleDone,
   onOpenDetail,
   onMarkProgress,
+  onArchive,
   onChangeDdl,
   onEdit,
   onDelete,
@@ -79,7 +82,7 @@ export function ScheduleRow({
   const openRow = () => (onOpenDetail ? onOpenDetail(item) : onToggleDone(item));
 
   // 原型 B1.3 #5-#10: 日程行的 ⋮ 菜单
-  // ⚠️ 「改 DDL」/「编辑」**按回调存在与否**追加 —— 没传回调 ⇒ 那一项根本不进菜单。
+  // ⚠️ 「归档」/「改 DDL」/「编辑」**按回调存在与否**追加 —— 没传回调 ⇒ 那一项根本不进菜单。
   const menuItems: RowMenuItem[] = [
     {
       key: "progress",
@@ -94,6 +97,14 @@ export function ScheduleRow({
       onSelect: () => onToggleDone(item),
     },
   ];
+  if (onArchive) {
+    menuItems.push({
+      key: "archive",
+      label: "归档",
+      icon: <ArchiveIcon size={14} className="w-[14px] h-[14px]" />,
+      onSelect: () => onArchive(item),
+    });
+  }
   if (onChangeDdl) {
     menuItems.push({
       key: "ddl",

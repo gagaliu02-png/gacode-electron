@@ -25,14 +25,15 @@
  *    (`schedule-api.ts:1419-1433`), 直接往下传给 BoardView 即可。
  *
  * 写操作 (原型 §9 ⋮ 菜单, 规格书 B3.5 #4-#8):
- *   标记进行中 / 标记完成 · 取消完成 · **改 DDL** · **编辑** · 删除 —— 全部走真端点
- *   (契约 §9.2 / §9.3); 「改 DDL」/「编辑」由 `ScheduleFormSheet` 承载。
+ *   标记进行中 / 标记完成 · 取消完成 · **归档** · **改 DDL** · **编辑** · 删除 ——
+ *   全部走真端点 (契约 §9.2 / §9.3); 「改 DDL」/「编辑」由 `ScheduleFormSheet` 承载。
  *   删除走**二次确认** (B3 的 `ScheduleConfirmDialog`)。
+ *   归档走**独立的归档端点** (可恢复), **不是** DELETE 硬删。
  *
- * ⚠️ **本批仍不做** (PM 拍板):
- *   - **卡片「归档」动作不渲染** —— PC 的归档查看/恢复入口是 B7,
- *     现在归档完就找不回 ⇒ 归档动作等归档区落地时一起补。
- *   - **已归档计数条 / `ArchivedSheet` 不渲染** —— B7。
+ * ⚠️ **B7 接上的入口** (PM 拍板):
+ *   - 卡片「归档」动作 → `archiveMutation` (按 kind 分派到四个归档端点)
+ *   - 提示条右侧「已归档 N」→ 打开 `ArchivedSheet` (跟今日待办页共用同一个组件)
+ *   ⚠️ **不新建归档路由页** —— web 没有独立的归档页, 归档是**弹层**。
  */
 
 import { useMemo, useState } from "react";
@@ -40,6 +41,8 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ScheduleTabs } from "../components/schedule/ScheduleTabs";
 import { BoardView } from "../components/schedule/BoardView";
+import { ArchivedSheet } from "../components/schedule/ArchivedSheet";
+import { archivedTotal, loadArchivedByKind } from "../components/schedule/archived";
 import type { NodeAction, NodeActionTarget } from "../components/schedule/ScheduleTaskCard";
 import { ScheduleConfirmDialog } from "../components/schedule/ScheduleConfirmDialog";
 import { CreateFab } from "../components/common/CreateFab";
@@ -62,6 +65,10 @@ import {
 } from "../components/schedule/form/ScheduleDdlOverrunDialog";
 import { useToast } from "../components/ui/Toast";
 import {
+  archiveMilestone,
+  archiveSchedule,
+  archiveSubtask,
+  archiveTask,
   buildFlatIndex,
   createTask,
   deleteMilestone,
@@ -116,11 +123,22 @@ export function ScheduleBoard() {
   const queryClient = useQueryClient();
   /** 待删除条目 —— 删除是级联硬删, 必须二次确认。 */
   const [pendingDelete, setPendingDelete] = useState<NodeActionTarget | null>(null);
+  /** 归档 sheet 开着吗 (原型 B1.3 #15: 「已归档」条 → 打开归档 sheet)。 */
+  const [archivedOpen, setArchivedOpen] = useState(false);
 
   const { data, isPending, error } = useQuery({
     queryKey: ["schedule", "board"],
     // 看板主数据 = GET /board (契约 §9.1); serverTime 随快照一起回来。
-    queryFn: getBoard,
+    // 已归档计数 = **四类**已归档列表的总数 (契约 §9.1 四个归档端点) ——
+    //   归档 sheet 里列的就是这四类, 计数只算一类的话数字跟内容对不上。
+    //   拉不到不影响看板本身, 降级成「不显示计数」。
+    queryFn: async () => {
+      const [board, archived] = await Promise.all([
+        getBoard(),
+        loadArchivedByKind().catch(() => null),
+      ]);
+      return { board, archivedCount: archived ? archivedTotal(archived) : null };
+    },
   });
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["schedule"] });
@@ -156,6 +174,34 @@ export function ScheduleBoard() {
     },
     onError: (err) => {
       toast({ title: "操作失败", description: describeScheduleError(err), variant: "danger" });
+    },
+  });
+
+  // 归档 (契约 §9.3) —— 走**独立的归档端点**, 不是 DELETE 硬删 (可恢复)。
+  // 四层各一个端点 ⇒ 按 kind 分派。
+  const archiveMutation = useMutation({
+    mutationFn: (target: NodeActionTarget): Promise<unknown> => {
+      switch (target.kind) {
+        case "task":
+          return archiveTask(target.id);
+        case "subtask":
+          return archiveSubtask(target.id);
+        case "milestone":
+          return archiveMilestone(target.id);
+        case "schedule":
+          return archiveSchedule(target.id);
+      }
+    },
+    onSuccess: async (_d, target) => {
+      await refresh();
+      toast({
+        title: `已归档「${target.title}」`,
+        description: "可在已归档页恢复。",
+        variant: "success",
+      });
+    },
+    onError: (err) => {
+      toast({ title: "归档失败", description: describeScheduleError(err), variant: "danger" });
     },
   });
 
@@ -206,7 +252,7 @@ export function ScheduleBoard() {
     nextDdlText: string;
   } | null>(null);
 
-  const boardColumns = data?.columns;
+  const boardColumns = data?.board.columns;
 
   /** 在看板树里找节点 (任务 → 子任务 → 关键节点 → 日程)。 */
   const found = useMemo(() => {
@@ -348,6 +394,9 @@ export function ScheduleBoard() {
           status: target.nextStatus ?? target.status,
         });
         break;
+      case "archive":
+        archiveMutation.mutate(target);
+        break;
       case "delete":
         // 级联硬删 + 不可恢复 → 二次确认 (与今日待办同一交互语言)
         setPendingDelete(target);
@@ -385,13 +434,18 @@ export function ScheduleBoard() {
 
       {data && (
         <BoardView
-          columns={data.columns}
-          serverTime={data.serverTime}
+          columns={data.board.columns}
+          serverTime={data.board.serverTime}
+          archivedCount={data.archivedCount}
           onNewTask={openCreateForm}
+          onOpenArchived={() => setArchivedOpen(true)}
           onNodeAction={handleNodeAction}
           onOpenDetail={handleOpenDetail}
         />
       )}
+
+      {/* 归档 sheet (原型 .archived-sheet) —— 今日待办 / 看板 共用同一个组件 */}
+      <ArchivedSheet open={archivedOpen} onClose={() => setArchivedOpen(false)} />
 
       <ScheduleConfirmDialog
         open={!!pendingDelete}

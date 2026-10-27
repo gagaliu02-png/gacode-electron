@@ -25,7 +25,7 @@
  *     ⇒ 没有真落点时**不留死按钮** (PC 一贯口径)。
  *   - **卡片「编辑」/「改 DDL」** —— 走 `ScheduleTaskCard` 的 `onNodeAction`
  *     通道 (action = "edit" / "change_ddl"), 页面层持有真正的 mutation。
- *   - **「已归档」按钮 + 计数条** 仍不渲染 —— PC 的归档查看/恢复入口是 B7。
+ *   - **「已归档」按钮 + 计数条** —— B7 起渲染 (跟今日待办页开**同一个** ArchivedSheet)。
  *   - 详情页跳转 B6 起跳真路由 (`/schedule/<kind>/<id>`), 不再是 toast 占位。
  *
  * 视觉基线 = docs/prototype/schedule-center.html (mockup v6 定稿):
@@ -122,6 +122,12 @@ export interface BoardViewProps {
   /** 响应级 serverTime (ISO) —— 倒计时的时间基准; null = 后端没给 (降级用本机时间) */
   serverTime: string | null;
   /**
+   * 已归档条目的计数 —— **四类总数** (任务 / 子任务 / 关键节点 / 日程),
+   * 跟归档 sheet 里列的内容一致 (2026-10-21 PM 拍板)。
+   * null / undefined = 计数拉不到 → 不显示徽标。
+   */
+  archivedCount?: number | null;
+  /**
    * 初始树状态 (可选) —— 不传就从 localStorage 读 (契约 §6.3)。
    */
   initialTreeState?: BoardTreeState;
@@ -130,8 +136,14 @@ export interface BoardViewProps {
    * (不留死按钮; PC 一贯口径)。
    */
   onNewTask?: () => void;
+  /**
+   * 已归档入口 —— 打开归档 sheet (原型 .archived-sheet)。
+   * **不传 = 提示条右侧不渲染「已归档」按钮** (零死按钮口径)。
+   */
+  onOpenArchived?: () => void;
   /** ⋮ 菜单动作 (写操作意图) —— 页面层持有真正的 mutation。
-   *  ⚠️ B6 起 channel 里多了两个 action: `change_ddl` / `edit` (两个表单动作)。 */
+   *  ⚠️ B6 起 channel 里多了两个 action: `change_ddl` / `edit` (两个表单动作);
+   *  ⚠️ B7 起再多个 `archive` (走归档端点, 可恢复)。 */
   onNodeAction?: (action: NodeAction, target: NodeActionTarget) => void;
   /** 点标题进详情页 —— 页面层负责拼路由 (B6 起跳真路由 `/schedule/<kind>/<id>`) */
   onOpenDetail?: (kind: ScheduleNodeKind, id: string) => void;
@@ -140,8 +152,10 @@ export interface BoardViewProps {
 export function BoardView({
   columns,
   serverTime,
+  archivedCount = null,
   initialTreeState,
   onNewTask,
+  onOpenArchived,
   onNodeAction,
   onOpenDetail,
 }: BoardViewProps) {
@@ -249,14 +263,31 @@ export function BoardView({
       </div>
 
       {/* ---------------- 提示条 (原型 .archbar) ----------------
-          ⚠️ web 在这一条右侧还有「已归档」按钮 + 计数徽标 —— PC 本批**不渲染**
-          (归档查看/恢复入口是 B7; 现在归档完就找不回 ⇒ 不能给入口)。 */}
+          ⚠️ web 在这一条右侧还有「已归档」按钮 + 计数徽标 —— B7 起渲染
+          (打开的是**同一个** ArchivedSheet); 按钮**按回调存在与否**渲染
+          (不传 onOpenArchived ⇒ 不渲染, 不留死按钮)。 */}
       <div className="px-4 lg:px-6">
         <div className="flex items-center gap-2 bg-card rounded-full py-[7px] pl-3.5 pr-2 mt-1 mb-3 text-[13px]">
           <InfoIcon size={15} className="w-[15px] h-[15px] text-fg-muted shrink-0" />
           <span className="text-fg-muted truncate">
             → 看板看任务 · 日程中心看日程 · 今日待办看今天的日程
           </span>
+          <span className="flex-1" />
+          {onOpenArchived && (
+            <button
+              type="button"
+              data-board-archived
+              onClick={onOpenArchived}
+              className="shrink-0 inline-flex items-center gap-1.5 px-[13px] py-1.5 rounded-full text-[13px] text-fg-muted hover:text-fg hover:bg-bg-elevated transition-colors duration-150"
+            >
+              已归档
+              {archivedCount != null && (
+                <span className="text-[11px] bg-danger-soft text-danger rounded-full px-2 py-0.5">
+                  {archivedCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </div>
 

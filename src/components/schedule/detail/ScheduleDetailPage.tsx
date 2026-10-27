@@ -30,11 +30,9 @@
  * ⚠️ 写操作全部走真端点, 写完 **invalidateQueries(["schedule"])** → 详情数据重新拉,
  *    不留旧值 (原型 B4 交互 #1-#10 + E2 写接口清单)。
  *
- * ⚠️ **本批不做归档 (= B7)**:
- *   web 这里有 `archiveMutation` + `ScheduleNodeMenu` 的 `onArchive`。
- *   PC 侧**整段不搬**, `onArchive` **一律不传** ⇒ `ScheduleNodeMenu` 的菜单里
- *   **根本没有「归档」这一项** (不是灰的、不是哑弹) —— B7 落地时把 `onArchive`
- *   传上, 现有菜单实现会**自动**多出该项。
+ * ⚠️ **归档 (B7)**: web 这里有 `archiveMutation` + `ScheduleNodeMenu` 的 `onArchive`。
+ *   B7 起 PC 侧**整段搬过来** (走独立的归档端点, 可恢复 —— 不是 DELETE 硬删),
+ *   `onArchive` 传上 ⇒ 菜单里自然多出「归档」这一项。
  *
  * ⚠️ **bound 的三处写法不一样** (交底 §3.3) —— 别统一抄成一种:
  *   - 本页「编辑」/「改 DDL」: `tree?.effectiveDdl(parent) ?? null` (**无** `?? parent.ddl` 回退)
@@ -83,6 +81,10 @@ import {
 } from "./detailModel";
 import { useToast } from "../../ui/Toast";
 import {
+  archiveMilestone,
+  archiveSchedule,
+  archiveSubtask,
+  archiveTask,
   buildFlatIndex,
   createMilestone,
   createSchedule,
@@ -271,6 +273,29 @@ export function ScheduleDetailPage({ kind, id }: ScheduleDetailPageProps) {
       });
     },
     onError: (err) => toast({ title: "操作失败", description: describeScheduleError(err), variant: "danger" }),
+  });
+
+  // 归档 (契约 §9.3) —— 走**独立的归档端点**, 不是 DELETE 硬删 (可恢复)。
+  // 四层各一个端点 ⇒ 按 kind 分派 (cron 没有 archived 概念 ⇒ 没有这一项)。
+  const archiveMutation = useMutation({
+    mutationFn: async (): Promise<unknown> => {
+      if (!node) return null;
+      switch (kindOf(node)) {
+        case "task":
+          return archiveTask(node.id);
+        case "subtask":
+          return archiveSubtask(node.id);
+        case "milestone":
+          return archiveMilestone(node.id);
+        case "schedule":
+          return archiveSchedule(node.id);
+      }
+    },
+    onSuccess: async () => {
+      await refresh();
+      toast({ title: "已归档", description: "可在已归档页恢复。", variant: "success" });
+    },
+    onError: (err) => toast({ title: "归档失败", description: describeScheduleError(err), variant: "danger" }),
   });
 
   const deleteMutation = useMutation({
@@ -673,7 +698,8 @@ export function ScheduleDetailPage({ kind, id }: ScheduleDetailPageProps) {
             status={status}
             ariaLabel={`${node.title} 的更多操作`}
             onSetStatus={(s) => statusMutation.mutate(s)}
-            // ⚠️ `onArchive` **不传** (= B7) ⇒ 菜单里**没有**「归档」这一项。
+            // ⚠️ B7: 归档走**独立的归档端点** (可恢复), 不是 DELETE 硬删。
+            onArchive={() => archiveMutation.mutate()}
             onChangeDdl={openDdl}
             onEdit={openEdit}
             onDelete={() => setPendingDelete(node.id)}

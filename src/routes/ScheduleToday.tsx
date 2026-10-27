@@ -1,5 +1,5 @@
 /**
- * routes/ScheduleToday.tsx — 日程中心入口页 (今日待办) · PC 端 B3 + B6
+ * routes/ScheduleToday.tsx — 日程中心入口页 (今日待办) · PC 端 B3 + B6 + B7
  *
  * 抄自 web `gacode-web/src/app/(main)/schedule/page.tsx`, 只换 PC 写法:
  *   - `next/navigation` 的 `useRouter` → `react-router-dom` 的 `useNavigate`
@@ -15,9 +15,9 @@
  *   /schedule/board     = 任务看板  (B5)
  *   /schedule/<kind>/<id> = 详情页   (B6: task/subtask/milestone/schedule/cron)
  *
- * 写操作: 完成 / 取消完成 / 删除, 定时任务的 暂停·启用 + 删除 —— 全部走真端点
- *   (PATCH /schedules/:id、PATCH /crons/:id、DELETE …)。归档 / 恢复 / 提醒 CRUD
- *   的实现见 schedule-api.ts (归档入口是 B7, 本页不挂)。
+ * 写操作: 完成 / 取消完成 / 删除 / **归档**, 定时任务的 暂停·启用 + 删除 —— 全部走真端点
+ *   (PATCH /schedules/:id、PATCH /crons/:id、DELETE …、POST …/:id/archive)。提醒 CRUD
+ *   的实现见 schedule-api.ts。
  *
  * 三态: loading = 骨架占位; error = 按后端 error.code 分支的可读文案
  *   (契约 §9.4b 的 4 个码); empty = 空态占位, 不让页面「啥也没有」地空白。
@@ -27,7 +27,11 @@
  *     defaultDate = 今天)
  *   - 行菜单「编辑」/「改 DDL」→ 打开表单 (mode=edit / mode=delay)
  *   - 点卡片整行 → 跳**真详情路由** `/schedule/schedule/{id}`
- *   ⚠️ **归档入口仍不渲染** (= B7) ⇒ 菜单里**没有**「归档」这一项。
+ *
+ * ⚠️ **B7 接上的入口** (PM 拍板):
+ *   - 行菜单「归档」→ `archiveSchedule` (可恢复, **不是** DELETE 硬删)
+ *   - 底部「已归档 N」条 → 打开 `ArchivedSheet` (四类已归档 + 可恢复)
+ *   ⚠️ **不新建归档路由页** —— web 没有独立的归档页, 归档是**弹层**。
  */
 
 import { useMemo, useState } from "react";
@@ -35,6 +39,8 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ScheduleTabs } from "../components/schedule/ScheduleTabs";
 import { TodayTodoList } from "../components/schedule/TodayTodoList";
+import { ArchivedSheet } from "../components/schedule/ArchivedSheet";
+import { archivedTotal, loadArchivedByKind } from "../components/schedule/archived";
 import { ScheduleConfirmDialog } from "../components/schedule/ScheduleConfirmDialog";
 import { CreateFab } from "../components/common/CreateFab";
 import { useToast } from "../components/ui/Toast";
@@ -47,6 +53,7 @@ import {
 import { ddlIso, endDateOf, scheduleBody, syncReminders } from "../components/schedule/form/scheduleFormBody";
 import {
   buildScheduleTreeIndex,
+  archiveSchedule,
   createSchedule,
   deleteCronJob,
   deleteSchedule,
@@ -106,13 +113,17 @@ export function ScheduleToday() {
       // 今天视图只显示 active 子集 (契约 §2.1.4: 已归档条目不在任何视图出现)——
       //   * listTodayTodos 内部已 exclude archived
       //   * tree 用 active-only 三张表 build, 引用解析不会跨过 archived 边界
-      const [buckets, crons, activeTasks, subtasks, milestones] = await Promise.all([
-        listTodayTodos(now),
-        listCronJobs(),
-        listTasks(),
-        listSubtasks(),
-        listMilestones(),
-      ]);
+      // 已归档计数 = **四类**已归档列表的总数 (契约 §9.1 四个归档端点) ——
+      //   归档 sheet 里列的就是这四类, 计数只算一类 = 数字跟内容对不上。
+      const [buckets, crons, activeTasks, subtasks, milestones, archived] =
+        await Promise.all([
+          listTodayTodos(now),
+          listCronJobs(),
+          listTasks(),
+          listSubtasks(),
+          listMilestones(),
+          loadArchivedByKind().catch(() => null),
+        ]);
       return {
         buckets,
         crons,
@@ -121,6 +132,7 @@ export function ScheduleToday() {
           subtasks,
           milestones,
         }),
+        archivedCount: archived ? archivedTotal(archived) : null,
       };
     },
   });
@@ -151,6 +163,24 @@ export function ScheduleToday() {
     },
     onError: (err) => {
       toast({ title: "删除失败", description: describeScheduleError(err), variant: "danger" });
+    },
+  });
+
+  // 归档 (原型 B1.3 #7): archived=true + archivedAt, 级联所有后代 ——
+  // 契约 §9.3 有独立归档端点, 不用 DELETE 硬删 (可恢复)。
+  // ⚠️ 今日待办页里的条目**全是日程** ⇒ 只需要 archiveSchedule 一个分支。
+  const archiveMutation = useMutation({
+    mutationFn: (item: ScheduleItem) => archiveSchedule(item.id),
+    onSuccess: async (_d, item) => {
+      await refresh();
+      toast({
+        title: `已归档「${item.title}」`,
+        description: "可在已归档页恢复。",
+        variant: "success",
+      });
+    },
+    onError: (err) => {
+      toast({ title: "归档失败", description: describeScheduleError(err), variant: "danger" });
     },
   });
 
@@ -187,6 +217,9 @@ export function ScheduleToday() {
     setPendingDelete({ kind: "schedule", id: item.id, title: item.title });
   const askDeleteCron = (job: CronJob) =>
     setPendingDelete({ kind: "cron", id: job.id, title: job.title });
+
+  /** 归档 sheet 开着吗 (原型 B1.3 #15: 「已归档」条 → 打开归档 sheet)。 */
+  const [archivedOpen, setArchivedOpen] = useState(false);
 
   // ---------------------------------------------------------------------------
   // 表单 (新建 / 编辑 / 改 DDL) —— B6
@@ -289,6 +322,7 @@ export function ScheduleToday() {
           tree={data.tree}
           now={now}
           todayYmd={todayYmd}
+          archivedCount={data.archivedCount}
           onToggleDone={(item) => {
             // v6: ScheduleItem 没有 status 字段; 用 effectiveStatus 判定当前态。
             const cur = data.tree.effectiveStatus(item);
@@ -299,13 +333,18 @@ export function ScheduleToday() {
           }}
           onOpenDetail={(item) => navigate(`/schedule/schedule/${item.id}`)}
           onMarkProgress={(item) => statusMutation.mutate({ id: item.id, status: "in_progress" })}
+          onArchive={(item) => archiveMutation.mutate(item)}
           onChangeDdl={openDdlForm}
           onEdit={openEditForm}
           onDeleteSchedule={askDeleteSchedule}
           onToggleCron={(job) => cronToggleMutation.mutate(job)}
           onDeleteCron={askDeleteCron}
+          onOpenArchived={() => setArchivedOpen(true)}
         />
       )}
+
+      {/* 归档 sheet (原型 .archived-sheet) —— 今日待办 / 看板 共用同一个组件 */}
+      <ArchivedSheet open={archivedOpen} onClose={() => setArchivedOpen(false)} />
 
       {/* 删除二次确认 —— 冻结契约里 DELETE 是硬删且不可恢复, 树节点还会级联删下级 */}
       <ScheduleConfirmDialog

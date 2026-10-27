@@ -1,5 +1,5 @@
 /**
- * components/schedule/TodayTodoList.tsx — 今日待办主体 (hero + 定时任务分组 + 五个分组)
+ * components/schedule/TodayTodoList.tsx — 今日待办主体 (hero + 定时任务分组 + 五个分组 + 已归档条)
  *
  * 抄自 web `gacode-web/src/components/schedule/TodayTodoList.tsx`, 只换 PC 写法:
  *   - `cn(...)`      → 数组 filter(Boolean).join(" ")
@@ -7,16 +7,15 @@
  *     (`Clock` → `ClockIcon` / `ChevronDown` → `ChevronDownIcon`)
  *
  * ⚠️ **B3 相对 web 的删减** (PM 拍板, 剩下的都是 B6 / B7 的活):
- *   - **已归档条 + 归档计数** → 不渲染 (B7 才有 ArchivedSheet / 归档入口;
- *     PC 现在没有归档查看·恢复入口, 渲染出来点进去是死路)
- *   - **归档** → 不渲染 (B7)
+ *   - **已归档条 + 归档计数** → B7 已补齐 (`archivedCount` / `onOpenArchived` 两个 prop)
+ *   - **归档** → B7 已补齐 (`onArchive` 透传给 `ScheduleRow` 的行菜单)
  *   - **改 DDL / 编辑** → B6 起由页面层通过 `onChangeDdl` / `onEdit` 传进来;
  *     **不传 = 行菜单里没有这两项** (不是灰的、不是哑弹) ⇒ 零死按钮。
  *   ⇒ 留下的每一项都有真端点可打, 没有死按钮。
  *
  * 布局 / 分组顺序 1:1 对齐原型 renderToday():
  *   hero (日期 + 计数 + 距日终) → 定时任务 (置顶, 独立实体) → 已逾期 → 上午 → 下午
- *   → 晚上 → 已完成 (末尾)          (v6: 取消「无时段」分组, 只剩 5 个)
+ *   → 晚上 → 已完成 (末尾) → 已归档条   (v6: 取消「无时段」分组, 只剩 5 个)
  *
  * 分组可折叠 (PM 要求): 默认只把「已完成」折叠, 其余全展开;
  * 空分组不渲染标题 (原型 `if(!arr.length) return;`)。
@@ -33,7 +32,7 @@ import {
   heroDateLabel,
   hoursLeftOfDay,
 } from "./format";
-import { ChevronDownIcon, ClockIcon } from "../ui/Glyphs";
+import { ChevronDownIcon, ClockIcon, ArchiveIcon } from "../ui/Glyphs";
 import { describeDdl } from "../../lib/schedule-api";
 import type {
   CronJob,
@@ -51,10 +50,18 @@ interface TodayTodoListProps {
   /** 时钟锚点, 用于「今天 / 距日终」文案 */
   now: Date;
   todayYmd: string;
+  /**
+   * 已归档条目的计数 —— **四类总数** (任务 / 子任务 / 关键节点 / 日程),
+   * 跟归档 sheet 里列的内容一致 (2026-10-21 PM 拍板)。
+   * null / undefined = 计数拉不到 → 不显示徽标 (别显示个假的 0)。
+   */
+  archivedCount?: number | null;
   onToggleDone: (item: ScheduleItem) => void;
   /** 点行主体 → 进日程详情页 (B6 才落地; 不传 = 整行点 = 切换完成) */
   onOpenDetail?: (item: ScheduleItem) => void;
   onMarkProgress: (item: ScheduleItem) => void;
+  /** 归档 (B7) —— **不传 = 行菜单里不渲染「归档」这一项** */
+  onArchive?: (item: ScheduleItem) => void;
   /** 改 DDL (B6 的表单) —— **不传 = 行菜单里不渲染「改 DDL」这一项** */
   onChangeDdl?: (item: ScheduleItem) => void;
   /** 编辑 (B6 的表单) —— **不传 = 行菜单里不渲染「编辑」这一项** */
@@ -62,6 +69,11 @@ interface TodayTodoListProps {
   onDeleteSchedule: (item: ScheduleItem) => void;
   onToggleCron: (job: CronJob) => void;
   onDeleteCron: (job: CronJob) => void;
+  /**
+   * 打开归档 sheet (B7) —— **不传 = 已归档条里不渲染「查看 / 恢复」按钮**
+   * (不是哑弹 —— PC 一贯的零死按钮口径)。
+   */
+  onOpenArchived?: () => void;
 }
 
 /** 层级中文名 — 继承型截止日文案要用 ("继承自关键节点 · …"). */
@@ -90,14 +102,17 @@ export function TodayTodoList({
   tree,
   now,
   todayYmd,
+  archivedCount,
   onToggleDone,
   onOpenDetail,
   onMarkProgress,
+  onArchive,
   onChangeDdl,
   onEdit,
   onDeleteSchedule,
   onToggleCron,
   onDeleteCron,
+  onOpenArchived,
 }: TodayTodoListProps) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
@@ -245,6 +260,7 @@ export function TodayTodoList({
                     onToggleDone={onToggleDone}
                     onOpenDetail={onOpenDetail}
                     onMarkProgress={onMarkProgress}
+                    onArchive={onArchive}
                     onChangeDdl={onChangeDdl}
                     onEdit={onEdit}
                     onDelete={onDeleteSchedule}
@@ -263,6 +279,37 @@ export function TodayTodoList({
           <div className="text-xs text-fg-subtle">新建一条待办,或直接跟 Cody 说一句</div>
         </div>
       )}
+
+      {/* ---------------- 已归档条 (B7) ----------------
+          原型 .archbar: margin:4px 0 12px (mt:4 / mb:12)
+          ⚠️ 「查看 / 恢复」按钮**按回调存在与否**渲染 —— 没传 onOpenArchived
+             ⇒ 那一项根本不进 DOM (不是哑弹)。 */}
+      <div
+        data-today-archbar
+        className="flex items-center gap-2 bg-card rounded-full py-[7px] pl-3.5 pr-2 mt-1 mb-3 text-[13px]"
+      >
+        <ArchiveIcon size={15} className="w-[15px] h-[15px] text-fg-muted shrink-0" />
+        <span className="text-fg-muted">已归档</span>
+        <span className="flex-1" />
+        {archivedCount != null && (
+          <span
+            data-today-arch-cnt
+            className="text-[11px] bg-danger-soft text-danger rounded-full px-2 py-0.5"
+          >
+            {archivedCount}
+          </span>
+        )}
+        {onOpenArchived && (
+          <button
+            type="button"
+            data-today-arch-open
+            onClick={onOpenArchived}
+            className="px-[13px] py-1.5 rounded-full text-[13px] text-fg-muted hover:text-fg hover:bg-bg-elevated transition-colors duration-150"
+          >
+            查看 / 恢复
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -39,8 +39,9 @@
  *   (标记进行中 · 取消完成·标记完成 · 删除), **零死按钮**;
  *   **B6 起** 页面层传 `onChangeDdl` / `onEdit` ⇒ 自然恢复 web 的 5 项
  *   (标记进行中 · 标记完成 · 改 DDL · 编辑 · 删除);
- *   **「归档」仍不传** (= B7) ⇒ 菜单里**没有**「归档」这一项 (不是灰的、不是哑弹)。
- *   ⇒ 一套菜单实现两批通吃 (组件意识: 禁止重复实现 —— 不另写第二份菜单)。
+ *   **B7 起** 页面层再传 `onArchive` ⇒ 恢复 web 的 **6 项**
+ *   (标记进行中 · 标记完成 · **归档** · 改 DDL · 编辑 · 删除);
+ *   ⇒ 一套菜单实现三批通吃 (组件意识: 禁止重复实现 —— 不另写第二份菜单)。
  */
 
 import { ChevronRightIcon } from "../ui/Glyphs";
@@ -64,9 +65,14 @@ const CHIP = "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px
 /**
  * 写操作意图 —— 组件只报意图, 真正的 mutation 由页面层持有。
  * ⚠️ B5 只接「改状态」和「删除」两项 (归档 = B7); **B6 起补上「改 DDL」和「编辑」**
- *    (两个表单动作)。「归档」仍然**不报** (= B7, PC 还没有归档查看·恢复入口)。
+ *    (两个表单动作)。**B7 起补上「归档」** (走归档端点, 可恢复 —— 不是 DELETE 硬删)。
  */
-export type NodeAction = "set_status" | "change_ddl" | "edit" | "delete";
+export type NodeAction =
+  | "set_status"
+  | "change_ddl"
+  | "edit"
+  | "archive"
+  | "delete";
 
 export interface NodeActionTarget {
   kind: ScheduleNodeKind;
@@ -241,6 +247,14 @@ export function ScheduleTaskCard({
                 nextStatus: s,
               })
             }
+            onArchive={() =>
+              emit("archive", {
+                kind: "task",
+                id: task.id,
+                title: task.title,
+                status: task.status,
+              })
+            }
             onChangeDdl={() =>
               emit("change_ddl", {
                 kind: "task",
@@ -394,6 +408,14 @@ function SubtaskNode({
                 nextStatus: s,
               })
             }
+            onArchive={() =>
+              onNodeAction("archive", {
+                kind: "subtask",
+                id: subtask.id,
+                title: subtask.title,
+                status: subtask.status,
+              })
+            }
             onChangeDdl={() =>
               onNodeAction("change_ddl", {
                 kind: "subtask",
@@ -510,6 +532,14 @@ function MilestoneNode({
                 nextStatus: s,
               })
             }
+            onArchive={() =>
+              onNodeAction("archive", {
+                kind: "milestone",
+                id: milestone.id,
+                title: milestone.title,
+                status,
+              })
+            }
             onChangeDdl={() =>
               onNodeAction("change_ddl", {
                 kind: "milestone",
@@ -612,6 +642,14 @@ function ScheduleLeaf({
                   title: schedule.title,
                   status,
                   nextStatus: s,
+                })
+              }
+              onArchive={() =>
+                onNodeAction("archive", {
+                  kind: "schedule",
+                  id: schedule.id,
+                  title: schedule.title,
+                  status,
                 })
               }
               onChangeDdl={() =>

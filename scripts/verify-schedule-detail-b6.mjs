@@ -774,24 +774,56 @@ assert(
 );
 
 // ---------------------------------------------------------------------------
-// H. 归档 = B7
+// H. 归档动作
 // ---------------------------------------------------------------------------
+// ⚠️ **口径在 2026-10-27 B7 落地后翻转过** ——
+//    B6 阶段的临时口径是「本批一律**不传** onArchive」（归档是 B7 的活），
+//    B7 落地后正确口径是「真正有归档入口的调用方**必须传**」。
+//    PM 2026-10-27 跑全套断言时发现这 3 条失配 ⇒ 按新口径改写，不是实现回退。
 log("");
-log("══ H. 归档 = B7 (本批一律不传 onArchive) ══");
+log("══ H. 归档动作 (B7 已落地 ⇒ 有入口的必须接上) ══");
 
-const MENU_CALLERS = [
+// 真正有归档入口的调用方 —— 必须传 onArchive
+const MUST_ARCHIVE = [
   "src/components/schedule/detail/ScheduleDetailPage.tsx",
   "src/components/schedule/ScheduleTaskCard.tsx",
-  "src/routes/ScheduleBoard.tsx",
   "src/routes/ScheduleToday.tsx",
+];
+for (const rel of MUST_ARCHIVE) {
+  const s = src(rel);
+  assert(
+    /onArchive\s*=/.test(s) || /onArchive\s*:\s*/.test(s),
+    `${rel} 接上了 onArchive`,
+    s.match(/onArchive[^,)\n]*/)?.[0] ?? "(没找到)",
+  );
+}
+
+// 看板页走 **emit 通道**（`case "archive"` → handleNodeAction），不直接传 onArchive prop
+{
+  const s = src("src/routes/ScheduleBoard.tsx");
+  assert(
+    /case\s+["']archive["']/.test(s),
+    "src/routes/ScheduleBoard.tsx 处理了 archive 动作 (case \"archive\")",
+  );
+  assert(
+    /archiveMutation/.test(s),
+    "src/routes/ScheduleBoard.tsx 有 archiveMutation",
+  );
+}
+
+// 真的**没有**归档入口的 —— 必须不传
+//   日历页：web `schedule/calendar/page.tsx` 零 archive 命中 ⇒ PC 不加才是对齐
+//   看板容器 BoardView：归档由 ScheduleBoard 的 handleNodeAction 直接处理，
+//   组件层不直接渲染菜单 ⇒ 不需要 onArchive prop
+const MUST_NOT_ARCHIVE = [
   "src/routes/ScheduleCalendar.tsx",
   "src/components/schedule/BoardView.tsx",
 ];
-for (const rel of MENU_CALLERS) {
+for (const rel of MUST_NOT_ARCHIVE) {
   const s = src(rel);
   assert(
     !/onArchive\s*=/.test(s) && !/onArchive\s*:\s*/.test(s),
-    `${rel} 不传 onArchive`,
+    `${rel} 不接 onArchive（web 该页也没有归档入口）`,
     s.match(/onArchive[^,)\n]*/)?.[0] ?? "",
   );
 }

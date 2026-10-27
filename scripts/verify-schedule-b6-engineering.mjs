@@ -176,6 +176,30 @@ const gitStatus = (p) => {
     return null;
   }
 };
+/** 该路径**是否已被 git 跟踪**（已入库）—— 与 git status 无关。 */
+const gitTracked = (p) => {
+  try {
+    const out = execFileSync("git", ["ls-files", "--error-unmatch", "--", p], {
+      cwd: ROOT,
+      encoding: "utf8",
+    }).trim();
+    return out.length > 0;
+  } catch {
+    return false;
+  }
+};
+/** .gitignore 里是否有该路径的**豁免行** (`!scripts/xxx`) ⇒ 下次 git add 一定带它进仓。 */
+const gitignoreHasExemption = (p) => {
+  try {
+    const gi = readFileSync(join(ROOT, ".gitignore"), "utf8");
+    return gi
+      .split("\n")
+      .map((l) => l.trim())
+      .some((l) => l.startsWith("!") && l.slice(1).trim() === p);
+  } catch {
+    return false;
+  }
+};
 
 for (const f of FROZEN) {
   const st = gitStatus(f);
@@ -189,15 +213,26 @@ if (gitOk) {
   assert(FROZEN.length === 12, `冻结件清单 = 12 条 (brief §2.2)`);
 }
 
-// 断言脚本本身**不进仓** (scripts/* 被 .gitignore 忽略)
+// 断言脚本**必须进仓** (PM 2026-10-27 决定, 推翻 worker 原来的「不进仓」口径)
+//   理由同 B1 的 verify-schedule-endpoint-set: 回归断言不入库 ⇒ clone 下来形同虚设。
+//   做法: .gitignore 三级解锁 (scripts/ 放行 → scripts/* 重新忽略 → 逐个豁免),
+//   不用 `git add -f`。
 for (const f of [
   "scripts/verify-schedule-form-b6.mjs",
   "scripts/verify-schedule-detail-b6.mjs",
   "scripts/verify-schedule-b6-engineering.mjs",
+  "scripts/verify-schedule-b7-archived.mjs",
 ]) {
-  const st = gitStatus(f);
-  if (st === null) continue;
-  assert(st === "", `断言脚本不进仓 (gitignore): ${f}`, st);
+  // ⚠️ 判据用 **「已被 git 跟踪」或「已在 .gitignore 的豁免名单里」** ——
+  //    ① 不用 `git status`：脚本在**提交前**必然是未提交改动状态 ⇒ 会自己把自己判红；
+  //    ② 豁免行存在 ⇒ 下次 `git add` 一定会把它带进仓 ⇒ 「会入库」这件事也判得住。
+  if (!gitOk) continue;
+  const tracked = gitTracked(f);
+  const exempt = gitignoreHasExemption(f);
+  assert(
+    tracked || exempt,
+    `断言脚本会入库 (已被 git 跟踪 ${tracked ? "✓" : "✗"} / .gitignore 已豁免 ${exempt ? "✓" : "✗"}): ${f}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +454,12 @@ for (const f of ALL_B6_FILES) {
 log("");
 log("══ E. 表单 sheet 形态 ══");
 
-const sheetSrc = src("src/components/schedule/form/ScheduleFormSheet.tsx");
+// ⚠️ **查剥注释后的源码** —— `ScheduleFormSheet.tsx` 的文件头注释里就写着
+//    `max-w-[520px]` / `88dvh` / `rounded-t-2xl` / `shadow-dialog` 这几个字样,
+//    查全文会被注释「喂饱」⇒ 真正改错 className 也测不出来（假绿）。
+//    (PM 2026-10-27 变异反实在 B7 那支脚本上抓到同类漏洞, 这里同步修。)
+const sheetSrcAll = src("src/components/schedule/form/ScheduleFormSheet.tsx");
+const sheetSrc = stripComments(sheetSrcAll);
 assert(
   sheetSrc.includes("max-w-[520px]") &&
     sheetSrc.includes("max-h-[88dvh]") &&
