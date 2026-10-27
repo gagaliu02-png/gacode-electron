@@ -38,7 +38,21 @@
 //   这里用 `import type` 引进来 —— 编译期擦除, 不会给 lib 引入运行时依赖.
 import type { ExecutionPhase } from "../components/chat/ExecutionTimeline";
 
-const API_BASE = "https://www.gaga.sale/api/v1";
+/**
+ * 后端 API base —— 绝对地址。
+ *
+ * ⚠️ 2026-10-27 · 日程中心 B1 批: 加 `export` (只加关键字, **零行为变更**)。
+ *    原因: 日程域有**独立**的传输层 `src/lib/schedule-http.ts` (见该文件头
+ *    「为什么不复用 api.ts 的 request<T>()」三条理由) ⇒ 它需要同一个 base。
+ *    加 export 之前只能**逐字复制常量值**过去 ⇒ 换后端地址时漏改一处 →
+ *    日程域 404 而 chat / library / notifications 全部正常 (极难排查)。
+ *    加 export 后两端同源, 这个风险归零。
+ *
+ *    注: 本行不在 :312-313「端点跟 web 同步」那段冻结注释的约束范围内 ——
+ *    那段管的是**端点定义段**, 且 web 端的 API_BASE 本来就拆在
+ *    `src/lib/api-base.ts` 而不在 api.ts 里 ⇒ 两端 api.ts 早已不是逐字相同。
+ */
+export const API_BASE = "https://www.gaga.sale/api/v1";
 
 /**
  * Auth state accessor — 延迟解析, 让 lib/auth.tsx 注册 useAuth 后再被读.
@@ -52,9 +66,9 @@ type AccessTokenGetter = () => string | null;
 type RefreshTokenGetter = () => string | null;
 type AuthClearer = () => void;
 
-let getAccessToken: AccessTokenGetter = () => null;
+export let getAccessToken: AccessTokenGetter = () => null;
 let getRefreshToken: RefreshTokenGetter = () => null;
-let clearAuth: AuthClearer = () => {};
+export let clearAuth: AuthClearer = () => {};
 
 export function registerAuthAccessors(
   getter: AccessTokenGetter,
@@ -81,7 +95,7 @@ interface V2Response<T> {
 /** 并发去重的 refresh promise (跟 gacode-web api.ts 一致) */
 let refreshPromise: Promise<boolean> | null = null;
 
-async function tryRefresh(): Promise<boolean> {
+export async function tryRefresh(): Promise<boolean> {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
     try {

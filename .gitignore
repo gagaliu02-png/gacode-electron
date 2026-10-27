@@ -29,6 +29,13 @@ scripts/*
 !scripts/verify-md-parser.mjs
 !scripts/verify-md-render.mjs
 !scripts/verify-pagination-guard.mjs
+# 日程中心 B1 批 (2026-10-27): 端点集合断言 + 断言脚本共用加载器。
+#   同款三级解锁 —— 父目录 `scripts/lib/` 先放行, 再用 `scripts/lib/*` 重新忽略其内容,
+#   最后只豁免要入库的两个文件 (逐个列出, 不用通配, 不用 `git add -f`)。
+!scripts/verify-schedule-endpoint-set.mjs
+!scripts/lib/
+scripts/lib/*
+!scripts/lib/schedule-loader.mjs
 check-gacode.ps1
 
 # Intermediate icon-resize PNGs (only icon-source.png + icon-256.png + icon.ico committed)
