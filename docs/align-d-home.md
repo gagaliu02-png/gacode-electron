@@ -12,12 +12,18 @@
 - **判定**：`缺失`（web 有、PC 没有）· `形态不同`（两边都有但 className / 结构 / 行为不一致，**本轮未改**）· `部分落地`（**已改，但仍有残留差异**）· `已一致`（逐行核对无差异；标 `已一致（commit xxxxxxx）` 表示是哪一轮改到位的）· `已拍板 · PC 不还原`（gaga 已拍板不改）
 - **token 前提**：PC `tailwind.config.ts:1-23` 头部注释写明「一字不差同步 gacode-web tailwind.config.ts」，实测 PC 仓**同时**具备 `bg-background` / `text-primary` / `bg-primary` / `border-border` / `rounded-squircle` / `shadow-elevation-3` / `text-headline` / `text-title` / `text-body` / `text-brand` / `text-brand-on` / `bg-bg-sunken` / `bg-bg-elevated` / `text-fg-muted` / `text-fg-subtle`。**所以 web 的 className 串可以逐字抄进 PC**，不需要做 token 改名映射。
 - **PC 仓无 `tailwind-merge` / `clsx` / `cva`**：`cn()` 不存在，className 用 `[...].join(" ")` 数组拼接。冲突类名**不会自动去重**，后面的类名在 CSS 里靠源码顺序决胜，radius 之类必须显式写 `!rounded-full` 强制。
-- **PC Toast 已支持 `title` / `description` 双字段**（`src/components/ui/Toast.tsx:32-45`：`ToastItem` 有 `title?` / `description?`，`message` 保留为 `title` 的别名向后兼容；commit `5504f93` 落地）⇒ **S-04 已结案**；剩下要做的是把 HOME 页的**调用点**从单行 `message` 改成双字段（H-42 / H-69）。
-- **PC `BottomSheet` 已支持可选 prop**（`src/components/ui/BottomSheet.tsx:64-108`：`title?` / `subtitle?` / `contentClassName?` / `titleClassName?` / `header?` / `hideTitle?` / `maxHeight?`），默认行为不变、其它调用方零改动 ⇒ **S-05 已结案**。
+- **PC Toast 已支持 `title` / `description` 双字段**（`src/components/ui/Toast.tsx:32-45`：`ToastItem` 有 `title?` / `description?`，`message` 保留为 `title` 的别名向后兼容；commit `5504f93` 落地）⇒ **D-S04 已结案**；剩下要做的是把 HOME 页的**调用点**从单行 `message` 改成双字段（H-42 / H-69）。
+- **PC `BottomSheet` 已支持可选 prop**（`src/components/ui/BottomSheet.tsx:64-108`：`title?` / `subtitle?` / `contentClassName?` / `titleClassName?` / `header?` / `hideTitle?` / `maxHeight?`），默认行为不变、其它调用方零改动 ⇒ **D-S05 已结案**。
 - **PC 全局禁 CSS 动效**（`src/styles/globals.css:408-414`：`transition-property: none !important` + `animation: none !important`）⇒ web 的 `animate-spin` / `animate-pulse` 在 PC 上是**静态**的。这是 gagaOS 既定规范，**本轮不改**（见 §12「本轮不做」表）。
 - **本清单不列 PC 独有的功能**（按 gaga 指令：先 1:1 还原 web，PC 增强不在本清单讨论范围）。已知不计入差异的 PC 独有行为：Home 上的 `/` slash 菜单、拖拽文件上传、粘贴图片上传、ChatInputBar 内的 IME 组合保护（`isComposing`）。
 - **表格 / 折叠**：本次范围是 HOME 页，不含 markdown 表格与 `ExpandableCell`；gaga 的「折叠 = 折行 + 可横滑 + 宽度封顶」规则在本页无适用面，不涉及。
 - **`react-markdown` 版本坑**：本页无 markdown 渲染，不涉及 web `^9.0.1` / PC `^10.1.0` 的 components 回调签名差异。
+
+> **判定口径（2026-10-27 拍板 · 分层对齐 / 阶梯式收敛）**：三端**不是「立刻一模一样」**，而是分层收敛 —— 安卓 = 0（基线 · 优先上功能）· web = -1（强对齐安卓）· **PC = -2（弱对齐安卓，直接对标 web）** ⇒ **允许 web 落后安卓 1 代、PC 落后 2 代 ⇒ 看到差异 ≠ 立刻拉齐；差异是排期问题，记台账 + 排期即可，不要求当下拉平**（模型出处：markdown 契约 v1.2 §0.2「当前推进规则（三端进度不一致 ⇒ 分层推进）」）。
+> - 「**缺失**」（web 有 PC 没有）⇒ 措辞统一为 **「待补 · 排期补，不催」** —— 排进下一批即可，**不是紧急缺陷**。
+> - 「**PC 多出**」（PC 有 web 没有）⇒ 措辞统一为 **「PC 多出 · 可保留（-2 容差）」** —— 只有与**终态契约**冲突才收；**但「三端都无的 PC 自创」仍然该删**（安卓也没有 ⇒ 删掉才是往终态收敛）。判断依据按新模型 = **「安卓有没有」优先**。
+> - 「**形态不同**」= 两边都有但 className / 结构 / 行为不一致（功能等价也记形态不同，差在哪写清 + 给 web 原文出处）；「**已一致**」= 逐条核到当前代码后无差异。
+> - **已拍板保留、不许动**：ChatItem 的 `locale: zhCN`（web 缺 locale 会显示英文，属 web 缺陷）/ `aria-current`（无障碍属性）/ 对话条目的 `isActive` 高亮；PC 全局禁 CSS 动效（`src/styles/globals.css:408-414`）⇒ web 的 `animate-spin` 在 PC 上静态，**不记为差异**；不回退安卓 2026-10-21 修好的表格横滑 / 列宽 clamp 等行为。
 
 ## 统计（详见文末 §12）
 
@@ -25,14 +31,14 @@
 |---|---|
 | 已一致（已落地） | 62 |
 | 部分落地（已改 · 仍有残留差异） | 0 |
-| 形态不同（未改） | 3 |
-| 缺失（未做） | 3 |
+| 形态不同（未改 · 排期补，不催） | 3 |
+| 缺失 · 待补（排期补，不催） | 3 |
 | 已拍板 · PC 不还原 | 2 |
 | **合计** | **70** |
 
 > 「部分落地」桶**本轮清空**（H-15 / H-16 / H-51 / H-54 全部收口）⇒ 该桶保留在表里但计数为 0，便于跟历史批次对照。
 
-另：§9 结构级差异 7 条 —— **4 条已落地结案**（S-03 / S-04 / S-05 / S-07）· **1 条按既有决策不改**（S-06）· **2 条仍待 gaga 拍**（S-01 未登录态 / S-02 附件 state 归属）。
+另：§9 结构级差异 7 条 —— **4 条已落地结案**（D-S03 / D-S04 / D-S05 / D-S07）· **1 条按既有决策不改**（D-S06）· **2 条不再需要 gaga 拍**（D-S01 未登录态 / D-S02 附件 state 归属 —— 分层口径下归 PM 排期，见 §9）。
 「PC 侧栏常驻 vs web 抽屉」一项**已拍板保留**，不进 §9。
 另：**2 类不计入上表合计**的标注 —— 「本轮不做」2 条 · 「待 gaga 真机看」2 条（见 §12 末尾两张表）。
 
@@ -63,9 +69,9 @@
   />
   ```
   PC `src/routes/Home.tsx`（381 行）全文没有任何 `isAuthenticated` 分支判断。
-- **判定**：**缺失**（仍待 gaga 拍 · 见 §9 S-01）
-- **怎么改**：**本轮未动**。仍见 §9「S-01」—— 这不是单文件改动，要拆 ProtectedRoute 语义（改 `App.tsx` 路由守卫 + `Home.tsx` 加分支 + 匿名 AlertDialog），属信息架构级决策，**需 gaga 拍板后单独排工**。
-- 预估改动：**>200 行（跨 4 文件，待拍板）**
+- **判定**：**缺失 · 待补（排期补，不催）**（见 §9 D-S01）
+- **怎么改**：**本轮未动**。见 §9「D-S01」—— 这不是单文件改动，要拆 ProtectedRoute 语义（改 `App.tsx` 路由守卫 + `Home.tsx` 加分支 + 匿名 AlertDialog），属信息架构级；**不再等 gaga 拍板**，按分层口径归 PM 排期（落法：不现在做，排到「PC 追上 web」那一代）。
+- 预估改动：**>200 行（跨 4 文件，排期补）**
 
 ## H-03　顶部 ☰ 菜单按钮 + Drawer —— ✅ 已拍板 · PC 不还原
 
@@ -213,7 +219,7 @@
   - `placeholder?: string`（`src/components/chat/ChatInputBar.tsx:159`）✅ Home 传 `"说点什么…"`
   - `disabled?: boolean`（`:166`）✅ Home 传 `createMutation.isPending`
   - `caption?: string`（`:164`，默认 `"AI 生成内容请核实重要信息"`）✅ web Home 不传 caption，用默认值即可
-  - 受控（web `value`/`onChange`）↔ 非受控（PC 内部自持 state + `onSubmit(text, attachments)`）的 API 形态差异，按 **S-06 选项 A** **保持不改**。
+  - 受控（web `value`/`onChange`）↔ 非受控（PC 内部自持 state + `onSubmit(text, attachments)`）的 API 形态差异，按 **D-S06 选项 A** **保持不改**。
 - 预估改动：**0 行**
 
 ---
@@ -236,9 +242,9 @@
 - **判定**：**形态不同**（**1 处残留：位置**；间距已对齐）
 - **怎么改**：**本轮未动**。已对齐的部分：间距 `gap-1.5`（6px）→ `gap-2`（8px）✅（`ChatInputBar.tsx:618`）。
   - **剩下的只有「附件区归属」**：web 把附件预览放在 ChatInputBar **外面**（`page.tsx:306`，是 Home 页自己的 JSX），PC 放在 ChatInputBar **里面**（`ChatInputBar.tsx:616`）⇒ Home 拿不到 `attachments` state，无法自己控制附件区样式。
-  - 改法见 §9 **S-02**（附件 state 归谁 —— 待 gaga 拍板 + 与 chat 域协调，**本轮未动**）。
+  - 改法见 §9 **D-S02**（附件 state 归谁 —— **不再等 gaga 拍板**，按分层口径归 PM 排期；落法 = 选 A：ChatInputBar 加 `onAttachmentsChange` 上报回调，Home 只读，~18 行，排进下一批；本轮未动）。
   - 两条备选：① ChatInputBar 加 `onAttachmentsChange?: (items: AttachmentItem[]) => void` 上报回调，Home 只读（改动小、不破坏 ChatDetail）；② attachments state 上移到 Home、ChatInputBar 改受控（彻底对齐 web，但 ChatInputBar 大改）。
-- 预估改动：**~18 行（跨 chat 域，见 S-02）**
+- 预估改动：**~18 行（跨 chat 域，见 D-S02）**
 
 ## H-12　上传中进度条
 
@@ -255,7 +261,7 @@
   轨道（`progress.tsx:55`）：`"flex-1 h-1.5 bg-bg-sunken rounded-full overflow-hidden"`
   填充（`progress.tsx:57`）：`"h-full bg-primary transition-all duration-150 ease-standard"`
   百分比（`progress.tsx:61`）：`"text-xs tabular-nums text-fg-muted shrink-0"`
-- **PC**：`gacode-electron/src/components/chat/UploadProgressBar.tsx:34-55`
+- **PC**：`gacode-electron/src/components/chat/UploadProgressBar.tsx:36-70`
   ```tsx
   className={[
     "flex items-center gap-2 px-3 py-2 rounded-full bg-bg-elevated",
@@ -266,14 +272,15 @@
   ```
 - **判定**：**形态不同**（**本轮未动** · 仍待做）
 - **怎么改**：目标文件 `gacode-electron/src/components/chat/UploadProgressBar.tsx`：
-  - `:36` `bg-bg-elevated` → `bg-bg-base`，并追加 `shadow-sm`
+  - `:38` `bg-bg-elevated` → `bg-bg-base`，并追加 `shadow-sm`
     - ⚠️ **冲突类名**：PC 数组拼接没有 tailwind-merge，`bg-bg-elevated` 与 `bg-bg-base` 同属性 ⇒ **必须替换不能追加**
-  - `:50` `bg-brand transition-[width] duration-150` → `bg-primary transition-all duration-150 ease-standard`
+  - `:52` `bg-brand transition-[width] duration-150` → `bg-primary transition-all duration-150 ease-standard`
     - `bg-brand` → `bg-primary`（同值 #FF6B35，写法对齐 web）
     - `transition-[width]` → `transition-all`（同属性 ⇒ 替换）；`ease-standard` 在 PC `tailwind.config.ts:210` 有同名 token
-  - 轨道（`:48`）与百分比（`:54`）**已与 web 逐字一致**，不用动。
+  - 轨道（`:50`）与百分比（`:56-58`）**已与 web 逐字一致**，不用动。
   - ✅ 视觉无风险：PC 输入条外层卡片已恢复 web 的 `bg-bg-elevated`（`ChatInputBar.tsx:664`，H-19 已落地）⇒ 进度条回 `bg-bg-base` 后在卡片上仍可见。
 - **⚠️ D 批次（2026-10-26）跳过**：目标文件 `src/components/chat/UploadProgressBar.tsx` **不在本批文件所有权白名单内**（本批只准改 `Home.tsx` / `ChatInputBar.tsx` / `ChatDetail.tsx` / `home/LibraryPicker.tsx` / 本文件），且本条在台账里归属 **chat 域** ⇒ **未动手**，留给 chat 域 worker 收口。
+- ℹ️ **2026-10-27 回写**：该文件本轮被 `a7fc845` 触及（X 取消钮的内联 svg 收编进共享 `CloseIcon`，14px / 形状不变）⇒ **本条的 2 处差异（底色 / 填充过渡）仍未收口，判定不变**。
 - 预估改动：**2 行**
 
 ## H-13　上传完成附件 chip
@@ -296,7 +303,7 @@
   缩略图 img（`:68`）：`"w-8 h-8 rounded object-cover shrink-0"`
 - **判定**：**已一致**（**已落地** · commit `5504f93`）
 - **怎么改**：**不改**。底色已从 PC 自选的 `bg-bg-elevated` 改回 web 的 `bg-bg-base` + `shadow-sm`（**必须与 H-19 同批**，否则 chip 在纯黑底上消失 —— H-19 已随 `5504f93` 落地，两条现在是一致的）。
-  - ℹ️ 工作树里还有一处**未提交**的 chat 域在途改动：删掉 PC 多出的「非 image 也渲染 FileText 方块」分支（web `AttachmentChip.tsx:60-72` 只有两个分支）。本条只登记状态，不动该文件。
+  - ✅ 旧稿登记的「chat 域在途改动」**已落地**（commit `f57f2ec`，2026-10-27）：PC 多出的「非 image 也渲染 FileText 方块」分支**已删**（`src/components/chat/AttachmentChip.tsx:70-81` 现在只有 web 的两个分支）⇒ 本条**两端同形**，无残留。
 - 预估改动：**0 行**
 
 ## H-14　上传失败错误 chip
@@ -330,7 +337,7 @@
   </Card>
   ```
 - **判定**：**已一致**（**已落地** · commit `6dc3c3d`）⚠️ **观感待 gaga 真机看**
-- **怎么改**：**不改**。已落地：改用 PC `ui/Card`（`src/components/ui/Card.tsx`，已与 web `card.tsx` 1:1）+ `border-red-200 bg-red-50/60`；图标 `text-red-600`、文案 `text-red-700`；按钮改 `<Button variant="ghost" size="sm">`（PC `src/components/ui/Button.tsx` 已与 web `button.tsx` 1:1）；私有 `AlertTriangleIcon` 删除，改用共享 `src/components/ui/Glyphs.tsx:587` 的 `AlertTriangleIcon`。
+- **怎么改**：**不改**。已落地：改用 PC `ui/Card`（`src/components/ui/Card.tsx`，已与 web `card.tsx` 1:1）+ `border-red-200 bg-red-50/60`；图标 `text-red-600`、文案 `text-red-700`；按钮改 `<Button variant="ghost" size="sm">`（PC `src/components/ui/Button.tsx` 已与 web `button.tsx` 1:1）；私有 `AlertTriangleIcon` 删除，改用共享 `src/components/ui/Glyphs.tsx:590` 的 `AlertTriangleIcon`。
   - ⚠️ **两处 PC 特有写法（必需，不是差异）**：`!p-3`（PC 无 tailwind-merge，`CardContent` base 的 `p-6` 在 CSS 产物里排在 `.p-3` 之后，不加 `!` 压不住）；`border-red-200 bg-red-50/60` **不需要** `!`（`bg-card` 排在默认调色板之前，天然赢）。
   - ⚠️ **待 gaga 真机看**：web 用的是**亮色**系错误 chip（亮红底 + 深红字），PC 是纯黑底 ⇒ 亮红 chip 打在黑底上的观感**未在真机验证**（详见 §12「待 gaga 真机看」表）。
 - 预估改动：**0 行**
@@ -359,7 +366,7 @@
     return;
   }
   ```
-- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit `0424bfe` · D 批次）
 - **怎么改**：已落地（commit `5504f93`）：上传中点发送**不再静默丢附件**（F-02 的行为 bug 已消），改为提示 + `return`，附件保留。
   - **残留已消**（D 批次）：toast 变体从 `danger` 改成 web 的 `default`，且改成 **title + description 两段式**。
     - `src/components/chat/ChatInputBar.tsx:485-492`：
@@ -407,7 +414,7 @@
     );
   }
   ```
-- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit `0424bfe` · D 批次）
 - **怎么改**：已落地（commit `5504f93`）：`ChatInputBar` 的 `onSubmitNotice` prop + warning 文案；失败项不带走（只传 `kind === "done"` 的附件）。
   - **残留已消**（D 批次）：**Home 侧接线 + 两段式**。
     - `src/routes/Home.tsx:239-248`：
@@ -621,9 +628,9 @@
   };
   ```
 - **PC**：`gacode-electron/src/routes/Home.tsx:345`　`onPlusClick={() => setPlusOpen(true)}` —— 无未登录判断（PC 未登录进不来 Home，见 H-02）
-- **判定**：**缺失**（依附于 H-02 的结构级差异）
-- **怎么改**：随 S-01 一起处理。若 S-01 拍板「PC 不做未登录态」，本条**直接作废**（PC 无未登录用户）。**本轮未动**。
-- 预估改动：**0 行（随 S-01）**
+- **判定**：**缺失 · 待补（排期补，不催）**（依附于 H-02 的结构级差异）
+- **怎么改**：随 D-S01 一起处理。若按 D-S01 的落法「PC 不做未登录态」，本条**直接作废**（PC 无未登录用户）。**本轮未动**（归 PM 排期，不等 gaga 拍板）。
+- 预估改动：**0 行（随 D-S01）**
 
 ---
 
@@ -694,14 +701,14 @@
 - **PC**：`gacode-electron/src/components/home/PlusSheet.tsx:80` / `:84` / `:89` / `:95` —— 4 个图标已改走共享 `src/components/ui/Glyphs.tsx`：
   | 图标 | PC 组件 | 线宽 | 与 web（lucide sw2） |
   |---|---|---|---|
-  | 图片 | `ImageIcon`（`Glyphs.tsx:963`） | sw2 | ✅ |
-  | 文件 | `FileTextIcon`（`Glyphs.tsx:939`） | sw2 | ✅ |
-  | 表情 | `SmileIcon`（`Glyphs.tsx:796`） | sw2 | ✅ |
-  | 挂载知识库 | `LibraryTypeIcon`（`Glyphs.tsx:768`） | sw2（调用点显式传 `strokeWidth={2}`） | ✅ |
-- **判定**：**已一致**（**已落地** · commit `5504f93` 收编共享 Glyphs + `6dc3c3d` 换图标 + 工作树在途改动补 `strokeWidth={2}`）
+  | 图片 | `ImageIcon`（`Glyphs.tsx:966`） | sw2 | ✅ |
+  | 文件 | `FileTextIcon`（`Glyphs.tsx:942`） | sw2 | ✅ |
+  | 表情 | `SmileIcon`（`Glyphs.tsx:799`） | sw2 | ✅ |
+  | 挂载知识库 | `LibraryTypeIcon`（`Glyphs.tsx:771`） | sw2（调用点显式传 `strokeWidth={2}`） | ✅ |
+- **判定**：**已一致**（**已落地** · commit `5504f93` 收编共享 Glyphs + `6dc3c3d` 换图标 + `f57f2ec` 提交前补 `strokeWidth={2}`）
 - **怎么改**：**不改**。已落地：PC 的内联 SVG 全部删掉，改走共享 `src/components/ui/Glyphs.tsx`；线宽从 1.8 提到 2，形状与 lucide 一致；4 个图标的线宽现已全部与 web（lucide sw2）一致。
   - ℹ️ 「挂载知识库」图标的 `strokeWidth={2}` 是**在调用点显式传**的（`src/components/home/PlusSheet.tsx:95`），**没有**改 `LibraryTypeIcon` 的默认值（1.6）—— 它还被 `src/components/home/LibraryPicker.tsx:324` 用着（那里跟 web 的 1.6 观感一致）。
-  - ⚠️ 该调用点的改动**当前是工作树未提交状态**（其它 worker 在途）⇒ 提交前请确认它被带上，否则本条会退回「知识库图标 sw1.6」。
+  - ✅ 该调用点的改动**已提交**（commit `f57f2ec`，2026-10-27）⇒ 本条不再是「在途」状态，不会退回「知识库图标 sw1.6」。
 - 预估改动：**0 行**
 
 ## H-29　Sheet 容器形态
@@ -785,7 +792,7 @@
 ## H-31　Sheet 「挂载知识库」图标形状
 
 - **web**：`gacode-web/src/components/chat/SheetActionMenu.tsx:92`　`<Library className="w-6 h-6" />` = lucide `Library`（书脊造型）
-- **PC**：`gacode-electron/src/components/ui/Glyphs.tsx:768-788`　`LibraryTypeIcon`
+- **PC**：`gacode-electron/src/components/ui/Glyphs.tsx:771-791`　`LibraryTypeIcon`
   ```tsx
   <path d="m16 6 4 14" />
   <path d="M12 6v14" />
@@ -875,7 +882,7 @@
 - **判定**：**已一致**（**已落地** · commit `6dc3c3d`）⚠️ **观感待 gaga 真机看**
 - **怎么改**：**不改**。已落地：黑底 + 白字 + 无圆角 + 无 padding + 无标题栏。
   - ⚠️ PC 无 tailwind-merge ⇒ 三处 `!` 前缀是**必需**的（`!bg-black` 压过底座 `bg-bg-elevated`；`!rounded-none` 压过 `rounded-t-2xl`；`!p-0` 压过底座 `p-6`）。`border-t-0` 无需处理（PC 底座本来就没有 border）。
-  - ℹ️ **S-07 已结案**：PC 的 `BottomSheet` 底座在 `5504f93` 已改成 web 的底部抽屉形态（**全宽**、无 `max-w-*`）⇒ 原「黑底全宽 vs 灰底限宽」的桌面端冲突**已不存在**。
+  - ℹ️ **D-S07 已结案**：PC 的 `BottomSheet` 底座在 `5504f93` 已改成 web 的底部抽屉形态（**全宽**、无 `max-w-*`）⇒ 原「黑底全宽 vs 灰底限宽」的桌面端冲突**已不存在**。
   - ⚠️ **待 gaga 真机看**：纯黑全宽弹层 + `bg-white/10` 半透明白按钮在 PC 桌面端的观感未在真机验证。
 - 预估改动：**0 行**
 
@@ -1045,12 +1052,12 @@
   ```tsx
   toast({ title: "上传失败", description: msg, variant: "danger" });
   ```
-- **判定**：~~形态不同~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **判定**：~~形态不同~~ → **已一致**（**已落地** · commit `0424bfe` · D 批次）
 - **怎么改**：目标文件 `gacode-electron/src/routes/Home.tsx`（**只剩这 1 处调用点**）：
   - `:292` `const msg = err instanceof Error ? err.message : String(err);` 保留
   - `:299` `toast({ message: msg, variant: "danger" })` → `toast({ title: "上传失败", description: msg, variant: "danger" })`
   - ⚠️ **`Home.tsx` 的注释说「Home 不再二次加『上传失败: 』前缀」** —— 改双字段后 `title` 就是「上传失败」、`description` 放原始 msg ⇒ **不会**出现「上传失败: 图片上传失败: ...」双前缀（原始 msg 直接进 description）。
-  - ℹ️ §9 的 **S-04（Toast 双字段）已结案**（`5504f93` 落地），本条剩下的只是调用点这 1 行。
+  - ℹ️ §9 的 **D-S04（Toast 双字段）已结案**（`5504f93` 落地），本条剩下的只是调用点这 1 行。
 - 预估改动：**0 行（D 批次已落地）**
 
 ---
@@ -1120,7 +1127,7 @@
     </div>
   ```
 - **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
-- **怎么改**：**不改**。Search 图标 / `pl-9` / `focus:ring-1 focus:ring-brand` / 去 `text-sm` 全部到位；图标改用共享 `src/components/ui/Glyphs.tsx:613` 的 `SearchFieldIcon`（lucide `search`，16px/sw2，自带 `absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted`）—— 与 H-58 共用同一个组件，**不重复实现**。
+- **怎么改**：**不改**。Search 图标 / `pl-9` / `focus:ring-1 focus:ring-brand` / 去 `text-sm` 全部到位；图标改用共享 `src/components/ui/Glyphs.tsx:616` 的 `SearchFieldIcon`（lucide `search`，16px/sw2，自带 `absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-muted`）—— 与 H-58 共用同一个组件，**不重复实现**。
 - 预估改动：**0 行**
 
 ## H-45　EmojiPicker 分类 tab 位置
@@ -1138,7 +1145,7 @@
 
 - **web**：`gacode-web/src/components/chat/EmojiPicker.tsx:175`　`<div className="flex-1 overflow-y-auto px-4 py-3">`（搜索框 + 分类 tab 在 `SheetContent` 的固定头部，不跟着滚）
 - **PC**：`gacode-electron/src/components/home/EmojiPicker.tsx:188`　`<div className="flex-1 overflow-y-auto px-4 py-3">`；搜索框 + 分类 tab 走 `BottomSheet` 的 `header` prop（`EmojiPicker.tsx:146-184` → `src/components/ui/BottomSheet.tsx:206` 的 `<div className="shrink-0">{header}</div>`，固定在滚动区 `:207` 之外）
-- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）—— 旧稿的「彻底版（走 S-05）」已完成
+- **判定**：**已一致**（**已落地** · commit `6dc3c3d`）—— 旧稿的「彻底版（走 D-S05）」已完成
 - **怎么改**：**不改**。PC 走 `BottomSheet` 的 `header` 通道 ⇒ 与 web 的「头部固定 + 网格独立滚动」结构一致，且没有双层滚动条（旧稿担心的 `BottomSheet.tsx:56` 外层滚动问题不存在了）。
 - 预估改动：**0 行**
 
@@ -1222,7 +1229,7 @@
   }
   ```
   + Home 侧：`gacode-electron/src/routes/Home.tsx:321-324`（`handleLibrarySelect`）+ `:411`（`<LibraryPicker onSelect={handleLibrarySelect} />`）+ `gacode-electron/src/components/chat/ChatInputBar.tsx:126`（`insertLibraryMarker` 声明）+ `:242-262`（实现，带分隔符）
-- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit `0424bfe` · D 批次）
 - **怎么改**：已落地（commit `5504f93`）：PC 的 LibraryPicker **组件**与 web 的组件 1:1（`onConfirm` 多选 + `pendingSelected` / `pendingItems` / `toggleItem` / `handleConfirm` / checkbox / 完成按钮 / 打开时清累积）；Home 侧注入 `@[library:id] title` marker 走 `insertLibraryMarker`（**带分隔符**，与 web `page.tsx:402-407` 同款，不是裸 `insertText`）。
   - **残留已消**（D 批次 · gaga 2026-10-26 21:35 口径「PC 有 web 没有的必须删」）：
     - `src/routes/Home.tsx:321-324`　`handleLibraryConfirm`（多选 ⇒ 合并 marker）**换成** `handleLibrarySelect`（单选）：
@@ -1267,7 +1274,7 @@
     </div>
   ) : null}
   ```
-  （`CheckGlyph` = `src/components/ui/Glyphs.tsx:634`，lucide `check` 14px/sw3）
+  （`CheckGlyph` = `src/components/ui/Glyphs.tsx:637`，lucide `check` 14px/sw3）
 - **判定**：**已一致**（**已落地** · commit `5504f93`）
 - **怎么改**：**不改**。勾选框的尺寸 / 圆角 / 选中态 className 与 web 逐字一致；图标走共享 Glyphs。
 - 预估改动：**0 行**
@@ -1348,7 +1355,7 @@
     </div>
   ```
   （配套：`src/components/home/LibraryPicker.tsx:157` `hideTitle`（只留 `title` 作 aria-label，不画内置标题栏）+ `:164` `contentClassName="!p-0 !gap-0"`）
-- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **判定**：~~部分落地~~ → **已一致**（**已落地** · commit `0424bfe` · D 批次）
 - **怎么改**：已落地（commit `6dc3c3d`）：标题「挂载知识库」→ web 的「选择知识库」；副标题按模式二选一（多选 `可多选, 点完成提交` / 单选 `选中后将插入到消息`），与 web 逐字一致。
   - **残留 1 已消**（D 批次 · 副标题位置）：web 的副标题在**标题同一行右侧**（`flex items-center justify-between`）⇒ PC 改成**自绘**标题行（放进 `BottomSheet` 的 `header` 通道），不再用内置 `title` / `subtitle`（内置的副标题落在标题**下一行**，`BottomSheet.tsx:183-185`）。
     - `src/components/home/LibraryPicker.tsx:157` 加 `hideTitle`：`title` 只作 `aria-label`，内置标题栏不画 ⇒ 右上角关闭键走 web `components/ui/sheet.tsx:102-109` 的**绝对定位 X**（PC 原本是标题栏里的「×」按钮）。
@@ -1395,16 +1402,16 @@
   ```
 - **PC**：`gacode-electron/src/components/home/LibraryPicker.tsx:315-326`　`TypeIcon`
   ```tsx
-  case "image": return <ImageTypeIcon />;                                   // ui/Glyphs.tsx:677 → text-brand-cyan
-  case "doc":   return <DocTypeIcon />;                                     // ui/Glyphs.tsx:699 → text-brand
-  case "link":  return <LinkCronIcon />;                                    // ui/Glyphs.tsx:733 → text-cron（紫）
-  default:      return <LibraryTypeIcon className="w-5 h-5 text-fg-muted" />; // ui/Glyphs.tsx:768（书脊造型）
+  case "image": return <ImageTypeIcon />;                                   // ui/Glyphs.tsx:680 → text-brand-cyan
+  case "doc":   return <DocTypeIcon />;                                     // ui/Glyphs.tsx:702 → text-brand
+  case "link":  return <LinkCronIcon />;                                    // ui/Glyphs.tsx:736 → text-cron（紫）
+  default:      return <LibraryTypeIcon className="w-5 h-5 text-fg-muted" />; // ui/Glyphs.tsx:771（书脊造型）
   ```
   + token：`gacode-electron/tailwind.config.ts:79`　`cron: "#a78bfa"`（web 私有 `--color-cron`）
   + 容器：`LibraryPicker.tsx:258` 已删掉 `text-fg-muted`（web 的容器也不写文字色，靠图标自带）
 - **判定**：**已一致**（**已落地** · commit `6dc3c3d`）—— F-11 同步消
 - **怎么改**：**不改**。link 已是 web 的紫（`text-cron`，PC 补了 `cron` token）；default 已是 lucide `library` 书脊造型（path 真值见 H-31）。
-  - ⚠️ **两个 link 图标并存且必须分开**：`LinkCronIcon`（紫，**只给 LibraryPicker 用**）vs `LinkTypeIcon`（绿，`src/components/ui/Glyphs.tsx:827`）—— 后者被知识库列表页 / `src/routes/LibraryDetail.tsx` 用着（web 的 `app/(main)/library/page.tsx:124` 就是绿的），**两处不可混用**。
+  - ⚠️ **两个 link 图标并存且必须分开**：`LinkCronIcon`（紫，**只给 LibraryPicker 用**）vs `LinkTypeIcon`（绿，`src/components/ui/Glyphs.tsx:830`）—— 后者被知识库列表页 / `src/routes/LibraryDetail.tsx` 用着（web 的 `app/(main)/library/page.tsx:124` 就是绿的），**两处不可混用**。
   - 顺带：标签 chip 改用 web 的 `<Badge variant="secondary" className="!text-[10px]">`（`LibraryPicker.tsx:275`；PC `src/components/ui/Badge.tsx` 已与 web `badge.tsx` 1:1）。
 - 预估改动：**0 行**
 
@@ -1430,7 +1437,7 @@
     </div>
   </div>
   ```
-  （`LibraryIcon` = `src/components/ui/Glyphs.tsx:654`，**自带** `w-10 h-10 opacity-40` ⇒ 渲染结果与 web 逐字等价）
+  （`LibraryIcon` = `src/components/ui/Glyphs.tsx:657`，**自带** `w-10 h-10 opacity-40` ⇒ 渲染结果与 web 逐字等价）
 - **判定**：**已一致**（**已落地** · commit `6dc3c3d`）
 - **怎么改**：**不改**。
 - 预估改动：**0 行**
@@ -1689,7 +1696,7 @@
     });
   },
   ```
-- **判定**：~~形态不同~~ → **已一致**（**已落地** · commit 待 PM 填 · D 批次）
+- **判定**：~~形态不同~~ → **已一致**（**已落地** · commit `0424bfe` · D 批次）
 - **怎么改**：目标文件 `gacode-electron/src/routes/Home.tsx`（**1 处调用点**）：
   ```tsx
   onError: (err) => {
@@ -1700,7 +1707,7 @@
     });
   },
   ```
-  - ℹ️ §9 的 **S-04（Toast 双字段）已结案**（`5504f93` 落地），本条剩下的只是调用点。
+  - ℹ️ §9 的 **D-S04（Toast 双字段）已结案**（`5504f93` 落地），本条剩下的只是调用点。
   - ℹ️ PC 的 Toast 是「屏幕正中 + 遮罩」形态（与 web `components/common/Toast.tsx` 1:1），与 web 一致；**字段拆分 D 批次已跟上**。
   - ⚠️ 改双字段后不再出现「创建对话失败: xxx」的前缀式单行文案（`title` 就是「创建对话失败」，原始错误进 `description`）。
 - 预估改动：**0 行（D 批次已落地）**
@@ -1720,21 +1727,25 @@
   };
   ```
 - **PC**：`PC 缺失`（PC 未登录进不了 Home，见 H-02）—— `src/routes/Home.tsx:345`（`+` 无未登录判断）、`:337-353`（`<ChatInputBar>` 无未登录拦截）
-- **判定**：**缺失**（依附 H-02）
-- **怎么改**：随 S-01 一起处理。若 S-01 拍板「PC 不做未登录态」，本条**作废**。**本轮未动**。
-- 预估改动：**0 行（随 S-01）**
+- **判定**：**缺失 · 待补（排期补，不催）**（依附 H-02）
+- **怎么改**：随 D-S01 一起处理。若按 D-S01 的落法「PC 不做未登录态」，本条**作废**。**本轮未动**（归 PM 排期，不等 gaga 拍板）。
+- 预估改动：**0 行（随 D-S01）**
 
 ---
 
-# §9 结构级差异 · 7 条（4 条已结案 / 1 条按既有决策不改 / 2 条仍待 gaga 拍）
+# §9 结构级差异 · 7 条（4 条已结案 / 1 条按既有决策不改 / 2 条归 PM 排期，不再等 gaga 拍）
 
-> **本节状态一览**：S-03 ✅ 已落地（`6dc3c3d`）· S-04 ✅ 已落地（`5504f93`）· S-05 ✅ 已落地（`5504f93` + `6dc3c3d`）· S-07 ✅ 已落地（`5504f93`）· S-06 📌 按既有决策保持不改（选项 A）· S-01 ⏳ 仍待 gaga 拍 · S-02 ⏳ 仍待 gaga 拍。
+> **⚠️ 编号消歧（2026-10-27 10:40）**：本域用 **D-S01~D-S07**；chat 域用 **A-S01~A-S08**；个人中心/通知域用 **C-S1~C-S12** —— **三套编号互不相同**，跨域引用必须带域前缀。**状态 / 落法 / 排期代次**统一见 PM 侧状态表：`D:\gaga\gaclaw-project\docs\pm\2026-10-27-PC端结构级条目状态表-供PM排期.md`
+
+> **本节状态一览**：D-S03 ✅ 已落地（`6dc3c3d`）· D-S04 ✅ 已落地（`5504f93`）· D-S05 ✅ 已落地（`5504f93` + `6dc3c3d`）· D-S07 ✅ 已落地（`5504f93`）· D-S06 📌 按既有决策保持不改（选项 A）· **D-S01 📌 不再需要 gaga 拍**（不现在做，排到「PC 追上 web」那一代）· **D-S02 📌 不再需要 gaga 拍**（选 A，排进下一批）。
 >
 > **PC 侧栏常驻已拍板保留**（gaga 2026-10-26：「PC 的 256px 常驻侧栏保留，不改成 web 的 Drawer 抽屉」）。因此「侧栏常驻 vs web 抽屉」**不在本节**，对应条目 H-03 / H-04 已标「✅ 已拍板 · PC 不还原」。侧栏**内部**的置顶可折叠分组 / pin 按钮 / 条目视觉形态 / 圆角间距 hover 态 / 计数与折叠箭头对齐，属 ChatList 侧栏域，不在本 HOME 页清单范围。
 
-## S-01　未登录态整块缺失（Home 页形态分叉）
+## D-S01　未登录态整块缺失（Home 页形态分叉）
 
-**状态**：⏳ **仍待 gaga 拍**（本轮未动）
+**状态**：📌 **不再需要 gaga 拍板**（2026-10-27 分层对齐口径：PC = -2 弱对齐 ⇒ 进度差异类归 PM 排期，不是待拍项）—— **落法：D-S01 不现在做，排到「PC 追上 web」那一代**。
+
+> ⚠️ 下面的「需要 gaga 拍」段是 2026-10-26 的历史稿：**结论保留、状态已改** —— 选项 A（不做未登录态）仍是 PM 建议，但它是**排期决策**，不再挂在 gaga 拍板队列上。
 
 - **web**：`gacode-web/src/app/page.tsx:425-537` —— 未登录时 Home **不跳登录**，而是渲染：
   - 居中 Cody 头像 120px（`page.tsx:456-462`，`width={120} height={120}`）
@@ -1754,9 +1765,12 @@
   - **选项 B**：做，完整复刻 web 的居中布局 + AlertDialog（成本 ~180 行，且要处理匿名发送拦截）。
 - **PM 建议**：选 A。理由：web 的未登录态本质是「落地页营销位」，PC 端没有获客场景。
 
-## S-02　附件区的归属与 attachments state 所有权（跨 chat 域）
+## D-S02　附件区的归属与 attachments state 所有权（跨 chat 域）
 
-**状态**：⏳ **仍待 gaga 拍**（本轮未动；H-11 的附件区位置差异保持原样）
+**状态**：📌 **不再需要 gaga 拍板**（2026-10-27 分层对齐口径：PC = -2 弱对齐 ⇒ 进度差异类归 PM 排期，不是待拍项）—— **落法：选 A（ChatInputBar 加 `onAttachmentsChange` 上报回调，Home 只读，~18 行，排进下一批）**；H-11 的附件区位置差异随之在下一批收口。
+
+> ⚠️ 下面的「需要 gaga 拍」段是 2026-10-26 的历史稿：**结论保留、状态已改**。
+> ℹ️ **选 A 的依据是采信 PM 判断（总 PM 已知并接受），本台账未独立核过 A / B 两个选项。**
 
 - **现状**：
   - web `page.tsx:306-357`：附件预览区在 **Home 页自己的 JSX 里**（ChatInputBar **外面**），数据源是 `useAttachmentUpload()` hook（`web/src/hooks/useAttachmentUpload.ts`），状态由 Home 持有
@@ -1771,7 +1785,7 @@
   - **选项 B**：attachments state 上移到 Home，ChatInputBar 改受控（`attachments` + `onAttachmentsChange`）。彻底对齐 web，但 ChatInputBar 大改 → chat 域要重排。
 - **PM 建议**：选 A。**但需明确：ChatInputBar 的改动由 chat 域 worker 执行，本清单的 H-11 / H-16（Home 侧）两条是给 chat 域的输入规格，不是 Home worker 可单独完成的任务。**
 
-## S-03　`+` Sheet → MediaPicker 的层级（拍照入口位置）
+## D-S03　`+` Sheet → MediaPicker 的层级（拍照入口位置）
 
 **状态**：✅ **已落地**（commit `6dc3c3d`）—— 本条已结案，不再需要 gaga 拍
 
@@ -1786,7 +1800,7 @@
 - **落地结论**：选项 A（拍照下沉到 MediaPicker）已实施。对应条目 H-26 / H-32 / H-40 均已落地。
 - ⚠️ **连带影响**：PC 用户点「拍照」从 2 跳变 3 跳（Sheet → MediaPicker → 拍照钮），这是 1:1 还原 web 的代价，已接受。
 
-## S-04　PC Toast 组件无 title / description 双字段
+## D-S04　PC Toast 组件无 title / description 双字段
 
 **状态**：✅ **已落地**（commit `5504f93`）—— 本条已结案，不再需要 gaga 拍
 
@@ -1808,7 +1822,7 @@
 - **落地结论**：选项 A（给 PC Toast 加 `title` / `description`）已实施，且**向后兼容**（`message` 保留为 `title` 的别名，全站旧调用点零改动）。
 - ⚠️ **剩下的只是 HOME 页的调用点**：H-42（上传失败）、H-69（创建对话失败）这 2 处仍是单行 `message` ⇒ 各自 1 行可改。
 
-## S-05　BottomSheet 公共组件形态与 web SheetContent 的差距
+## D-S05　BottomSheet 公共组件形态与 web SheetContent 的差距
 
 **状态**：✅ **已落地**（commit `5504f93` 底座形态 + `6dc3c3d` 补 prop）—— 本条已结案，不再需要 gaga 拍
 
@@ -1825,7 +1839,7 @@
   + 底座本身也已改成 web 的底部抽屉形态（`BottomSheet.tsx:168`：`w-full inset-x-0 bottom-0 rounded-t-2xl bg-bg-elevated text-fg shadow-elevation-3 flex flex-col p-6`），全部默认行为不变、其它调用方零改动。
 - **落地结论**：选项 A（给 `BottomSheet` 加可选 prop）已实施，**没有为 HOME 页另写一套面板组件**（符合 gaga 2026-10-22「组件意识」要求）。
 
-## S-06　ChatInputBar 的受控 / 非受控 API 形态
+## D-S06　ChatInputBar 的受控 / 非受控 API 形态
 
 **状态**：📌 **按既有决策保持不改**（选项 A）—— 本条不再需要 gaga 拍
 
@@ -1835,7 +1849,7 @@
 - **决策**：**选 A —— 不改 API 形态**。web 的受控形态是 web 侧「Home 和 ChatDetail 共用一个组件」的设计产物；PC 的命令式形态是 PC 侧「ChatInputBar 自治 + parent 通过 ref 指挥」的设计产物。**功能上已覆盖**（H-10 已登记对照）。
 - **本清单的边界**：H-10 / H-19 / H-20 / H-21 / H-22 / H-23 / H-24 全部以「补可选 props + 改 className」为边界，**不动 ChatInputBar 的状态模型**。
 
-## S-07　MediaPicker 的桌面端形态冲突（黑底全宽 vs 灰底限宽）
+## D-S07　MediaPicker 的桌面端形态冲突（黑底全宽 vs 灰底限宽）
 
 **状态**：✅ **已落地**（commit `5504f93`）—— 本条已结案，不再需要 gaga 拍
 
@@ -1899,12 +1913,12 @@
 
 - **web `MediaPicker.tsx:217-239`**：image 模式并排「拍照（w-24 h-24 rounded-full）」+「相册（w-24 h-24 rounded-full）」两个圆形按钮
 - **PC `MediaPicker.tsx:71-91`**：**单个**按钮 `w-40 h-24 rounded-md`，文案随入口变（「打开拍照」/「打开选择图片」）
-- **后果**：PC 的 MediaPicker 在 image 模式下**看不到「拍照」和「相册」并排的入口**，拍照被提升到 PlusSheet 顶层（与 web 的层级相反，见 S-03）
+- **后果**：PC 的 MediaPicker 在 image 模式下**看不到「拍照」和「相册」并排的入口**，拍照被提升到 PlusSheet 顶层（与 web 的层级相反，见 D-S03）
 - **修法**：见 H-32（MediaPicker 改双按钮 + 双 hidden input，~40 行）
 
 ### F-06　PC 知识库挂载是**单选立即关闭**，web 是**多选 + 完成按钮**
 
-- **状态**：✅ **已修**（D 批次 · commit 待 PM 填）→ H-51：Home 侧 PC 已改成 web Home 的**单选**（`onSelect`）；多选能力保留在 chat 页（`KnowledgeAttachSheet` 传 `onConfirm`），与 web 的 chat 页同构
+- **状态**：✅ **已修**（D 批次 · commit `0424bfe`）→ H-51：Home 侧 PC 已改成 web Home 的**单选**（`onSelect`）；多选能力保留在 chat 页（`KnowledgeAttachSheet` 传 `onConfirm`），与 web 的 chat 页同构
 
 - **web `LibraryPicker.tsx:121-149`**：`onConfirm` 存在时点行只切换勾选，**不关面板**；底部「完成 (N)」按钮才提交
 - **PC `LibraryPicker.tsx:144-150`**：点行立即 `onSelect(item); handleClose();` —— **单选、立即关闭**
@@ -1914,12 +1928,12 @@
 
 ### F-07　PC 的附件区**在 ChatInputBar 内部**，Home 无法独立控制
 
-- **状态**：⏳ **未修** → H-11 / S-02（附件区仍在 `ChatInputBar` 内部）
+- **状态**：⏳ **未修** → H-11 / D-S02（附件区仍在 `ChatInputBar` 内部）
 
 - **web `page.tsx:306-357`**：附件区是 Home 页自己的 JSX，在 ChatInputBar **外面**，`px-4 pb-2` + `flex flex-wrap gap-2`
 - **PC `ChatInputBar.tsx:507-508`**：附件区在 ChatInputBar **里面**，`mb-2 flex flex-wrap gap-1.5`
 - **后果**：(a) Home 无法控制附件区位置/间距（只能改 ChatInputBar → 同时改到 ChatDetail）；(b) 附件区是**输入框内部**的，而 web 是**输入框外部上方**，视觉差一行
-- **修法**：见 H-11 + S-02（需与 chat 域协调，~18 行）
+- **修法**：见 H-11 + D-S02（需与 chat 域协调，~18 行）
 
 ### F-08　PC 欢迎语文案与 web **完全不同**
 
@@ -1981,8 +1995,8 @@
 
 | 序 | 条目 | 一句话 | 归属 |
 |---|---|---|---|
-| 2 | H-11 | 附件区上移 Home（ChatInputBar 暴露附件状态） | **chat 域** + 待 S-02 拍板 |
-| 3 | H-02 / H-25 / H-70 | 未登录态整块缺失（居中 Cody 120px + 居中输入框 + 右上「登录」按钮 + 3 处拦截） | **待 S-01 拍板** |
+| 2 | H-11 | 附件区上移 Home（ChatInputBar 暴露附件状态） | **chat 域** + 待 D-S02 拍板 |
+| 3 | H-02 / H-25 / H-70 | 未登录态整块缺失（居中 Cody 120px + 居中输入框 + 右上「登录」按钮 + 3 处拦截） | **待 D-S01 拍板** |
 | 4 | H-63 | firstMessage 改走 URL query（PC 现在走 sessionStorage） | **建议不改**（见 §12「本轮不做」） |
 
 ---
@@ -2002,8 +2016,8 @@
 - **C 批次 `6dc3c3d` 落地 —— 24 条**：H-06、H-14、H-18、H-23、H-24、H-26、H-29、H-31、H-32、H-33、H-34、H-35、H-36、H-38、H-40、H-43、H-44、H-45、H-46、H-56、H-57、H-58、H-62、H-65
 - **批 1 `5504f93` 落地 —— 17 条**：H-01、H-05、H-07、H-09、H-10、H-13、H-17、H-19、H-20、H-21、H-22、H-30、H-52、H-53、H-55、H-60、H-61
 - **本就一致（无需施工）—— 14 条**：H-08、H-27、H-37、H-39、H-41、H-47、H-48、H-49、H-50、H-59、H-64、H-66、H-67、H-68
-- **工作树在途补齐（未提交）—— 1 条**：H-28（`src/components/home/PlusSheet.tsx:95` 的 `LibraryTypeIcon` 加 `strokeWidth={2}`，其它 worker 在途改动，**提交前请确认它被带上**）
-- **D 批次落地（commit 待 PM 填）—— 6 条**：H-15、H-16、H-42、H-51、H-54、H-69
+- **已在途改动里补齐（现已提交）—— 1 条**：H-28（`src/components/home/PlusSheet.tsx:95` 的 `LibraryTypeIcon` 加 `strokeWidth={2}`，**已随 commit `f57f2ec` 提交**，2026-10-27 回写确认）
+- **D 批次落地（commit `0424bfe`）—— 6 条**：H-15、H-16、H-42、H-51、H-54、H-69（commit 已于 2026-10-27 回写时补上）
   - H-15 / H-16：`src/components/chat/ChatInputBar.tsx:155-159`（prop 改两段式）+ `:485-492`（上传中守卫）+ `:512-518`（部分失败提示）+ `src/routes/Home.tsx:239-248` / `:375`（Home 接线）+ `src/routes/ChatDetail.tsx:1307-1309`（chat 页不再接线）
   - H-42 / H-69：`src/routes/Home.tsx:299` / `:121`（两处 toast 改双字段）
   - H-51：`src/routes/Home.tsx:321-324` / `:411`（Home 改单选 `onSelect`）
@@ -2019,12 +2033,12 @@
 | H-54 | 副标题位置（web 同行右 / PC 下一行）+ 头部容器 padding | `LibraryPicker.tsx:172-178` 自绘标题行 + `:164` `!p-0` 让 `px-4 pt-5` 真正生效 |
 
 **形态不同 3 条的分布**：
-- 跨 chat 域 / 待拍板：H-11（附件区位置，见 S-02）
+- 跨 chat 域 / 待拍板：H-11（附件区位置，见 D-S02）
 - 纯 className：**H-12**（进度条 2 行 · 目标文件 `src/components/chat/UploadProgressBar.tsx` 属 **chat 域** · D 批次**跳过**）
 - 机制差异（建议不改）：H-63（firstMessage 通道）
 
 **缺失 3 条的分布**：
-- ⏳ 依附 S-01（未登录态，未拍板）：3 条（H-02 未登录分支、H-25 `+` 未登录拦截、H-70 三处未登录拦截）
+- ⏳ 依附 D-S01（未登录态，未拍板）：3 条（H-02 未登录分支、H-25 `+` 未登录拦截、H-70 三处未登录拦截）
 
 **「本轮不做」**（有既定决策依据，**不计入上表合计**）：
 
@@ -2041,10 +2055,10 @@
 | H-33 | MediaPicker 纯黑全宽弹层 + `bg-white/10` 半透明白按钮 | 桌面端观感未验证 |
 
 **跨域依赖提醒**：
-- 仍在 chat 域的待做条目：**H-11**（跨 chat 域，见 S-02）· **H-12**（`src/components/chat/UploadProgressBar.tsx` · D 批次跳过）
+- 仍在 chat 域的待做条目：**H-11**（跨 chat 域，见 D-S02）· **H-12**（`src/components/chat/UploadProgressBar.tsx` · D 批次跳过）
 - 仍在 `src/components/ui/BottomSheet.tsx` 的待做条目：**0 条** —— H-29 / H-43 / H-46 / H-53 / H-54 需要的 BottomSheet 能力已随 `5504f93` + `6dc3c3d` 全部落地（H-54 改用 BottomSheet 已有的 `hideTitle` + `header` + `contentClassName` 通道，**BottomSheet 本身 0 改动**）
 - Home 域可自行施工：**0 条**（D 批次后 Home 域的 5 条 H-15 / H-16 / H-42 / H-54 / H-69 全部落地）
-- 待 gaga 拍板：**H-02 / H-25 / H-70**（随 S-01）· **H-11**（随 S-02）
+- 待 gaga 拍板：**H-02 / H-25 / H-70**（随 D-S01）· **H-11**（随 D-S02）
 - 已由 gaga 2026-10-26 21:35 拍板（不再等拍板）：**PC↔web 差异是「待办」不是「待拍项」** —— web 有 PC 没有的**必须补**，PC 有 web 没有的**必须删**（H-51 即按此口径收口）
 
 ---
@@ -2053,7 +2067,7 @@
 
 ## 2026-10-26 · D 批次 · HOME 页剩余待办收口（gaga 21:35 口径）
 
-- **批次 commit**：待 PM 填 —— `feat(home): D · HOME 页剩余待办收口（两段式 toast / chat 页删 partial warning / LibraryPicker 单选 + 头部对齐 web）`
+- **批次 commit**：`0424bfe` — `feat(home): HOME 域剩余待办收口 + 附件失败提示回到 web 的归属`（原「待 PM 填」已于 2026-10-27 回写时补上）
 - **执行口径**（gaga 2026-10-26 21:35）：**PC↔web 差异是「待办」不是「待拍项」** —— web 有 PC 没有的**必须补**；PC 有 web 没有的**必须删**；不端给 gaga 勾选。
 - **文件所有权**（本批只准改这 5 个路径）：`src/routes/Home.tsx` · `src/components/chat/ChatInputBar.tsx` · `src/routes/ChatDetail.tsx` · `src/components/home/LibraryPicker.tsx` · `docs/align-d-home.md`。
 - **本批改动的条目（6 条）**：
@@ -2082,7 +2096,7 @@
   - §10 的「高价值发现」状态同步：F-06 由 🟡 部分修 → ✅ 已修；F-02 的「toast 变体残留」备注消掉 ⇒ 该节计数 9/1/1 → **10/0/1**。
 - **跳过的条目及原因**：
   - **H-12**（进度条底色 / 填充色 / 过渡属性）—— 目标文件 `src/components/chat/UploadProgressBar.tsx` **不在本批文件所有权白名单内**，且本条在台账里归属 **chat 域** ⇒ **未动手**，留给 chat 域 worker（2 行）。
-  - **H-11 / H-02 / H-25 / H-70 / S-01 / S-02** —— 信息架构级决策，等 gaga 拍板（本批不碰）。
+  - **H-11 / H-02 / H-25 / H-70 / D-S01 / D-S02** —— 信息架构级决策，等 gaga 拍板（本批不碰）。
   - **H-63** —— 台账写「建议不改」，本批不动。
   - **H-03 / H-04 / H-22 附属 / H-29 残留 / H-14 / H-33** —— 已有既定决策依据（详见 §12 两张不计入合计的表），本批不动。
 - **本批的连带影响（已知 · 已记录）**：
@@ -2110,15 +2124,15 @@
   | 已拍板 · PC 不还原 | （旧表并入「缺失」） | **2** |
   | 合计 | 70 | **70** |
 
-  - §9 的 7 条结构级差异：**4 条结案**（S-03 / S-04 / S-05 / S-07）· **1 条按既有决策不改**（S-06）· **2 条仍待 gaga 拍**（S-01 / S-02）。
+  - §9 的 7 条结构级差异：**4 条结案**（D-S03 / D-S04 / D-S05 / D-S07）· **1 条按既有决策不改**（D-S06）· **2 条仍待 gaga 拍**（D-S01 / D-S02）。
   - 另新增 2 张**不计入合计**的标注表：「本轮不做」2 条 · 「待 gaga 真机看」2 条。
 - **仍然待办的条目**（编号 + 一句话原因）：
-  - **H-02 / H-25 / H-70** —— 未登录态整块缺失，等 **S-01** 拍板（要改 `src/App.tsx` 的路由守卫，信息架构级）。
-  - **H-11** —— 附件区仍在 `ChatInputBar` 内部，等 **S-02** 拍板（附件 state 归谁），且必须与 chat 域同批。
+  - **H-02 / H-25 / H-70** —— 未登录态整块缺失，等 **D-S01** 拍板（要改 `src/App.tsx` 的路由守卫，信息架构级）。
+  - **H-11** —— 附件区仍在 `ChatInputBar` 内部，等 **D-S02** 拍板（附件 state 归谁），且必须与 chat 域同批。
   - **H-12** —— 进度条底色 / 填充色 / 过渡属性仍与 web 不同（2 行，chat 域文件）。
   - **H-15** —— 上传中拦截已落地，残留 toast 变体 `danger` vs web `default`（并到 H-16 一起改）。
   - **H-16** —— `onSubmitNotice` 组件层已落地，**Home 侧未接线** ⇒ HOME 页的「部分附件上传失败」warning 不弹（2 行）。
-  - **H-42 / H-69** —— PC Toast 已支持双字段（S-04 已结案），HOME 页这 2 处调用点仍是单行 `message`（各 1 行）。
+  - **H-42 / H-69** —— PC Toast 已支持双字段（D-S04 已结案），HOME 页这 2 处调用点仍是单行 `message`（各 1 行）。
   - **H-51（残留）** —— 组件层已 1:1，但 **PC Home 传 `onConfirm`（多选）、web Home 传 `onSelect`（单选）** ⇒ PC 首页多一个多选形态，**需 gaga 拍**（产品取舍）。
   - **H-54（残留）** —— 标题 / 副标题文案已对齐，剩副标题位置（web 同行右 / PC 下一行）+ 头部容器 padding（~6 行）。
   - **H-63** —— firstMessage 走 sessionStorage vs web 的 URL query，**建议不改**（两端机制各自自洽，见「本轮不做」）。
@@ -2127,4 +2141,38 @@
   2. **PC Home 的知识库挂载比 web 多一个「多选」形态** —— web `page.tsx:399-408` 传 `onSelect`（单选，点行即插即关），PC 传 `onConfirm`（多选，带勾选框 + 完成按钮）（= H-51 的真缺口）。
   3. **`.zip` / `.json` 的后端 mime 白名单未核** —— H-36 已把前端 accept 放宽到 web 实际生效的那串，但 `unified-api` 的 `/yinian/documents` 白名单本次不可读（= H-36 的服务端缺口）。
   4. **`src/components/chat/AttachmentChip.tsx` 有未提交的在途改动** —— chat 域正在删 PC 多出的「非 image 也渲染 FileText 方块」分支（web `AttachmentChip.tsx:60-72` 只有两个分支）；本文件只登记状态，未触碰该文件。
-  5. **`src/components/home/PlusSheet.tsx:95` 的 `strokeWidth={2}` 是工作树未提交改动** —— 其它 worker 在回写过程中补上了 H-28 的最后 1 处（知识库图标线宽 1.6 → 2），本文件已据此把 H-28 改判为「已一致」；**提交时请确认这处改动被带上**，否则 H-28 会退回「部分落地」。
+  5. ~~**`src/components/home/PlusSheet.tsx:95` 的 `strokeWidth={2}` 是工作树未提交改动**~~ → ✅ **2026-10-27 回写：已随 commit `f57f2ec` 提交**（2026-10-27）⇒ H-28 稳定在「已一致」，不会再退回「部分落地」。
+
+
+---
+
+# §14 本轮变更记录（2026-10-27 · 定向复核）
+
+## 14.1 本轮做了什么（只做定向复核，未逐条重判）
+
+- **触发原因**：PC 仓本会话又落了 8 个 commit（`f57f2ec` / `77a83fc` / `0424bfe` / `a7363a0` / `8cfcb64` / `a7fc845` / `7c22841` / `7f79add`），本台账的落法信息与部分行号已过期 ⇒ 按派工单**只复核受影响的条目**，其余条目一字未动。
+- **基线说明**：代码基线 = `7f79add`；此后 `ccbe0a6` / `064be1f` 两个 commit **只改 `docs/align-a-chat.md` / `docs/align-c-profile-notify.md`（A / C 域台账），`src/` 零改动** ⇒ **本文件 70 条判定全部仍然成立**。
+- **落法回填（6 条）**：H-15 / H-16 / H-42 / H-51 / H-54 / H-69 的「commit 待 PM 填」→ **`0424bfe`**（D 批次的真实 commit）；F-06 与 §13 的批次 commit 同步补上。
+- **行号刷新（受 `a7fc845` / `f57f2ec` 影响）**：共享 `src/components/ui/Glyphs.tsx` 的导出从 59 → **84** 个 ⇒ 本文件里所有 `Glyphs.tsx:NNN` 引用按当前文件刷新（`AlertTriangleIcon` 587→590 · `SearchFieldIcon` 613→616 · `CheckGlyph` 634→637 · `LibraryIcon` 654→657 · `ImageTypeIcon` 677→680 · `DocTypeIcon` 699→702 · `LinkCronIcon` 733→736 · `LibraryTypeIcon` 768→771 · `LinkTypeIcon` 827→830 · `ImageIcon` 963→966 · `FileTextIcon` 939→942 · `SmileIcon` 796→799）。
+- **在途 → 已落地（2 条）**：H-28（`PlusSheet.tsx:95` 的 `strokeWidth={2}`，**已随 `f57f2ec` 提交**）· H-13（`AttachmentChip.tsx` 的 PC 独有第三分支，**已随 `f57f2ec` 删除**，两端同形）。
+- **H-12 补充**：目标文件本轮被 `a7fc845` 触及（X 取消钮收编进共享 `CloseIcon`，形状不变）⇒ 本条 2 处差异（底色 / 填充过渡）**仍未收口，判定不变**；同时补了刷新后的 PC 行号。
+- **编号消歧（10:40 口径）**：`S-01~S-07` → **`D-S01~D-S07`**（标题 + 正文交叉引用 + 状态行全改），§9 开头加消歧声明；§12 / §13 的历史记录里的引用也一并带上前缀。
+- **D-S01 / D-S02 状态改写**：两条**不再需要 gaga 拍板**（分层对齐模型下 PC = -2 ⇒ 进度差异类归 PM 排期）—— D-S01 落法 = **不现在做，排到「PC 追上 web」那一代**；D-S02 落法 = **选 A**（ChatInputBar 加 `onAttachmentsChange` 上报回调，Home 只读，~18 行，排进下一批）。⚠️ D-S02 的 A / B **不是本台账独立核过的**，是采信 PM 判断（总 PM 已知并接受）。
+- **连带更新的 4 条**（状态随上游改，避免台账自相矛盾）：H-02 / H-25 / H-70（缺失 ⇒ **缺失 · 待补（排期补，不催）**，依附 D-S01）· H-11（交叉引用 D-S02 的落法）。
+- **8cfcb64 对本域的影响**：**无** —— 该 commit 删的 5 处 PC 自创 UI（审批 banner 提示行 / ↓跳到底浮动按钮 / 消息列表空态 / 侧栏导航项 active 高亮 / 侧栏对话条目行首气泡图标）全部属 **chat 域**，本台账 §9 已写明「侧栏内部属 ChatList 侧栏域，不在本 HOME 页清单范围」⇒ **D 域 70 条判定一条未动**。
+
+## 14.2 统计（条目总数恒 = 70，未增未删）
+
+| 判定 | 条数 | 本轮变化 |
+|---|---|---|
+| 已一致（已落地） | 62 | 不变（落法 commit 从「待 PM 填」补成 `0424bfe`，不改判定） |
+| 部分落地（已改 · 仍有残留差异） | 0 | 不变 |
+| 形态不同（未改 · 排期补，不催） | 3 | 不变（H-11 / H-12 / H-63） |
+| 缺失 · 待补（排期补，不催） | 3 | 不变（H-02 / H-25 / H-70，措辞按新口径改） |
+| 已拍板 · PC 不还原 | 2 | 不变（H-03 / H-04） |
+| **合计** | **70** | **不变** |
+
+## 14.3 新口径下本轮的改标
+
+- 「**该删 → 可保留**」：**0 条**（本域无「PC 多出 web 没有」且未删的条目；§9 的 D-S03 ~ D-S07 已是两端同构）。
+- 「**该补 → 排期补，不催**」：**3 条**（H-02 / H-25 / H-70 的缺失措辞统一为「待补 · 排期补，不催」）；另 H-11 / H-12 / H-63 三条形态不同同样归「排期补，不催」级。
