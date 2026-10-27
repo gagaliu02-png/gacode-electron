@@ -56,6 +56,11 @@ export const SCHEDULE_SRC = {
   api: "src/lib/api.ts",
   http: "src/lib/schedule-http.ts",
   scheduleApi: "src/lib/schedule-api.ts",
+  // [SSE 批04 2026-10-28] api.ts 新增了**运行时** import { normalizeRichEvent } from "./rich-events"
+  //   ⇒ 拷贝链必须带上它, 否则转译后的 api.mjs 指向一个不存在的模块 ⇒
+  //   ERR_MODULE_NOT_FOUND (verify-schedule-b7-archived / verify-schedule-detail-b6 直接炸在 import 处).
+  //   ⚠️ rich-events.ts **零 import** ⇒ 不用再往下带依赖.
+  richEvents: "src/lib/rich-events.ts",
   format: "src/components/schedule/format.ts",
   calendarUtils: "src/components/schedule/calendar-utils.ts",
   formRules: "src/components/schedule/form/scheduleFormRules.ts",
@@ -146,8 +151,14 @@ const readSrc = (rel) => readFileSync(srcFile(rel), "utf8");
  */
 export async function loadScheduleModules(dir) {
   writeModule(dir, "notifications", readSrc(SCHEDULE_SRC.notifications));
+  // [SSE 批04 2026-10-28] api.ts 的运行时依赖 —— 必须与 api.mjs 写在**同一个**临时目录,
+  //   否则 import "./rich-events" 解析不到 (ERR_MODULE_NOT_FOUND).
+  writeModule(dir, "rich-events", readSrc(SCHEDULE_SRC.richEvents));
   writeModule(dir, "api", readSrc(SCHEDULE_SRC.api), {
-    rewriteImports: [["./notifications", "./notifications.mjs"]],
+    rewriteImports: [
+      ["./notifications", "./notifications.mjs"],
+      ["./rich-events", "./rich-events.mjs"],
+    ],
   });
   const httpUrl = writeModule(dir, "schedule-http", readSrc(SCHEDULE_SRC.http), {
     rewriteImports: [["./api", "./api.mjs"]],
