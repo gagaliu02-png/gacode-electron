@@ -65,10 +65,14 @@ import {
 } from "./notifications";
 import { tryRefreshAccessToken } from "./auth-refresh";
 import { useToast } from "../components/ui/Toast";
+// ⚠️ 2026-10-28 · 契约 §14.5 P2 —— 退避 / watchdog 的「同一实现」在
+//   `lib/sse-reconnect.ts` (会话流 `lib/sse.ts` 也从那儿取) ⇒ 本文件不再
+//   自己写一遍 `Math.min(backoff * 2, ...)` / `Date.now() - lastEventAt`。
+import {
+  createSseBackoff,
+  createSseWatchdog,
+} from "./sse-reconnect";
 
-const BACKOFF_INITIAL_MS = 1000;
-const BACKOFF_MAX_MS = 30_000;
-const HEARTBEAT_TIMEOUT_MS = 60_000;
 /** 401 且换不到新 token → 等多久再连 (web notification-stream.ts:394)。 */
 const UNAUTHORIZED_RETRY_MS = 15_000;
 /** 拿不到 token → 等多久再看 (web notification-stream.ts:372)。 */
@@ -253,11 +257,29 @@ export function NotificationSSEBridge() {
     let cancelled = false;
     let controller: AbortController | null = null;
     let connected = false;
-    let watchdog: number | null = null;
     let retryTimer: number | null = null;
-    let backoff = BACKOFF_INITIAL_MS;
+    const backoff = createSseBackoff();
     /** C4-06 — 最近一次事件的 id, 重连时带 `Last-Event-ID` 让服务端补发。 */
     let lastEventId: string | null = null;
+
+    // ⚠️ P2 — watchdog 的判据与算术在 `lib/sse-reconnect.ts` (会话流共用同一份)。
+    const watchdog = createSseWatchdog({
+      lastEventAt: () => lastEventAtRef.current,
+      isActive: () => !cancelled && connected,
+      onTimeout: (idle) => {
+        console.warn(
+          `[gacode-sse] No event in ${Math.round(idle / 1000)}s, reconnecting`,
+        );
+        // abort 当前 fetch → catch 分支走退避重连
+        try {
+          controller?.abort();
+        } catch {
+          /* ignore */
+        }
+        controller = null;
+        connected = false;
+      },
+    });
 
     const clearRetry = () => {
       if (retryTimer) {
@@ -284,26 +306,6 @@ export function NotificationSSEBridge() {
         retryTimer = null;
         void connect();
       }, delay);
-    };
-
-    const armWatchdog = () => {
-      if (watchdog) window.clearInterval(watchdog);
-      watchdog = window.setInterval(() => {
-        if (cancelled || !connected) return;
-        const idle = Date.now() - lastEventAtRef.current;
-        if (idle <= HEARTBEAT_TIMEOUT_MS) return;
-        console.warn(
-          `[gacode-sse] No event in ${Math.round(idle / 1000)}s, reconnecting`,
-        );
-        // abort 当前 fetch → catch 分支走退避重连
-        try {
-          controller?.abort();
-        } catch {
-          /* ignore */
-        }
-        controller = null;
-        connected = false;
-      }, 10_000);
     };
 
     const handleIncoming = (n: NotificationItem) => {
@@ -407,12 +409,12 @@ export function NotificationSSEBridge() {
         }
         if (!res.ok || !res.body) {
           console.warn(`[gacode-sse] SSE HTTP ${res.status}`);
-          scheduleRetry(backoff);
-          backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
+          scheduleRetry(backoff.current);
+          backoff.next();
           return;
         }
 
-        backoff = BACKOFF_INITIAL_MS;
+        backoff.reset();
         connected = true;
         lastEventAtRef.current = Date.now();
         console.log("[gacode-sse] SSE stream opened");
@@ -438,27 +440,24 @@ export function NotificationSSEBridge() {
         // 正常读完 (服务端断了) → 重连 (web :425 —— 这里**不**翻倍退避)
         if (!cancelled) {
           connected = false;
-          scheduleRetry(backoff);
+          scheduleRetry(backoff.current);
         }
       } catch (err) {
         if (cancelled) return;
         connected = false;
         console.warn("[gacode-sse] SSE error:", err);
-        scheduleRetry(backoff);
-        backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
+        scheduleRetry(backoff.current);
+        backoff.next();
       }
     }
 
-    armWatchdog();
+    watchdog.arm();
     void connect();
 
     return () => {
       cancelled = true;
       connected = false;
-      if (watchdog) {
-        window.clearInterval(watchdog);
-        watchdog = null;
-      }
+      watchdog.disarm();
       // clearRetry + abort 当前 fetch + 置空 controller
       abortCurrent();
     };

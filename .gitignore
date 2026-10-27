@@ -43,9 +43,19 @@ scripts/*
 #   同款声明式例外。⚠️ 该脚本入库前已把硬编码绝对路径改成从
 #   scripts/lib/schedule-loader.mjs 导入 ROOT —— 否则换个 checkout 路径就跑不了。
 !scripts/verify-schedule-b7-archived.mjs
+# SSE 接回批 (2026-10-28): 游标/续传头 + 进场接回 + 审批链路 + 富事件降级 四支断言,
+#   外加变异反证台 (每条断言必须有「改了它就转红」的证据)。
+#   同款声明式例外 —— 父目录已放行 + `scripts/*` 已重新忽略, 这里逐个豁免。
+!scripts/verify-sse-cursor.mjs
+!scripts/verify-attach-flow.mjs
+!scripts/verify-approval-chain.mjs
+!scripts/verify-rich-event-degrade.mjs
+!scripts/verify-mutation-counterproof.mjs
 !scripts/lib/
 scripts/lib/*
 !scripts/lib/schedule-loader.mjs
+!scripts/lib/source-scan.mjs
+!scripts/lib/strip-comments.mjs
 check-gacode.ps1
 
 # Intermediate icon-resize PNGs (only icon-source.png + icon-256.png + icon.ico committed)

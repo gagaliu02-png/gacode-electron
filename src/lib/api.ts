@@ -37,6 +37,11 @@
 //   类型定义在 `components/chat/ExecutionTimeline.tsx` (组件已定稿, 不可改),
 //   这里用 `import type` 引进来 —— 编译期擦除, 不会给 lib 引入运行时依赖.
 import type { ExecutionPhase } from "../components/chat/ExecutionTimeline";
+// 2026-10-28 · 任务书 04 P-4 —— 富事件判别联合 (契约 §2)。
+//   ⛔ 编译期擦除 (`import type`) —— 不给本文件引运行时依赖, 也不会跟
+//   `lib/rich-events.ts` 形成循环 import (那个文件零 import)。
+import type { RichEventBase } from "./rich-events";
+import { normalizeRichEvent } from "./rich-events";
 
 /**
  * 后端 API base —— 绝对地址。
@@ -361,6 +366,19 @@ export interface ChatMessage {
    *   缺失 / 脏数据 ⇒ undefined (不是空数组, 免得渲出空 timeline 容器).
    */
   phases?: ExecutionPhase[];
+  /**
+   * 2026-10-28 · 任务书 04 P-4 · **历史恢复要产出 richEvents**。
+   *
+   *   之前 PC 的历史路径只产出 `phases` (执行时间线), 富事件 (`file` / `image` /
+   *   `tool_done` …) **从来没**回到消息气泡里 ⇒ 刷新页面后交付物卡片全没了。
+   *   现在从同一份 `phases_json` 里再解析一份 `richEvents` 出来 (走契约的归一层,
+   *   见 `parsePhasesRichEvents`)。
+   *
+   *   与 web 定稿版 (`gacode-web/src/lib/api.ts:529-584` 的 `parsePhasesJson`)
+   *   同一口径: tool 事件过归一层 (L-8 键缺失≡null / L-9 单条坏不牵连全批 /
+   *   L-11 未知 type 跳过该条 / L-12 丢弃 `category`)。
+   */
+  richEvents?: RichEventBase[];
   /** 阶段 8: 是否已撤回 (server 返 recalled=true 时不再走 modify, 但保留以渲占位) */
   recalled?: boolean;
   /** 阶段 8: 撤回时间, ISO; 当 recalled=true 时必返. UI 用它显示占位文案 */
@@ -567,6 +585,48 @@ function parsePhasesJson(
   return phases.length > 0 ? phases : undefined;
 }
 
+/**
+ * 2026-10-28 · 任务书 04 P-4 · 从 `phases_json` 里解析出**富事件**。
+ *
+ * 与 web 定稿版 `gacode-web/src/lib/api.ts:529-584` 的 `parsePhasesJson` 里
+ * 那段「tool 事件过归一层」的逻辑**同一口径**:
+ *
+ *   · 只认 `phases[].type === "tool"` 的条目 (server 落的就是这个形状);
+ *   · 每条 tool 事件过归一层 (`normalizeRichEvent`):
+ *       - L-8 键不存在 ⇒ 该字段为 null;
+ *       - L-9 单条坏 ⇒ **只跳那一条**, 其余照常 (⛔ 不整批丢);
+ *       - L-11 未知 / 死类型 ⇒ 跳过该条 (⛔ 不整批丢);
+ *       - L-12 `category` 丢弃;
+ *   · 非法 JSON / 非数组 ⇒ undefined (静默降级)。
+ *
+ * ⚠️ **不**改 `parsePhasesJson` 的既有返回 (`ExecutionPhase[]` 是
+ *   `ExecutionTimeline` 组件的数据契约, 组件已定稿不可改) ⇒ 这里另起一个
+ *   纯函数, 两份结果共用同一份 `phases_json` 源。
+ */
+export function parsePhasesRichEvents(
+  phasesJson: string | null | undefined,
+): RichEventBase[] | undefined {
+  if (!phasesJson) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(phasesJson);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parsed)) return undefined;
+  const events: RichEventBase[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const p = item as { type?: unknown; event?: unknown };
+    if (p.type !== "tool") continue;
+    if (!p.event || typeof p.event !== "object") continue;
+    const norm = normalizeRichEvent(p.event);
+    if (!norm.event) continue;
+    events.push(norm.event);
+  }
+  return events.length > 0 ? events : undefined;
+}
+
 export async function getHistory(chatId: string): Promise<{
   messages: ChatMessage[];
   nextCursor: string | null;
@@ -630,6 +690,9 @@ export async function getHistory(chatId: string): Promise<{
       // A2-D4-02 · 思考 / 工具时间线 —— server 落库的 phases_json 解析结果.
       //   缺失 / null / 脏数据 ⇒ undefined (不渲空 timeline 容器).
       phases: parsePhasesJson(m.phases_json),
+      // 2026-10-28 · 任务书 04 P-4 · 富事件 (契约 §2) —— 同一份 phases_json 的
+      //   另一面。没有它 ⇒ 刷新页面后交付物卡片 (file / image / tool_done) 全丢。
+      richEvents: parsePhasesRichEvents(m.phases_json),
     };
   });
   return { messages, nextCursor: r.next_cursor };
@@ -718,6 +781,189 @@ export function submitApprovalDecisionLegacy(input: {
       body: JSON.stringify(input),
     },
   );
+}
+
+// =========================================================================
+// 任务书 04 · 契约 §9 (L-41 / L-42) + 契约 §7 (L-26 ~ L-30) 的两个**新**出口
+//
+// ⛔ 这两个函数**不动** `request<T>()` —— 那个函数把 HTTP 状态码和 body 吞了
+//   (失败只 throw 一个普通 Error), 而下面两个场景**必须**拿到它们:
+//     · `stream-state` 的成功响应**不是** v2 `{ok,data}` 形状 (server 直接返
+//       八个键的裸对象) ⇒ 走 `request()` 会被当成失败;
+//     · 审批 409 的 `decidedBy` / `decidedAt` **只在 body 里** (契约 L-29)
+//       ⇒ 走 `request()` 就丢了 (契约 L-26 ~ L-30 的「后到者不报错」判据)。
+// =========================================================================
+
+/** 服务端侧待审批条目 (契约 L-43) —— `pending_id` 是**唯一**能用来裁决的标识。 */
+export interface StreamStatePendingApproval {
+  /** ★ 审批身份 (契约 L-21) —— 只有它能用来提交裁决。 */
+  pending_id: string;
+  tool?: string | null;
+  title?: string | null;
+  risk_level?: string | null;
+}
+
+/** `GET /yinian/sessions/:id/stream-state` 的响应体 (契约 L-42 的八个键)。 */
+export interface StreamState {
+  /** 该会话当前有无在跑的轮次。 */
+  running: boolean;
+  /** 本轮标识 (跨请求稳定, 与游标同生命周期) —— 契约 D4。 */
+  turnKey: string | null;
+  /** 当前可接的起点游标 (纯十进制数字串)。 */
+  lastEventId: string | null;
+  /** 现在能不能 attach。 */
+  canAttach: boolean;
+  /** `canAttach === false` 时的机器可读原因码。 */
+  reason: string | null;
+  /** 本轮阶段。 */
+  phase: string | null;
+  /** 本轮已产出帧数。 */
+  frameCount: number | null;
+  /** ★ 服务端侧待审批列表 (契约 L-43)。 */
+  pendingApprovals: StreamStatePendingApproval[];
+}
+
+/**
+ * getStreamState —— 进场第一问 (契约 L-41 / L-57)。
+ *
+ * 失败**不抛给用户**: 端侧拿不到就静默走历史补拉 (与 web 定稿版同款降级思路)。
+ *
+ * ⚠️ 走裸 fetch 而不是 `request<T>()` —— server 的成功响应**不是** v2
+ *   `{ok, data}` 形状 (是八个键的裸对象) ⇒ `request()` 会把它当失败抛掉。
+ */
+export async function getStreamState(
+  sessionId: string,
+): Promise<StreamState | null> {
+  let res: Response;
+  try {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    const token = getAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    res = await fetch(`${API_BASE}/yinian/sessions/${sessionId}/stream-state`, {
+      method: "GET",
+      headers,
+      credentials: "include",
+      cache: "no-store",
+    });
+  } catch (err) {
+    console.warn("[stream-state] 查询失败, 降级为历史补拉:", err);
+    return null;
+  }
+  if (!res.ok) {
+    console.warn(`[stream-state] HTTP ${res.status} — 降级为历史补拉`);
+    return null;
+  }
+  let raw: Partial<StreamState> | null = null;
+  try {
+    raw = (await res.json()) as Partial<StreamState>;
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== "object") return null;
+  return {
+    running: raw.running === true,
+    turnKey: typeof raw.turnKey === "string" ? raw.turnKey : null,
+    lastEventId: typeof raw.lastEventId === "string" ? raw.lastEventId : null,
+    canAttach: raw.canAttach === true,
+    reason: typeof raw.reason === "string" ? raw.reason : null,
+    phase: typeof raw.phase === "string" ? raw.phase : null,
+    frameCount: typeof raw.frameCount === "number" ? raw.frameCount : null,
+    pendingApprovals: Array.isArray(raw.pendingApprovals)
+      ? raw.pendingApprovals.filter(
+          (p): p is StreamStatePendingApproval =>
+            !!p &&
+            typeof p.pending_id === "string" &&
+            p.pending_id !== "",
+        )
+      : [],
+  };
+}
+
+/** 审批裁决的结果 (契约 L-26 ~ L-30)。 */
+export interface ApprovalDecisionOutcome {
+  /** 服务端是否受理 (HTTP 2xx ⇒ true)。 */
+  ok: boolean;
+  /** HTTP 状态码 (409 = 已被别的端裁决过)。 */
+  status: number;
+  /** 机器可读错误码 (409 ⇒ `APPROVAL_ALREADY_DECIDED`)。 */
+  code: string | null;
+  /** 先到者的端标识 (`web` / `pc` / `android`) —— 契约 L-29。 */
+  decidedBy: string | null;
+  /** 先到者的裁决时刻。 */
+  decidedAt: string | null;
+}
+
+/**
+ * submitApprovalDecisionOutcome —— 提交裁决并**拿回** HTTP 状态码与 body。
+ *
+ * 为什么不用 `submitApprovalDecision()`: 那个函数走 `request<T>()`, 失败时
+ * throw 一个普通 Error —— **状态码与 body 全丢** ⇒ 契约 L-26 ~ L-30 的
+ * 「先到先得, 后到者拿到 409 + `decidedBy`」这条根本没法实现 (任务书 P-14)。
+ *
+ * ⚠️ 提交体只有 `{action}` (契约 L-22): ⛔ **两个端点都不收** snake 的
+ *   `pending_id` (它在 URL 路径上), 旧端点 `/yinian/approvals` 额外要求
+ *   `toolId` 必填 ⇒ 新端点是唯一正确出口。
+ */
+export async function submitApprovalDecisionOutcome(
+  sessionId: string,
+  pendingId: string,
+  action: ApprovalAction,
+): Promise<ApprovalDecisionOutcome> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  const token = getAccessToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  let res: Response;
+  try {
+    res = await fetch(
+      `${API_BASE}/yinian/sessions/${sessionId}/approvals/${pendingId}/decision`,
+      {
+        method: "POST",
+        headers,
+        credentials: "include",
+        cache: "no-store",
+        // ★ 提交体只有 `{action}` (契约 L-22 / 任务书 P-10)
+        body: JSON.stringify({ action }),
+      },
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      code: "NETWORK_ERROR",
+      decidedBy: null,
+      decidedAt: null,
+    };
+  }
+  let body: Record<string, unknown> | null = null;
+  try {
+    const parsed: unknown = await res.json();
+    if (parsed && typeof parsed === "object") {
+      body = parsed as Record<string, unknown>;
+    }
+  } catch {
+    body = null;
+  }
+  const rawError = body ? body.error : null;
+  const code =
+    typeof rawError === "string"
+      ? rawError
+      : rawError &&
+          typeof rawError === "object" &&
+          typeof (rawError as { code?: unknown }).code === "string"
+        ? (rawError as { code: string }).code
+        : null;
+  return {
+    ok: res.ok,
+    status: res.status,
+    code,
+    decidedBy:
+      body && typeof body.decidedBy === "string" ? body.decidedBy : null,
+    decidedAt:
+      body && typeof body.decidedAt === "string" ? body.decidedAt : null,
+  };
 }
 
 // ─────────── Notifications (top-level, 非 /yinian/*) ───────────

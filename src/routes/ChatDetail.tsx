@@ -82,6 +82,9 @@ import {
   autoTitleSession,
   createLibraryItem,
   createChat,
+  getStreamState,
+  submitApprovalDecisionOutcome,
+  type ApprovalAction,
   type ChatMessage,
   type LibraryItem,
 } from "../lib/api";
@@ -119,10 +122,31 @@ import {
   classifyStreamingError,
   type StreamingErrorKind,
 } from "../components/chat/StreamingErrorBanner";
+import { ApprovalBanner } from "../components/chat/ApprovalBanner";
+// ★ 待审批列表的本机落点 (契约 L-21 / L-32a / L-32b / 任务书 P-6 / P-11 / P-12)。
+//   `ApprovalRequest` 的**唯一定义**在 lib 里 —— 组件与页面都从这儿取,
+//   ⛔ 不写第二份同型 interface (组件那份改成 re-export)。
 import {
-  ApprovalBanner,
+  addPendingApproval as appendPendingApproval,
+  removePendingApproval as dropPendingApproval,
+  loadPendingApprovals,
+  savePendingApprovals,
   type ApprovalRequest,
-} from "../components/chat/ApprovalBanner";
+} from "../lib/chat-pending-approvals";
+// ★ 裁决结果的**纯分类** (契约 L-26 ~ L-30 / 任务书 P-14) —— 409 ⇒ conflict
+//   (收卡不报错), 不是 error。抠成零依赖纯函数 ⇒ 断言脚本能在运行时验证。
+import { classifyApprovalDecision } from "../lib/chat-approval-decision";
+// ★ 契约判别联合 + 旧协议双写去重 (契约 L-14 ~ L-18 / 任务书 P-8 / P-9 / P-13)。
+import {
+  dedupeRichEvents,
+  type RichEventBase,
+} from "../lib/rich-events";
+// ★ 跟进控制器 + 游标决策 (契约 L-33 / L-34 / L-58 / L-60)。
+import {
+  createFollowController,
+  decideAttachCursor,
+  type FollowController,
+} from "../lib/sse-follow";
 import {
   DropdownMenu,
   type DropdownMenuItem,
@@ -171,6 +195,11 @@ function mergeThinkingPhase(
   return [...phases, { type: "thinking", text, ts }];
 }
 
+// 跟进控制器 —— 进程级单例 (状态按 sessionId 分键, 组件重渲染不影响)。
+// 契约 L-58: 本机痕迹**只用于加速** (决定续传时带不带 `Last-Event-ID`),
+// 「该不该接回」的判据**永远**是服务端的 `stream-state`。
+const followController: FollowController = createFollowController();
+
 // 附件上限 — 与 lib/upload.ts MAX_BYTES 对齐.
 // uploadAttachment 的 size 校验是**同步 throw**, 不在 promise 链里, 所以调用点必须前置拦截.
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
@@ -203,22 +232,29 @@ function extractKnowledgeRefIdsFromMessage(message: string): string[] {
   return ids;
 }
 
-/** 把 approval_request rich_event 抽成 ApprovalRequest; 缺字段兜底. */
-function toApprovalRequest(ev: Record<string, unknown>): ApprovalRequest | null {
-  const pendingId =
-    (typeof ev.pendingId === "string" && ev.pendingId) ||
-    (typeof ev.id === "string" && ev.id) ||
-    (typeof ev.toolId === "string" && ev.toolId) ||
-    "";
+/**
+ * 把 approval_request rich_event 抽成 ApprovalRequest。
+ *
+ * ⚠️ 审批身份**只**认 `pending_id` (契约 L-21 / 任务书 P-11):
+ *   审批事件里的 `id` 是 **tool_use_id** —— 同一个工具调用可能对应多个 pending,
+ *   拿 `id` 当身份会撞键 + 删错条。认不出 `pending_id` ⇒ **宁可不显示**,
+ *   也不拿 `id` 冒充 (跟 web 定稿版 `chat/[id]/page.tsx` 的 `handleApprovalEvent` 同款)。
+ *
+ *   `pending_id` 的 snake / camel 两个别名已由归一层 (`lib/rich-events.ts`)
+ *   解析好 ⇒ 这里只读 `pending_id` 一个字段。
+ */
+function toApprovalRequest(ev: RichEventBase): ApprovalRequest | null {
+  if (ev.type !== "approval_request") return null;
+  const pendingId = ev.pending_id;
   if (!pendingId) return null;
-  const risk = String(ev.riskLevel ?? "medium");
+  const risk = ev.risk_level;
   return {
     // 用 pendingId 当 store 去重 key, 跟 web store.addPendingApproval 同款
     id: pendingId,
     pendingId,
-    tool: String(ev.tool ?? ev.name ?? "tool"),
-    title: String(ev.title ?? "需要你的授权"),
-    detail: ev.detail ? String(ev.detail) : undefined,
+    tool: ev.tool || "tool",
+    title: ev.title || "需要你的授权",
+    detail: ev.detail || undefined,
     riskLevel: risk === "high" || risk === "low" ? risk : "medium",
   };
 }
@@ -298,6 +334,10 @@ export function ChatDetail() {
       recalledAt: m.recalledAt ?? null,
       // 历史消息的思考/工具时间线 (M5 批): api.getHistory 已把服务端 phases_json 解析成 ExecutionPhase[]
       phases: m.phases,
+      // ★ 任务书 P-4 —— 历史消息的**富事件** (工具卡片 / 文件 / 图片 / 审批回执)
+      //   也得还原出来, 否则刷新后历史里的工具卡片全没了。
+      //   api.getHistory 已按 web 定稿版口径从 phases_json 里解析 (只认 type==="tool")。
+      richEvents: m.richEvents,
     }));
     return list;
   }, [historyQuery.data]);
@@ -305,9 +345,9 @@ export function ChatDetail() {
   // 流式期间累积 (content + events). MessageList 用 streamingContent 渲染最后一条.
   const [streamingAssistantId, setStreamingAssistantId] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
-  const [streamingEvents, setStreamingEvents] = useState<
-    Array<Record<string, unknown>>
-  >([]);
+  // ★ 契约判别联合 (契约 §2) —— 流式富事件的类型是**冻结**的, ⛔ 不再是
+  //   `Record<string, unknown>` (那样按 type 收窄就拿不到字段名检查)。
+  const [streamingEvents, setStreamingEvents] = useState<RichEventBase[]>([]);
   // A2-D4-02 · 思考 / 工具时间线 (流式累积 chunk.reasoning + tool 事件).
   // 合并策略跟 web `chat/[id]/page.tsx:605-618` + 安卓 SsePipeline.WORK 一致:
   //   相邻 thinking chunk **就地拼接** (不是每 chunk 一条) —— 否则时间线会显示
@@ -355,8 +395,53 @@ export function ChatDetail() {
   //   `streamingSince*` 随 `ExecutionTiming` → `ExecutionTimeline` 的替换一起删
   //   (A2-D4-02); `phaseTimelineRef` 由 `streamingPhases` state 取代 (A2-D4-02 数据通路).
 
-  // 阶段 8 chat-id-13 — approval_request 累积. 任一按钮触发 → 清整张 banner.
+  // 阶段 8 chat-id-13 — approval_request 累积.
+  //
+  // ⚠️ 任务书 P-6 · 待审批列表**必须持久化**:
+  //   PC 端零持久化的口径是「不落任何用户数据到磁盘」, 但待审批列表必须活过
+  //   页面刷新 —— 否则用户点一下「刷新」, 正在等裁决的工具调用就永远没人管了
+  //   (工具卡在 gaclaw 那儿, 前端再也看不见)。
+  //   ⇒ 落 localStorage (PC 端唯一可用的浏览器存储), key 按 sessionId 分键,
+  //     只存**审批身份 + 展示字段**, 不存任何正文 / 附件 / token。
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
+
+  /**
+   * 加一条待审批 (按 pending_id 去重) —— 并同步落盘。
+   *
+   * ⚠️ 幂等: 重复的 pending_id 保留**先到**的那条 (web store 同款)。
+   */
+  const addPendingApproval = useCallback(
+    (req: ApprovalRequest) => {
+      if (!chatId) return;
+      setPendingApprovals((prev) => {
+        const next = appendPendingApproval(prev, req);
+        if (next === prev) return prev;
+        savePendingApprovals(chatId, next);
+        return next;
+      });
+    },
+    [chatId],
+  );
+
+  /**
+   * ★ 精确删**一条**待审批 (契约 L-32a / L-32b / 任务书 P-12)。
+   *
+   * ⛔ 不是「清掉不在集合里的」, 也不是「整表清」—— 兄弟 pending 必须留下:
+   *   整表清会把兄弟一起清掉, 而服务端真值仍在, 兄弟端会再收到这条,
+   *   于是「别的端已经批过了」这件事被本端悄悄吞掉。
+   */
+  const removePendingApproval = useCallback(
+    (pendingId: string) => {
+      if (!chatId || !pendingId) return;
+      setPendingApprovals((prev) => {
+        const next = dropPendingApproval(prev, pendingId);
+        if (next === prev) return prev;
+        savePendingApprovals(chatId, next);
+        return next;
+      });
+    },
+    [chatId],
+  );
 
   // ────────────── 0.7.5 hotfix 2 (gaga 反馈 2026-10-20) — `+` 按钮 + sheet 流程 ──────────────
   // ChatInputBar 不再内置 4 个附件按钮, 只在 textarea 左侧放一个 `+` 按钮.
@@ -377,23 +462,16 @@ export function ChatDetail() {
   // 当前 sheet 选中的 kind → handleFileChange 拿到 File 后用它选 upload mode.
   const pendingUploadKindRef = useRef<UploadMode | null>(null);
 
-  const addPendingApproval = useCallback((req: ApprovalRequest) => {
-    setPendingApprovals((prev) =>
-      prev.some((p) => p.id === req.id) ? prev : [...prev, req],
-    );
-  }, []);
-
-  const clearPendingApprovals = useCallback(() => {
-    setPendingApprovals([]);
-  }, []);
-
   // 是否处于"等待首帧" 的状态 — 用来显示"正在思考" 占位
   const [waitingFirstFrame, setWaitingFirstFrame] = useState(false);
 
-  // 切 chat → 清 pendingApprovals (旧 session 的 pending 不带到新 session).
-  // 跟 web page.tsx:317-321 同款 (clear store on chat switch).
+  // 切 chat → 换 session ⇒ 待审批列表也跟着换 (旧 session 的 pending 不带到新 session).
+  //
+  // ⚠️ 任务书 P-6: 本 session 的 pending 要从**本机落盘**里 hydrate 回来 ——
+  //   不是清空。刷新页面后正在等裁决的工具调用必须还在 banner 上,
+  //   否则用户永远不知道自己还有一条没批。
   useEffect(() => {
-    setPendingApprovals([]);
+    setPendingApprovals(chatId ? loadPendingApprovals(chatId) : []);
     setStreamingAssistantId(null);
     setStreamingContent("");
     setStreamingEvents([]);
@@ -401,23 +479,33 @@ export function ChatDetail() {
     setStreamError(null);
     setWaitingFirstFrame(false);
     return () => {
-      // 卸载时再清一次 — 切 chat / unmount 都覆盖到.
+      // 卸载时只清**内存态** —— 本机落盘的那份要留着 (跨刷新存活, 任务书 P-6)。
       setPendingApprovals([]);
     };
   }, [chatId]);
 
   // 拼装最终 messages: 历史 + 流式那条占位
   const messages: ChatMessageModel[] = useMemo(() => {
-    if (!streamingAssistantId) return baseMessages;
+    // ★ 任务书 P-8 · 旧协议双写去重 (契约 L-14 ~ L-18)。
+    //   服务端同一次工具产出可能既推新协议 `file`/`image`, 又推旧协议
+    //   `tool_done[file]`/`tool_done[image]` ⇒ 同一张卡片渲两遍。
+    //   去重按 **(事件族, id)**: 同族同 id 只留一条, 且留**新协议**那条。
+    //   ⛔ `web_preview` 不参与 (它的 id 被加工成 `id+'_web'`, 同族同 id 判据不成立)。
+    const dedupedBase = baseMessages.map((m) =>
+      m.richEvents && m.richEvents.length > 0
+        ? { ...m, richEvents: dedupeRichEvents(m.richEvents) }
+        : m,
+    );
+    if (!streamingAssistantId) return dedupedBase;
     const streamingMsg: ChatMessageModel = {
       id: streamingAssistantId,
       role: "assistant",
       content: streamingContent,
-      richEvents: streamingEvents as ChatMessageModel["richEvents"],
+      richEvents: dedupeRichEvents(streamingEvents),
       // A2-D4-02 · 思考 / 工具时间线随消息下传 → ExecutionTimeline
       phases: streamingPhases,
     };
-    return [...baseMessages, streamingMsg];
+    return [...dedupedBase, streamingMsg];
   }, [
     baseMessages,
     streamingAssistantId,
@@ -467,12 +555,154 @@ export function ChatDetail() {
 
   // ────────────── SSE 启动 + chunk 处理 ──────────────
 
+  /**
+   * 本机正在渲染的那一行 assistant 的本地 id。
+   *   发起流 = `streaming-*`; 只读接入流 = `attach-<chatId>`。
+   */
+  const localRowIdRef = useRef<string | null>(null);
+
+  /** 清掉本机的流式行 (终态 / 取消 / 出错 / 切会话)。 */
+  const clearLocalRow = useCallback(() => {
+    const rowId = localRowIdRef.current;
+    localRowIdRef.current = null;
+    setStreamingAssistantId((cur) => (rowId && cur === rowId ? null : cur));
+    setStreamingContent("");
+    setStreamingEvents([]);
+    setStreamingPhases([]);
+  }, []);
+
+  /**
+   * ★ 流帧处理 —— **发起流与只读接入流共用这一条** (契约 L-57)。
+   *
+   * 两者的帧语义完全一样 (正文 / 思考 / 富事件 / 审批事件) ⇒ 同一个 handler,
+   * ⛔ 不写第二遍同型代码 (web 定稿版 `accumulateChunk` 同样只有一份)。
+   *
+   * @param rowPrefix   本机那一行的 id 前缀 (发起流 `streaming` / 接入流 `attach`)
+   * @param attachments 发起流的附件 (用于错误条的重试上下文); **null** = 静默
+   *                    (只读接入流出错不打扰用户 —— 契约 L-50 同款降级)
+   */
+  const handleStreamChunk = useCallback(
+    (
+      chunk: ChatChunk,
+      rowPrefix: "streaming" | "attach",
+      attachments: PendingAttachment[] | null,
+    ) => {
+      if (!chatId) return;
+      // waiting first frame → 收到任意 chunk 即结束 typing
+      setWaitingFirstFrame(false);
+
+      // 本机那一行: **第一次有内容才建** —— 控制帧 (attach_ok) 不带内容,
+      // 建早了会挂一个空气泡。
+      const ensureRow = () => {
+        if (localRowIdRef.current) return;
+        localRowIdRef.current =
+          rowPrefix === "attach" ? `attach-${chatId}` : streamingId();
+        setStreamingAssistantId(localRowIdRef.current);
+      };
+
+      if (chunk.content) {
+        ensureRow();
+        streamingContentRef.current += chunk.content;
+        setStreamingContent((prev) => prev + chunk.content);
+      }
+      // A2-D4-02 · 思考链 → phases (相邻 thinking 就地拼接)
+      if (chunk.reasoning) {
+        ensureRow();
+        streamingPhasesRef.current = mergeThinkingPhase(
+          streamingPhasesRef.current,
+          chunk.reasoning,
+          Date.now(),
+        );
+        setStreamingPhases(streamingPhasesRef.current);
+      }
+      // 阶段 8 chat-id-13/17 — 抽 approval_request / approval_granted /
+      //   approval_denied 事件走 ApprovalBanner / store, 不进 message.richEvents
+      //   (跟 web page.tsx:622-655 + Android ApprovalBanner 同款)。
+      //   ⛔ 'feedback' 不在契约的活类型名单里 ⇒ 归一层 (`lib/rich-events.ts`)
+      //     已经把它整条丢掉 (gagaOS §⑥ 点赞/点砍整体删除)。
+      const dispatch = (ev: RichEventBase) => {
+        if (!ev || typeof ev !== "object") return;
+        const type = ev.type;
+        if (type === "approval_request") {
+          const req = toApprovalRequest(ev);
+          if (req) addPendingApproval(req);
+          return; // 不进 richEvents (banner 唯一展示源)
+        }
+        if (type === "approval_granted" || type === "approval_denied") {
+          // ★ 只收**那一条** (契约 L-32a / L-32b / 任务书 P-12) —— 兄弟 pending
+          //   必须并存。认不出是哪一条 ⇒ 不删 (宁多留一张卡, 不可错删兄弟)。
+          if (ev.pending_id) removePendingApproval(ev.pending_id);
+          return;
+        }
+        ensureRow();
+        setStreamingEvents((prev) => [...prev, ev]);
+        // A2-D4-02 · tool 事件同时进 phases 时间线 (跟 web page.tsx:648-655 同款)
+        streamingPhasesRef.current = [
+          ...streamingPhasesRef.current,
+          {
+            type: "tool",
+            event: ev as unknown as Record<string, unknown>,
+            ts: Date.now(),
+          },
+        ];
+        setStreamingPhases(streamingPhasesRef.current);
+      };
+      if (chunk.event) dispatch(chunk.event);
+      if (chunk.events && chunk.events.length > 0) {
+        for (const ev of chunk.events) dispatch(ev);
+      }
+      if (isTerminalDone(chunk)) {
+        // 终态 → 用 server messageId 替换本地临时 id (由 history 认亲)
+        const serverId = chunk.messageId!;
+        // C4-08 · 「AI 回复到达」系统通知 ——
+        //   仅窗口不在前台时弹 (主进程算 isFocused, 不用 document.hidden).
+        //   取消帧 / error 帧不走这里 ⇒ 用户按停止时**不**通知
+        //   (gaga 口径: 打断 = 彻底丢弃产出).
+        void notifyAiReplyArrived({
+          chatId,
+          chatTitle: chatTitleRef.current,
+          content: chunk.fullContent ?? streamingContentRef.current,
+          phases: streamingPhasesRef.current,
+        });
+        clearLocalRow();
+        // 刷新 history + chats (server 落库后 title 改了)
+        queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+        queryClient.invalidateQueries({ queryKey: ["chats"] });
+        // small UX touch: fullContent / emptyReply 由父组件消费, 此处不强求
+        void serverId;
+        return;
+      }
+      if (isCancelFrame(chunk)) {
+        // 取消帧 — 直接关闭, 不调 ack (互斥路径 finally 会判)
+        clearLocalRow();
+        return;
+      }
+      if (chunk.error) {
+        if (attachments) {
+          setStreamError({
+            kind: "server",
+            message: String(chunk.error),
+            userAttachments: attachments,
+          });
+        }
+        clearLocalRow();
+      }
+    },
+    [
+      chatId,
+      queryClient,
+      addPendingApproval,
+      removePendingApproval,
+      clearLocalRow,
+    ],
+  );
+
   const startStream = useCallback(
     async (text: string, attachments: PendingAttachment[]) => {
       if (!chatId) return;
       // 重置流式态
-      const localAssistantId = streamingId();
-      setStreamingAssistantId(localAssistantId);
+      localRowIdRef.current = streamingId();
+      setStreamingAssistantId(localRowIdRef.current);
       setStreamingContent("");
       setStreamingEvents([]);
       setStreamingPhases([]);
@@ -480,8 +710,9 @@ export function ChatDetail() {
       streamingPhasesRef.current = [];
       setStreamError(null);
       setWaitingFirstFrame(true);
-      // 新一轮触发 → 清空旧 session 的 pending approvals (不再 stale)
-      clearPendingApprovals();
+      // ⚠️ 任务书 P-12 —— 这里**不再**清空待审批列表:
+      //   兄弟 pending 还在服务端真值里 (契约 L-32a / L-32b), 整表清会让用户
+      //   再也看不见那条没批的授权。列表的收敛只发生在「那条真的被裁决了」时。
 
       // image 端点 (/yinian/upload) 不返 fileId; document 端点 (/yinian/documents)
       // url + fileId 都有 → 按 fileId 有无分流, 否则文档会同时进 image_urls 和
@@ -526,133 +757,13 @@ export function ChatDetail() {
           attachedFileIds: fileIds,
           knowledgeRefs,
           onChunk: (chunk: ChatChunk) => {
-            // waiting first frame → 收到任意 chunk 即结束 typing
-            setWaitingFirstFrame(false);
-            if (chunk.content) {
-              streamingContentRef.current += chunk.content;
-              setStreamingContent((prev) => prev + chunk.content);
-            }
-            // A2-D4-02 · 思考链 → phases (相邻 thinking 就地拼接)
-            if (chunk.reasoning) {
-              streamingPhasesRef.current = mergeThinkingPhase(
-                streamingPhasesRef.current,
-                chunk.reasoning,
-                Date.now(),
-              );
-              setStreamingPhases(streamingPhasesRef.current);
-            }
-            // 阶段 8 chat-id-13/17 — 抽 approval_request / approval_granted /
-            //   approval_denied / feedback 事件走 ApprovalBanner / store, 不进
-            //   message.richEvents (跟 web page.tsx:622-655 + Android ApprovalBanner 同款)
-            if (chunk.event) {
-              const ev = chunk.event;
-              const type = ev.type as string | undefined;
-              if (type === "approval_request") {
-                const req = toApprovalRequest(ev);
-                if (req) addPendingApproval(req);
-                return; // 不进 richEvents (banner 唯一展示源)
-              }
-              if (type === "approval_granted" || type === "approval_denied") {
-                // first-wins: 任一端 granted/denied 后清空 banner
-                clearPendingApprovals();
-                return;
-              }
-              // gagaOS §⑥ — 点赞 / 点砍整体删除; server 即便推 'feedback' 事件也丢弃
-              //   (跟 Phase 1 server 协议不接 /messages/:id/feedback 一致)
-              if (type === "feedback") {
-                return;
-              }
-              setStreamingEvents((prev) => [...prev, ev]);
-              // A2-D4-02 · tool 事件同时进 phases 时间线 (跟 web page.tsx:648-655 同款)
-              streamingPhasesRef.current = [
-                ...streamingPhasesRef.current,
-                { type: "tool", event: ev, ts: Date.now() },
-              ];
-              setStreamingPhases(streamingPhasesRef.current);
-            }
-            if (chunk.events && chunk.events.length > 0) {
-              const kept: Array<Record<string, unknown>> = [];
-              for (const ev of chunk.events) {
-                const type = ev.type as string | undefined;
-                if (type === "approval_request") {
-                  const req = toApprovalRequest(ev);
-                  if (req) addPendingApproval(req);
-                  continue; // banner 唯一源
-                }
-                if (type === "approval_granted" || type === "approval_denied") {
-                  clearPendingApprovals();
-                  continue;
-                }
-                if (type === "feedback") {
-                  // gagaOS §⑥ — 点赞/点砍删除, feedback 事件丢弃
-                  continue;
-                }
-                kept.push(ev);
-              }
-              if (kept.length > 0) {
-                setStreamingEvents((prev) => [...prev, ...kept]);
-                // A2-D4-02 · tool 事件同时进 phases 时间线
-                for (const ev of kept) {
-                  streamingPhasesRef.current = [
-                    ...streamingPhasesRef.current,
-                    { type: "tool", event: ev, ts: Date.now() },
-                  ];
-                }
-                setStreamingPhases(streamingPhasesRef.current);
-              }
-            }
-            if (isTerminalDone(chunk)) {
-              // 终态 → 立即用 server messageId 替换本地临时 id
-              const serverId = chunk.messageId!;
-              // C4-08 · 「AI 回复到达」系统通知 ——
-              //   仅窗口不在前台时弹 (主进程算 isFocused, 不用 document.hidden).
-              //   取消帧 / error 帧不走这里 ⇒ 用户按停止时**不**通知
-              //   (gaga 口径: 打断 = 彻底丢弃产出).
-              void notifyAiReplyArrived({
-                chatId,
-                chatTitle: chatTitleRef.current,
-                content: chunk.fullContent ?? streamingContentRef.current,
-                phases: streamingPhasesRef.current,
-              });
-              setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
-              setStreamingContent("");
-              setStreamingEvents([]);
-              setStreamingPhases([]);
-              // 刷新 history + chats (server 落库后 title 改了)
-              queryClient.invalidateQueries({ queryKey: ["history", chatId] });
-              queryClient.invalidateQueries({ queryKey: ["chats"] });
-              // small UX touch: fullContent / emptyReply 由父组件消费, 此处不强求
-              void serverId;
-              return;
-            }
-            if (isCancelFrame(chunk)) {
-              // 取消帧 — 直接关闭, 不调 ack (互斥路径 finally 会判)
-              setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
-              setStreamingContent("");
-              setStreamingEvents([]);
-              setStreamingPhases([]);
-              return;
-            }
-            if (chunk.error) {
-              setStreamError({
-                kind: "server",
-                message: String(chunk.error),
-                userAttachments: attachments,
-              });
-              setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
-              setStreamingContent("");
-              setStreamingEvents([]);
-              setStreamingPhases([]);
-            }
+            handleStreamChunk(chunk, "streaming", attachments);
           },
         });
       } catch (err) {
         // user abort → 静默关闭, 不弹错误
         if (isUserAbortError(err) || err instanceof UserAbortError) {
-          setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
-          setStreamingContent("");
-          setStreamingEvents([]);
-          setStreamingPhases([]);
+          clearLocalRow();
           setWaitingFirstFrame(false);
           return;
         }
@@ -664,15 +775,168 @@ export function ChatDetail() {
           message: msg,
           userAttachments: attachments,
         });
-        setStreamingAssistantId((cur) => (cur === localAssistantId ? null : cur));
-        setStreamingContent("");
-        setStreamingEvents([]);
-        setStreamingPhases([]);
+        clearLocalRow();
         setWaitingFirstFrame(false);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chatId, queryClient, addPendingApproval, clearPendingApprovals, pendingKnowledgeRefs],
+    [chatId, queryClient, handleStreamChunk, clearLocalRow, pendingKnowledgeRefs],
+  );
+
+  // =========================================================================
+  // ★ 进场接回 (契约 L-41 ~ L-46 / L-49 / L-50 / L-57 / L-60 / 任务书 P-9)
+  //
+  // 三端**统一**进场序列, 不得各自发明:
+  //   ① GET  /sessions/:id/stream-state
+  //        ├─ running === false (或 canAttach === false)
+  //        │     ⇒ 走历史接口 (正文 + 交付物 + 审批历史) ⇒ 结束
+  //        └─ running === true
+  //              ⇒ POST /sessions/:id/chat/attach
+  //                   ├─ 本机有该 session 的**合法**游标 ⇒ 带 Last-Event-ID
+  //                   └─ 本机零状态                    ⇒ 带 X-Resume-Turn: 1
+  //                       ⇒ 收首帧 attach_ok    ⇒ 渲染回放 + 继续收 live 帧
+  //                       ⇒ 收首帧 attach_failed ⇒ 回落历史补拉 (静默, 不报错)
+  //
+  // ⛔ 本机痕迹 (游标) **只用于加速** (决定带不带 Last-Event-ID),
+  //    「该不该接回」的判据**永远**是服务端的 stream-state (契约 L-58)。
+  //
+  // 这一段覆盖 PM 点名的 4 个场景:
+  //   ① 刷新页面  ② 关掉重进  ③ 换台电脑打开同一会话
+  //   ④ 从会话页跳去别的页面再回来
+  // =========================================================================
+  useEffect(() => {
+    if (!chatId) return;
+    let cancelled = false;
+    const ac = new AbortController();
+    // 进场期间先占住「正在思考」位 ⇒ 用户不能在接回途中误发新消息。
+    setWaitingFirstFrame(true);
+
+    (async () => {
+      // ① 先问服务端「这会话现在有没有在跑的轮次」
+      const state = await getStreamState(chatId);
+      if (cancelled) return;
+      if (!state || !state.running || !state.canAttach) {
+        // ⇒ 没有在跑的轮次 ⇒ 走历史接口即可 (historyQuery 已经在做)
+        //   同时把本机的跟进记录清掉 (轮次已结束, 游标作废 —— 下一轮会重发)。
+        await followController.stop(chatId);
+        setWaitingFirstFrame(false);
+        return;
+      }
+
+      // 服务端侧待审批真值 ⇒ 补进本地缓存 (契约 L-43 / D5)。
+      //   本地表只是缓存, 服务端真值优先 ⇒ 这里 upsert 不会覆盖更新的数据。
+      for (const p of state.pendingApprovals) {
+        addPendingApproval({
+          id: p.pending_id,
+          pendingId: p.pending_id,
+          tool: p.tool || "tool",
+          title: p.title || "需要你的授权",
+          detail: undefined,
+          riskLevel: "medium",
+        });
+      }
+
+      // ② 本机痕迹只用于加速 (契约 L-58): 决定带不带 Last-Event-ID
+      const local = await followController.read(chatId);
+      if (cancelled) return;
+      const cursor = decideAttachCursor(local);
+
+      // ③ 接回这一轮
+      await followController.start(chatId, cursor);
+      await stream.attach({
+        sessionId: chatId,
+        cursor,
+        signal: ac.signal,
+        onControl: (frame) => {
+          if (frame.type === "attach_failed") {
+            // 契约 L-50: attach 失败**静默**回落历史补拉, 不报错给用户
+            console.warn("[attach] 接不回来, 回落历史补拉:", frame.reason);
+            void followController.stop(chatId);
+            queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+          }
+        },
+        onCursor: (c) => {
+          // 游标推进 —— 只接受纯十进制数字串 (非法值由控制器直接丢弃)
+          void followController.advanceCursor(chatId, c);
+        },
+        onChunk: (chunk) => {
+          if (cancelled) return;
+          handleStreamChunk(chunk, "attach", null);
+        },
+      });
+      // 流结束 (轮次终帧 / 服务端关流) ⇒ 不再跟进
+      if (!cancelled) {
+        await followController.stop(chatId);
+        queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+      }
+    })().catch((err) => {
+      // 进场接回失败**不打扰用户** —— 静默回落历史补拉 (契约 L-39 / L-50 同款降级)
+      console.warn("[attach] 进场接回失败, 回落历史补拉:", err);
+    });
+
+    return () => {
+      cancelled = true;
+      // 只掐**读流**, 不删跟进记录 (游标要留着 —— 跳走再回来才能续传)。
+      // ⚠️ 契约 L-53: 中止不得掐全体 —— 接入流只是读, 掐它不影响服务端那一轮。
+      ac.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
+
+  // =========================================================================
+  // ★ 审批裁决 (契约 L-21 / L-22 / L-26 ~ L-30 / 任务书 P-10 / P-12 / P-14)
+  //
+  //   · 提交体只有 `{action}` —— ⛔ 两个端点都不收 snake 的 `pending_id`
+  //     (它在 URL 路径上), 旧端点 `/yinian/approvals` 额外要求 `toolId` 必填
+  //     ⇒ 新端点 `POST /sessions/:id/approvals/:pendingId/decision` 是唯一出口。
+  //   · 乐观收卡: 提交**前**把**那一条**从本机列表里摘掉 (契约 L-32a) ——
+  //     ⛔ 不整表清, 兄弟 pending 必须并存。
+  //   · 409 (已被别的端裁决过): 契约 L-29 —— **收卡不报错**, 只提示「已由 X 端处理」。
+  //   · 真失败 (网络 / 5xx): 把卡**放回去**, 用户还能再点一次。
+  // =========================================================================
+  const handleApprovalAction = useCallback(
+    async (action: ApprovalAction, request: ApprovalRequest) => {
+      if (!chatId) return;
+      // ★ 身份**只**认 pending_id (契约 L-21 / 任务书 P-11):
+      //   事件里的 id 是 tool_use_id —— 拿它兜底会把裁决提交到别的审批上。
+      const pendingId = request.pendingId;
+      if (!pendingId) {
+        toast({
+          message: "审批提交失败: 缺少 pending_id, 无法定位审批",
+          variant: "danger",
+          duration: 4000,
+        });
+        return;
+      }
+      // 乐观收卡 (跟 Android 一致, 点了立刻消失) —— 但**只删这一条**。
+      removePendingApproval(pendingId);
+      const outcome = await submitApprovalDecisionOutcome(
+        chatId,
+        pendingId,
+        action,
+      );
+      // ★ 分类是**纯函数** (lib/chat-approval-decision.ts) —— 契约 L-27 / L-29
+      //   / 任务书 P-14: 409 = 已被别的端裁决 ⇒ 迟到的人**不算错**,
+      //   收卡 + 提示是谁处理的, 不弹错、不重试。
+      const verdict = classifyApprovalDecision(outcome);
+      if (verdict.kind === "ok") return;
+      if (verdict.kind === "conflict") {
+        toast({
+          message: verdict.message,
+          variant: "default",
+          duration: 3000,
+        });
+        return;
+      }
+      // 真失败 (网络 / 5xx) ⇒ 把卡放回去, 用户还能再点一次。
+      addPendingApproval(request);
+      toast({
+        message: `审批提交失败: action=${action} pendingId=${pendingId} err=${outcome.code || outcome.status}`,
+        variant: "danger",
+        duration: 4000,
+      });
+    },
+    [chatId, toast, addPendingApproval, removePendingApproval],
   );
 
   // ────────────── 发送 / 停止 / 重试 / 重生 ──────────────
@@ -681,12 +945,13 @@ export function ChatDetail() {
     (text: string, attachments: PendingAttachment[]): boolean => {
       if (!chatId) return false;
       if (streamingAssistantId) return false; // 已经在流式, 拒绝并发
+      if (waitingFirstFrame) return false; // 正在等首帧 / 正在接回, 拒绝并发
       lastUserTextRef.current = text;
       lastUserAttachmentsRef.current = attachments;
       void startStream(text, attachments);
       return true;
     },
-    [chatId, streamingAssistantId, startStream],
+    [chatId, streamingAssistantId, waitingFirstFrame, startStream],
   );
 
   const handleStop = useCallback(() => {
@@ -1290,18 +1555,16 @@ export function ChatDetail() {
         )}
       </div>
 
-      {/* 阶段 8 chat-id-13 — ApprovalBanner sticky 在输入栏上方 */}
+      {/* 阶段 8 chat-id-13 — ApprovalBanner sticky 在输入栏上方
+          ⚠️ 契约 L-32a / L-32b / 任务书 P-12: 批掉一条只删**那一条**
+             (handleApprovalAction 内部按 pending_id 精确删), 兄弟 pending 必须并存。
+          ⚠️ 契约 L-29 / 任务书 P-14: 409 (已被别的端裁决) ⇒ 收卡 + 提示
+             「已由 X 端处理」, 不报错、不重试。 */}
       <ApprovalBanner
         requests={pendingApprovals}
-        sessionId={chatId}
-        onClear={clearPendingApprovals}
-        onError={(msg) =>
-          toast({
-            message: `审批失败: ${msg}`,
-            variant: "danger",
-            duration: 4000,
-          })
-        }
+        onAction={(action, request) => {
+          void handleApprovalAction(action, request);
+        }}
       />
 
       {/* gagaOS §② — 知识库挂载 chip — 对齐 web chat/[id]/page.tsx:1311-1331:

@@ -28,6 +28,12 @@
  * 失败处理: ACK_DONE 静默, USER_STOP 警告日志 (漏发 = 界面骗用户说停, 服务端还在烧 token)。
  */
 
+/**
+ * 富事件判别联合 (契约 §2) —— 与 web 定稿版 `gacode-web/src/lib/api.ts` 的
+ * ChatChunk 同款。⛔ 编译期擦除 (`import type`), 不给本文件引运行时依赖。
+ */
+import type { RichEventBase } from "./rich-events";
+
 const API_BASE = "https://www.gaga.sale/api/v1";
 
 /**
@@ -52,6 +58,13 @@ export function registerCancelAuthAccessors(getter: AuthGetter): void {
 /**
  * SSE chunk 形态 — 与 gacode-web/api.ts ChatChunk 对齐, 自实现以便 renderer 不引 lib
  *  (纯结构性 interface, 不照搬代码)。
+ *
+ * ⚠️ 2026-10-28 · 任务书 04 —— `event` / `events` 的元素类型从
+ *   `Record<string, unknown>` 换成契约的判别联合 `RichEventBase`
+ *   (web 定稿版 `gacode-web/src/lib/api.ts` 的 ChatChunk 就是这个类型)。
+ *   换来的是: 归一层 (`lib/rich-events.ts`) 产出的事件**直接**流到 UI,
+ *   中间不需要任何 `as Record<string, unknown>` 强转;
+ *   且 UI 层按 `type` 收窄时能拿到**编译期**的字段名检查 (契约 §14.4 W7)。
  */
 export interface ChatChunk {
   /** 增量正文 */
@@ -59,9 +72,9 @@ export interface ChatChunk {
   /** 思考链 */
   reasoning?: string;
   /** 单个 rich_event (tool_start / file / image / approval_request 等) */
-  event?: Record<string, unknown>;
+  event?: RichEventBase;
   /** 累积 rich_event 数组 */
-  events?: Array<Record<string, unknown>>;
+  events?: RichEventBase[];
   /** 流结束哨兵 — 注意: 一轮里会来不止一次, 必须看 messageId/cancelled */
   done?: boolean;
   /** 错误 */

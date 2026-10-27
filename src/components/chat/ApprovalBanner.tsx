@@ -1,47 +1,44 @@
 /**
  * components/chat/ApprovalBanner.tsx — 阶段 8 ChatDetail P0 tool 审批 banner
  *
- * 行为对位 gacode-web `src/components/chat/ApprovalBanner.tsx`:
- *   - 一次 batch 多条 pending approval 同时显示 (server 端 SSE 推送
- *     chunk.events 里 type='approval_request' 累加, 同 id 去重)
- *   - 任一按钮触发 → onAction(action, pendingId) → parent 调
- *     submitApprovalDecision(sessionId, pendingId, action) + 清空 store
- *   - 4 个动作按钮 (跟 Android 端 ApprovalBanner.kt 对齐):
- *     deny / once / session / always
- *   - sticky 在消息列表底部 + ChatInputBar 上方 (Web 是这样; Electron 这边
- *     把它放在 ChatInput 之上, 不挤压消息列表滚动区)
- *
  * 视觉 1:1 对齐 web: 外层 `mx-auto max-w-3xl w-full px-4 pb-2` + 内层
  *   `rounded-xl border border-red-500/40 bg-red-500/5 shadow-lg p-3` 卡片,
  *   标题行 / 工具列表 (带风险等级 badge) / detail / 4 按钮等宽 grid.
  *
- * 数据契约 (ApprovalRequest): 跟 api.ts submitApprovalDecision / sse.ts 解析
- * 出来的 approval_request rich_events 形状一致. ChatDetail 在 onChunk 里识别
- * type='approval_request' 累加进 store, type='approval_granted'/'approval_denied'
- * 清空 (first-wins 行为, 跟 web api.ts:643-646 + yinian-android 同款).
+ * ---------------------------------------------------------------------------
+ * 2026-10-28 · 任务书 04 · 契约 §7 (L-21 / L-26 ~ L-30 / L-32a / L-32b)
+ * ---------------------------------------------------------------------------
+ *   本组件**只负责渲染 + 把点击抛给父组件**, 不再自己提交裁决 ——
+ *   提交与「收哪几条」必须由**持有 pending 列表**的父组件决定
+ *   (契约 L-32a: 批掉一条**只删那一条**, 兄弟 pending 必须并存;
+ *    契约 L-26 ~ L-30: 409 = 已被别的端裁决 ⇒ 收卡 + 提示, 不报错不重试)。
+ *
+ *   ⇒ props 从 `onClear()` (整张表清空) 改成 `onAction(action, request)`,
+ *     与 web 定稿版 `gacode-web/src/components/chat/ApprovalBanner.tsx` 同款。
+ *
+ *   ⚠️ 审批身份 (`pendingId`) **只**来自事件的 `pending_id`
+ *     (归一层 `lib/rich-events.ts` 已把 snake / camel 两个别名解析好,
+ *      且⛔绝不拿 `id` 冒充 —— `id` 是 tool_use_id, 契约 L-21)。
  */
 
-import { useState } from "react";
-import { submitApprovalDecision, type ApprovalAction } from "../../lib/api";
 import { AlertTriangleIcon } from "../ui/Glyphs";
+import type { ApprovalAction } from "../../lib/api";
+// ★ `ApprovalRequest` 的**唯一定义**在 lib 里 (持久化 + 增删语义都在那儿),
+//   组件只负责渲染 —— ⛔ 不在这里写第二份同型 interface。
+import type { ApprovalRequest } from "../../lib/chat-pending-approvals";
 
-export interface ApprovalRequest {
-  /** local key — store 内去重 (同 server-pendingId 不重复 push) */
-  id: string;
-  /** server 端 pendingId — POST 时拼 URL (routing 后端到 gaclaw) */
-  pendingId: string;
-  tool: string;
-  title: string;
-  detail?: string;
-  riskLevel: "high" | "medium" | "low";
-}
+export type { ApprovalRequest };
 
 export interface ApprovalBannerProps {
   requests: ApprovalRequest[];
-  sessionId: string;
-  /** 触发时清空 parent 端 pendingApprovals 列表 (整张 banner 立刻消失) */
-  onClear: () => void;
-  onError?: (msg: string) => void;
+  /**
+   * 任一按钮触发 —— 父组件负责:
+   *   1) 调 `submitApprovalDecisionOutcome(sessionId, pendingId, action)`
+   *      (提交体只有 `{action}`, 契约 L-22);
+   *   2) 乐观收卡 —— **只删被裁决的那一条** (契约 L-32a / L-32b);
+   *   3) 409 ⇒ 收卡 + 提示「已由 X 端处理」, **不报错不重试** (契约 L-29)。
+   */
+  onAction: (action: ApprovalAction, request: ApprovalRequest) => void;
 }
 
 // 风险等级 badge — 对齐 web ApprovalBanner.tsx:32-36
@@ -65,39 +62,8 @@ function RiskBadge({ level }: { level: ApprovalRequest["riskLevel"] }) {
   );
 }
 
-export function ApprovalBanner({
-  requests,
-  sessionId,
-  onClear,
-  onError,
-}: ApprovalBannerProps) {
-  const [busy, setBusy] = useState<string | null>(null);
-
+export function ApprovalBanner({ requests, onAction }: ApprovalBannerProps) {
   if (!requests || requests.length === 0) return null;
-
-  const handleAction = async (action: ApprovalAction, req: ApprovalRequest) => {
-    if (busy) return; // 防按钮狂点
-    setBusy(req.pendingId);
-    try {
-      await submitApprovalDecision(sessionId, req.pendingId, action);
-      // 成功 → 清整张 banner. server 透传到 gaclaw 后异步 resolve 该
-      // approval, AI 再开下一 turn, banner 不再出现.
-      onClear();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[approval-banner] decision failed (pendingId=${req.pendingId}, action=${action}):`,
-        msg,
-      );
-      onError?.(msg);
-      // 失败也别无限卡在 banner 上 — 清掉让用户重发, server 端会通过
-      // cancel TTL 自行清理 (unified-api cancelRegistry.js).
-      onClear();
-    } finally {
-      setBusy(null);
-    }
-  };
 
   return (
     <div
@@ -148,42 +114,37 @@ export function ApprovalBanner({
         ) : null}
 
         {/* 4 按钮横排等宽 — 对齐 web ApprovalBanner.tsx:109.
-            注: 决策只作用于列表里第一条 approval (requests[0]). gaclaw 收到后会
-            cancel 整个 batch 的 _waiters, 所以「任一按钮触发 → 整批清空」语义在
-            server 侧保证. */}
+            决策只作用于列表里第一条 approval (requests[0]) —— 但**只删那一条**,
+            兄弟 pending 继续留在列表里 (契约 L-32a / L-32b)。 */}
         <div className="grid grid-cols-4 gap-1.5 mt-3">
           <button
             type="button"
-            disabled={!!busy}
-            onClick={() => void handleAction("deny", requests[0])}
-            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs border border-red-500/60 text-red-600 hover:bg-red-500/10 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            onClick={() => onAction("deny", requests[0])}
+            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs border border-red-500/60 text-red-600 hover:bg-red-500/10 transition-colors duration-150"
             data-testid="approval-deny"
           >
             拒绝
           </button>
           <button
             type="button"
-            disabled={!!busy}
-            onClick={() => void handleAction("once", requests[0])}
-            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            onClick={() => onAction("once", requests[0])}
+            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 transition-colors duration-150"
             data-testid="approval-once"
           >
             同意一次
           </button>
           <button
             type="button"
-            disabled={!!busy}
-            onClick={() => void handleAction("session", requests[0])}
-            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            onClick={() => onAction("session", requests[0])}
+            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 transition-colors duration-150"
             data-testid="approval-session"
           >
             本次会话
           </button>
           <button
             type="button"
-            disabled={!!busy}
-            onClick={() => void handleAction("always", requests[0])}
-            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-brand text-brand-on shadow hover:bg-brand/90 transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+            onClick={() => onAction("always", requests[0])}
+            className="flex-1 min-w-[80px] h-8 rounded-md px-3 text-xs bg-brand text-brand-on shadow hover:bg-brand/90 transition-colors duration-150"
             data-testid="approval-always"
           >
             永久
