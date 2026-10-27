@@ -5,6 +5,7 @@ import {
   shell,
   Menu,
   ipcMain,
+  nativeTheme,
 } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -18,6 +19,38 @@ import { registerNotificationIpc } from './notifications';
 // const __dirname = path.dirname(__filename);
 
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
+
+// ─────────────────────────────────────────────────────────────────────
+// 原生标题栏配色（2026-10-27 · gaga 要求「标题栏和下面的背景统一，都用黑底」）
+//
+// 背景：`BrowserWindow` 的 `backgroundColor: '#000000'` 只管**内容区**；
+// 顶部那条标题栏是 **Windows 自己画的**（原生 frame）⇒ 跟随系统浅色主题
+// ⇒ PC 端出现「白标题栏 + 黑内容区」的割裂（gaga 截图反馈）。
+//
+// 做法：`nativeTheme.themeSource = 'dark'` ⇒ Windows 按暗色画原生标题栏，
+// 底色变深，跟内容区的黑底观感统一。**零布局改动。**
+// 放在 module level（早于 `app.whenReady()` / 窗口创建）⇒ 窗口一建出来就是暗色，
+// 不会出现「先亮后暗」的闪烁。
+//
+// 为什么不用 `titleBarStyle: 'hidden'` + `titleBarOverlay`（那才是**纯黑无缝**，
+// 但代价大得多）：
+//   ① 隐藏标题栏后 web 内容会顶到窗口最上沿 ⇒ 页面顶部会被系统窗口按钮
+//      **压住**（例如「知识库」页右上角的搜索 / 刷新图标）⇒ 必须全局加顶部留白；
+//   ② 本仓浏览器页用 `BrowserView` 铺满 content area（`setBrowserTabBounds`
+//      里 `getContentBounds()`），隐藏标题栏后 content area = 整个窗口
+//      ⇒ BrowserView 会**盖住**右上角的窗口按钮 ⇒ 还得同步改它的 setBounds；
+//   ③ 那条区域还得自己标 `-webkit-app-region: drag` 才能拖动窗口。
+// ⇒ 先走 themeSource 这条零布局改动的路；要「纯黑无缝」再上 hidden 方案。
+//
+// 副作用检查：本仓 `index.html` 已是 `<html class="dark">`、`globals.css` 已声明
+// `color-scheme: dark`、Tailwind 用 `darkMode: ["class"]` 且**没有**
+// `prefers-color-scheme` 媒体查询 ⇒ 强制 dark 主题不改变任何现有渲染。
+//
+// ⚠️ 验证方式：**以 gaga 肉眼确认为准**。此前用 PowerShell `Graphics.CopyFromScreen`
+//    取样标题栏像素得到 R245-250，据此判「themeSource 无效」是**取样方法本身不可靠**
+//    （抓到了被遮挡区域 / 未重绘窗口）—— gaga 肉眼确认标题栏已变深色。
+//    ⇒ 原生 frame 的颜色**不要**拿屏幕像素取样当证据。
+nativeTheme.themeSource = 'dark';
 
 // 阶段 0 验证用:Electron 启动并截一张 PNG,然后退出。
 // 用于 evidence 截图 — 走 webContents.capturePage() (正确捕获 GPU 内容),
