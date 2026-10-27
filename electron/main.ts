@@ -13,6 +13,7 @@ import * as crypto from 'crypto';
 import { createTray } from './tray';
 import { createAppMenu } from './menu';
 import { registerNotificationIpc } from './notifications';
+import { getAppIcon, logIconStatus } from './icon';
 
 // CommonJS 下 __dirname 已有,这里只是为了类型注释
 // const __filename = fileURLToPath(import.meta.url); // ESM 模式才需要
@@ -205,12 +206,19 @@ let mainWindow: BrowserWindow | null = null;
 let isQuiting = false;
 
 function createWindow(): void {
+  // 应用图标 —— **窗口必须自带 icon**（gaga 2026-10-27 截图反馈）。
+  // 不传时 Windows 任务栏 hover 预览卡片左上角的小方块会退化到 exe 自带图标，
+  // dev 模式跑的是 electron.exe ⇒ 显示 Electron 原子图标（实测 WM_GETICON 返回 null）。
+  // 解析逻辑见 electron/icon.ts（dev 走仓内 build/，打包态走 process.resourcesPath）。
+  // 图标拿不到时**不传 icon**（保留原有行为），不让 app 起不来。
+  const appIcon = getAppIcon();
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 800,
     minHeight: 600,
     title: 'Gacode',
+    ...(appIcon.isEmpty() ? {} : { icon: appIcon }),
     backgroundColor: '#000000',
     show: false, // 先不显示,等 ready-to-show 再 show,避免白屏闪一下
     webPreferences: {
@@ -821,6 +829,9 @@ app.whenReady().then(() => {
       console.warn('[gacode-electron] setPath userData failed', err);
     }
   }
+
+  // 图标状态日志（PM 靠这行验证窗口 / 托盘图标，不靠截图）
+  logIconStatus();
 
   createWindow();
   createAppMenu(() => mainWindow);

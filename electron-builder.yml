@@ -48,6 +48,18 @@ files:
   - package.json
   - '!**/*.map'
 
+# 应用图标运行时解析（electron/icon.ts）:
+#   - 打包后仓内 build/ **不在 files: 里** ⇒ 主进程只能靠 process.resourcesPath 找图标
+#     (dev 态走 <repo>/build/, 打包态走 <安装目录>/resources/)
+#   - icon.ico    → 窗口 icon (6 帧, Windows 自己挑帧)
+#   - icon-16.png → 托盘 icon (原生 16px, 避免重采样糊)
+# 复制到 resources 根 ⇒ <安装目录>/resources/icon.ico | icon-16.png
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+  - from: build/icon-16.png
+    to: icon-16.png
+
 asar: true
 disableSanityCheckAsar: true
 compression: maximum

@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
+import { BrandLockup } from "../components/ui/BrandLockup";
 import { Button } from "../components/ui/Button";
 import { useAuth } from "../lib/auth";
 import { authApi } from "../lib/api";
@@ -172,17 +173,8 @@ export function QrLogin() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-bg-base px-4 py-8">
-      {/* Brand logo */}
-      <div className="flex items-center gap-3 mb-10">
-        <div
-          aria-hidden="true"
-          className="w-14 h-14 rounded-md bg-brand/20 border border-brand/40 flex items-center justify-center text-brand font-bold text-2xl"
-          style={{ fontFamily: "var(--font-mono)" }}
-        >
-          G
-        </div>
-        <span className="text-xl font-semibold tracking-wide">gacode</span>
-      </div>
+      {/* Brand logo — cody 吉祥物 + gacode 品牌名 (对齐 web qr-login/page.tsx:171-179) */}
+      <BrandLockup />
 
       <div className="w-full max-w-[400px] rounded-md bg-bg-sunken shadow-sm p-6">
         <h1 className="text-lg font-medium mb-1 text-center">扫码登录</h1>
