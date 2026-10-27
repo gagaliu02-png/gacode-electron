@@ -1,9 +1,16 @@
 # PC 端 · markdown 代次 2 交底包（照抄 web 定稿版 · CSS 段）
 
-> **来源**：2026-10-27 explore 只读取证（`bg_8f87d052`）+ PM 独立复核关键行号与规则体。
+> ## ⭐ 权威步骤表在总PM 那份，本文件是**详细附录**
+>
+> **主交底（照着做）**：`D:\gaga\gaclaw-project\docs\pm\2026-10-27-PC代次2-markdown抄写清单.md`（总PM 出 · 10 步骨架 + 三条红线 + **①-E 裁决 (a)** + 无可抄项 + 已知风险）
+> **取证原文**：`D:\gaga\gaclaw-project\docs\pm\2026-10-27-PC代次2-markdown抄写清单-取证原文.md`（29.7 KB · 逐条表 + `文件:行号`）
+> **本文件（附件）** = **逐规则 / 逐行号的详细对照 + 对账 + 风险展开 + 断言脚本规格** —— 两份**不冲突**，步骤以总PM 那份为准，细则以本文件为准。
+> **冲突时以总PM 那份为准**（它含最新裁决 ①-E）。
+
+> **来源**：2026-10-27 explore 只读取证（`bg_8f87d052`）+ PM 独立复核关键行号与规则体 + 总PM 裁决。
 > **口径**（总PM 裁定 + PM 修正）：**markdown 三件套（`parser.ts` / `renderer.tsx` / `markdown.tsx`）= PC 是原件端，两端 blob 相同 ⇒ PC 零改动**；
-> `ImageLightbox.tsx` + `verify-md-render.mjs` = **两端各保留、不互抄**。
-> ⇒ **本代 PC 唯一必抄 = `src/styles/globals.css` 的 markdown CSS 段（必须连 `@layer` 上下文一起搬）** + 1 处接线。
+> `ImageLightbox.tsx` + `verify-md-render.mjs` = **两端各保留、不互抄** —— 但 **`ImageLightbox.tsx` 要按 ①-E 裁决 (a) 补一个类名**（见 §2.2）。
+> ⇒ **本代 PC 唯一必抄 = `src/styles/globals.css` 的 markdown CSS 段（必须连 `@layer` 上下文一起搬）** + 1 处接线 + 1 处类名。
 
 ---
 
@@ -21,7 +28,7 @@
 | `src/lib/markdown/parser.ts` | `cc9c035d` | `cc9c035d` | **不动** | 两端**完全相同** ⇒ PC 是原件端 |
 | `src/lib/markdown/renderer.tsx` | `e75e1629` | `e75e1629` | **不动** | 同上 |
 | `src/lib/markdown.tsx` | `125f0fa9` | `125f0fa9` | **不动** | 同上 |
-| `src/components/ui/ImageLightbox.tsx` | `108338d0` | `e3b8715b` | **不动**（双向保留） | 见 §2.2 —— PC **已有** `onCloseRef`（6 处命中），**是 web 抄 PC 的**，PC 无需抄 |
+| `src/components/ui/ImageLightbox.tsx` | `108338d0` | `e3b8715b` | **只改 1 行 className**（①-E (a)：补 `backdrop:bg-black/85`），**其余 0 改动** | 见 §2.2 —— PC **已有** `onCloseRef`（6 处命中），**是 web 抄 PC 的**；web 的 onClick 与 PC **逐字一致** ⇒ 判定逻辑不用改 |
 | `scripts/verify-md-render.mjs` | `3b115969` | `1023abae` | **不动**（双向保留） | 两端各锁各的口径 |
 | `scripts/verify-md-parser.mjs` | `4211e4b6` | `f0b43dec` | **不动** | 同上 |
 | `scripts/verify-md-table-colwidth.mjs` | `18c1d102` | `18c1d102` | **不动** | 两端 blob 相同 |
@@ -112,26 +119,43 @@ L397-414 「gagaOS 全局禁用 CSS 动效」块              （**留在原处�
 
 **语义差**：PC = 「全屏遮罩层」（dialog 自身铺满 + flex 居中 + 暗色在 dialog 本体）；web 定稿 = 「**dialog 自身归零 + 居中**」，暗色落到 `::backdrop` 伪元素。
 
-**⭐ PM 2026-10-27 拍板：遮罩来源走「纯 CSS」路线（不动组件）**
+**⭐ ①-E 裁决（总PM 2026-10-27 拍板，选 (a)）**：**在 PC 自己的 `ImageLightbox.tsx` 的 `<dialog>` className 上补 `backdrop:bg-black/85`** —— **不抄 web 的文件，只抄 web 的做法**。
 
-web 的暗色来自**组件上**的 Tailwind 工具类 `backdrop:bg-black/85`（落 `::backdrop`），而 **PC 的 `ImageLightbox.tsx` 不带这个类**（且该组件契约 = 两端各保留、不互抄）⇒ **PC 在 CSS 里补一条 `::backdrop` 暗色**：
+**为什么 (a) 能成立（PM 已实测）**：
 
-```css
-/* PM 2026-10-27 拍板（纯 CSS 路线 · 组件零改动）：
-   web 的暗色遮罩来自组件上的 Tailwind `backdrop:bg-black/85`（落 ::backdrop）；
-   PC 组件不带该工具类，且 ImageLightbox.tsx 契约 = 两端各保留、不互抄
-   ⇒ 在 CSS 侧补 ::backdrop 暗色，视觉与 web 等价、组件不动。 */
-dialog.md-lightbox-backdrop::backdrop {
-  background: rgba(0, 0, 0, 0.85);
-}
+- web 的暗色来自**组件 className**（`gacode-web/src/components/ui/ImageLightbox.tsx:130`：`className="md-lightbox-dialog md-lightbox-backdrop p-0 bg-transparent border-0 max-w-[95vw] max-h-[95vh] m-auto backdrop:bg-black/85"`）⇒ Tailwind 生成 `&::backdrop`。
+- PC 的 `ImageLightbox.tsx:93` className = `"md-lightbox-dialog md-lightbox-backdrop"`（**零 Tailwind 工具类**）⇒ 补 `backdrop:bg-black/85` 即可。
+- **Tailwind v3.4.19 会生成这个类**（PC 自带 CLI 实测：`.backdrop\:bg-black\/85::backdrop { background-color: rgb(0 0 0 / 0.85) }`）；PC 的 `tailwind.config.ts:27-30` content = `"./src/**/*.{ts,tsx}"` + `"./index.html"` ⇒ **`src/components/ui/ImageLightbox.tsx` 在扫描范围内** ⇒ 类会生成 ✓。
+- **PC 不需要抄 web 的其它工具类**（`p-0` / `bg-transparent` / `border-0` / `max-w-[95vw]` / `max-h-[95vh]` / `m-auto`）—— 这些值**已在 web 定稿版的 CSS 规则体里**（上面那 6 条）⇒ PC 搬 CSS 后由 CSS 提供 ⇒ **只需加 `backdrop:bg-black/85` 一个类**。
+
+**⭐ 总PM 附条件「先补读 web 的 onClick」—— PM 已补读，结论：web 与 PC 判定逻辑逐字一致，PC 不用改判定。**
+
+| | web `ImageLightbox.tsx:131-134` | PC `ImageLightbox.tsx:94-97` |
+|---|---|---|
+| onClick | `if (e.target === ref.current) onCloseRef.current();` | `if (e.target === ref.current) onCloseRef.current();` |
+
+⇒ **逐字一致** ⇒ 「点背景关闭」的判定**两端口径相同** ⇒ PC **不需要实现任何新的点击判定** ⇒ **组件只改 1 行 className**。
+
+**z-index / stacking / 滚动锁风险 —— PM 已核，零风险**：
+
+- 两端都用**原生 `<dialog>` + `showModal()`** ⇒ 进浏览器 **top layer**（原生 modal dialog）⇒ **自带焦点陷阱 + Esc 关闭 + 背景滚动锁**，**不依赖 z-index** ⇒ 换结构不会引入叠层 / 滚动锁问题。
+- PC 现有 `.md-lightbox-backdrop` 里的 `z-index: 9999` 在 **web 定稿版里没有** ⇒ 搬 web 规则体时**自然消失**（是删除，不是新加）。
+- 居中逻辑从 PC 的 `display:flex; align-items:center; justify-content:center` 换成 **UA 的 `dialog:modal` 居中 + `margin:auto`** —— web 就是这么做的且**已上线跑通**（commit `6bd9215` / BUILD_ID `6LGSWCebi2JsHOWB_-naR`）⇒ 成立。
+- web 的 close 按钮用 Tailwind（`absolute top-2 right-2 w-9 h-9 rounded-full bg-black/60 text-white text-lg leading-none hover:bg-black/80`），PC 的 `.md-lightbox-close` CSS 版是 `top:8px; right:8px; width:36px; height:36px; border-radius:9999px; background:rgba(0,0,0,.6); color:#fff; font-size:18px; line-height:1;` + `:hover background:rgba(0,0,0,.8)` ⇒ **逐值等价**（top-2=8px / w-9=36px / bg-black/60=rgba(0,0,0,.6) / text-lg=18px）⇒ **不用改**。
+
+**PC 组件的最终改动（就 1 行）**：
+
+```diff
+- className="md-lightbox-dialog md-lightbox-backdrop"
++ className="md-lightbox-dialog md-lightbox-backdrop backdrop:bg-black/85"
 ```
 
 **配套事实（已核实，照做即可）**：
 
 - PC 的 `ImageLightbox.tsx` 用**原生 `<dialog>` + `showModal()`**（`ImageLightbox.tsx:73`）⇒ `::backdrop` 可用。
-- `::backdrop` 的点击事件 **target 就是 dialog 元素** ⇒ PC 组件里 `onClick` 的 `e.target === ref.current` 判断**照常生效** ⇒ 「点暗色关闭」行为与 web 一致，**组件不用改**。
+- `::backdrop` 的点击事件 **target 就是 dialog 元素** ⇒ PC 组件里 `onClick` 的 `e.target === ref.current` 判断**照常生效** ⇒ 「点暗色关闭」行为与 web 一致。（**web 侧已上线跑通同一套机制** ⇒ 事实，非推测。）
 - **必须去掉** `animation: md-lightbox-in 0.15s ease-out`（web 侧只定义 `@keyframes` 不引用；且 PC 全局禁 animation ⇒ 本就不生效）。
-- **建议去掉** `cursor: zoom-out`（web 无此提示；改口径后 dialog 盒 = 图盒，`zoom-out` 挂上去没意义）。
+- **建议去掉** `cursor: zoom-out`（web 无此提示；改口径后 dialog 盒 = 图盒，`zoom-out` 挂上去没意思）。
 - **`.md-lightbox-inner` / `.md-lightbox-img` / `.md-lightbox-close` / `:hover` / `@keyframes` 五条 PC 与 web 已逐字相同** ⇒ **只搬层级，不改声明**。
 
 ### 2.3 `src/styles/globals.css` —— `.md-table-th` 对齐 + 删 PC 独有规则
@@ -161,6 +185,18 @@ dialog.md-lightbox-backdrop::backdrop {
 - web 对应：`gacode-web/src/app/(main)/library/[id]/page.tsx:420` = `<Markdown size="reading" cutCodeBlocks>{item.content}</Markdown>`。
 - **可见变化**：知识库正文 **14px → 16px** + 行高 1.5 → 24px + 阅读场景段落间距 12px。
 - 顺手把 L379 那条过期注释（`web:420 <Markdown>{item.content}</Markdown>`）改成 web 实际写法。
+
+### 2.5 `src/components/chat/MessageBubble.tsx:129-130` —— 反色 wrapper 砍 2 条死 selector
+
+```diff
+- const USER_MARKDOWN_WRAPPER_CLASS = "[&_code]:!bg-primary-foreground/20 [&_pre]:!bg-primary-foreground/10 [&_blockquote]:!border-primary-foreground/40 [&_a]:!text-primary-foreground";
++ const USER_MARKDOWN_WRAPPER_CLASS = "[&_code]:!bg-primary-foreground/20 [&_a]:!text-primary-foreground";
+```
+
+- web 的对应（`gacode-web/src/components/chat/MessageBubble.tsx:351-353`）只有 **2 个 selector**：web 在 2b-2 按新 DOM 契约删掉了 `[&_pre]`（chat 场景**不产 `<pre>`**）与 `[&_blockquote]`（引用是 `<div class="md-quote">`，**不是 `<blockquote>`**）⇒ 这 2 条在 PC 上**永远匹配不到** = 死 selector。
+- **零视觉影响**（删的是匹配不到的选择器）⇒ 纯清理。
+- ⚠️ `!` 前缀写法（Tailwind 3.4.19 重要修饰符）**保留** —— `&_code` / `&_a` 那两条仍需要压过 markdown 的 `.md-inline-code` / `.md-link`。
+- **不要**动 `USER_MARKDOWN_WRAPPER_CLASS` 之外的 `MessageBubble.tsx` 任何逻辑。
 
 ---
 
@@ -224,7 +260,7 @@ dialog.md-lightbox-backdrop::backdrop {
 |---|---|---|---|
 | **R1** | 只搬声明不改层级 ⇒ PC 优先级模型与 web 不一致 | PC `.md-*` 主体 45 条在 unlayered，web 55 条全在 `@layer components` | **整段搬进 `@layer components`**，不零散搬 |
 | **R2** | 搬进 layer 后 Tailwind utilities 会压过 `.md-*` | PC v3 的 `@tailwind utilities` 是 unlayered；web v4 的 utilities 真在 `@layer utilities` | **两端结论一致 ✓**；仍要复查 §4 的 3 条副作用 |
-| **R3** | `.md-lightbox-backdrop` 换口径后 PC 的暗色遮罩来源变了 | web 靠组件的 Tailwind `backdrop:bg-black/85`；PC 组件没有该类 | ⭐ **PM 已拍板走纯 CSS**：加 `dialog.md-lightbox-backdrop::backdrop { background: rgba(0,0,0,0.85) }`（§2.2）⇒ 组件零改动、视觉等价 |
+| **R3** | `.md-lightbox-backdrop` 换口径后 PC 的暗色遮罩来源变了 | web 靠组件的 Tailwind `backdrop:bg-black/85`；PC 组件没有该类 | ⭐ **①-E 裁决 (a)**：PC 自己的 `ImageLightbox.tsx` className 补 `backdrop:bg-black/85`（§2.2）⇒ **组件只改 1 行**；Tailwind v3.4.19 已实测会生成该类、`tailwind.config.ts` content glob 覆盖该文件 ⇒ 可行 |
 | **R4** | `.md-table-th` 改 center 但忘了删 `.md-table .md-table-th` | specificity 0,2,0 > 0,1,0 | §2.3 已含「同时删 L391-394」 |
 | **R5** | `size="reading"` 影响知识库正文排版 | `renderer.tsx` 的 `size` 决定字号 / 段间距（PC CSS L448-455） | 改后跑 `verify-md-render.mjs`（§B 103 条含 reading 场景）+ 真机看知识库页 |
 | **R6** | 搬 CSS 时误动 PC 独有的 `.md-table*` 段（L272-394） | 该段已在 `@layer components` 内、与 web 同层同声明 | **只动 L415-809**，L272-394 原位保留 |
@@ -242,12 +278,27 @@ dialog.md-lightbox-backdrop::backdrop {
 | `scripts/verify-md-table-colwidth.mjs` | 12 条静态 | 列宽 clamp 80/240 + 横滑 + 断行（§B 渲染实测因 `scripts/e2e/node_modules` 缺失被跳过） |
 | `scripts/verify-pagination-guard.mjs` | 15 | 分页守卫（与本代无关，照跑） |
 
-### 6.2 新增 2 支（**先写断言再改代码**，防回退）
+### 6.2 新增 5 支（**先写断言再改代码**，防回退）
 
-| 脚本 | 断言内容 | 条数 |
-|---|---|---|
-| `scripts/verify-md-no-third-party.mjs` | `package.json` + lock 各 4 库 0 命中 + `src/` 第三方 import 数 0 + components 覆写对象 0 | ~10 |
-| `scripts/verify-md-contract.mjs` | 把 web 的 lightbox 严口径搬过来：4 条 `cssMatches` + 1 条「backdrop 规则体内 **14 条遮罩声明命中数全为 0**」（web `verify-md-render.mjs:670,695-724` 的 FORBIDDEN 数组）+ 接线三项回归（library 有 `size="reading"` · wrapper 不含 `[&_pre]`/`[&_blockquote]` · `.md-table .md-table-th` 已删） | ~9 |
+| 脚本 | 来源 | 断言内容 | 条数 |
+|---|---|---|---|
+| `scripts/verify-md-no-third-party.mjs` | **抄 web**（原件端 = web）+ 按 PC 参数化 | `package.json` + lock 各 4 库 0 命中 + `src/` 第三方 import 数 0 + components 覆写对象 0 | ~10 |
+| `scripts/verify-md-user-bubble.mjs` | **抄 web** + 参数化 | user 气泡的 markdown 反色 wrapper + 正文结构 | web 375 行 |
+| `scripts/verify-md-link-color.mjs` | **抄 web** + 参数化 | 链接色 `#FF6B35` 等 markdown 链接口径 | web 548 行 |
+| `scripts/verify-md-xss.mjs` | **抄 web** + 参数化 | XSS 面（无原生 HTML 注入、无 `dangerouslySetInnerHTML` 等） | web 756 行 |
+| `scripts/verify-md-css-context.mjs` | ⭐ **PC 独有 · 新写** | **钉 4 条声明差异 + `@layer` 上下文**（用 **CSS 花括号深度解析**定位规则体所在层级）—— C-5 就是「只搬声明会改优先级」的回归闸 | ~9 |
+
+> **⚠️ 关于「抄 web 的脚本」**：总PM 写的是「PC 自己的脚本，禁止复制 web 的文件」。
+> **PM 的落地口径**：**原件端 = web ⇒ 抄 web 的脚本，按 PC 的路径 / 命名 / 变量名参数化**（这与本仓已有的 `verify-pagination-guard.mjs` 做法一致 —— 抄 web 同名脚本后按 PC 的 `data` / `pageData`、`listLibrary` / `listLibraryMapped` 等命名差异参数化 + 做变异反证）。
+> ⇒ **文件落在 PC 仓、断言的是 PC 的路径与 PC 的代码形状** ⇒ 满足「PC 自己的脚本」；**不重写第三遍**（gaga 明示「组件意识：禁止重复实现」）。
+> ⇒ **参数化时必须逐条核 web 与 PC 的命名差异**，不能直接跑 —— web 的脚本里若写死了 `gacode-web/src/...` 路径或 web 专属 DOM 形状，一律改成 PC 的对应物。
+
+> **⭐ 遮罩声明断言的正确条数 = 15，不是 16**（PM 订正）：
+> web `scripts/verify-md-render.mjs:702-717` 的 `FORBIDDEN_BACKDROP_DECLS` 是 **14 条**：`position:fixed` / `inset:0` / `width:100%` / `height:100%` / `max-width:none` / `max-height:none` / `margin:0` / `padding:2rem` / `background:rgba(...)` / `display:flex` / `align-items:` / `justify-content:` / `cursor:zoom-out` / `z-index:`。
+> **PC 那 16 条里多出来的 2 条要分开看**：
+> - `border: 0` ⇒ **是 web 定稿版的必需项**（UA 归零三件套之一：padding/border/background）⇒ **绝不能禁**，禁了会把 web 定稿版自己判红。
+> - `animation: md-lightbox-in 0.15s ease-out` ⇒ web 里**根本没有**（web 只定义 `@keyframes` 不引用）⇒ **可以禁**，且应该禁。
+> ⇒ **正确口径 = 禁 web 那 14 条 + 额外禁 `animation:` 1 条 = 15 条**；`border: 0` 留在允许集里。
 
 > **入库路径**：PC 仓 `.gitignore` 有 `scripts/*` 全忽略 + 逐个 `!scripts/verify-*.mjs` 声明式例外（**三级解锁**：先 `!scripts/` 放行目录 → `scripts/*` 重新忽略 → 只豁免要入库的文件）。
 > **⛔ 不许 `git add -f`**（隐性步骤，忘一次就丢且 `git log` 看不出来）。
@@ -263,7 +314,10 @@ node scripts/verify-md-render.mjs;            if ($LASTEXITCODE -ne 0) { throw '
 node scripts/verify-md-table-colwidth.mjs;    if ($LASTEXITCODE -ne 0) { throw 'colwidth 失败' }
 node scripts/verify-pagination-guard.mjs;     if ($LASTEXITCODE -ne 0) { throw 'pagination 失败' }
 node scripts/verify-md-no-third-party.mjs;    if ($LASTEXITCODE -ne 0) { throw 'third-party 失败' }
-node scripts/verify-md-contract.mjs;          if ($LASTEXITCODE -ne 0) { throw 'contract 失败' }
+node scripts/verify-md-user-bubble.mjs;       if ($LASTEXITCODE -ne 0) { throw 'user-bubble 失败' }
+node scripts/verify-md-link-color.mjs;        if ($LASTEXITCODE -ne 0) { throw 'link-color 失败' }
+node scripts/verify-md-xss.mjs;               if ($LASTEXITCODE -ne 0) { throw 'xss 失败' }
+node scripts/verify-md-css-context.mjs;       if ($LASTEXITCODE -ne 0) { throw 'css-context 失败' }
 ```
 
 ⚠️ `verify-md-render.mjs` 会写仓内 `node_modules/.cache/gacode-md-render/renderer.bundle.mjs`（脚本 L44-45 / L254-255）⇒ 干净树 / CI 跑之前留意。
@@ -275,13 +329,13 @@ node scripts/verify-md-contract.mjs;          if ($LASTEXITCODE -ne 0) { throw '
 **门禁（全部必须绿，缺一不可交）**：
 
 1. `pnpm typecheck` ⇒ 退出码 **0**
-2. §6.3 的 **6 支脚本逐个点名跑**，全绿（各自的通过数照实报）
+2. §6.3 的 **9 支脚本逐个点名跑**，全绿（各自的通过数照实报）
 3. `pnpm-lock.yaml` **未动**
 4. `src/lib/markdown/` **三件套 blob 未变**（`git diff --name-only -- src/lib/markdown` 为空）
-5. `src/components/ui/ImageLightbox.tsx` **未动**
+5. `src/components/ui/ImageLightbox.tsx` **只改了 1 行 className**（加 `backdrop:bg-black/85`），**其余 0 改动**（`git diff` 里该文件应当**只有 1 处 `-`/`+` 对**）
 6. `scripts/verify-md-render.mjs` / `verify-md-parser.mjs` **未动**
-7. `git diff --name-only` 只出现本交底包列出的文件
-8. **变异反证**：把新写的 `verify-md-contract.mjs` 盯住的那一处改坏 ⇒ 该断言**必须立刻红**；改回 ⇒ 全绿（证明断言不是摆设）
+7. `git diff --name-only` 只出现：`src/styles/globals.css` · `src/routes/LibraryDetail.tsx` · `src/components/chat/MessageBubble.tsx` · `src/components/ui/ImageLightbox.tsx` · 5 个新脚本
+8. **变异反证**：每支新脚本都要能**改坏就转红**（改 CSS 的层级 / 改 `text-align` / 删掉 `.md-table .md-table-th` / 去掉 `backdrop:bg-black/85` / 加回 `&_pre` ⇒ 对应断言必须立刻红）；改回 ⇒ 全绿（证明断言不是摆设）
 
 **验收（PM 复核）**：
 
@@ -290,5 +344,6 @@ node scripts/verify-md-contract.mjs;          if ($LASTEXITCODE -ne 0) { throw '
 - lightbox **点图片不关**（`stopPropagation`）
 - 知识库页正文**字号变大到 16px**
 - 表格**仍能横滑**、列宽仍 clamp 80/240px、**表头仍居中**
+- **PC 全局禁动效块仍在 `@layer` 之外**（`globals.css` 的 `*,*::before,*::after{animation:none!important…}` 那一块）
 
-**⛔ 本代不做**：`MessageBubble` 反色 wrapper 的 2 条死 selector（可选，零视觉影响）；任何 `package.json` 依赖增删；任何 `src/lib/markdown/**` 改动；`ImageLightbox.tsx` 改动。
+**⛔ 本代不做**：任何 `package.json` 依赖增删；任何 `src/lib/markdown/**` 改动；`ImageLightbox.tsx` 除那 1 行 className 外的任何改动；`verify-md-render.mjs` / `verify-md-parser.mjs` 改动。
