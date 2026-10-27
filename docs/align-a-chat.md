@@ -5820,7 +5820,11 @@ function typeIcon(type: LibraryItem["type"]) {
 
 ---
 
-## 结构级差异 · 需 gaga 拍
+## 结构级差异 · 8 条（A-S01~A-S08）
+
+> **⚠️ 编号消歧（2026-10-27 10:40）**：本域用 **A-S01~A-S08**；C 域用 **C-S1~C-S12**；D 域用 **D-S01~D-S07** —— **三套编号互不相同**（例如 A-S05 = 全局 store，C-S5 = 头像重复上传，D-S05 = BottomSheet 形态），**跨域引用必须带域前缀**。
+> **状态 / 落法 / 排期代次**统一见 PM 侧状态表：`D:\gaga\gaclaw-project\docs\pm\2026-10-27-PC端结构级条目状态表-供PM排期.md`
+> **按分层对齐模型（PC = -2），本节 8 条已不再等 gaga 拍** ⇒ 逐条落法与代次见上表。
 
 > **已拍板、不在此列**：PC 侧栏 **256px 常驻**（`AppShell.tsx` `SIDEBAR_WIDTH = "w-64"`）保留，不改成 web 的 Drawer 抽屉 —— gaga 已明确拍板。侧栏**内部内容与交互**照 web 对齐（见 A3 / A4 全部条目），一条不落。
 
