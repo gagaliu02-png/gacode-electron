@@ -5,7 +5,14 @@
 > **生成日期**：2026-10-26
 > **粒度**：每条含 ① web `file:line` ② PC `file:line`（无则写「PC 缺失」）③ 判定（缺失 / 形态不同 / 已一致）④ 「怎么改」栏：目标文件绝对路径 + 插入锚点 + 可直接粘贴的完整 className 串 + 代码骨架（state/ref/handler 签名 + props）+ 交互参数（hover / 长按 ms / 键盘 / 防抖 / 动画 duration）+ 预估改动行数
 > **排序**：每节内按改动量升序分 4 档 — D1 ≤3 行 · D2 4-15 行 · D3 16-40 行 · D4 >40 行
-> **不列入**：PC 有、web 没有的功能（gaga 指示：先 1:1 还原 web，不讨论 PC 增强）
+> **不列入**：PC 有、web 没有的功能（gaga 指示：先 1:1 还原 web，不讨论 PC 增强）—— ⚠️ **2026-10-27 10:13 订正**：按分层对齐模型（PC = -2），「PC 多出」不再一律排除或删除，而是**可保留**，除非与终态契约冲突；仅「三端都无的 PC 自创」仍该删（那是往终态收敛，不是落后）。详见下方优先级口径。
+>
+> **⚠️ 优先级口径（2026-10-27 10:13 总PM 纠正 · 分层对齐模型）**：三端一致 = **分层对齐**，不是「立刻一模一样」—— **安卓 = 0**（基线 · 优先上功能）· **web = -1**（强对齐安卓）· **PC = -2**（弱对齐安卓，直接对标 web）⇒ **允许 web 落后安卓 1 代、PC 落后 2 代**；**看到差异 ≠ 立刻拉齐**，差异是**排期问题**（记台账 + 排期，不催）。
+> - 本台账「**缺失**」（web 有 PC 没有）⇒ **待补 · 排期补，不催**（PC 弱对齐），**不是紧急缺陷**
+> - 本台账「**PC 多出**」（PC 有 web 没有）⇒ **可保留（-2 容差）**；只有与**终态契约**冲突（契约判「明确不支持」）才收；**但「三端都无的 PC 自创」仍然该删**
+> - 判断依据按新模型 = **「安卓有没有」优先**，不是「PC 有没有」：安卓有而 web 没有 ⇒ 是 web 落后，PC 保持并等 web 追上
+> - 模型出处：markdown 契约 v1.2 **§0.2「当前推进规则（三端进度不一致 ⇒ 分层推进）」**
+> - 本台账里标「⏳ 仍待 gaga 拍」的 **S 类结构级条目**，按新模型**已不需要 gaga 拍**（进度差异类 ⇒ 排期补，不催）；「只问 gaga」只剩**产品级取舍**（功能要不要 / 用户可见能力加不加 / 生产数据迁移）与**终态口径冲突**
 > **PC 端 className 约束**：PC 仓无 tailwind-merge / clsx / cva，`className` 是数组尾部字符串追加 → 同名冲突类由 CSS 源码顺序决定，需显式处理（例：`rounded-full` 输给 base `rounded-md` → 写 `!rounded-full`）
 > **web 端 cn 语义**：`cn = twMerge(clsx(...))`（`src/lib/utils.ts:4-6`）→ 本清单给出的 className 均为 **twMerge 后最终生效串**
 > **PC `file:line` 口径（2026-10-26 修正）**：本清单的 PC 行号取 **2026-10-26 实现批快照**（该批改动现已进入 HEAD）。同仓有其它 worker 并行改 `src/**`，行号会继续漂移 ⇒ **定位以「锚点函数名 / 代码串」为准**，行号仅作参考。
@@ -6014,7 +6021,7 @@ function typeIcon(type: LibraryItem["type"]) {
 |---|---|---|---|
 | 1 | A3-D2-04 | 侧栏「日程中心」入口缺失 —— **PM 拍板本轮不做**（PC 无 `/schedule` 路由，前置页面未建） | 40 行（挂起） |
 | 2 | A2-D2-07 | web 重命名弹窗保存按钮的「保存中...」文案 —— **PM 拍板不改**（通用 `ConfirmDialog` 不加页面专属文案） | 0 行（不改） |
-| 3 | ~~A3-D1-06 / A4-D3-01 / A2-D2-12~14~~ | ✅ **已完成（2026-10-27）**：这 5 条 PC 多出项（侧栏 nav active 高亮 / 行首气泡图标 / 「跳到底」按钮 / 消息列表空态 / 多工具决策提示）已按 gaga 21:35 口径**全部删除 PC 侧 UI**（commit `8cfcb64`）⇒ 判定改为「已一致」，**不再是待办** | 0 行（已清零） |
+| 3 | ~~A3-D1-06 / A4-D3-01 / A2-D2-12~14~~ | ✅ **已完成（2026-10-27）**：这 5 条 PC 多出项（侧栏 nav active 高亮 / 行首气泡图标 / 「跳到底」按钮 / 消息列表空态 / 多工具决策提示）已按 gaga 21:35 口径**全部删除 PC 侧 UI**（commit `8cfcb64`）⇒ 判定改为「已一致」，**不再是待办**。⚠️ **2026-10-27 10:13 补充**：这 5 条**删除是对的**（已逐条核 **web 无 + 安卓无** ⇒ 属「三端都无的 PC 自创」，删掉是往终态收敛），但**理由不是「PC 多出即删」** —— 按分层对齐模型（PC = -2），一般性的「PC 多出」是**可保留**的 | 0 行（已清零） |
 
 > 结构级条目里 **S-05（web 全局 store vs PC 组件内 state）** 与 **S-03（全局 Header vs ChatDetail 自管 header）** 的改动面比上表任何单条都大（各 >150 行、跨 4 个文件），建议在排期时与上表并列看待。
 >
@@ -6106,7 +6113,7 @@ function typeIcon(type: LibraryItem["type"]) {
 | A1-D3-06 | `src/routes/ChatList.tsx:259` | — |
 | A1-D3-07 | `src/components/ui/Card.tsx:22-38` | — |
 | A1-D3-08 | `src/routes/ChatList.tsx:646` + `src/styles/globals.css:194-201` + `tailwind.config.ts:162` | — |
-| A1-D4-01 | `src/routes/ChatList.tsx:450-477` | PC **未**新建 `ui/Sheet.tsx`；复用既有 `components/ui/BottomSheet.tsx`。单条删除仍走 `ConfirmDialog` 属 PC 多出，不进差异清单 |
+| A1-D4-01 | `src/routes/ChatList.tsx:450-477` | PC **未**新建 `ui/Sheet.tsx`；复用既有 `components/ui/BottomSheet.tsx`。⚠️ **2026-10-27 10:13 订正**：原判「单条删除仍走 `ConfirmDialog` 属 PC 多出」**不成立** —— 已核 **web 聊天列表没有单条删除入口**（`gacode-web/src/app/(main)/chat/page.tsx:44` 长按进多选 · `:278-310` 只有多选批量 Sheet「确认删除 N 条对话？」/「此操作不可恢复」）· **安卓同样只有长按多选 + AlertDialog**（`yinian-android/app/src/main/java/com/yinian/app/ui/drawer/ChatListSection.kt:199-217`「此操作不可撤销，对话中的消息将被永久删除」）⇒ **单条删除 + 二次确认 = PC 独有能力**，按分层对齐模型（PC = -2 容差 + 数据安全更优）**保留，不删、不进待办** |
 | A1-D4-02 | `src/routes/ChatList.tsx:494-537` | — |
 | A1-D4-03 | `src/routes/ChatList.tsx:380-392` | — |
 | A1-D4-04 | `src/components/layout/AppShell.tsx:67` + `src/App.tsx:112` + `src/components/layout/AppShell.tsx:156-158` | — |
