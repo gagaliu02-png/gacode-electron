@@ -37,6 +37,7 @@ import {
   ArrowLeftIcon,
   BellIcon,
   BookOpenIcon,
+  CalendarIcon,
   ChevronRightIcon,
   ClockIcon,
   GlobeIcon,
@@ -109,6 +110,9 @@ function resolveTitle(pathname: string): string {
   if (pathname.startsWith("/library/")) return "知识库详情";
   if (pathname === "/deliveries") return "交付中心";
   if (pathname.startsWith("/deliveries/")) return "交付详情";
+  // 日程中心 (B3) — /schedule = 今日待办页; 日历页 (B4) / 看板页 (B5) / 详情页 (B6)
+  //   都在 /schedule/ 下 ⇒ 一律叫「日程中心」(web 侧也是 `setHeaderTitle("日程中心")`)。
+  if (pathname.startsWith("/schedule")) return "日程中心";
   if (pathname.startsWith("/notifications")) return "通知中心";
   if (pathname === "/profile") return "我的";
   if (pathname === "/profile/edit") return "编辑资料";
@@ -149,6 +153,15 @@ const NAV_ITEMS: NavItem[] = [
     label: "交付中心",
     to: "/deliveries",
     icon: <PackageOpenIcon />,
+  },
+  {
+    // 日程中心 (B3) — 位置 = 「交付中心」下面、「通知」上面
+    //   (UX 契约 `schedule-center-ux-2026-10-20.md` §2)。
+    //   label 一字不改 (gaga 确认) ⇒ 跟下面 tab 条里的第二个 tab **同名**, 是 web 现状。
+    //   路由 = /schedule = 今日待办页 (详情页是 B6)。
+    label: "日程中心",
+    to: "/schedule",
+    icon: <CalendarIcon size={20} className="w-5 h-5" />,
   },
   {
     label: "通知",

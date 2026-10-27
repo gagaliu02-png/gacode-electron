@@ -55,6 +55,12 @@
  *     `!important` 类 (PC 无 tailwind-merge, `!` 硬压是脆的)。
  *   - 清理 3 处 `["library-tags"]` invalidate (CollectSheet ×2 / EditSheet ×1) ——
  *     TagFilter 已删 ⇒ 该 queryKey 在 src/** 里已无任何 query 定义 ⇒ invalidate 是 no-op
+ *
+ * 2026-10-27 · B3 日程中心批次:
+ *   - 底部 FAB 的内联 <button> 换成共享 <CreateFab>
+ *     (web `components/common/CreateFab.tsx` 逐字搬运; PC 之前没有 common/ 目录 ⇒ 新建)
+ *     ⇒ FAB 视觉参数一字不变, 但跟日程中心入口页共用同一个组件 (组件意识: 别再写第三遍)。
+ *   - `PlusIcon` 的 import 随之删除 (本文件只有那个内联 FAB 在用它)。
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -71,6 +77,7 @@ import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { ErrorBoundary } from "../components/ui/ErrorBoundary";
 import { useToast } from "../components/ui/Toast";
 import { Tabs } from "../components/ui/Tabs";
+import { CreateFab } from "../components/common/CreateFab";
 import {
   ConstructionIcon,
   FileTextIcon as FileTextTabIcon,
@@ -78,7 +85,6 @@ import {
   LayoutGridIcon,
   LibraryTypeIcon,
   LoaderCircleIcon,
-  PlusIcon,
   RefreshCwIcon,
   SearchBareIcon,
   SearchFieldIcon,
@@ -489,24 +495,13 @@ function LibraryInner() {
       </div>
 
       {/* PC-6: FAB — 右下角 + 按钮 (item 7)
-          对齐 web CreateFab (FAB_CLASS): fixed bottom-5 right-5 z-40 w-[52px] h-[52px]
-          rounded-lg bg-brand text-brand-on + 橙色辉光阴影 + hover 上浮 / active 缩放
+          2026-10-27 (B3 日程中心批次): 内联 <button> 换成共享的 <CreateFab>
+            (web `components/common/CreateFab.tsx` 逐字搬运; PC 之前没有 common/ 目录 ⇒ 新建)
+          视觉参数一字不变 (fixed bottom-5 right-5 z-40 w-[52px] h-[52px] rounded-lg
+          bg-brand text-brand-on + 橙色辉光阴影 + hover 上浮 / active 缩放)
           多选模式隐藏 (避免与底部 toolbar 重复入口), 跟 web L563 一致 */}
       {!isInMultiSelect ? (
-        <button
-          type="button"
-          aria-label="采集内容"
-          title="采集内容"
-          onClick={() => setCollectOpen(true)}
-          className={[
-            "fixed bottom-5 right-5 z-40 w-[52px] h-[52px] rounded-lg bg-brand text-brand-on grid place-items-center shadow-[0_8px_24px_rgba(255,107,53,0.4)] hover:bg-brand-hover hover:-translate-y-px active:scale-[0.96] transition-all duration-150",
-          ].join(" ")}
-        >
-          {/* lucide `plus` (22px / sw2.2) — 共享 <PlusIcon>
-              (web `components/common/CreateFab.tsx:54` 的
-               <Plus className="w-[22px] h-[22px]" strokeWidth={2.2} /> 同款) */}
-          <PlusIcon size={22} strokeWidth={2.2} className="w-[22px] h-[22px]" />
-        </button>
+        <CreateFab label="采集内容" onClick={() => setCollectOpen(true)} />
       ) : null}
 
       {/* 多选模式 bottom toolbar — sticky 在底部; 列表区有 flex-1 让 toolbar 永远贴底 */}

@@ -2395,3 +2395,258 @@ export function SparkleStarIcon({ className, size = 16, strokeWidth = 1.6 }: Gly
   );
 }
 
+// ════════════════════════════════════════════════════════════
+// 2026-10-27 日程中心 (B3) 新增图标批次
+//
+//   path 逐字取自 gacode-web/node_modules/lucide-react@0.407.0
+//   `dist/esm/icons/<name>.js` —— web 端是图标 path 的真值来源。
+//   本批只**追加**, 上面 84 个既有导出一个字都没改。
+//
+//   默认 size = 该图标在 B3 调用点的实际渲染尺寸 (同本文件既有约定:
+//   「默认 size = 该图标原始值」); 调用点仍按既有惯例显式传 size + w/h 类。
+// ════════════════════════════════════════════════════════════
+
+/**
+ * lucide `list-todo` (方框勾 + 三条横线) — 16×16 / sw2
+ *
+ * 日程中心 tab 条「今日待办」(web `components/schedule/ScheduleTabs.tsx:27`
+ * 的 `<ListTodo className="w-4 h-4" />`)。
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/list-todo.js`:
+ *   rect(3,5,6,6,rx1) + path "m3 17 2 2 4-4" + 3 条 "M13 {6,12,18}h8"。
+ */
+export function ListTodoIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect x="3" y="5" width="6" height="6" rx="1" />
+      <path d="m3 17 2 2 4-4" />
+      <path d="M13 6h8" />
+      <path d="M13 12h8" />
+      <path d="M13 18h8" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `calendar-range` (月历 + 两条横线) — 16×16 / sw2
+ *
+ * 日程中心 tab 条「日程中心」(web `ScheduleTabs.tsx:28` 的
+ * `<CalendarRange className="w-4 h-4" />`)。
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/calendar-range.js`:
+ *   rect(3,4,18,18,rx2) + "M16 2v4" + "M3 10h18" + "M8 2v4" +
+ *   "M17 14h-6" + "M13 18H7" + "M7 14h.01" + "M17 18h.01"。
+ */
+export function CalendarRangeIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4" />
+      <path d="M3 10h18" />
+      <path d="M8 2v4" />
+      <path d="M17 14h-6" />
+      <path d="M13 18H7" />
+      <path d="M7 14h.01" />
+      <path d="M17 18h.01" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `square-kanban` (web 端 import 名为 `KanbanSquare`) — 16×16 / sw2
+ *
+ * 日程中心 tab 条「任务看板」(web `ScheduleTabs.tsx:29` 的
+ * `<KanbanSquare className="w-4 h-4" />`)。
+ * ⚠️ lucide v0.407.0 的 `kanban-square.js` 只是 `export { default } from './square-kanban.js'`
+ *    ⇒ 形状真值在 `square-kanban.js`:
+ *    rect(3,3,18,18,rx2) + "M8 7v7" + "M12 7v4" + "M16 7v9"。
+ *    (注意: 不是同版本的 `kanban` —— 那个是三根竖条, 无外框。)
+ */
+export function KanbanSquareIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M8 7v7" />
+      <path d="M12 7v4" />
+      <path d="M16 7v9" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `archive` (箱盖 + 箱体 + 中缝) — 14×14 / sw2
+ *
+ * 任务树节点 ⋮ 菜单的「归档」项 (web `components/schedule/ScheduleNodeMenu.tsx:82`
+ * 的 `<Archive className="w-[14px] h-[14px]" />`)。
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/archive.js`:
+ *   rect(2,3,20,5,rx1) + "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" + "M10 12h4"。
+ */
+export function ArchiveIcon({ className, size = 14, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect x="2" y="3" width="20" height="5" rx="1" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+      <path d="M10 12h4" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `bot` (机器人头 + 天线 + 侧耳) — 13×13 / sw2
+ *
+ * 责任人头像的 Cody 态 (web `components/schedule/OwnerAvatar.tsx:37` 的
+ * `<Bot className="w-[13px] h-[13px]" />`)。
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/bot.js`:
+ *   "M12 8V4H8" + rect(4,8,16,12,rx2) + "M2 14h2" + "M20 14h2" +
+ *   "M15 13v2" + "M9 13v2"。
+ */
+export function BotIcon({ className, size = 13, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M12 8V4H8" />
+      <rect x="4" y="8" width="16" height="12" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M15 13v2" />
+      <path d="M9 13v2" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `play` (三角) — 14×14 / sw2
+ *
+ * 定时任务 ⋮ 菜单的「启用」项 (web `components/schedule/CronGroup.tsx:53` 的
+ * `<Play className="w-[14px] h-[14px]" />`)。
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/play.js`:
+ *   polygon "6 3 20 12 6 21 6 3" (描边, 不填充 —— 与 lucide 一致)。
+ */
+export function PlayIcon({ className, size = 14, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <polygon points="6 3 20 12 6 21 6 3" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `pause` (双竖条) — 14×14 / sw2
+ *
+ * 定时任务 ⋮ 菜单的「暂停」项 (web `CronGroup.tsx:53` 的
+ * `<Pause className="w-[14px] h-[14px]" />`)。
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/pause.js`:
+ *   rect(14,4,4,16,rx1) + rect(6,4,4,16,rx1)。
+ */
+export function PauseIcon({ className, size = 14, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <rect x="14" y="4" width="4" height="16" rx="1" />
+      <rect x="6" y="4" width="4" height="16" rx="1" />
+    </svg>
+  );
+}
+
+/**
+ * lucide `timer` (秒表) — 13×13 / sw2
+ *
+ * 定时任务行首的圆标 (web `CronGroup.tsx:87` 的
+ * `<Timer className="w-[13px] h-[13px]" />`)。
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/timer.js`:
+ *   line(10,2→14,2) + line(12,14→15,11) + circle(12,14,r8)。
+ */
+export function TimerIcon({ className, size = 13, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <line x1="10" y1="2" x2="14" y2="2" />
+      <line x1="12" y1="14" x2="15" y2="11" />
+      <circle cx="12" cy="14" r="8" />
+    </svg>
+  );
+}
+

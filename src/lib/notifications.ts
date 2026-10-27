@@ -239,11 +239,13 @@ export type NotificationTarget =
 /**
  * scheduleTarget —— 日程详情落点。
  *
- * ⚠️ **PC 端没有日程模块** (`src/App.tsx` 路由表里没有 `/schedule`)。
- *   照抄 web 的 `/schedule/schedule/{id}/` 只会命中 `path="*"` 被兜回首页
+ * ⚠️ **PC 端现在只有日程中心的入口页** (`/schedule` = 今日待办, B3 已落地;
+ *   见 `src/App.tsx` 的路由表 + `src/routes/ScheduleToday.tsx`),
+ *   **日程详情页 (`/schedule/schedule/{id}/`) 是 B6 才有的路由** ——
+ *   照抄 web 的详情路径现在只会命中 `path="*"` 被兜回首页
  *   —— 静默跳走, 用户以为没生效。按文档 S-12 的短期兜底口径: 返回
  *   `kind="none"` + `rawLink`, 由调用方弹「无法识别的链接」提示。
- *   (另立需求给 PC 补日程模块后, 这里再换成真路由。)
+ *   (B6 详情页落地时, 这里再连同真路由一起换掉。)
  */
 export function scheduleTarget(
   scheduleId: string,
