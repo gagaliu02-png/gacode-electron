@@ -3311,7 +3311,7 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 
 ### S-5 · 头像保存时**重复上传** —— 照抄 web 会让同一张头像写两次磁盘
 
-**状态**：✅ **已落地（commit `557033e`，2026-10-27）** —— **落法 b**（总PM 排期：代次 1 = C-S5 + D-S02）。**不再需要 gaga 拍**（分层对齐模型下 PC = -2 ⇒ 进度差异类归 PM 排期）。
+**状态**：✅ **已落地（commit `557033e`，2026-10-27）** —— **落法 b**（总PM 排期：代次 1 = C-S5 + D-S02）。**不再需要 gaga 拍**（分层对齐模型下 PC = -2 ⇒ 进度差异类归 PM 排期）。**A/B 之争已于 2026-10-27 收口**（总PM 认 PM 的复核）：**(a) 标成误读作废 · (a)≡(b) ⇒ 落法 (b) 正确**（b 是 a 的行为等价子集）⇒ **不再拍**。
 
 > ⚠️ **事实订正（2026-10-27 · PM 实测 + 独立复核）**：本条原先的前提**有两处不成立**，落法因此改变。
 > 1. **web 不重复上传** —— `gacode-web/src/app/(main)/profile/edit/page.tsx` 的 `avatarMutation` 定义在 `:82-83`，全文件**只有 `:148` 读它的 `isPending`，从未 `mutate()` 调用**（死代码）；真正上传在 `saveMutation.mutationFn` `:105-106` ⇒ **web 只传一次**。
@@ -3321,7 +3321,10 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
 - **web**：`gacode-web/src/app/(main)/profile/edit/page.tsx:76` 选文件时 `setAvatarFile(file)` + 本地预览；`:102-115` 保存时 `mutationFn` 里**上传一次**（`uploadAvatar(avatarFile)` → `uploadedUrl`）；`:116-126` `onSuccess` 把 `displayName` / `gender` / `bio` / `avatar` 写进 `applyPatch`（`useAuthStore.updateProfile`，`gacode-web/src/lib/store.ts:130-133`）→ **本地 store 立刻更新**，不等 refetch
 - **PC**：`gacode-electron/src/routes/ProfileEdit.tsx:108-124`（选文件只本地预览）+ `:129-143`（保存时上传一次）+ `:144-160`（`onSuccess` 调 `patchUser`）
 - **后果（落地前）**：PC 缺「本地 store 立即更新」⇒ 改完头像后侧栏 / 顶栏仍是旧值，要等下次 `/auth/me` 或重启才刷新
-- **两种落法**：(a) 照抄 web（严格 1:1，接受重复上传）；(b) PC 保持不重复上传，但补上 web 的「本地 store 立即更新」语义（PC 的 `useAuth` 没有 `updateProfile` patch 方法 → 需要新增）—— **实际落地 = (b)**（因事实订正，两端上传次数本就一致，(a) 无对象）
+- **两种落法**：~~(a) 照抄 web（严格 1:1，接受重复上传）~~ —— **(a) 已作废（当初按 web 表面结构写的误读）**；**(b) PC 保持不重复上传，但补上 web 的「本地 store 立即更新」语义**（PC 的 `useAuth` 没有 `updateProfile` patch 方法 → 需要新增）
+  - **(a) ≡ (b) ⇒ 落法 (b)**（总PM 2026-10-27 收口，不再拍）：PM 独立复核 web **全文件 268 行** `profile/edit/page.tsx` ⇒ `avatarMutation`（`:82-88`）**全文件只有 `:148` 读它的 `isPending`，从无 `.mutate(...)` 调用** ⇒ 整块死代码 ⇒ **web 实际也只上传一次**（`saveMutation.mutationFn:105-107`）；web 活的「本地 store 立即更新」来自 `saveMutation.onSuccess:116-122` 的 `applyPatch({...})`。
+    ⇒ 「严格照抄 web 的字面结果」**就等于 web 自己的行为 = (b)** ⇒ **(b) 是 (a) 的行为等价子集**（少抄 ~7 行死代码）⇒ **已落地的 (b) 正确**。
+  - **附带发现**：web store 里的 `updateAvatar`（= `applyAvatar`）**同样只被那段死 mutation 的 `onSuccess` 调用** ⇒ **也是死方法**（PC 用的是 `patchUser`，不受影响）。
 - **落法 b 的实现**：`src/lib/auth.tsx` 新增 `patchUser(patch: Partial<User>)`（`useCallback` 浅合并 `setUser`，**不重拉 `/auth/me`**，语义同 web `store.ts:130-133`）+ `AuthContextValue` 加同名成员；`ProfileEdit.tsx` 的 `saveMutation.onSuccess` 改为 `({ uploadedUrl }, variables) =>`，先 `patchUser({ ...(variables.displayName ? { displayName } : {}), ...(uploadedUrl ? { avatar: uploadedUrl } : {}) })`，再 `invalidateQueries(["profile"])` / toast / navigate
 - **影响面**：`src/routes/ProfileEdit.tsx`（onSuccess）+ `src/lib/auth.tsx`（auth store 加 patch 方法）—— 共 2 文件
 - **有意偏差**：web 的 `applyPatch` 还带 `gender` / `bio`，但 PC 的 `User` 类型（`src/lib/api.ts:213-220`）**无此二字段** ⇒ PC 只 patch `displayName` + `avatar`；UI 无缺口（性别 / 简介走 `["profile"]` query，保存成功时被 invalidate）。另 web 传 `displayName.trim() || undefined`（键存在值为 undefined ⇒ 本地被清空），PC 只传有值字段 ⇒ 与 PC 自己的 C2-32 一致，也与服务端一致
