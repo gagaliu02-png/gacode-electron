@@ -23,6 +23,7 @@ import { LibraryDetail } from "./routes/LibraryDetail";
 import { Deliveries } from "./routes/Deliveries";
 import { DeliveryDetail } from "./routes/DeliveryDetail";
 import { ScheduleToday } from "./routes/ScheduleToday";
+import { ScheduleCalendar } from "./routes/ScheduleCalendar";
 import { Notifications } from "./routes/Notifications";
 import { Profile } from "./routes/Profile";
 import { ProfileEdit } from "./routes/ProfileEdit";
@@ -160,7 +161,7 @@ export function App() {
                 }
               />
               {/* 日程中心 (B3: 今日待办入口页) — 侧栏「日程中心」落在 /schedule。
-                  ⚠️ 日程详情页 / 日历页 / 看板页 是 B4/B5/B6, 这批没有路由 ——
+                  ⚠️ 日程详情页 / 看板页 是 B5/B6, 这批没有路由 ——
                      通知里的日程深链仍按 `src/lib/notifications.ts` 的口径兜回
                      `kind="none"` + rawLink (跳不存在的路由会被 path="*" 兜回首页) */}
               <Route
@@ -168,6 +169,16 @@ export function App() {
                 element={
                   <Protected>
                     <ScheduleToday />
+                  </Protected>
+                }
+              />
+              {/* 日程中心 · 日历页 (B4) — 周视图 + 月视图。
+                  详情页跳转本批只弹 toast 占位 (B6), 不跳路由。 */}
+              <Route
+                path="/schedule/calendar"
+                element={
+                  <Protected>
+                    <ScheduleCalendar />
                   </Protected>
                 }
               />

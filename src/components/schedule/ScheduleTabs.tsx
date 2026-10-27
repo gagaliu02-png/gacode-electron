@@ -12,12 +12,12 @@
  *   今日待办 / 日程中心 / 任务看板
  *   (⚠️ 第二个 tab 也叫「日程中心」, 跟侧栏入口同名 —— 这是 web 现状, 不改。)
  *
- * ⚠️ **B3 只做今日待办** (PM 拍板):
- *   「日程中心」/「任务看板」两个 tab **渲染出来但 disabled**, 点击弹 toast 占位提示
- *   —— **不跳到不存在的路由** (PC 端 `App.tsx` 没有 `/schedule/calendar` / `/schedule/board`,
- *   跳过去会命中 `path="*"` 被兜回首页 ⇒ 静默跳走, 用户以为没生效)。
- *   web 早期版本也是 `disabled + toast` 占位 (见 web `ScheduleTabs.tsx:13` 的历史注释)。
- *   B4 (日历页) / B5 (看板页) 落地后, 把对应 tab 的 disabled 去掉 + 换成真路由即可。
+ * ⚠️ **B3 只做今日待办 · B4 已落地日历页** (PM 拍板):
+ *   B3 时「日程中心」/「任务看板」两个 tab **渲染出来但 disabled**, 点击弹 toast 占位提示
+ *   —— **不跳到不存在的路由** (跳过去会命中 `path="*"` 被兜回首页 ⇒ 静默跳走)。
+ *   **B4 (日历页) 已落地** ⇒ 「日程中心」tab 的 `path` 从 `null` 换成真路由
+ *   `/schedule/calendar`, 点击直接进日历页 (见 `routes/ScheduleCalendar.tsx`)。
+ *   「任务看板」**保持 `path: null`** —— B5 才解禁, 现在点它仍然只弹占位提示。
  *
  * 吸顶三件套 (gaga 2026-10-21 反馈: 「tab 栏没有吸顶, 内容从下面穿过去」):
  *   1. top-0 —— 滚动容器是 AppShell 的 `<main>` (overflow-y-auto), 全局 header 在 main
@@ -48,11 +48,11 @@ const TABS: {
   key: ScheduleTabKey;
   label: string;
   icon: typeof ListTodoIcon;
-  /** 真路由 (B3 只有 today 有); null = 尚未落地, 点击只弹占位提示 */
+  /** 真路由 (B3 today + B4 calendar 有); null = 尚未落地, 点击只弹占位提示 */
   path: string | null;
 }[] = [
   { key: "today", label: "今日待办", icon: ListTodoIcon, path: "/schedule" },
-  { key: "calendar", label: "日程中心", icon: CalendarRangeIcon, path: null },
+  { key: "calendar", label: "日程中心", icon: CalendarRangeIcon, path: "/schedule/calendar" },
   { key: "board", label: "任务看板", icon: KanbanSquareIcon, path: null },
 ];
 

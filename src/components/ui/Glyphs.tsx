@@ -2650,3 +2650,42 @@ export function TimerIcon({ className, size = 13, strokeWidth = 2 }: GlyphProps)
   );
 }
 
+// ════════════════════════════════════════════════════════════
+// B4 新增 (日程中心 · 日历页) —— 同样只**追加**, 上面 92 个既有导出一个字都没改。
+//
+//   path 逐字取自 gacode-web/node_modules/lucide-react@0.407.0
+//   `dist/esm/icons/<name>.js` —— web 端是图标 path 的真值来源。
+// ════════════════════════════════════════════════════════════
+
+/**
+ * lucide `chevron-left` (左尖括号) — 16×16 / sw2
+ *
+ * 日程中心 · 日历页工具条的「上一个」(翻周 / 翻月)。
+ * web `components/schedule/CalendarView.tsx:299` 的
+ * `<ChevronLeft className="w-4 h-4" />`。
+ *
+ * path 逐字取自 lucide v0.407.0 `dist/esm/icons/chevron-left.js`:
+ *   path "m15 18-6-6 6-6" (跟已有的 `ChevronRightIcon` = "m9 18 6-6-6-6" 严格镜像)。
+ *
+ * ⚠️ className 处理跟既有 `ChevronRightIcon` 保持一致 (追加 transition-transform),
+ *    保证这对左右箭头在工具条里挨着时行为完全相同。
+ */
+export function ChevronLeftIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={["transition-transform duration-150", className].filter(Boolean).join(" ")}
+    >
+      <path d="m15 18-6-6 6-6" />
+    </svg>
+  );
+}
+
