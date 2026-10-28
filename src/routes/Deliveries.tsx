@@ -36,6 +36,13 @@ import {
   type Deliverable,
 } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
+// ★ a4 契约 v1 · 拉模式兜底 —— 「已删除交付物」集合的本机落点 (W-5 / H-5 / H-6)。
+//   帧推是 best-effort (用户不在聊天页就收不到) ⇒ **正确性靠这条路**。
+import { recordDeletedDeliverables } from "../lib/deliverable-deleted-store";
+// ★ a4 契约 v1 · W-5 —— 「删除必须赢」的**唯一**判据落点 (H-9)。
+import { filterRemovedDeliverableItems } from "../lib/deliverable-visibility";
+// ★ 当前登录用户 —— 交付物集合**按用户隔离** (H-6)。
+import { useAuth } from "../lib/auth";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Card, CardContent } from "../components/ui/Card";
@@ -78,6 +85,9 @@ const PAGE_SIZE = 30;
 export function Deliveries() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  // ★ a4 契约 v1 —— 「已删除交付物」集合**按用户隔离** (H-6)。
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
 
   const [tab, setTab] = useState<TabKey>("all");
   const [page, setPage] = useState(1);
@@ -131,17 +141,36 @@ export function Deliveries() {
     if (consumedDataRef.current === pageData) return;
     consumedDataRef.current = pageData;
     setHasMore(pageData.hasMore);
-    if (page === 1) {
-      setItems(pageData.items || []);
-    } else {
-      setItems((cur) => [...cur, ...(pageData.items || [])]);
+    // ★ a4 契约 v1 · W-5 —— **拉模式兜底**: 列表响应带 `removedIds`
+    //   (服务端聚合三个软删来源) ⇒ 记进**同一张**「已删除交付物」集合。
+    //   ⇒ 聊天气泡里那张死链卡随之收敛 (用户在交付中心时收不到 a4 帧)。
+    //   ⚠️ **可选字段** (老服务端没有 ⇒ undefined) ⇒ 当「没这回事」,
+    //     ⛔ 不得当成错误、不得崩。
+    const removed = pageData.removedIds;
+    if (removed && removed.length > 0 && userId) {
+      recordDeletedDeliverables(userId, removed);
     }
-  }, [pageData, page, isFetching]);
+    // ★ 「删除必须赢」: 同一个 id 同时出现在 `items` 与 `removedIds` 里 ⇒
+    //   **不进列表** (安卓 `RemoteDeliverableRepository` 「删除必须赢」同款)。
+    //   ⛔ 判据**只写一次** (H-9) ⇒ 走 `deliverable-visibility` 的纯函数,
+    //     不在 JSX / effect 里 inline 同一份过滤。
+    const visible = filterRemovedDeliverableItems(pageData.items || [], removed);
+    setItems((cur) => {
+      const next = page === 1 ? visible : [...cur, ...visible];
+      // 整表再过一遍 —— 前面几页已经收进来的卡, 这一页告知「已删」也要拿掉.
+      return filterRemovedDeliverableItems(next, removed);
+    });
+  }, [pageData, page, isFetching, userId]);
 
   // ────── 单条删除 (web:152-169) ──────
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteDeliverable(id),
     onSuccess: (_data, id) => {
+      // ★ a4 契约 v1 —— 服务端 200 ⇒ 这条**确实**被删了 ⇒ 记进「已删除」集合
+      //   (安卓 `markServerDeleted` 同款: 只在服务端成功后才记)。
+      //   ⇒ 聊天气泡里那张卡随之收敛 —— 用户此刻在交付中心, **收不到 a4 帧**
+      //     (帧只推给「有活动聊天流」的用户, 契约 §四)。
+      if (userId) recordDeletedDeliverables(userId, [id]);
       // 从本地列表中立即移除, 不用等下一次 refetch (web:156)
       setItems((cur) => cur.filter((d) => d.id !== id));
       setDeleteTarget(null);

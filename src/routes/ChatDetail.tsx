@@ -141,6 +141,24 @@ import {
   dedupeRichEvents,
   type RichEventBase,
 } from "../lib/rich-events";
+// ★ a4 契约 v1 · 交付物删除推送 —— 「顶层字段 `deletedDeliverables`」的帧解析。
+//   ⛔ 不写第三份 SSE 帧解析器 —— 复用共享零件 `lib/chat-sse.ts` 的
+//     `parseDeletedDeliverables` (只认顶层字段, 不碰游标)。
+import { parseDeletedDeliverables } from "../lib/chat-sse";
+// ★ a4 契约 v1 · 交付物可见性判据 (W-3 / H-1 / H-2 / H-3 / H-9) ——
+//   判据只写一遍 (纯函数), 页面层只接线, ⛔ 不在 JSX 里 inline 判据。
+import {
+  filterDeletedDeliverableEvents,
+  filterDeletedDeliverablePhases,
+} from "../lib/deliverable-visibility";
+// ★ a4 契约 v1 · 「已删除交付物」集合的本机落点 (W-2 / H-5 / H-6)。
+import {
+  pruneDeletedDeliverables,
+  readDeletedDeliverables,
+  recordDeletedDeliverables,
+} from "../lib/deliverable-deleted-store";
+// ★ 当前登录用户 —— 交付物集合**按用户隔离** (H-6)。
+import { useAuth } from "../lib/auth";
 // ★ 跟进控制器 + 游标决策 (契约 L-33 / L-34 / L-58 / L-60)。
 import {
   createFollowController,
@@ -297,6 +315,10 @@ export function ChatDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  // ★ a4 契约 v1 —— 「已删除交付物」集合**按用户隔离** (H-6):
+  //   换用户登录 ⇒ 看到的是他自己那一份, 绝不串号。
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
 
   const stream = useChatStream();
 
@@ -443,6 +465,57 @@ export function ChatDetail() {
     [chatId],
   );
 
+  // =========================================================================
+  // ★ a4 契约 v1 · 交付物删除推送 (W-1 / W-2 / W-3 / H-1 / H-2 / H-4 / H-5 / H-6)
+  //
+  //   交付物从服务端消失后, 交付中心里那张卡没了, 但**消息气泡里**那张卡还在
+  //   —— 气泡只认 rich_event, 它自己不知道文件没了 ⇒ 用户点进去是个死链。
+  //
+  //   判据只有一条 (H-1): **事件带了交付物主键, 且这个主键在「已删除」集合里**。
+  //   ⛔ 判据**不是**「查服务端这个 id 还在不在」—— 那会把「从没同步过的
+  //     老会话气泡」误判成消失 (历史消息气泡集体消失 = 严重回归)。
+  //   ⛔ 端侧**零判断** (H-4): 收到 id 就记, 不查本地有没有、不猜服务端语义。
+  //
+  //   两个来源写进**同一张**集合 (W-5):
+  //     ① 推模式 —— 会话 SSE 帧的顶层字段 `deletedDeliverables` (best-effort);
+  //     ② 拉模式 —— 列表接口的 `removedIds` (交付中心页写, 见 routes/Deliveries.tsx)。
+  //   帧推是 best-effort (没开聊天页就收不到) ⇒ **正确性由拉模式兜底** (H-7)。
+  // =========================================================================
+  const [deletedDeliverableIds, setDeletedDeliverableIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  /**
+   * 记一批「已被服务端删除的交付物主键」→ 更新内存态。
+   *
+   * ⚠️ 只增不减 + 幂等 (H-5): 已经在集合里的 id 不重复记。
+   */
+  const markDeletedDeliverables = useCallback(
+    (ids: string[]) => {
+      if (!userId || ids.length === 0) return;
+      const added = recordDeletedDeliverables(userId, ids);
+      if (added.length === 0) return;
+      setDeletedDeliverableIds((prev) => {
+        const next = new Set(prev);
+        for (const id of added) next.add(id);
+        return next;
+      });
+    },
+    [userId],
+  );
+
+  // 进场 / 换用户 ⇒ 从本机落盘 hydrate 回「已删除交付物」集合 (W-2 / H-6)。
+  //   ⚠️ 刷新页面后那张死链卡必须**不回来** —— 服务端不会重推这帧。
+  useEffect(() => {
+    if (!userId) {
+      setDeletedDeliverableIds(new Set());
+      return;
+    }
+    // TTL 清理: 超过 180 天的条目从落盘里剔掉 (H-5)。
+    pruneDeletedDeliverables(userId);
+    setDeletedDeliverableIds(readDeletedDeliverables(userId));
+  }, [userId]);
+
   // ────────────── 0.7.5 hotfix 2 (gaga 反馈 2026-10-20) — `+` 按钮 + sheet 流程 ──────────────
   // ChatInputBar 不再内置 4 个附件按钮, 只在 textarea 左侧放一个 `+` 按钮.
   //   点 `+` → onPlusClick → ChatDetail 把 plusOpen=true → 弹 PlusActionsSheet.
@@ -491,11 +564,26 @@ export function ChatDetail() {
     //   `tool_done[file]`/`tool_done[image]` ⇒ 同一张卡片渲两遍。
     //   去重按 **(事件族, id)**: 同族同 id 只留一条, 且留**新协议**那条。
     //   ⛔ `web_preview` 不参与 (它的 id 被加工成 `id+'_web'`, 同族同 id 判据不成立)。
-    const dedupedBase = baseMessages.map((m) =>
-      m.richEvents && m.richEvents.length > 0
-        ? { ...m, richEvents: dedupeRichEvents(m.richEvents) }
-        : m,
-    );
+    //
+    // ★ a4 契约 v1 · W-3 · 气泡收敛 —— **历史路径与流式路径都要滤**。
+    //   只滤一边 ⇒ 安卓踩过的两个坑: 「空壳气泡」与「判定还成立但内容空了」。
+    //   ⇒ `richEvents` 与 `phases` 两边一起滤 (判据在 lib/deliverable-visibility.ts)。
+    const dedupedBase = baseMessages.map((m) => {
+      const deduped =
+        m.richEvents && m.richEvents.length > 0
+          ? dedupeRichEvents(m.richEvents)
+          : m.richEvents;
+      const keptEvents = filterDeletedDeliverableEvents(
+        deduped,
+        deletedDeliverableIds,
+      );
+      const keptPhases = filterDeletedDeliverablePhases(
+        m.phases,
+        deletedDeliverableIds,
+      );
+      if (keptEvents === deduped && keptPhases === m.phases) return m;
+      return { ...m, richEvents: keptEvents, phases: keptPhases };
+    });
     if (!streamingAssistantId) return dedupedBase;
     const streamingMsg: ChatMessageModel = {
       id: streamingAssistantId,
@@ -505,6 +593,18 @@ export function ChatDetail() {
       // A2-D4-02 · 思考 / 工具时间线随消息下传 → ExecutionTimeline
       phases: streamingPhases,
     };
+    // ★ a4 契约 v1 · W-3 · 气泡收敛 —— **流式路径**也要滤掉「已被服务端删除的交付物」。
+    //   ⛔ 判据在 `lib/deliverable-visibility.ts` (H-9) —— 这里**只接线**, 不 inline 判据。
+    //   ⚠️ 两边都要滤 (`richEvents` 与 `phases`) —— 只滤一边 ⇒ 安卓踩过的两个坑:
+    //     「空壳气泡」(phase 还在、事件没了) 与「判定还成立但内容空了」。
+    streamingMsg.richEvents = filterDeletedDeliverableEvents(
+      streamingMsg.richEvents,
+      deletedDeliverableIds,
+    );
+    streamingMsg.phases = filterDeletedDeliverablePhases(
+      streamingMsg.phases,
+      deletedDeliverableIds,
+    );
     return [...dedupedBase, streamingMsg];
   }, [
     baseMessages,
@@ -512,6 +612,7 @@ export function ChatDetail() {
     streamingContent,
     streamingEvents,
     streamingPhases,
+    deletedDeliverableIds,
   ]);
 
   // chat-id-19 rerun 显示条件: 不在流式 + 历史非空 + 最后一条是 assistant.
@@ -590,6 +691,17 @@ export function ChatDetail() {
       if (!chatId) return;
       // waiting first frame → 收到任意 chunk 即结束 typing
       setWaitingFirstFrame(false);
+
+      // ★ a4 契约 v1 · W-1 —— 认「顶层字段 `deletedDeliverables`」这一帧。
+      //   ⛔ 它**不是** events[] 里的一条富事件 (契约 §二: 走顶层字段,
+      //     老版本端侧天然安全) ⇒ 在**消费层**认, 不改帧解析器 (H-8)。
+      //   ⛔ 端侧**零判断** (H-4): 收到 id 就记 —— 不查本地有没有这个交付物、
+      //     不猜服务端语义、不加任何前置条件。
+      //   ⚠️ 这帧**不带 `id:` 行** ⇒ 游标不推进 (读帧层已按契约 L-34 处理)。
+      const deletedIds = parseDeletedDeliverables(chunk);
+      if (deletedIds && deletedIds.length > 0) {
+        markDeletedDeliverables(deletedIds);
+      }
 
       // 本机那一行: **第一次有内容才建** —— 控制帧 (attach_ok) 不带内容,
       // 建早了会挂一个空气泡。
@@ -693,6 +805,7 @@ export function ChatDetail() {
       queryClient,
       addPendingApproval,
       removePendingApproval,
+      markDeletedDeliverables,
       clearLocalRow,
     ],
   );

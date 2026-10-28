@@ -51,6 +51,12 @@ scripts/*
 !scripts/verify-approval-chain.mjs
 !scripts/verify-rich-event-degrade.mjs
 !scripts/verify-mutation-counterproof.mjs
+# a4 交付物删除推送批 (2026-10-28): 认帧 / 落盘 / 气泡收敛 / 拉模式兜底 一支断言,
+#   外加该批专属的变异反证台 (在**临时镜像**里变异 —— 全程不碰工作区)。
+#   同款声明式例外 —— 父目录已放行 + `scripts/*` 已重新忽略, 这里逐个豁免。
+#   理由与批04 同款: 回归断言必须入库, 否则 clone 下来这些判据形同虚设。
+!scripts/verify-deliverable-delete-push.mjs
+!scripts/verify-mutation-counterproof-deliverable.mjs
 !scripts/lib/
 scripts/lib/*
 !scripts/lib/schedule-loader.mjs

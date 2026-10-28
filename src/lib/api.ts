@@ -1419,6 +1419,17 @@ export interface DeliverableListResponse {
   page: number;
   pageSize: number;
   hasMore: boolean;
+  /**
+   * ★ a4 契约 v1 · 拉模式兜底 —— 「已经被服务端删掉的交付物主键」。
+   *
+   *   服务端在列表响应里带这个字段 (unified-api deliverables.routes.js:369
+   *   聚合三个软删来源, :379 放进响应体) ⇒ 端侧据此把「已删除」集合补齐
+   *   (a4 帧推是 best-effort, 没开聊天页就收不到 ⇒ 正确性靠这条路)。
+   *
+   *   ⚠️ **可选字段**: 老服务端没有它 ⇒ `undefined` ⇒ 端侧当「没这回事」,
+   *   ⛔ 不得当成错误、不得因此崩、不得当成空数组以外的异常态。
+   */
+  removedIds?: string[];
 }
 
 export async function listDeliverables(params: {

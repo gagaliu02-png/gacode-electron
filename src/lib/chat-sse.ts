@@ -156,6 +156,45 @@ export function parseAttachControl(payload: unknown): AttachControlFrame | null 
 }
 
 // =========================================================================
+// a4 · 交付物删除帧 (契约 v1 §二 / 订正附录「附」)
+// =========================================================================
+
+/**
+ * parseDeletedDeliverables —— 认出 a4 的「交付物删除」帧。
+ *
+ * 帧形态 (契约附录「附」**最终确认**):
+ *
+ * ```
+ * data: {"deletedDeliverables":["<yinian_deliverables.id 原值>"]}
+ * ```
+ *
+ *   · **顶层字段** —— 不是 `events[]` 里的一条 (契约 §二: 走顶层字段,
+ *     老版本端侧天然安全 —— 不认识的顶层字段被静默忽略);
+ *   · 值是**数组** —— 一次可带多个; **单元素数组同样要认**;
+ *   · 元素 = `yinian_deliverables.id` **原值** (不是 file_id / 不是 url);
+ *   · **不带 `id:` 行** ⇒ 不推进游标 (读帧层已经这么做了, 这里不碰游标)。
+ *
+ * 返回:
+ *   · `null` = 这帧**不是**删除帧 (没有这个字段 / 字段不是数组) ⇒ 调用方按原样处理;
+ *   · `string[]` = 是删除帧 (可能是空数组 ⇒ 这一帧没有要删的 id)。
+ *
+ * ⚠️ 本函数**只解析**, 不判断、不落盘 —— 落盘归 `lib/deliverable-deleted-store`
+ *   管 (端侧零判断: 收到 id 就记, H-4)。
+ */
+export function parseDeletedDeliverables(payload: unknown): string[] | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = (payload as Record<string, unknown>).deletedDeliverables;
+  if (!Array.isArray(raw)) return null;
+  const ids: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const id = item.trim();
+    if (id !== "") ids.push(id);
+  }
+  return ids;
+}
+
+// =========================================================================
 // 读帧
 // =========================================================================
 
