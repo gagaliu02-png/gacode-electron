@@ -32,16 +32,19 @@
 #          knowledge_refs 发送侧/读侧接线):
 #   - output 改 release-align-v11/ 绕 Search Indexer 锁旧目录 (v10 被锁死清不掉)
 #   - buildVersion bump 0.7.11 (package.json 同步)
+# 0.7.12 (跨端 SSE 接回 + a4 交付物删除推送 + web_preview 判据口径订正):
+#   - output 改 release-sse-a4-v12/ 绕 Search Indexer 锁旧目录 (每次换新目录)
+#   - buildVersion bump 0.7.12 (package.json 同步)
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.11
+buildVersion: 0.7.12
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
-  # 0.7.11: 隔离输出目录 (v10 被 Windows Search Indexer 锁死, EnsureEmptyDir 失败)
-  output: release-align-v11
+  # 0.7.12: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
+  output: release-sse-a4-v12
 
 files:
   - dist/**/*
