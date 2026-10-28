@@ -29,10 +29,29 @@
  *        写进**同一张**集合, 且「删除必须赢」(同 id 同时在 items 与 removedIds ⇒ 不进列表)。
  *
  *   硬约束: H-1 (判据只有一条, ⛔ 不许查服务端) / H-2 (没 id ⇒ 照常渲染)
- *            / H-3 (web_preview 不参与) / H-4 (端侧零判断)
+ *            / H-3 (⚠️ 2026-10-28 口径订正: **web_preview 参与**判据) / H-4 (端侧零判断)
  *            / H-5 (只增不减 + TTL) / H-6 (按用户隔离) / H-7 (容忍丢帧)
  *            / H-8 (⛔ 不写第三份帧解析器) / H-9 (判据只写一次, 不 inline 进 JSX)
  *            / H-10 (复用既有零件)
+ *
+ * ---------------------------------------------------------------------------
+ * ⚠️ 2026-10-28 · PM 返工交底 (口径订正) —— web_preview 必须参与判据
+ * ---------------------------------------------------------------------------
+ *   原任务书 05b 的 H-3「web_preview 不参与」是 **PM 写错了**, 这轮改口径。
+ *
+ *   实证 (gaclaw `src/llm/llm.executors.js:938-946`):
+ *     `context.eventCollector.push({ type: 'web_preview', id: id + '_web', ... })`
+ *   ⇒ `web_preview` 的事件 id = `<fileId>_web` = `yinian_deliverables` 那一行的
+ *     **主键** ⇒ 与 file / image **同一个 id 空间**;
+ *   ⇒ 而 PC **渲染** web_preview 气泡 ⇒ 不参与判据 ⇒ 删掉「网站」类交付物后
+ *     **气泡里那张 web 卡仍渲染** ⇒ 点开 404 ⇒ **死链还在**。
+ *
+ *   ⛔ 但 **不许**改 `richEventFamily` / `dedupeRichEvents` ——
+ *     那是**去重**规则 (L-14 ~ L-18), `web_preview` 不入族是**对的** (L-16:
+ *     它的 id 跟 file 不同, 不该去重)。**去重规则 ≠ 「是不是交付物事件」**。
+ *   ⇒ 判据要**独立**判; 且必须新增变异证明:
+ *     (a) 把 web_preview 从判据里去掉 ⇒ 断言转红;
+ *     (b) 把族判定 / 去重改坏 ⇒ 断言转红 (证明没破坏 L-14 ~ L-18)。
  *
  * ---------------------------------------------------------------------------
  * 断言方式
@@ -134,7 +153,9 @@ const dir = makeTmpDir("verify-deliverable-delete");
 }
 
 // rich-events.ts 零 import —— 直接落。
-writeModule(dir, "rich-events", repoSrc("src/lib/rich-events.ts"));
+//   ⚠️ 落点 URL 要留着: 口径订正后要**运行时**断言族判定 / 去重契约 (L-14 ~ L-18)
+//     —— 证明「本批没借改族判定的手脚去改判据」。
+const richEventsUrl = writeModule(dir, "rich-events", repoSrc("src/lib/rich-events.ts"));
 
 // ⚠️ `api` 桩 —— **只为了反证用**。
 //   变异台会把「判据改成查服务端」这条变异打进 `deliverable-visibility.ts`
@@ -178,6 +199,8 @@ const chatSseUrl = writeModule(dir, "chat-sse", repoSrc("src/lib/chat-sse.ts"), 
 const V = await import(visibilityUrl);
 const D = await import(storeUrl);
 const S = await import(chatSseUrl);
+// 族判定 / 去重的**真**实现 —— 口径订正后要断言它没被本批改坏。
+const RE = await import(richEventsUrl);
 
 const enc = new TextEncoder();
 const streamOf = (text) =>
@@ -394,10 +417,38 @@ log("C. W-3 · 气泡收敛 (判据只有一条)");
 }
 
 {
-  // H-3 · web_preview 不参与 —— 它的 id 空间 (`{tool_use_id}_web`) 不是交付物主键。
-  V.deliverableIdOf({ type: "web_preview", id: "d1_web" }) === null
-    ? pass("★ H-3 web_preview 不参与判据")
-    : miss("H-3 web_preview 混进判据了 (拿它比对只会误判)");
+  // H-3 · ⚠️ 2026-10-28 口径订正 · web_preview **参与**判据。
+  //   它的 id (`<fileId>_web`) 就是 `yinian_deliverables` 那一行的**主键**
+  //   (gaclaw llm.executors.js:943-946) ⇒ 与 file / image 同一个 id 空间。
+  //   ⇒ 不参与 ⇒ 用户删掉「网站」类交付物后, 气泡里那张 web 卡仍渲染 ⇒ 死链还在。
+  V.deliverableIdOf({ type: "web_preview", id: "d1_web" }) === "d1_web"
+    ? pass("★ H-3(口径订正) web_preview 参与判据 (id = <fileId>_web = DB 主键)")
+    : miss("H-3(口径订正) web_preview 没参与判据 (网站类交付物删掉后死链还在)");
+}
+
+{
+  // H-2 对 web_preview 同样成立 —— 没带 id ⇒ 照常渲染, 绝不误杀。
+  V.deliverableIdOf({ type: "web_preview" }) === null &&
+  V.deliverableIdOf({ type: "web_preview", id: "" }) === null
+    ? pass("H-2 web_preview 没带 id / 空 id ⇒ 不参与判据")
+    : miss("H-2 web_preview 空 id 被当成了交付物主键");
+}
+
+{
+  // 非交付物事件一律不参与 —— `tool_start` / `tool_fail` / 无 subtype 的 `tool_done`
+  //   / `result` / `qrcode` 都不是交付物事件 (a4 契约 §三 那张表的最后一行)。
+  const notDeliverables = [
+    { type: "tool_start", id: "x1" },
+    { type: "tool_fail", id: "x2" },
+    { type: "tool_done", id: "x3" },
+    { type: "tool_done", subtype: "code_diff", id: "x4" },
+    { type: "result", id: "x5" },
+    { type: "qrcode", id: "x6" },
+  ];
+  const leaked = notDeliverables.filter((e) => V.deliverableIdOf(e) !== null);
+  leaked.length === 0
+    ? pass("非交付物事件 (tool_start / tool_fail / 无 subtype 的 tool_done / result / qrcode) 都不参与判据")
+    : miss(`非交付物事件混进判据了: ${JSON.stringify(leaked)}`);
 }
 
 {
@@ -442,8 +493,38 @@ log("C. W-3 · 气泡收敛 (判据只有一条)");
     "file::",
   ];
   JSON.stringify(keptIds) === JSON.stringify(want)
-    ? pass("★ 已删除的 file/image/tool_done 全部滤掉, 别的 (web_preview / 无 id / 无 subtype) 全留")
+    ? pass("★ 已删除的 file/image/tool_done 全部滤掉; 没在集合里的 web_preview / 无 id / 无 subtype 全留")
     : miss(`滤完剩的不是预期那批: ${JSON.stringify(keptIds)}`);
+}
+
+{
+  // 口径订正的**后果**: 「网站」类交付物删掉 (a4 帧带的是 `<fileId>_web`) ⇒
+  //   气泡里那张 web 卡必须**收敛掉** —— 否则死链还在 (这批要解决的正是死链)。
+  const events = [
+    { type: "file", id: "d1" },
+    { type: "web_preview", id: "d1_web" },
+    { type: "image", id: "d2" },
+  ];
+  const kept = V.filterDeletedDeliverableEvents(events, new Set(["d1_web"]));
+  const keptIds = kept.map((e) => `${e.type}:${e.id ?? ""}`);
+  JSON.stringify(keptIds) === JSON.stringify(["file:d1", "image:d2"])
+    ? pass("★ 已删除的 web_preview 被滤掉 (网站类交付物删掉后气泡不剩死链)")
+    : miss(`web_preview 没被滤掉: ${JSON.stringify(keptIds)}`);
+}
+
+{
+  // phases 侧同样要滤 web_preview —— 只滤 events 会留「空壳气泡」。
+  const phases = [
+    { type: "tool", event: { type: "web_preview", id: "d1_web" } },
+    { type: "tool", event: { type: "file", id: "d2" } },
+    { type: "thinking", text: "想一下" },
+  ];
+  const kept = V.filterDeletedDeliverablePhases(phases, new Set(["d1_web"]));
+  kept.length === 2 &&
+  kept[0].event.type === "file" &&
+  kept[1].type === "thinking"
+    ? pass("★ phases 侧也滤 web_preview (只滤 events ⇒ 空壳气泡)")
+    : miss(`phases 没滤 web_preview: ${JSON.stringify(kept)}`);
 }
 
 {
@@ -662,15 +743,78 @@ log("E. 结构性断言");
 {
   const vis = repoCode("src/lib/deliverable-visibility.ts");
   /from\s+"\.\/rich-events"/.test(vis) &&
-  /richEventFamily/.test(vis) &&
   /eventIdOf/.test(vis)
-    ? pass("★ H-10 判据复用 rich-events 的族判定 / 取 id (没重写一份)")
-    : miss("H-10 判据没有复用 rich-events 的族判定");
+    ? pass("★ H-10 判据复用 rich-events 的取 id (没重写一份)")
+    : miss("H-10 判据没有复用 rich-events 的取 id");
 
   const store = repoCode("src/lib/deliverable-deleted-store.ts");
   /localStorage/.test(store)
     ? pass("H-10 落盘走 localStorage (PC 端唯一可用的浏览器存储)")
     : miss("H-10 落盘没用 localStorage");
+}
+
+// E-13 · 口径订正 · ⛔ 判据不许拿「去重族判定」当判据。
+//   `richEventFamily` 是 L-14 ~ L-18 的**去重**规则 —— `web_preview` 不入族是**对的**
+//   (L-16: 它的 id 跟 file 不同, 不该去重) ⇒ 拿它当判据 ⇒ web 类交付物永远漏判
+//   ⇒ 死链还在 ⇒ 判据必须**独立**判「是不是交付物事件」。
+{
+  const vis = repoCode("src/lib/deliverable-visibility.ts");
+  !/richEventFamily/.test(vis)
+    ? pass("★ 口径订正: 判据**独立**判「是不是交付物事件」, 没拿 richEventFamily 当判据")
+    : miss("判据拿了 richEventFamily 当判据 (web_preview 不入族 ⇒ 漏判 ⇒ 死链还在)");
+}
+
+// E-14 · L-14 ~ L-18 · 族判定 / 去重契约**没被本批改坏**。
+//   口径订正只许改「删除集判据」, ⛔ 不许动「去重规则」—— 这里运行时盯住。
+{
+  const fam = (e) => RE.richEventFamily(e);
+
+  fam({ type: "file" }) === "file" &&
+  fam({ type: "image" }) === "image" &&
+  fam({ type: "tool_done", subtype: "file" }) === "file" &&
+  fam({ type: "tool_done", subtype: "image" }) === "image"
+    ? pass("★ L-15 族判定没被改坏 (file / image / tool_done[file|image])")
+    : miss("L-15 族判定被改坏了");
+
+  fam({ type: "web_preview" }) === null
+    ? pass("★ L-16 web_preview 仍不入族 (它是**去重**规则, 不许拿它当删除集判据)")
+    : miss("L-16 族判定把 web_preview 归进了族 (web_preview 与 file 不该去重)");
+
+  fam({ type: "tool_done" }) === null && fam({ type: "tool_start" }) === null
+    ? pass("L-15 无 subtype 的 tool_done / tool_start 仍不入族")
+    : miss("L-15 族判定把无 subtype 的 tool_done / tool_start 归进了族");
+
+  const legacyFirst = RE.dedupeRichEvents([
+    { type: "tool_done", subtype: "file", id: "d1" },
+    { type: "file", id: "d1" },
+  ]);
+  legacyFirst.length === 1 && legacyFirst[0].type === "file"
+    ? pass("★ L-15 同族同 id 只留一条 (旧协议先到 ⇒ 换成新协议那条)")
+    : miss(`L-15 去重不对: ${JSON.stringify(legacyFirst)}`);
+
+  const newFirst = RE.dedupeRichEvents([
+    { type: "file", id: "d1" },
+    { type: "tool_done", subtype: "file", id: "d1" },
+  ]);
+  newFirst.length === 1 && newFirst[0].type === "file"
+    ? pass("★ L-15 同族同 id 且新协议先到 ⇒ 仍然留新协议那条 (file)")
+    : miss("L-15 去重把新协议那条丢了 (新协议先到时被旧协议顶掉)");
+
+  const withWeb = RE.dedupeRichEvents([
+    { type: "file", id: "d1" },
+    { type: "web_preview", id: "d1_web" },
+  ]);
+  withWeb.length === 2
+    ? pass("★ L-16 web_preview 与 file 不去重 (两个都在)")
+    : miss(`L-16 web_preview 被去重掉了: ${JSON.stringify(withWeb)}`);
+
+  const crossFamily = RE.dedupeRichEvents([
+    { type: "file", id: "x" },
+    { type: "image", id: "x" },
+  ]);
+  crossFamily.length === 2
+    ? pass("★ L-16 跨族不去重 (file 与 image 同 id 都留)")
+    : miss(`L-16 跨族被去重了: ${JSON.stringify(crossFamily)}`);
 }
 
 // E-12 · H-11 / H-12 —— 本批只在 PC 仓里动 (脚本自查: 被测文件都在本仓 src/ 下)。

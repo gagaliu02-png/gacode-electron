@@ -18,14 +18,32 @@
 //   **H-2 · 绝不误杀**
 //     事件没带 id (老服务端 / 老 fixture) ⇒ **照常渲染**。
 //
-//   **H-3 · web_preview 不参与**
-//     它的 id 空间跟交付物主键**不是一个空间** (安卓基线 `DeliverableVisibility`
-//     同款裁定) ⇒ 拿它比对只会误判 ⇒ 不参与判据。
-//     ⇒ 复用 PC 自己 `lib/rich-events.ts` 的**族判定** `richEventFamily`
-//       (契约 L-15: 族 A = {file} ∪ {tool_done|subtype=file};
-//         族 B = {image} ∪ {tool_done|subtype=image};
-//         `web_preview` / 无 subtype 的 `tool_done` 一律不入族)。
-//       ⛔ 不在这里重写一份族判定 (组件意识: 同型实现只写一遍)。
+//   **H-3 · ⚠️ 口径订正 (2026-10-28 · PM 返工交底)**
+//     原任务书 05b 写的「web_preview 不参与」是**错的**, 这轮改口径:
+//     **web_preview 必须参与删除集判据**。
+//
+//     实证 (gaclaw `src/llm/llm.executors.js:938-946`):
+//       ```js
+//       // id 用 _web 后缀避免与上面 type:'file' 共享主键触发 upsert 冲突
+//       context.eventCollector.push({ type: 'web_preview', id: id + '_web', ... })
+//       ```
+//     ⇒ `web_preview` 事件的 id = `<fileId>_web` = `yinian_deliverables` 表那一行的
+//       **主键** ⇒ 与 file / image **同一个 id 空间**。
+//     ⇒ 而 PC **确实渲染 web_preview 气泡** (`components/chat/RichEventBubble.tsx`
+//       的 `web_preview` 分支) ⇒ 不参与判据 ⇒ 用户删掉「网站」类交付物后
+//       **气泡里那张 web 卡仍渲染** ⇒ 点开内容端点 404 ⇒ **死链还在**。
+//
+//     ⛔ **不许**拿 `richEventFamily` 当这个判据:
+//       它是**去重**规则 (契约 L-14 ~ L-18) —— `web_preview` 不入族 (L-16,
+//       因为它的 id 跟 file 不同, 不该去重)。**去重规则 ≠ 「是不是交付物事件」**
+//       —— 两件不同的事。拿族判定当判据 ⇒ `web_preview` 被漏掉 ⇒ 死链还在。
+//     ⇒ 故本文件**独立**判「这个事件是不是交付物事件」, 只复用 `eventIdOf`
+//       (取 id 这一步是共用的, 不重写)。
+//
+//     ⚠️ 安卓**不改**: 它只认 `FileEvent` / `ImageEvent` —— 但安卓
+//       `RichBubbles` 里 web_preview 是 `Unit` 占位 (**根本不渲染**) ⇒
+//       对安卓没有用户可见后果 ⇒ 这是**分层对齐**的正常形态:
+//       web / PC 比安卓**多渲染一种气泡形态**, 所以判据要多覆盖一种。
 //
 //   **H-9 · 判据只写一次**
 //     「哪些事件算交付物」与「这个事件是不是已删除」都在本文件里;
@@ -38,9 +56,14 @@
 //   契约 L-15 与独立的 `file` / `image` 事件**同族同 id**)。
 //   ⇒ 同一个交付物主键会出现在两种事件上 ⇒ 判据必须覆盖两种,
 //     否则旧协议那条卡会变成死链。
+//
+// ⚠️ 为什么 `web_preview` 也要参与 (2026-10-28 口径订正)
+// ---------------------------------------------------------------------------
+//   见文件头 H-3 段: 它的 id (`<fileId>_web`) **就是** DB 主键, 且 PC 渲染它。
+//   ⇒ 漏了它 ⇒ 「网站」类交付物删掉后死链还在。
 // =========================================================================
 
-import { eventIdOf, richEventFamily, type RichEventBase } from "./rich-events";
+import { eventIdOf, type RichEventBase } from "./rich-events";
 
 /**
  * 一条 phase 的最小结构 —— 只需要 `type` 与 `event` 两个字段。
@@ -55,16 +78,39 @@ export interface DeliverablePhaseLike {
 }
 
 /**
+ * isDeliverableEvent —— 这个事件**是不是交付物事件** (与去重族判定**无关**)。
+ *
+ * 覆盖四类 (与 a4 契约 §三 一致):
+ *   | 事件                     | 它的 id 是什么            | 是 DB 主键 |
+ *   |--------------------------|---------------------------|------------|
+ *   | `file`                   | `yinian_deliverables.id`  | ✅         |
+ *   | `image`                  | `yinian_deliverables.id`  | ✅         |
+ *   | `web_preview`            | `<fileId>_web`            | ✅         |
+ *   | `tool_done[file\|image]` | 与同名独立事件同值        | ✅         |
+ *   | 其余 (`tool_start` / `tool_fail` / 无 subtype 的 `tool_done` / 死类型) | — | ❌ |
+ *
+ * ⚠️ ⛔ **不许**改用 `richEventFamily` 当这个判据 —— 那是**去重**规则 (L-14~L-18),
+ *   `web_preview` 按 L-16 本就不入族 ⇒ 拿它当判据 ⇒ web 类交付物永远漏判。
+ */
+function isDeliverableEvent(ev: RichEventBase): boolean {
+  if (ev.type === "file" || ev.type === "image" || ev.type === "web_preview") {
+    return true;
+  }
+  if (ev.type === "tool_done") {
+    return ev.subtype === "file" || ev.subtype === "image";
+  }
+  return false;
+}
+
+/**
  * deliverableIdOf —— 这个事件带的**交付物主键**; 不是交付物事件则返回 null。
  *
- * 判据 = 「族判定成立」且「`id` 是非空字符串」。
- *   · 族判定 (`richEventFamily`) 天然排除 `web_preview` (H-3);
+ * 判据 = 「是交付物事件」且「`id` 是非空字符串」。
  *   · `id` 缺失 / 空串 ⇒ null (H-2: 照常渲染, 绝不误杀)。
  */
 export function deliverableIdOf(ev: RichEventBase): string | null {
   if (!ev || typeof ev !== "object") return null;
-  const family = richEventFamily(ev);
-  if (!family) return null;
+  if (!isDeliverableEvent(ev)) return null;
   const id = eventIdOf(ev);
   if (typeof id !== "string" || id === "") return null;
   return id;

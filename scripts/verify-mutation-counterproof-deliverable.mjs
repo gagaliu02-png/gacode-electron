@@ -43,6 +43,17 @@
  *   **只有被变异的文件与变异表不同** —— 本批的变异表是**重写的** (a4 批次)。
  *
  * ---------------------------------------------------------------------------
+ * 2026-10-28 · PM 返工交底 (口径订正) —— 变异表跟着改
+ * ---------------------------------------------------------------------------
+ *   口径改成「**web_preview 也参与**删除集判据」, 变异表同步:
+ *     · D07 重写 —— 原来打的是「web_preview 混进判据」(旧口径), 现在打的是
+ *       「**web_preview 从判据里去掉**」⇒ 断言必须红 (证明这条判据真盯着它);
+ *     · D24 新增 —— 把**族判定** `richEventFamily` 改坏 (web_preview 归进 file 族)
+ *       ⇒ 断言必须红 (证明没破坏 L-16);
+ *     · D25 新增 —— 把**去重逻辑**改坏 (新协议那条被旧协议顶掉)
+ *       ⇒ 断言必须红 (证明没破坏 L-15)。
+ *
+ * ---------------------------------------------------------------------------
  * 安全约定
  * ---------------------------------------------------------------------------
  *   · 每个变异只在**镜像**里改; 镜像文件在 finally 里逐字节还原;
@@ -196,13 +207,17 @@ const MUTATIONS = [
   ),
 
   // ===== deliverable-visibility.ts —— 判据 (W-3 / H-1 / H-2 / H-3) ========
+  //   ⚠️ 2026-10-28 口径订正: web_preview **参与**判据 (它的 id = `<fileId>_web`
+  //   = `yinian_deliverables` 主键, 且 PC 渲染 web_preview 气泡)
+  //   ⇒ 判据必须**独立**判「是不是交付物事件」, ⛔ 不许拿 `richEventFamily`
+  //     (L-14~L-18 的**去重**规则) 当判据 —— web_preview 按 L-16 本就不入族。
   M(
-    "D07 web_preview 混进判据 (id 空间不是同一个)",
+    "D07 web_preview 从判据里去掉 (网站类交付物删掉后死链还在)",
     "src/lib/deliverable-visibility.ts",
-    "  const family = richEventFamily(ev);\n  if (!family) return null;",
-    "  const family = richEventFamily(ev);",
+    '  if (ev.type === "file" || ev.type === "image" || ev.type === "web_preview") {',
+    '  if (ev.type === "file" || ev.type === "image") {',
     SCRIPT,
-    "H-3 web_preview 混进判据了"
+    "web_preview 没参与判据"
   ),
   M(
     "D08 没带 id 的事件被当成已删除 (老会话气泡集体消失)",
@@ -247,8 +262,8 @@ const MUTATIONS = [
   M(
     "D13 判据改成查服务端 (老会话气泡会被全判成消失)",
     "src/lib/deliverable-visibility.ts",
-    'import { eventIdOf, richEventFamily, type RichEventBase } from "./rich-events";',
-    'import { eventIdOf, richEventFamily, type RichEventBase } from "./rich-events";\nimport { listDeliverables } from "./api";',
+    'import { eventIdOf, type RichEventBase } from "./rich-events";',
+    'import { eventIdOf, type RichEventBase } from "./rich-events";\nimport { listDeliverables } from "./api";',
     SCRIPT,
     "H-1 判据模块里有网络调用"
   ),
@@ -347,6 +362,26 @@ const MUTATIONS = [
     "  const handleRefresh = () => {\n    setPage(1);",
     SCRIPT,
     "W-4 交付中心刷新机制不见了"
+  ),
+
+  // ===== rich-events.ts —— 口径订正不许动的「去重规则」(L-14 ~ L-18) =========
+  //   2026-10-28 返工: 判据改成独立判定后, ⛔ 更不许拿改族判定的手脚去凑口径 ——
+  //   这两条变异证明「族判定 / 去重契约」有断言盯着, 本批没碰它。
+  M(
+    "D24 族判定把 web_preview 归进 file 族 (破坏 L-16 去重契约)",
+    "src/lib/rich-events.ts",
+    '  if (ev.type === "file") return "file";',
+    '  if (ev.type === "file" || ev.type === "web_preview") return "file";',
+    SCRIPT,
+    "L-16 族判定把 web_preview 归进了族"
+  ),
+  M(
+    "D25 去重把新协议那条顶掉 (破坏 L-15 保留新协议那条)",
+    "src/lib/rich-events.ts",
+    "    if (prevIsLegacy && !curIsLegacy) {",
+    "    if (prevIsLegacy || curIsLegacy) {",
+    SCRIPT,
+    "L-15 去重把新协议那条丢了"
   ),
 ];
 
