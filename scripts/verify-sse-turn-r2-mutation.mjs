@@ -2,13 +2,13 @@
 /**
  * scripts/verify-sse-turn-r2-mutation.mjs
  *
- * ★ 变异反证台 (纪律 G-2) —— 端侧续传中枢 (R2-PC) 的 42 条新断言。
+ * ★ 变异反证台 (纪律 G-2) —— 端侧续传中枢 (R2-PC / R2-PC′) 的 44 条断言。
  *
  * ---------------------------------------------------------------------------
  * 这脚本干什么
  * ---------------------------------------------------------------------------
  *   逐条把**生产代码改坏** ⇒ 必须有断言变红 ⇒ 还原 ⇒ 必须变绿。
- *   ⇒ 证明「42 条断言真的盯得住它们该盯的行」, 而不是「断言只会通过」。
+ *   ⇒ 证明「44 条断言真的盯得住它们该盯的行」, 而不是「断言只会通过」。
  *
  *   ⚠️ 与 a4 批 (scripts/verify-mutation-counterproof-deliverable.mjs) **同款做法**:
  *     变异只发生在**系统临时目录里的镜像** (`src/` + `scripts/` + `test/` 的拷贝),
@@ -36,6 +36,17 @@
  *   M-P16 降级时不落地服务端快照      → B3
  *   M-P17 问不到时抹掉游标            → B6 (+ B6b)
  *   M-P18 帧级 elapsedMs 不记进快照  → B16
+ *   —— R2-PC′ 批 (缺陷 W-1 / W-2) ——
+ *   M-P19 帧里不带 seq (适配层丢掉)   → W1a
+ *   M-P20 反向适配不带 seq            → W1b
+ *   M-P21 状态机不认帧里的 seq        → W1c
+ *   M-P22 老分支也判跳号              → W1d
+ *   M-P23 本机快照无条件渲染          → W2a
+ *   M-P24 判据永远说不                → W2b
+ *   M-P25 onDegrade 无条件渲染        → W2c
+ *   M-P26 降级内容也当本机旧快照      → W2d
+ *   M-P27 onDegrade 另写一套判据      → W2e
+ *   M-P28 非法游标也当合法            → W2f
  *
  * ---------------------------------------------------------------------------
  * 用法
@@ -344,6 +355,150 @@ const MUTATIONS = [
     test: T_R2,
     expect: "B16 ",
   },
+  // ── R2-PC′ 批: 缺陷 W-1 (帧丢 seq) + 缺陷 W-2 (本机快照无条件渲染) ──
+  {
+    id: "M-P19",
+    desc: "宿主适配层不带 seq (缺陷 W-1 的原样)",
+    file: "src/routes/ChatDetail.tsx",
+    edits: [
+      {
+        find: "    seq: chunk.seq ?? null,",
+        replace: "    // ★ 变异: 端侧不把 seq 带进帧",
+      },
+    ],
+    test: T_R2,
+    expect: "W1a",
+  },
+  {
+    id: "M-P20",
+    desc: "反向适配不带 seq (缺陷 W-1 的另一半)",
+    file: "src/routes/ChatDetail.tsx",
+    edits: [
+      {
+        find: '    seq: typeof frame.seq === "number" ? frame.seq : undefined,',
+        replace: "    // ★ 变异: 反向适配不把 seq 带回去",
+      },
+    ],
+    test: T_R2,
+    expect: "W1b",
+  },
+  {
+    id: "M-P21",
+    desc: "状态机不认帧里的 seq (跳号判定永远走不到)",
+    file: "src/lib/sse/turn-session.ts",
+    edits: [
+      {
+        find: `      const verdict: SeqVerdict = decideFrame(
+        session.appliedSeq,
+        event.frame,
+        event.cursor ?? null
+      );`,
+        replace: `      const verdict: SeqVerdict = decideFrame(
+        session.appliedSeq,
+        null,
+        event.cursor ?? null
+      );`,
+      },
+    ],
+    test: T_R2,
+    expect: "W1c",
+  },
+  {
+    id: "M-P22",
+    desc: "老分支 (只有 SSE 游标) 也判跳号 (老兼容语义被破坏)",
+    file: "src/lib/sse/seq-guard.ts",
+    edits: [
+      {
+        find: "    return decideFrameSeq(appliedSeq, legacy, false);",
+        replace: "    return decideFrameSeq(appliedSeq, legacy, true);",
+      },
+    ],
+    test: T_R2,
+    expect: "W1d",
+  },
+  {
+    id: "M-P23",
+    desc: "本机快照无条件渲染 (缺陷 W-2 的原样)",
+    file: "src/routes/ChatDetail.tsx",
+    edits: [
+      {
+        find: "            if (!canRenderLocalSnapshot(cursor, true)) return;",
+        replace: "            // ★ 变异: 本机快照无条件渲染",
+      },
+    ],
+    test: T_R2,
+    expect: "W2a",
+  },
+  {
+    id: "M-P24",
+    desc: "判据函数永远说「不渲染」",
+    file: "src/routes/ChatDetail.tsx",
+    edits: [
+      {
+        find: `  if (isValidCursor(localCursor)) return true;
+  return !isLocalSnapshot;`,
+        replace: "  return false;",
+      },
+    ],
+    test: T_R2,
+    expect: "W2b",
+  },
+  {
+    id: "M-P25",
+    desc: "onDegrade 无条件渲染 (缺陷 W-2 的另一半)",
+    file: "src/routes/ChatDetail.tsx",
+    edits: [
+      {
+        find: `            if (
+              plan.renderSnapshot &&
+              snap.content &&
+              canRenderLocalSnapshot(cursor, snap.content === localSnapshotContent)
+            ) {`,
+        replace: `            if (plan.renderSnapshot && snap.content) {`,
+      },
+    ],
+    test: T_R2,
+    expect: "W2c",
+  },
+  {
+    id: "M-P26",
+    desc: "降级内容也当本机旧快照 (降级内容被丢掉)",
+    file: "src/routes/ChatDetail.tsx",
+    edits: [
+      {
+        find: "  return !isLocalSnapshot;",
+        replace: "  return false;",
+      },
+    ],
+    test: T_R2,
+    expect: "W2d",
+  },
+  {
+    id: "M-P27",
+    desc: "onDegrade 另写一套判据 (与 onLocalRecord 不同口径)",
+    file: "src/routes/ChatDetail.tsx",
+    edits: [
+      {
+        find: "canRenderLocalSnapshot(cursor, snap.content === localSnapshotContent)",
+        replace: "snap.content === localSnapshotContent",
+      },
+    ],
+    test: T_R2,
+    expect: "W2e",
+  },
+  {
+    id: "M-P28",
+    desc: "非法游标也当合法 (判据不认「纯十进制」)",
+    file: "src/routes/ChatDetail.tsx",
+    edits: [
+      {
+        find: "  if (isValidCursor(localCursor)) return true;",
+        replace: "  if (localCursor !== null) return true;",
+      },
+    ],
+    test: T_R2,
+    expect: "W2f",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -424,7 +579,7 @@ let passed = 0;
 let failed = 0;
 
 console.log("");
-console.log(`══ 变异反证台 (R2-PC · 42 条新断言) —— ${RUNS.length} 条 ══`);
+console.log(`══ 变异反证台 (R2-PC · 44 条断言) —— ${RUNS.length} 条 ══`);
 console.log(`   镜像: ${MIRROR}`);
 console.log("");
 

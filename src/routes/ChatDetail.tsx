@@ -164,7 +164,9 @@ import {
   type TurnFrameLike,
   type TurnSummaryLike,
 } from "../lib/sse/turn-record";
-import { type SeqFrameLike } from "../lib/sse/seq-guard";
+// ★ v2 帧信封 —— 宿主要把服务端的**显式 seq** 搬进帧里 (T-09 幂等主键, 缺陷 W-1)。
+//   ⚠️ `seq-guard.ts` 是 `src/lib/sse/` 的定稿模块 —— 本文件**只 import, 不改**。
+import { isValidCursor, type SeqFrameLike } from "../lib/sse/seq-guard";
 import {
   OUTPUT_FILTER_HIT_CODE,
   presentTerminal,
@@ -283,9 +285,9 @@ function toTurnFrame(chunk: ChatChunk): TurnFrameLike & SeqFrameLike {
     event: (chunk.event as unknown as Record<string, unknown>) ?? null,
     events: (chunk.events as unknown as Record<string, unknown>[]) ?? null,
     // ★ v2: 服务端显式发的轮次序号 (T-09 幂等主键)。
-    //   ⚠️ web 定稿版的 `toTurnFrame` **漏了这一项** ⇒ 跳号判定在生产里永远不生效
-    //     (帧没有 seq ⇒ 状态机只能按 SSE 游标判重复)。PC 补上 (本批唯一的**行为**分歧,
-    //     报告 §6 有说明)。
+    //   ⚠️ web 的 `toTurnFrame` 曾经**漏了这一项** ⇒ 跳号判定在生产里永远不生效
+    //     (帧没有 seq ⇒ 状态机只能按 SSE 游标判重复)。web 已在 R2-web′ 补齐,
+    //     两端现在**逐字同款**。
     seq: chunk.seq ?? null,
     startedAt: chunk.startedAt ?? null,
     elapsedMs: chunk.elapsedMs ?? null,
@@ -326,6 +328,31 @@ function toChatChunk(frame: TurnFrameLike & SeqFrameLike): ChatChunk {
     code: frame.code ?? undefined,
     terminalReason: frame.terminalReason ?? undefined,
   };
+}
+
+/**
+ * ★ INV-2 / INV-3 —— 「本机快照能不能渲染」的**唯一**判据 (web 与 PC 逐字同款)。
+ *
+ * ⚠️ 两条不变式**共用这一个判据** (不许各写一套 ⇒ 必然漂移):
+ *   · INV-2 —— `onLocalRecord`: 本机快照**只在「本机游标合法」时**渲染;
+ *   · INV-3 —— `onDegrade`   : 渲染快照的条件**与 INV-2 一致**。
+ *
+ * @param localCursor     本机游标 (纯十进制串; null = 没有 / 非法)。
+ * @param isLocalSnapshot 这一份内容是不是**本机旧快照**。
+ *
+ * 规则:
+ *   ① 本机游标**合法** ⇒ 服务端从本机游标处**续传** ⇒ 本机快照 + 增量 = 连续 ⇒ 渲染;
+ *   ② 本机游标**非法** ⇒ 服务端**整轮重放** ⇒ 再渲染本机旧快照 = **界面重复**
+ *      (缺陷 W-2) ⇒ 本机旧快照**不渲染**;
+ *      ⚠️ 但**服务端自己给的**内容 (不是本机旧快照) 照渲染 ——
+ *         降级必须带内容 (G-4 / T-08), 不能因为游标脏就把内容也丢了。
+ */
+function canRenderLocalSnapshot(
+  localCursor: string | null,
+  isLocalSnapshot: boolean
+): boolean {
+  if (isValidCursor(localCursor)) return true;
+  return !isLocalSnapshot;
 }
 
 // 跟进控制器 —— 进程级单例 (状态按 sessionId 分键, 组件重渲染不影响)。
@@ -1267,6 +1294,9 @@ export function ChatDetail() {
     if (!chatId) return;
     let cancelled = false;
     const ac = new AbortController();
+    // ★ INV-2 / INV-3 —— 本机旧快照的正文 (onLocalRecord 记下, onDegrade 用来判别
+    //   「要渲染的这份内容是不是那份旧快照」)。null = 本机没有旧快照。
+    let localSnapshotContent: string | null = null;
     // 进场期间先占住「正在思考」位 ⇒ 用户不能在接回途中误发新消息。
     setWaitingFirstFrame(true);
 
@@ -1373,9 +1403,13 @@ export function ChatDetail() {
           //   整轮重放 (无游标) 时服务端会把整轮再发一遍, 再叠本机快照就重复了。
           onLocalRecord: (rec) => {
             if (cancelled) return;
+            // ★ INV-2 (缺陷 W-2): 本机快照**只在「本机游标合法」时**渲染。
+            //   ⚠️ 判据与 onDegrade **同一个** (`canRenderLocalSnapshot`) —— 见 INV-3。
             const snap = rec.renderedSnapshot;
+            // 记下本机旧快照的正文 (onDegrade 用来判别「是不是同一份旧快照」)。
+            localSnapshotContent = snap.content;
+            if (!canRenderLocalSnapshot(cursor, true)) return;
             if (!snap.content && snap.phases.length === 0) return;
-            if (!cursor) return;
             renderAttachSnapshot(
               snap.content,
               snap.phases as unknown as ExecutionPhase[],
@@ -1389,7 +1423,16 @@ export function ChatDetail() {
           // ★ 降级闭环 (G-4): 有快照 ⇒ 先渲染快照; 没有 ⇒ 回落历史。**不弹错误**。
           onDegrade: (plan, session) => {
             const snap = session.record.renderedSnapshot;
-            if (plan.renderSnapshot && snap.content) {
+            // ★ INV-3 (缺陷 W-2 的另一半): 渲染条件**与 onLocalRecord 同一口径**
+            //   (`canRenderLocalSnapshot`) —— ⛔ 不许出现「onLocalRecord 跳过了、
+            //   onDegrade 又把同一份旧快照渲染一遍」= 界面重复。
+            //   ⚠️ 但**服务端自己给的**内容 (attach_failed.snapshot, 不是本机旧快照)
+            //     照渲染 —— 降级必须带内容 (G-4 / T-08)。
+            if (
+              plan.renderSnapshot &&
+              snap.content &&
+              canRenderLocalSnapshot(cursor, snap.content === localSnapshotContent)
+            ) {
               renderAttachSnapshot(
                 snap.content,
                 snap.phases as unknown as ExecutionPhase[],

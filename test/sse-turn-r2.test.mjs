@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 
 import { makeTmpDir, writeModule } from "../scripts/lib/schedule-loader.mjs";
 import { stripComments } from "../scripts/lib/strip-comments.mjs";
-import { extractDecl, extractFunction } from "../scripts/lib/source-scan.mjs";
+import { extractDecl, extractFunction, extractObjectProp, extractSiblingObjectProp } from "../scripts/lib/source-scan.mjs";
 
 const REPO = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const repoSrc = (p) => readFileSync(join(REPO, p), "utf8");
@@ -512,6 +512,33 @@ test("B8 退出页面 ⇒ 不发 DELETE (只停订阅, 不删轮次记录)", () 
   );
 });
 
+// ⚠️ 追加 (R2-PC′ 批) —— **不削弱** B8, 只是把「离场清理」钉到**对的那处 effect**。
+//   ⚠️ B8 用「`}, [chatId])` 收尾」的正则找清理块 ⇒ 本仓里有好几个 useEffect
+//     ⇒ 它**误配到了别的 effect** ⇒ 往「进场接回」那处清理里塞 userStopped,
+//     B8 是**抓不到的** (这一条改用锚定位, 判据不变)。
+//   ⇒ 这一条用**锚** (`getStreamState(chatId)`) 重新定位「进场接回」那处 effect,
+//     判据与 B8 完全相同 (不许出现 userStopped = true; 必须有 ac.abort())。
+test("B8b 进场接回那处 useEffect 的离场清理: 只 abort 读流, **不置** userStopped", () => {
+  const pageCode = repoCode("src/routes/ChatDetail.tsx");
+  const anchor = pageCode.indexOf("getStreamState(chatId)");
+  assert.ok(anchor > 0, "没找到进场接回的 useEffect");
+  const effectStart = pageCode.lastIndexOf("useEffect(() => {", anchor);
+  const effectEnd = pageCode.indexOf("}, [chatId]);", effectStart);
+  assert.ok(
+    effectStart > 0 && effectEnd > effectStart,
+    "没找到进场接回 useEffect 的边界"
+  );
+  const effectCode = pageCode.slice(effectStart, effectEnd);
+  assert.ok(
+    !/userStopped\s*=\s*true/.test(effectCode),
+    "★ 离场不得置 userStopped (置了就会发 USER_STOP ⇒ 等于发取消)"
+  );
+  assert.ok(
+    /ac\.abort\(\)/.test(effectCode),
+    "★ 离场必须 abort 本地读流 (只掐读流, 不掐服务端那一轮)"
+  );
+});
+
 // ===========================================================================
 // B9 —— 重连**存在**且带 `Last-Event-ID`
 // ===========================================================================
@@ -865,4 +892,347 @@ test("Z3 src/lib/sse/ 目录里有且只有那 6 个模块", () => {
       `缺少模块 src/lib/sse/${f}`
     );
   }
+});
+
+// ===========================================================================
+// W1 / W2 —— R2-web′ / R2-PC′ 批: 缺陷 W-1 (帧丢 seq) + 缺陷 W-2 (本机快照无条件渲染)
+// ===========================================================================
+//
+//   INV-1  喂进状态机的帧**带着**服务端显式 seq ⇒ v2 服务端下 T-09 的两种判定
+//          (重复 + 跳号) 都**够得着**;
+//          ⛔ 老服务端 (帧里没有 seq) 仍**只判重复** (老兼容语义不许变)。
+//   INV-2  本机快照**只在「本机游标合法」时**渲染 (onLocalRecord)。
+//   INV-3  onDegrade 的渲染条件**与 INV-2 一致** ⇒ 不许「跳过了又渲染」。
+//
+//   ⚠️ 这里**测的是生产代码本身** —— 宿主层的适配函数与回调是从宿主源文件里
+//     **原样抠出来**再执行的 (不是复刻一份) ⇒ 改坏宿主 ⇒ 断言必红。
+//
+//   抠法: extractFunction / extractObjectProp (scripts/lib/source-scan.mjs)
+//     把宿主源码里的那几段**原样**取出来 ⇒ 拼成一个临时模块 ⇒ 真跑一遍。
+
+const HOST = "src/routes/ChatDetail.tsx";
+const HOST_FILE = "ChatDetail.tsx";
+const hostSrc = repoSrc(HOST);
+
+// —— 宿主层的「可执行单元」 (原样抠出来) ——
+const toTurnFrameSrc = extractFunction(hostSrc, "toTurnFrame", HOST_FILE);
+const toChatChunkSrc = extractFunction(hostSrc, "toChatChunk", HOST_FILE);
+const canRenderSrc = extractFunction(
+  hostSrc,
+  "canRenderLocalSnapshot",
+  HOST_FILE
+);
+// 进场那处 createEntryController 的回调 (onLocalRecord 唯一 ⇒ 它就是进场那处;
+//   onDegrade 必须跟它落在**同一个**对象字面量里 —— 本文件里有两处
+//   createEntryController (进场那处 + 发送那处, 发送那处没有 onLocalRecord))。
+const onLocalRecordSrc = extractObjectProp(
+  hostSrc,
+  "onLocalRecord",
+  HOST_FILE
+);
+const onDegradeSrc = extractSiblingObjectProp(
+  hostSrc,
+  "onLocalRecord",
+  "onDegrade",
+  HOST_FILE
+);
+
+// —— ① 适配层 (toTurnFrame / toChatChunk / canRenderLocalSnapshot) ——
+const adapters = await import(
+  writeModule(
+    dir,
+    "host-adapters",
+    [
+      'import { isValidCursor } from "./seq-guard";',
+      `export ${toTurnFrameSrc}`,
+      `export ${toChatChunkSrc}`,
+      `export ${canRenderSrc}`,
+    ].join("\n"),
+    { jsx: true, rewriteImports: [["seq-guard", "./seq-guard.mjs"]] }
+  )
+);
+
+// —— ② 进场回调 (onLocalRecord / onDegrade) + 宿主环境桩 ——
+//    ⚠️ 判据函数是**真的** (从宿主源码抠出来的), 只有「渲染出去」与「上下文」是桩。
+const hostCallbacks = await import(
+  writeModule(
+    dir,
+    "host-callbacks",
+    [
+      'import { isValidCursor } from "./seq-guard";',
+      "let cancelled = false;",
+      "let cursor = null;",
+      "let localSnapshotContent = null;",
+      "const rendered = [];",
+      "let invalidated = 0;",
+      "const renderAttachSnapshot = (content, phases) => {",
+      "  rendered.push({ content, phases });",
+      "};",
+      "const queryClient = { invalidateQueries: () => { invalidated += 1; } };",
+      'const chatId = "s1";',
+      "export function setup(nextCursor) {",
+      "  cancelled = false;",
+      "  cursor = nextCursor;",
+      "  localSnapshotContent = null;",
+      "  rendered.length = 0;",
+      "  invalidated = 0;",
+      "}",
+      "export function renderedList() { return rendered; }",
+      "export function invalidatedCount() { return invalidated; }",
+      canRenderSrc,
+      "export const callbacks = {",
+      `  ${onLocalRecordSrc},`,
+      `  ${onDegradeSrc},`,
+      "};",
+    ].join("\n"),
+    { jsx: true, rewriteImports: [["seq-guard", "./seq-guard.mjs"]] }
+  )
+);
+
+/** 造一条「本机轮次记录」 (游标 + 已渲染内容在**同一条**记录里 —— 缺陷 D-1)。 */
+const fakeRecord = (content) => ({
+  sessionId: "s1",
+  turnKey: "t1",
+  seq: "42",
+  renderedSnapshot: {
+    content,
+    events: [],
+    phases: [],
+    startedAt: null,
+    elapsedMs: null,
+    toolCallCount: null,
+    thinkingCount: null,
+    terminalReason: null,
+  },
+  updatedAt: 0,
+});
+
+/** 降级方案 (形状照 degrade.ts 的 planDegrade)。 */
+const fakePlan = (renderSnapshot) => ({
+  reason: "seq_gap",
+  renderSnapshot,
+  fallbackToHistory: true,
+  raiseError: false,
+  notice: null,
+  keepCursor: true,
+});
+
+const runningProbe = async () => ({
+  reachable: true,
+  running: true,
+  canAttach: true,
+  turnKey: "t1",
+  lastEventId: "1",
+  pendingApprovals: [],
+  lastSeq: 1,
+  turnState: "running",
+  upstreamAlive: true,
+  snapshotAvailable: false,
+  completeness: "partial",
+  startedAt: null,
+  elapsedMs: null,
+  toolCallCount: null,
+  thinkingCount: null,
+});
+
+// ===========================================================================
+// INV-1 —— 帧必须带着服务端的显式 seq (缺陷 W-1)
+// ===========================================================================
+
+test("W1a 宿主把服务端的显式 seq 带进帧里 (缺陷 W-1 · INV-1)", () => {
+  assert.ok(toTurnFrameSrc, "没找到宿主的 toTurnFrame");
+  const frame = adapters.toTurnFrame({ seq: 42, content: "正文" });
+  assert.equal(
+    frame.seq,
+    42,
+    "★ 帧里必须带着服务端的显式 seq (没有 ⇒ T-09 的跳号判定永远走不到)"
+  );
+  const legacy = adapters.toTurnFrame({ content: "正文" });
+  assert.equal(
+    legacy.seq,
+    null,
+    "老服务端没有 seq ⇒ 落 null (⇒ 只判重复、不判跳号的老分支)"
+  );
+});
+
+test("W1b 反向适配把 seq 带回去 (缺陷 W-1 的另一半)", () => {
+  assert.ok(toChatChunkSrc, "没找到宿主的 toChatChunk");
+  assert.equal(
+    adapters.toChatChunk({ seq: 7 }).seq,
+    7,
+    "★ 反向适配必须把 seq 带回去"
+  );
+  assert.equal(
+    adapters.toChatChunk({ seq: "9" }).seq,
+    undefined,
+    "字符串形态的 seq 在反向适配里丢掉 (ChatChunk.seq 是 number)"
+  );
+  assert.equal(
+    adapters.toChatChunk({}).seq,
+    undefined,
+    "没有 seq ⇒ undefined"
+  );
+});
+
+test("W1c 帧里带 seq ⇒ T-09 的「重复」与「跳号」两种判定都够得着 (端到端跑真状态机)", async () => {
+  const frames = [];
+  const ctrl = E.entry.createEntryController(
+    "s1",
+    {
+      probe: runningProbe,
+      loadRecord: async () => null,
+      saveRecord: async () => {},
+      attach: async (args) => {
+        args.onControl?.({ type: "attach_ok", turnKey: "t1", resumedFrom: "1" });
+        args.onData?.({ content: "第一段", seq: 1 }, "1");
+        args.onData?.({ content: "重复的一段", seq: 1 }, "1");
+        args.onData?.({ content: "跳号的一段", seq: 3 }, "3");
+      },
+    },
+    { onFrame: (f) => frames.push(f) },
+    () => 0
+  );
+  await ctrl.start();
+  assert.equal(
+    frames.length,
+    1,
+    "★ 重复帧被丢弃 + 跳号帧不渲染 ⇒ 只有第一段进了渲染层"
+  );
+  assert.equal(frames[0].content, "第一段");
+  assert.equal(
+    ctrl.session.state,
+    "degraded",
+    "★ 跳号必须降级 (不许静默吞内容)"
+  );
+  assert.equal(ctrl.session.degradeReason, "seq_gap");
+});
+
+test("W1d 老服务端 (帧里没有 seq) ⇒ 仍然只判重复, **不判跳号** (老兼容语义不变)", async () => {
+  const frames = [];
+  const ctrl = E.entry.createEntryController(
+    "s1",
+    {
+      probe: runningProbe,
+      loadRecord: async () => null,
+      saveRecord: async () => {},
+      attach: async (args) => {
+        args.onControl?.({ type: "attach_ok", turnKey: "t1", resumedFrom: "1" });
+        // ⚠️ 老服务端: 帧里**没有** seq, 只有 SSE `id:` 游标 (而且它会跳号)。
+        args.onData?.({ content: "第一段" }, "1");
+        args.onData?.({ content: "游标跳号的一段" }, "3");
+      },
+    },
+    { onFrame: (f) => frames.push(f) },
+    () => 0
+  );
+  await ctrl.start();
+  assert.equal(
+    frames.length,
+    2,
+    "老服务端的两帧都要渲染 (游标跳号是常见的, 不是洞)"
+  );
+  assert.notEqual(
+    ctrl.session.state,
+    "degraded",
+    "★ 老服务端不许因为游标跳号就降级 (老兼容语义不许变)"
+  );
+  assert.equal(ctrl.session.degradeReason, null);
+});
+
+// ===========================================================================
+// INV-2 / INV-3 —— 本机快照只在「本机游标合法」时渲染, 两处**同一口径**
+// ===========================================================================
+
+test("W2a 本机游标非法 ⇒ 本机快照**不渲染** (INV-2 · 缺陷 W-2)", () => {
+  hostCallbacks.setup(null); // 无合法游标 ⇒ 服务端整轮重放
+  hostCallbacks.callbacks.onLocalRecord(fakeRecord("本机旧快照"));
+  assert.equal(
+    hostCallbacks.renderedList().length,
+    0,
+    "★ 无合法游标 ⇒ 本机旧快照不渲染 (否则整轮重放 = 界面重复)"
+  );
+});
+
+test("W2b 本机游标合法 ⇒ 本机快照照渲染 (INV-2)", () => {
+  hostCallbacks.setup("42"); // 有合法游标 ⇒ 服务端尾随重放
+  hostCallbacks.callbacks.onLocalRecord(fakeRecord("本机旧快照"));
+  const list = hostCallbacks.renderedList();
+  assert.equal(
+    list.length,
+    1,
+    "★ 有合法游标 ⇒ 本机快照必须先渲染 (缺陷 D-1: 刷新后正文没了)"
+  );
+  assert.equal(list[0].content, "本机旧快照");
+});
+
+test("W2c onDegrade 与 onLocalRecord 同一口径 ⇒ 不许「跳过了又渲染」 (INV-3 · 缺陷 W-2)", () => {
+  hostCallbacks.setup(null);
+  // ① 本机快照: 无合法游标 ⇒ 跳过。
+  hostCallbacks.callbacks.onLocalRecord(fakeRecord("本机旧快照"));
+  // ② 降级: 要渲染的还是**同一份**本机旧快照 ⇒ 也必须跳过。
+  hostCallbacks.callbacks.onDegrade(fakePlan(true), {
+    record: fakeRecord("本机旧快照"),
+  });
+  assert.equal(
+    hostCallbacks.renderedList().length,
+    0,
+    "★ onLocalRecord 跳过了 ⇒ onDegrade 也不许把同一份旧快照再渲染一遍"
+  );
+});
+
+test("W2d 降级带的是服务端自己的内容 ⇒ 照渲染 (G-4 / T-08)", () => {
+  hostCallbacks.setup(null);
+  hostCallbacks.callbacks.onLocalRecord(fakeRecord("本机旧快照"));
+  hostCallbacks.callbacks.onDegrade(fakePlan(true), {
+    record: fakeRecord("服务端给的正文"),
+  });
+  const list = hostCallbacks.renderedList();
+  assert.equal(
+    list.length,
+    1,
+    "★ 降级必须带内容 (服务端给的快照不能因为游标脏就被丢掉)"
+  );
+  assert.equal(list[0].content, "服务端给的正文");
+});
+
+test("W2e onLocalRecord 与 onDegrade 用的是**同一个**判据 (INV-2 / INV-3 同口径)", () => {
+  assert.ok(canRenderSrc, "宿主里没有 canRenderLocalSnapshot 这个判据");
+  const defs = (hostSrc.match(/function canRenderLocalSnapshot\b/g) || []).length;
+  assert.equal(defs, 1, "★ 判据函数只许有一个定义 (两处各写一套 ⇒ 必然漂移)");
+  assert.ok(
+    onLocalRecordSrc && onLocalRecordSrc.includes("canRenderLocalSnapshot("),
+    "onLocalRecord 必须走那个判据"
+  );
+  assert.ok(
+    onDegradeSrc && onDegradeSrc.includes("canRenderLocalSnapshot("),
+    "onDegrade 必须走**同一个**判据"
+  );
+});
+
+test("W2f 判据函数的五条口径 (INV-2 / INV-3 的唯一判据)", () => {
+  assert.equal(
+    adapters.canRenderLocalSnapshot("42", true),
+    true,
+    "合法游标 ⇒ 本机快照渲染"
+  );
+  assert.equal(
+    adapters.canRenderLocalSnapshot(null, true),
+    false,
+    "无游标 ⇒ 本机快照不渲染"
+  );
+  assert.equal(
+    adapters.canRenderLocalSnapshot("abc", true),
+    false,
+    "非法游标 ⇒ 本机快照不渲染"
+  );
+  assert.equal(
+    adapters.canRenderLocalSnapshot(null, false),
+    true,
+    "服务端自己给的内容照渲染 (降级必须带内容)"
+  );
+  assert.equal(
+    adapters.canRenderLocalSnapshot("42", false),
+    true,
+    "合法游标 ⇒ 服务端内容照渲染"
+  );
 });

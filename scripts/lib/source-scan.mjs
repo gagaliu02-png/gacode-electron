@@ -215,6 +215,112 @@ export function extractCatchBlock(src, markerText, fileName = "mod.ts") {
 }
 
 /**
+ * 抠出对象字面量里某个属性 (箭头函数 / 方法) 的源码文本。
+ *
+ * 用途: 宿主层把回调写在 `createEntryController(..., { onLocalRecord: (rec) => {...} })`
+ *   这种**对象属性**里 —— 它们**不是命名声明** ⇒ `extractFunction` 抠不到
+ *   ⇒ 这里按属性抠 (返回 `name: <value>` 的整段文本, 可以直接塞回对象字面量里)。
+ *
+ * @param src 源码文本 (建议先 stripComments 过)
+ * @param propName 属性名
+ * @param fileName 只用于决定解析模式 (.tsx 走 TSX 解析)
+ * @param opts { nth = 0, from = 0 } —— nth = 第几个同名属性; from = 只找这个位置之后的
+ * @returns 该属性的源码文本; 找不到 ⇒ null
+ */
+export function extractObjectProp(src, propName, fileName = "mod.ts", opts = {}) {
+  const { nth = 0, from = 0 } = opts || {};
+  const isTsx = fileName.endsWith(".tsx");
+  const sf = ts.createSourceFile(
+    fileName,
+    src,
+    ts.ScriptTarget.ES2022,
+    true,
+    isTsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+
+  const hits = [];
+  const visit = (node) => {
+    if (
+      ts.isPropertyAssignment(node) &&
+      node.name &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === propName &&
+      node.getStart(sf) >= from
+    ) {
+      hits.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+
+  const hit = hits[nth];
+  if (!hit) return null;
+  return src.slice(hit.getStart(sf), hit.end);
+}
+
+/**
+ * 抠出「**同一个对象字面量里**」的另一个属性 —— 用「先找到锚点属性, 再在锚点所在的
+ * 那一个对象字面量里找目标属性」的方式定位 (不许靠出现顺序猜)。
+ *
+ * 用途: 宿主的进场回调 `onLocalRecord` / `onDegrade` 在**同一个**对象字面量里
+ *   (`createEntryController(..., { onLocalRecord, onDegrade })`),
+ *   而同一个文件里有**两处** createEntryController (进场那处 + 发送那处,
+ *   发送那处**没有** onLocalRecord) ⇒ 抠 `onDegrade` 时必须跟锚点落在同一处。
+ *
+ * @param src 源码文本
+ * @param anchorProp 作为锚点的属性名 (应当唯一)
+ * @param propName 要抠的属性名
+ * @param fileName 只用于决定解析模式 (.tsx 走 TSX 解析)
+ * @returns 属性源码文本; 找不到 ⇒ null
+ */
+export function extractSiblingObjectProp(
+  src,
+  anchorProp,
+  propName,
+  fileName = "mod.ts"
+) {
+  const isTsx = fileName.endsWith(".tsx");
+  const sf = ts.createSourceFile(
+    fileName,
+    src,
+    ts.ScriptTarget.ES2022,
+    true,
+    isTsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+
+  let anchorObj = null;
+  const visit = (node) => {
+    if (anchorObj) return;
+    if (
+      ts.isPropertyAssignment(node) &&
+      node.name &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === anchorProp &&
+      node.parent &&
+      ts.isObjectLiteralExpression(node.parent)
+    ) {
+      anchorObj = node.parent;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+  if (!anchorObj) return null;
+
+  for (const prop of anchorObj.properties) {
+    if (
+      ts.isPropertyAssignment(prop) &&
+      prop.name &&
+      ts.isIdentifier(prop.name) &&
+      prop.name.text === propName
+    ) {
+      return src.slice(prop.getStart(sf), prop.end);
+    }
+  }
+  return null;
+}
+
+/**
  * 抠出任意**命名声明**的源码文本 (函数 / const / interface / type)。
  * 找不到 ⇒ null。
  */
