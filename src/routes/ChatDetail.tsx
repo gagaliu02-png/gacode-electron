@@ -288,9 +288,10 @@ function toTurnFrame(chunk: ChatChunk): TurnFrameLike & SeqFrameLike {
     event: (chunk.event as unknown as Record<string, unknown>) ?? null,
     events: (chunk.events as unknown as Record<string, unknown>[]) ?? null,
     // ★ v2: 服务端显式发的轮次序号 (T-09 幂等主键)。
-    //   ⚠️ web 的 `toTurnFrame` 曾经**漏了这一项** ⇒ 跳号判定在生产里永远不生效
+    //   ⚠️ 历史: web 的 `toTurnFrame` 曾经**漏了这一项** ⇒ 跳号判定在生产里永远不生效
     //     (帧没有 seq ⇒ 状态机只能按 SSE 游标判重复)。web 已在 R2-web′ 补齐,
     //     两端现在**逐字同款**。
+    //   ★ 现在 `TurnFrameLike.seq` 是**必填** ⇒ 这里漏了**直接编译不过** (INV-1 由类型保证)。
     seq: chunk.seq ?? null,
     startedAt: chunk.startedAt ?? null,
     elapsedMs: chunk.elapsedMs ?? null,
