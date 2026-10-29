@@ -30,6 +30,10 @@ import {
   ImageIcon,
   WrenchIcon,
 } from "../ui/Glyphs";
+// ★ 重构轮 R2-web (T-16 / T-17): 计数与合并的**口径**归到 sse/ 那一套。
+//   · `renderPhases` —— 相邻 thinking 的合并**只有这一处** (主路径原样 / 兼容分支合并);
+//   · `countPhases`  —— 端侧兜底计数 (服务端给了权威值时**不用**它)。
+import { renderPhases, countPhases, type SsePhase } from "../../lib/sse/turn-record";
 
 // ════════════════════════════════════════════════════════════
 // phase 模型 + helpers
@@ -48,17 +52,30 @@ export interface ExecutionPhase {
 export interface ExecutionTimelineProps {
   phases: ExecutionPhase[];
   defaultExpanded?: boolean;
+  /**
+   * ★ v2 (T-17): 服务端给的**逻辑**工具调用次数。
+   *   - 有值 ⇒ header 用它 (端侧**不数帧** —— 一次工具调用会产生多帧, 数帧会虚高);
+   *   - 没有 (老服务端) ⇒ 端侧按相位数组兜底数。
+   */
+  toolCallCount?: number | null;
+  /**
+   * ★ v2 (T-16): 服务端给的**逻辑**思考段数。
+   *   - 有值 ⇒ header 用它;
+   *   - 没有 ⇒ 端侧兜底数。
+   */
+  thinkingCount?: number | null;
 }
 
-/** 简化的 phase 类型标签计数 — header 用 */
-function countPhases(phases: ExecutionPhase[]) {
-  let thinking = 0;
-  let tool = 0;
-  for (const p of phases) {
-    if (p.type === "thinking") thinking++;
-    else if (p.type === "tool") tool++;
-  }
-  return { thinking, tool };
+/**
+ * 简化的 phase 类型标签计数 — header 用 (**兜底**)。
+ *
+ * ⚠️ 服务端给了 `toolCallCount` / `thinkingCount` 时**不用**它 (T-15 / T-17):
+ *   端侧数的是**帧**, 服务端数的是**逻辑调用** —— 一次工具调用会产生
+ *   tool_start + tool_done + 富事件好几帧 ⇒ 端侧数出来虚高。
+ */
+function fallbackCount(phases: SsePhase[]) {
+  const r = countPhases(phases);
+  return { thinking: r.thinking, tool: r.tool };
 }
 
 /** tool event 摘要 — 从事件对象里抓一组常用字段, 找第一个非空字符串 */
@@ -99,16 +116,29 @@ function ToolIcon({ ev }: { ev: Record<string, unknown> }) {
 export function ExecutionTimeline({
   phases,
   defaultExpanded = false,
+  toolCallCount = null,
+  thinkingCount = null,
 }: ExecutionTimelineProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [openThinkingIdx, setOpenThinkingIdx] = useState<number | null>(null);
 
   if (!phases || phases.length === 0) return null;
-  const { thinking, tool } = countPhases(phases);
+
+  // ★ 相邻 thinking 的合并**只有这一处** (T-16 / 架构 §2.5.3)。
+  //   · 服务端给了权威计数 ⇒ 服务端给的 phases 已是合并形态 ⇒ **原样**渲染;
+  //   · 服务端没给 (老服务端 v1 raw) ⇒ 走**兼容分支**合并 (⚠️ 待下线 R5)。
+  const authoritative = toolCallCount != null || thinkingCount != null;
+  // ⚠️ 适配点: 宿主的 `ExecutionPhase.event` 是 `Record<string, unknown>`,
+  //   而 sse/ 那一套是自包含的 `SseToolEvent` (可整目录抄走) ⇒ 这里做一次结构转换。
+  const rendered = renderPhases(phases as unknown as SsePhase[], { authoritative });
+
+  const fallback = fallbackCount(rendered);
+  const thinking = thinkingCount ?? fallback.thinking;
+  const tool = toolCallCount ?? fallback.tool;
   const summary =
     thinking > 0 || tool > 0
       ? `思考 ${thinking} 次 · 工具 ${tool} 次`
-      : `${phases.length} 个步骤`;
+      : `${rendered.length} 个步骤`;
 
   return (
     <div
@@ -135,10 +165,10 @@ export function ExecutionTimeline({
         <span className="font-medium">{summary}</span>
       </button>
 
-      {/* 展开后列出每条 phase */}
+      {/* 展开后列出每条 phase (★ 用合并后的 rendered —— 不是原始 phases) */}
       {expanded ? (
         <div className="border-t border-border/60 divide-y divide-border/40">
-          {phases.map((p, idx) => {
+          {rendered.map((p, idx) => {
             if (p.type === "thinking") {
               const isOpen = openThinkingIdx === idx;
               const preview = (p.text ?? "").trim();

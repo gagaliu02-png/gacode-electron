@@ -165,7 +165,7 @@ const MUTATIONS = [
   // ===== sse.ts —— 接线 / attach / abort ===================================
   M(
     "M06 续传请求带上 body (服务端会当成建新轮次)",
-    "src/lib/sse.ts",
+    "src/lib/chat-stream.ts",
     "body: opts.resume ? undefined : JSON.stringify(opts.body ?? {}),",
     'body: opts.resume ? JSON.stringify(opts.body ?? {}) : JSON.stringify(opts.body ?? {}),',
     "scripts/verify-sse-cursor.mjs",
@@ -173,7 +173,7 @@ const MUTATIONS = [
   ),
   M(
     "M07 sse.ts 不把游标透传给调用方",
-    "src/lib/sse.ts",
+    "src/lib/chat-stream.ts",
     "onCursor: (cursor) => {\n          if (!cursor) return;\n          opts.onCursor?.(cursor);\n        },",
     "onCursor: (_cursor) => {\n          if (!_cursor) return;\n        },",
     "scripts/verify-sse-cursor.mjs",
@@ -181,7 +181,7 @@ const MUTATIONS = [
   ),
   M(
     "M08 attach 流不带游标 (只发 X-Resume-Turn)",
-    "src/lib/sse.ts",
+    "src/lib/chat-stream.ts",
     "Object.assign(headers, buildResumeHeaders(opts.cursor ?? null));",
     "Object.assign(headers, buildResumeHeaders(null));",
     "scripts/verify-attach-flow.mjs",
@@ -189,7 +189,7 @@ const MUTATIONS = [
   ),
   M(
     "M09 attach 流带上 body (attach 不该建轮次)",
-    "src/lib/sse.ts",
+    "src/lib/chat-stream.ts",
     "            body: undefined,",
     '            body: JSON.stringify({ resume: true }),',
     "scripts/verify-attach-flow.mjs",
@@ -197,7 +197,7 @@ const MUTATIONS = [
   ),
   M(
     "M10 attach 流不带端标识 X-Client-Id",
-    "src/lib/sse.ts",
+    "src/lib/chat-stream.ts",
     "[CLIENT_ID_HEADER]: CLIENT_ID_PC,",
     '[CLIENT_ID_HEADER]: "pc-x",',
     "scripts/verify-attach-flow.mjs",
@@ -205,7 +205,7 @@ const MUTATIONS = [
   ),
   M(
     "M11 流状态退回函数级局部变量 (P-5 回归)",
-    "src/lib/sse.ts",
+    "src/lib/chat-stream.ts",
     "const activeRef = useRef<ActiveStream | null>(null);",
     "const activeRef = { current: null as ActiveStream | null };",
     "scripts/verify-attach-flow.mjs",
@@ -213,7 +213,7 @@ const MUTATIONS = [
   ),
   M(
     "M12 用户按停止不发 USER_STOP (服务端照样跑完)",
-    "src/lib/sse.ts",
+    "src/lib/chat-stream.ts",
     'if (ac.signal.aborted && turnState.userStopped) {\n          sendCancelDelete(opts.sessionId, "USER_STOP");\n        } else if',
     'if (false && ac.signal.aborted && turnState.userStopped) {\n          sendCancelDelete(opts.sessionId, "USER_STOP");\n        } else if',
     "scripts/verify-attach-flow.mjs",
@@ -221,7 +221,7 @@ const MUTATIONS = [
   ),
   M(
     "M13 中止只读接入流时误发 USER_STOP (掐到服务端那一轮)",
-    "src/lib/sse.ts",
+    "src/lib/chat-stream.ts",
     "      } finally {\n        // 释放只读槽位 —— 下一轮才能再接。\n        if (attachRef.current === active) attachRef.current = null;\n      }",
     '      } finally {\n        if (ac.signal.aborted) sendCancelDelete(opts.sessionId, "USER_STOP");\n        // 释放只读槽位 —— 下一轮才能再接。\n        if (attachRef.current === active) attachRef.current = null;\n      }',
     "scripts/verify-attach-flow.mjs",
@@ -408,7 +408,11 @@ const MUTATIONS = [
   M(
     "M35 attach_failed 不回落历史补拉",
     "src/routes/ChatDetail.tsx",
-    'console.warn("[attach] 接不回来, 回落历史补拉:", frame.reason);\n            void followController.stop(chatId);\n            queryClient.invalidateQueries({ queryKey: ["history", chatId] });',
+    // ⚠️ 2026-10-29 · R2-PC: 锚点跟着新代码走 —— 进场接回改成走「端侧续传中枢」
+    //   (`createEntryController`) 之后, attach_failed 分支**多缩进了两层**
+    //   (原先在 onControl 里, 现在在 ports.attach 里) ⇒ 锚点行跟着挪。
+    //   判据本身 (删掉这段 ⇒ verify-attach-flow 必须变红) **一字未改**。
+    'console.warn("[attach] 接不回来, 回落历史补拉:", frame.reason);\n                  void followController.stop(chatId);\n                  queryClient.invalidateQueries({ queryKey: ["history", chatId] });',
     'console.warn("[attach] 接不回来, 回落历史补拉:", frame.reason);',
     "scripts/verify-attach-flow.mjs",
     "attach_failed 没走静默回落"

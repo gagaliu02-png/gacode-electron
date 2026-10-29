@@ -35,7 +35,7 @@
  * 父组件拿到 recalled=true 时**不传 menu** — 这个组件再卡一道防误调.
  */
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { Markdown } from "../../lib/markdown";
@@ -47,6 +47,9 @@ import { TtsButton } from "./TtsButton";
 import { ExecutionTimeline, type ExecutionPhase } from "./ExecutionTimeline";
 import { CallTreeCard, type CallTreeNode } from "./CallTreeCard";
 import { FileIcon } from "../ui/Glyphs";
+// ★ 重构轮 R2-PC (T-12): 终态分类的**表现形态**归到 sse/ 那一套 ——
+//   `presentTerminal` 是**唯一**的「终态 ⇒ 端侧文案/语气/要不要撤正文」判据。
+import { isTerminalReason, presentTerminal } from "../../lib/sse/terminal";
 
 // ============================================================================
 // A2-D4-06 · 渲染层剥图 (抄 web `gacode-web/src/components/chat/MessageBubble.tsx:133-198`)
@@ -175,6 +178,26 @@ export interface MessageBubbleProps {
   stripImageUrls?: string[];
   /** chat-id-12: 链路树节点 (从 chunk.events 解析). 缺省 → 走 RichEventBubble 单卡片 */
   callTree?: CallTreeNode[];
+  // ====== 重构轮 R2-web · 四要素 (服务端权威) + 本地时钟兜底 ======
+  /**
+   * ★ 服务端算的累计耗时 (ms) —— 四要素之一 (T-15 / 架构 §2.5)。
+   *   **优先**用它显示「已执行 N 秒」; 没有 (老服务端) 才落回本地时钟。
+   */
+  elapsedMs?: number | null;
+  /** ★ 服务端给的**逻辑**工具调用次数 (T-17) —— 有值则端侧不数帧。 */
+  toolCallCount?: number | null;
+  /** ★ 服务端给的**逻辑**思考段数 (T-16) —— 有值则端侧不数帧。 */
+  thinkingCount?: number | null;
+  /**
+   * ★ 终态分类 (T-12): completed / cancelled / filtered / failed / upstream_lost。
+   *   `filtered` = 天眼命中 ⇒ 正文已被端侧撤掉 (purge)。
+   */
+  terminalReason?: string | null;
+  /**
+   * 本轮开始时刻 (ms epoch) —— **本地时钟兜底**用 (老服务端没有帧级 elapsedMs)。
+   * ⚠️ 服务端给了 `elapsedMs` 时不用它。
+   */
+  startedAt?: number | null;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -381,6 +404,11 @@ function AssistantBubble({
   phases,
   stripImageUrls,
   callTree,
+  elapsedMs,
+  toolCallCount,
+  thinkingCount,
+  terminalReason,
+  startedAt,
 }: Pick<
   MessageBubbleProps,
   | "content"
@@ -396,6 +424,11 @@ function AssistantBubble({
   | "phases"
   | "stripImageUrls"
   | "callTree"
+  | "elapsedMs"
+  | "toolCallCount"
+  | "thinkingCount"
+  | "terminalReason"
+  | "startedAt"
 > & { messageId: string }) {
   const showCursor = !!isStreaming;
   const hasRichEvents = !!richEvents && richEvents.length > 0;
@@ -403,6 +436,42 @@ function AssistantBubble({
   const hasContent = !!content && content.trim().length > 0;
   const hasPhases = !!phases && phases.length > 0;
   const timeAgo = createdAt ? formatAgo(createdAt) : "";
+
+  // ====== M2 2A P0-3 实时秒表 (对齐 web `MessageBubble.tsx:221-251`) ======
+  // ★ R2-web (T-15): 耗时**优先**用服务端帧里的 `elapsedMs` (四要素之一, 权威值);
+  //   本地时钟 (startedAt + now) 只作**兜底** —— 老服务端没有这个字段。
+  // ⚠️ hook 必须挂在任何 early return 之前 (下面 recalled / 空内容会 return)。
+  const isRunning = !!isStreaming && startedAt != null;
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!isRunning) return;
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [isRunning, startedAt]);
+
+  const elapsedSec = (() => {
+    // 1) 服务端权威值 —— **优先**
+    if (typeof elapsedMs === "number" && Number.isFinite(elapsedMs)) {
+      return Math.max(0, Math.floor(elapsedMs / 1000));
+    }
+    // 2) 本地时钟兜底 (老服务端)
+    if (startedAt == null) return 0;
+    const end = isRunning ? nowMs : null;
+    if (end == null) return 0;
+    return Math.max(0, Math.floor((end - startedAt) / 1000));
+  })();
+  const showTimer = startedAt != null || elapsedMs != null;
+
+  // ====== ★ R2-PC (T-12): 终态分类 ⇒ 端侧表现 ======
+  //   五类终态各有各的形态 (completed / cancelled / filtered / failed /
+  //   upstream_lost) —— 判据只有 `sse/terminal.ts` 这一处 (端侧不另写一套)。
+  //   `completed` 是常态 ⇒ 不额外标一行 (免得每条正常回复都挂个「已完成」)。
+  const terminalView = isTerminalReason(terminalReason)
+    ? presentTerminal(terminalReason)
+    : null;
+  const showTerminalBadge =
+    terminalView != null && terminalView.form !== "answer";
 
   // A2-D4-06: 渲染前剥掉 user 已上传过的图引用 (不改原始 content)
   const markdownContent = stripReferencedImageUrls(content, stripImageUrls ?? []);
@@ -454,8 +523,13 @@ function AssistantBubble({
         {hasContent || hasPhases ? (
           <div className="rounded-[16px] rounded-bl-[4px] bg-background border border-border text-foreground px-4 py-3 text-sm leading-relaxed shadow-sm">
             {/* A2-D4-02: 思考 / 工具时间线 (正文**上方**, 对齐 web MessageBubble.tsx:396-398).
-                phases 为空 ⇒ 组件自身 return null ⇒ 不渲染空框. */}
-            <ExecutionTimeline phases={phases ?? []} />
+                phases 为空 ⇒ 组件自身 return null ⇒ 不渲染空框.
+                ★ R2-web (T-16 / T-17): 计数用服务端的**权威值**, 没有才端侧兜底数。 */}
+            <ExecutionTimeline
+              phases={phases ?? []}
+              toolCallCount={toolCallCount}
+              thinkingCount={thinkingCount}
+            />
             {hasContent ? (
               <>
                 <Markdown>{markdownContent}</Markdown>
@@ -467,9 +541,41 @@ function AssistantBubble({
                 ) : null}
               </>
             ) : null}
-            {timeAgo ? (
+            {/* ★ R2-PC (T-12): 终态标记 —— 只有「非正常完成」才显形。
+                ⛔ 天眼 (filtered) 不是错误 ⇒ 用 warn 语气, 不弹红色报错。 */}
+            {showTerminalBadge && terminalView ? (
+              <div
+                data-testid="terminal-badge"
+                data-terminal={terminalView.reason}
+                className={[
+                  "mt-1 text-[11px]",
+                  terminalView.tone === "danger"
+                    ? "text-destructive"
+                    : terminalView.tone === "warn"
+                      ? "text-amber-600"
+                      : "text-muted-foreground",
+                ].join(" ")}
+              >
+                {terminalView.label}
+              </div>
+            ) : null}
+            {timeAgo || showTimer ? (
               <div className="mt-1 flex items-center gap-1 justify-start">
-                <span className="text-[10px] text-muted-foreground">{timeAgo}</span>
+                {timeAgo ? (
+                  <span className="text-[10px] text-muted-foreground">{timeAgo}</span>
+                ) : null}
+                {/* ★ R2-web (T-15): 秒表 —— 服务端 elapsedMs 优先, 本地时钟兜底。 */}
+                {showTimer ? (
+                  <span
+                    data-testid="execution-timer"
+                    aria-label={
+                      isRunning ? `已执行 ${elapsedSec} 秒` : `共执行 ${elapsedSec} 秒`
+                    }
+                    className="text-[10px] text-muted-foreground tabular-nums"
+                  >
+                    {isRunning ? "已执行" : "共执行"} {elapsedSec}s
+                  </span>
+                ) : null}
               </div>
             ) : null}
           </div>

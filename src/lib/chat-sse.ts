@@ -105,7 +105,40 @@ export function buildResumeHeaders(
 // attach 控制帧 (L-50 / D2)
 // =========================================================================
 
-/** attach 成功控制帧 (D2: 端侧只认这四个键)。 */
+/**
+ * `attach_ok.summary` 的形状 (契约订正 13 / T-18)。
+ *
+ * ⚠️ 必须是**轮次开始以来的完整摘要**, 不是增量。
+ * ⚠️ **老服务端没有这个字段** ⇒ 解析出来是 null ⇒ 上层走本地兜底。
+ */
+export interface AttachSummary {
+  startedAt?: number | null;
+  elapsedMs?: number | null;
+  toolCallCount?: number | null;
+  thinkingCount?: number | null;
+  phases?: unknown[] | null;
+  content?: string | null;
+  events?: unknown[] | null;
+}
+
+/**
+ * `attach_failed.snapshot` 的形状 (契约订正 3 / T-08)。
+ *
+ * ⚠️ **老服务端没有这个字段** ⇒ 解析出来是 null ⇒ 降级时回落历史 (不报错)。
+ */
+export interface AttachSnapshot {
+  startedAt?: number | null;
+  elapsedMs?: number | null;
+  toolCallCount?: number | null;
+  thinkingCount?: number | null;
+  phases?: unknown[] | null;
+  content?: string | null;
+  events?: unknown[] | null;
+  terminalReason?: string | null;
+  completeness?: string | null;
+}
+
+/** attach 成功控制帧 (D2: 端侧只认那四个键 + v2 追加的 summary)。 */
 export interface AttachOkFrame {
   type: "attach_ok";
   /** 本轮标识 (跨请求稳定, 与游标同生命周期) —— D4。 */
@@ -116,6 +149,11 @@ export interface AttachOkFrame {
   replayed: number | null;
   /** 成功时为 null。 */
   reason: string | null;
+  /**
+   * ★ v2 (契约订正 13): **完整**摘要 (不是增量)。
+   * 老服务端没有 ⇒ 这个键**根本不存在**于解析结果里 (不是 undefined 值)。
+   */
+  summary?: AttachSummary | null;
 }
 
 /** attach 失败控制帧 (L-50) —— session 合法但接不回来。 */
@@ -123,9 +161,48 @@ export interface AttachFailedFrame {
   type: "attach_failed";
   /** 机器可读原因码 (L-38 同族): `no_active_stream` / `buffer_expired` / `not_running` / `unknown`。 */
   reason: string | null;
+  /**
+   * ★ v2 (契约订正 3): 轮次快照 —— 降级时**先渲染它** (T-08)。
+   * 老服务端没有 ⇒ 这个键**根本不存在**于解析结果里。
+   */
+  snapshot?: AttachSnapshot | null;
 }
 
 export type AttachControlFrame = AttachOkFrame | AttachFailedFrame;
+
+/** 把一个可能是对象的载荷读成 `AttachSummary` (逐字段容错; 形状不对 ⇒ null)。 */
+function readSummary(raw: unknown): AttachSummary | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === "number" ? v : null);
+  return {
+    startedAt: num(o.startedAt),
+    elapsedMs: num(o.elapsedMs),
+    toolCallCount: num(o.toolCallCount),
+    thinkingCount: num(o.thinkingCount),
+    phases: Array.isArray(o.phases) ? o.phases : null,
+    content: typeof o.content === "string" ? o.content : null,
+    events: Array.isArray(o.events) ? o.events : null,
+  };
+}
+
+/** 把一个可能是对象的载荷读成 `AttachSnapshot` (逐字段容错; 形状不对 ⇒ null)。 */
+function readSnapshot(raw: unknown): AttachSnapshot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === "number" ? v : null);
+  return {
+    startedAt: num(o.startedAt),
+    elapsedMs: num(o.elapsedMs),
+    toolCallCount: num(o.toolCallCount),
+    thinkingCount: num(o.thinkingCount),
+    phases: Array.isArray(o.phases) ? o.phases : null,
+    content: typeof o.content === "string" ? o.content : null,
+    events: Array.isArray(o.events) ? o.events : null,
+    terminalReason: typeof o.terminalReason === "string" ? o.terminalReason : null,
+    completeness: typeof o.completeness === "string" ? o.completeness : null,
+  };
+}
 
 /**
  * parseAttachControl —— 认出控制帧 (L-50 / D2)。
@@ -133,24 +210,39 @@ export type AttachControlFrame = AttachOkFrame | AttachFailedFrame;
  * 非控制帧返回 null。⚠️ 键**只认** D2 钉死的那几个: `attach_ok` 收
  * `turnKey` / `resumedFrom` / `replayed` / `reason`, 多出来的键一律忽略
  * (端侧不得自行发明字段)。
+ *
+ * ⚠️ v2 追加的两个键 (契约订正 3 / 13) 是**例外**, 且是**纯增量**:
+ *   · `attach_ok.summary`      —— 完整摘要 (老服务端没有 ⇒ 键不存在)
+ *   · `attach_failed.snapshot` —— 轮次快照 (老服务端没有 ⇒ 键不存在)
+ *   ⇒ 老服务端下解析结果与改动前**逐字一致** (键不存在, 不是 undefined)。
  */
 export function parseAttachControl(payload: unknown): AttachControlFrame | null {
   if (!payload || typeof payload !== "object") return null;
   const obj = payload as Record<string, unknown>;
   if (obj.type === "attach_ok") {
-    return {
+    const frame: AttachOkFrame = {
       type: "attach_ok",
       turnKey: typeof obj.turnKey === "string" ? obj.turnKey : null,
       resumedFrom: typeof obj.resumedFrom === "string" ? obj.resumedFrom : null,
       replayed: typeof obj.replayed === "number" ? obj.replayed : null,
       reason: typeof obj.reason === "string" ? obj.reason : null,
     };
+    // ⚠️ 只有服务端**真的发了** summary 才挂这个键 —— 老服务端下键不存在。
+    if (obj.summary !== undefined && obj.summary !== null) {
+      frame.summary = readSummary(obj.summary);
+    }
+    return frame;
   }
   if (obj.type === "attach_failed") {
-    return {
+    const frame: AttachFailedFrame = {
       type: "attach_failed",
       reason: typeof obj.reason === "string" ? obj.reason : null,
     };
+    // ⚠️ 同上 —— 老服务端下键不存在 ⇒ 降级路径回落历史 (不报错)。
+    if (obj.snapshot !== undefined && obj.snapshot !== null) {
+      frame.snapshot = readSnapshot(obj.snapshot);
+    }
+    return frame;
   }
   return null;
 }

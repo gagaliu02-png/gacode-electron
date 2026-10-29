@@ -98,8 +98,14 @@ export interface UseChatStreamOptions {
   knowledgeRefs?: string[];
   /** 主动中止回调 (取消按钮 / 组件卸载) */
   signal?: AbortSignal;
-  /** chunk 回调 (任意先后顺序) */
-  onChunk: (chunk: ChatChunk) => void;
+  /**
+   * chunk 回调 (任意先后顺序)。
+   *
+   * ★ v2 (R2-PC): 第二个参数是**这一帧的游标** (纯十进制数字串 / null)。
+   *   帧本身带 `id:` 时才有 ⇒ 没有的帧给 null (游标保持不变, 不回退)。
+   *   「端侧续传中枢」要靠它把帧与 seq 对上 (T-09 幂等) —— 所以必须透出。
+   */
+  onChunk: (chunk: ChatChunk, cursor: string | null) => void;
   /** 可选: 错误回调 (区别 user abort vs network error) */
   onError?: (err: Error) => void;
   /**
@@ -112,6 +118,18 @@ export interface UseChatStreamOptions {
   onCursor?: (cursor: string) => void;
   /** ★ attach 控制帧 (契约 L-50 / D2) —— `attach_ok` / `attach_failed`。 */
   onControl?: (frame: AttachControlFrame) => void;
+  /**
+   * ★ v2 (R2-PC): 续传模式 (契约 L-35 / L-36)。
+   *
+   *   传了这个字段 ⇒ **第一次请求**就走续传形态:
+   *     · `cursor` 合法 ⇒ 发 `Last-Event-ID: <cursor>`;
+   *     · 否则 ⇒ 发 `X-Resume-Turn: 1` (接回本轮, 不建新轮次);
+   *     · ⚠️ 两种情况 **body 都留空** —— body 带内容会被服务端当成「建新轮次」
+   *       (契约 L-36: 空 body 豁免「body 不能全空」的 400 守卫)。
+   *
+   *   传了 ⇒ `message` 参数被忽略 (续传不重建轮次)。
+   */
+  resume?: { cursor?: string | null } | null;
 }
 
 /** attach (只读接入一条在跑的轮次) 的入参。 */
@@ -126,8 +144,8 @@ export interface AttachChatStreamOptions {
   cursor?: string | null;
   /** 主动中止 (组件卸载 / 切会话) */
   signal?: AbortSignal;
-  /** chunk 回调 */
-  onChunk: (chunk: ChatChunk) => void;
+  /** chunk 回调 (★ v2: 第二个参数 = 这一帧的游标, 见 UseChatStreamOptions) */
+  onChunk: (chunk: ChatChunk, cursor: string | null) => void;
   /** 可选: 错误回调 */
   onError?: (err: Error) => void;
   /** 游标推进 (契约 L-33 / L-34) */
@@ -235,7 +253,7 @@ export function useChatStream(): ChatStreamHandle {
         cursor: string | null;
         resume: boolean;
         signal?: AbortSignal;
-        onChunk: (chunk: ChatChunk) => void;
+        onChunk: (chunk: ChatChunk, cursor: string | null) => void;
         onCursor?: (cursor: string) => void;
         onControl?: (frame: AttachControlFrame) => void;
       },
@@ -289,11 +307,12 @@ export function useChatStream(): ChatStreamHandle {
       // ★ 读帧走共享零件 (契约 P1 / §11.4 P3) ——
       //   `readChatSse` 复用通知流的增量解析器, 并把 `id:` 行当游标。
       await readChatSse(res.body, {
-        onData: (payload) => {
+        onData: (payload, cur) => {
           if (!payload || typeof payload !== "object") return;
           // ★ 过归一层 (契约 L-8 ~ L-12) —— 未知 / 死类型逐条跳过 (L-9 / L-11),
           //   `pending_id` 的 snake / camel 别名在这里统一解析好 (L-21)。
-          opts.onChunk(normalizeChatChunk(payload as ChatChunk));
+          // ★ v2: 游标一起透出 (T-09 幂等要靠它把帧与 seq 对上)。
+          opts.onChunk(normalizeChatChunk(payload as ChatChunk), cur ?? null);
         },
         onCursor: (cursor) => {
           if (!cursor) return;
@@ -318,7 +337,9 @@ export function useChatStream(): ChatStreamHandle {
       const active: ActiveStream = {
         ac,
         turnState,
-        cursor: null,
+        // ★ v2 (R2-PC): 续传模式 ⇒ 起始游标就是 `resume.cursor`
+        //   (合法 ⇒ Last-Event-ID; 非法/null ⇒ X-Resume-Turn)。
+        cursor: opts.resume?.cursor ?? null,
         ownsTurn: true,
       };
       activeRef.current = active;
@@ -390,16 +411,18 @@ export function useChatStream(): ChatStreamHandle {
                 sessionId: opts.sessionId,
                 body,
                 cursor: active.cursor,
-                resume: attempt > 0,
+                // ★ v2 (R2-PC): 显式续传模式 ⇒ **第一次**请求就是续传形态
+                //   (空 body + 续传头); 之后的自动重连当然也是续传形态。
+                resume: attempt > 0 || !!opts.resume,
                 signal: opts.signal,
-                onChunk: (chunk) => {
+                onChunk: (chunk, cur) => {
                   lastEventAt.current = Date.now();
                   if (isTerminalDone(chunk)) {
                     sawDone = true;
                   } else if (isCancelFrame(chunk)) {
                     sawCancel = true;
                   }
-                  opts.onChunk(chunk);
+                  opts.onChunk(chunk, cur);
                 },
                 onCursor: (cursor) => {
                   active.cursor = cursor;
@@ -555,10 +578,11 @@ export function useChatStream(): ChatStreamHandle {
         }
 
         await readChatSse(res.body, {
-          onData: (payload) => {
+          onData: (payload, cur) => {
             if (!payload || typeof payload !== "object") return;
             // ★ 与发起流**同一份**归一层 (契约 L-8 ~ L-12) —— 不写第二遍。
-            opts.onChunk(normalizeChatChunk(payload as ChatChunk));
+            // ★ v2: 游标一起透出 (T-09 幂等要靠它把帧与 seq 对上)。
+            opts.onChunk(normalizeChatChunk(payload as ChatChunk), cur ?? null);
           },
           onCursor: (cursor) => {
             if (!cursor) return;

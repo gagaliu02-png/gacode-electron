@@ -49,6 +49,37 @@ export interface ChatMessageModel {
   phases?: ExecutionPhase[];
   /** chat-id-12: call tree 节点 (parent 从 chunk.events 解析) */
   callTree?: CallTreeNode[];
+  // ====== 重构轮 R2-web · 四要素的**服务端权威值** (T-15 / T-16 / T-17) ======
+  /**
+   * 服务端算的累计耗时 (ms) —— 四要素之一 (架构 §2.5)。
+   *   - 有值 ⇒ 气泡里的「已执行 N 秒」**优先用这个** (不用本地时钟);
+   *   - 没有 (老服务端) ⇒ 用本地时钟兜底 (streamingSince / startedAt)。
+   */
+  elapsedMs?: number | null;
+  /**
+   * 逻辑工具调用次数 (T-17) —— 四要素之一。
+   *   - 有值 ⇒ ExecutionTimeline 的「工具 N 次」用这个 (**端侧不数帧**);
+   *   - 没有 (老服务端) ⇒ 端侧按相位数组数 (兜底, 会虚高 —— 一次工具调用会产生多帧)。
+   */
+  toolCallCount?: number | null;
+  /**
+   * 逻辑思考段数 (T-16) —— 四要素之一。
+   *   - 有值 ⇒ ExecutionTimeline 的「思考 N 次」用这个;
+   *   - 没有 ⇒ 端侧数 (兜底)。
+   */
+  thinkingCount?: number | null;
+  /**
+   * 终态分类 (T-12): `completed` / `cancelled` / `filtered` / `failed` / `upstream_lost`。
+   *   - 服务端没给 (老服务端) ⇒ 由端侧从 error.code / done.cancelled 推导。
+   *   - `filtered` = 天眼命中 ⇒ 已渲染的 partial 正文**必须撤掉**。
+   */
+  terminalReason?: string | null;
+  /**
+   * 本轮开始时刻 (ms epoch) —— 本地时钟兜底用 (老服务端没有帧级 elapsedMs)。
+   *
+   * ⚠️ 服务端给了 `elapsedMs` 时**不用**它 (服务端值才是权威的)。
+   */
+  startedAt?: number | null;
 }
 
 interface Props {
@@ -139,6 +170,12 @@ export function MessageList({
               phases={m.phases}
               stripImageUrls={stripImageUrls}
               callTree={m.callTree}
+              // ★ R2-web: 四要素 (服务端权威) —— 透传给气泡, 端侧只渲染不推算。
+              elapsedMs={m.elapsedMs}
+              toolCallCount={m.toolCallCount}
+              thinkingCount={m.thinkingCount}
+              terminalReason={m.terminalReason}
+              startedAt={m.startedAt}
               onAction={
                 onMessageAction
                   ? (action, ok) => onMessageAction(m, action, ok)

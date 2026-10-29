@@ -9,6 +9,9 @@
  *
  * 覆盖面:
  *   A. 文件面 —— 1 新建 + 7 修改都在; **13 个冻结件** git status 全空。
+ *      ⚠️ 2026-10-29 · R2-PC: 其中 `src/lib/api.ts` / `package.json` 被本批**合法**
+ *        改动 ⇒ 走**内容级范围判据** (日程域逐字未改 / 依赖未改 + 只多一个 test),
+ *        口径与 verify-schedule-b6-engineering.mjs 一致。
  *   B. 硬违规扫描 (零容忍) —— 零 cn / clsx / tailwind-merge / cva / lucide-react /
  *      零内联 <svg> / 零 !important / 零 next\/navigation / 零 zustand / 零 @\/lib\/utils。
  *   C. 归档口径层 (真值) —— archivedTotal 算**四类总数** / ARCHIVED_KINDS 顺序 /
@@ -167,13 +170,87 @@ const gitStatus = (p) => {
   }
 };
 
+// ★ 2026-10-29 · R2-PC: 本批**合法**改动的两个冻结件 ⇒ 不走「一个字都没动」判据,
+//   走下面的**范围**判据 (语义等价, 保护力不减 —— 见那段注释)。
+//   ⚠️ 判据与 verify-schedule-b6-engineering.mjs 保持一致 (同一批改的, 同一套口径)。
+const FROZEN_SCOPED = new Set(["src/lib/api.ts", "package.json"]);
+const PRE_BATCH_SHA = "0e256df"; // main 的 HEAD (本批开分支时的基线)
+
 for (const f of FROZEN) {
+  if (FROZEN_SCOPED.has(f)) continue;
   const st = gitStatus(f);
   if (st === null) {
     console.log(`  ⚠️ 跳过 (git 不可用): 冻结件 ${f}`);
     continue;
   }
   assert(st === "", `冻结件未改动: ${f}`, st);
+}
+
+// ---------------------------------------------------------------------------
+// ★ 2026-10-29 · R2-PC —— 两个冻结件被本批**合法**改动 ⇒ 换成**语义等价**判据
+// ---------------------------------------------------------------------------
+// 原判据: 「工作区里这两个文件一个字都没动」(git status --porcelain 为空)。
+//
+// 本批 (重构轮 R2-PC · SSE v2 端侧续传中枢) 合法改动:
+//   · `src/lib/api.ts` —— ChatChunk 认 seq/elapsedMs/toolCallCount/thinkingCount/
+//     terminalReason/startedAt/code + getStreamState 区分「问不到 / 没在跑」
+//     + parsePhasesJson 去掉 thinking 合并 (T-16 单点化);
+//   · `package.json` —— 新增 `"test"` 脚本 (任务书 §2.1 建 test/ 目录)。
+//
+// 语义等价判据 (**内容级** · 提交后依然有效, 比原来的「工作区干净」更硬):
+//   · api.ts      ⇒ **日程域相关的那几行逐字未改** —— 原守卫真正要守的是
+//                   「日程批不许改共享文件」, 现在收紧成「SSE 批不许改 api.ts 的
+//                   日程部分」;
+//   · package.json⇒ **依赖 / 开发依赖逐字未改** + **scripts 只许多一个 test**。
+//
+// ⚠️ 比对锚点是**批次开工前的 commit** (PRE_BATCH_SHA) —— 不随本批提交漂移。
+const gitShow = (sha, path) => {
+  try {
+    return execFileSync("git", ["show", `${sha}:${path}`], {
+      cwd: REPO,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
+};
+{
+  // ① api.ts —— 日程域相关行逐字未改。
+  const preApi = gitShow(PRE_BATCH_SHA, "src/lib/api.ts");
+  const curApi = readFileSync(join(REPO, "src/lib/api.ts"), "utf8");
+  if (preApi === null) {
+    console.log(`  ⚠️ 跳过 (git 不可用): 冻结件 src/lib/api.ts 的范围判据`);
+  } else {
+    const schedLines = (src) =>
+      src.split(/\r?\n/).filter((l) => /schedule|日程/i.test(l));
+    assert(
+      JSON.stringify(schedLines(preApi)) === JSON.stringify(schedLines(curApi)),
+      "冻结件 src/lib/api.ts: 日程域相关代码逐字未改 (本批只许动 SSE 相关)",
+    );
+  }
+  // ② package.json —— 依赖不许动 + scripts 只许多一个 test。
+  const prePkgRaw = gitShow(PRE_BATCH_SHA, "package.json");
+  if (prePkgRaw === null) {
+    console.log(`  ⚠️ 跳过 (git 不可用): 冻结件 package.json 的范围判据`);
+  } else {
+    const prePkg = JSON.parse(prePkgRaw);
+    const curPkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"));
+    assert(
+      JSON.stringify(prePkg.dependencies) === JSON.stringify(curPkg.dependencies),
+      "冻结件 package.json: dependencies 不许改",
+    );
+    assert(
+      JSON.stringify(prePkg.devDependencies) === JSON.stringify(curPkg.devDependencies),
+      "冻结件 package.json: devDependencies 不许改",
+    );
+    const curScripts = { ...curPkg.scripts };
+    delete curScripts.test;
+    assert(
+      JSON.stringify(prePkg.scripts) === JSON.stringify(curScripts),
+      "冻结件 package.json: scripts 只许新增 test 一条",
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -57,6 +57,10 @@ scripts/*
 #   理由与批04 同款: 回归断言必须入库, 否则 clone 下来这些判据形同虚设。
 !scripts/verify-deliverable-delete-push.mjs
 !scripts/verify-mutation-counterproof-deliverable.mjs
+# 重构轮 R2-PC (2026-10-29): 端侧续传中枢 —— 42 条新断言专属的变异反证台
+#   (18 条变异, 在**临时镜像**里变异 —— 同 a4 批的做法, 全程不碰工作区)。
+#   同款声明式例外 —— 父目录已放行 + `scripts/*` 已重新忽略, 这里逐个豁免。
+!scripts/verify-sse-turn-r2-mutation.mjs
 !scripts/lib/
 scripts/lib/*
 !scripts/lib/schedule-loader.mjs

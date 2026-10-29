@@ -530,11 +530,14 @@ export function deleteSessions(ids: string[]): Promise<{ ok: true; deletedCount:
  *      { type: 'tool', event: {…}, ts?: number }, ...]
  *   对照 web `gacode-web/src/lib/api.ts:445-495` (parsePhasesJson).
  *
- * 合并策略跟 web 一致 (web M3 fix): server 落的是 **raw 流式累积**结果, 相邻
- *   thinking chunk 没在 server 端合并 ⇒ 回放时必须 client-side 就地拼接,
- *   否则时间线显示「思考 20 次」短句列表, 而不是 1 条完整思考链
- *   (跟 PC 流式路径 `ChatDetail.mergeThinkingPhase` 同款).
- *   遇到 tool ⇒ 关闭当前 open thinking.
+ * ★ 重构轮 R2-web (T-16 / 架构 §2.5.3): thinking 的合并**单点化到服务端**。
+ *   v2 服务端落库的 `phases_json` **就是已合并形态** ⇒ 端侧**原样解析, 一次都不合并**。
+ *   端侧再合并一次 = 把服务端刻意分开的思考段又粘回去 ⇒ 「思考 N 次」次数漂移。
+ *
+ * ⚠️ **老服务端 (v1 契约) 的 phases_json 是 raw 流式累积结果** ——
+ *   那份数据由**渲染层**的兼容分支兜 (`src/lib/sse/turn-record.ts` 的 renderPhases,
+ *   `authoritative: false` 时才走合并; ⚠️ 兼容分支待下线 R5)。
+ *   ⇒ 「合并逻辑」全仓**只剩那一处**, 解析层不再有第二份。
  *
  * 健壮性 (server 数据不可信, 一条脏数据不许拖垮整个 history):
  *   · 字段缺失 / null / 空串 → undefined (不给空数组, 免得渲出空 timeline 容器)
@@ -542,7 +545,7 @@ export function deleteSessions(ids: string[]): Promise<{ ok: true; deletedCount:
  *   · 解析结果非数组 → undefined
  *   · 条目字段缺失 / 类型不对 → **逐条丢弃**, 其余合法项保留 (不整份丢)
  */
-function parsePhasesJson(
+export function parsePhasesJson(
   phasesJson: string | null | undefined,
 ): ExecutionPhase[] | undefined {
   if (!phasesJson) return undefined;
@@ -554,7 +557,6 @@ function parsePhasesJson(
   }
   if (!Array.isArray(parsed)) return undefined;
   const phases: ExecutionPhase[] = [];
-  let openThinkingIdx = -1;
   for (const item of parsed) {
     if (!item || typeof item !== "object") continue;
     const p = item as {
@@ -565,19 +567,9 @@ function parsePhasesJson(
     };
     const ts = typeof p.ts === "number" && Number.isFinite(p.ts) ? p.ts : undefined;
     if (p.type === "thinking" && typeof p.text === "string") {
-      if (openThinkingIdx >= 0) {
-        const cur = phases[openThinkingIdx];
-        if (cur && cur.type === "thinking") {
-          cur.text = (cur.text ?? "") + p.text;
-          if (ts !== undefined) cur.ts = ts;
-        }
-      } else {
-        phases.push({ type: "thinking", text: p.text, ts });
-        openThinkingIdx = phases.length - 1;
-      }
+      // ★ 原样收下 —— **不合并** (T-16)。
+      phases.push({ type: "thinking", text: p.text, ts });
     } else if (p.type === "tool" && p.event && typeof p.event === "object") {
-      // tool 出现 → 关闭任何 open thinking
-      openThinkingIdx = -1;
       phases.push({ type: "tool", event: p.event as Record<string, unknown>, ts });
     }
     // 其它形态 (type 未知 / 字段类型不对) → 丢弃该条, 保留其它合法项
@@ -824,9 +816,35 @@ export interface StreamState {
 }
 
 /**
+ * emptyStreamState —— 「可达但没有在跑的轮次」的归一形态。
+ *
+ * ⚠️ 与 `null` 的区别是**本轮重构 (R2-web) 的关键**:
+ *   · `null` ⇒ **问不到** (网络失败 / 5xx / 鉴权) ⇒ 回落历史, **不抹游标** (缺陷 A-3 / 断言 B6)
+ *   · 本对象 ⇒ **问到了, 但没在跑** ⇒ 回落历史, 游标作废 (这一轮结束了)
+ */
+function emptyStreamState(): StreamState {
+  return {
+    running: false,
+    turnKey: null,
+    lastEventId: null,
+    canAttach: false,
+    reason: null,
+    phase: null,
+    frameCount: null,
+    pendingApprovals: [],
+  };
+}
+
+/**
  * getStreamState —— 进场第一问 (契约 L-41 / L-57)。
  *
  * 失败**不抛给用户**: 端侧拿不到就静默走历史补拉 (与 web 定稿版同款降级思路)。
+ *
+ * ★ 重构轮 R2-web: **「问不到」与「没在跑」必须分开** (缺陷 A-3 / 断言 B6)。
+ *   · 返回 `null`      ⇒ **问不到** (网络失败 / 5xx / 鉴权) ⇒ 回落历史, **不抹游标**
+ *   · 返回 `StreamState` ⇒ **问到了** ⇒ 看 `running` / `canAttach` 决定接不接
+ *   ⚠️ 老服务端 (还没上这个端点) ⇒ 404 ⇒ 归一成「没在跑」(`emptyStreamState`),
+ *     **不是**「问不到」—— 否则端侧会把游标一直留着 (那是个永远用不上的游标)。
  *
  * ⚠️ 走裸 fetch 而不是 `request<T>()` —— server 的成功响应**不是** v2
  *   `{ok, data}` 形状 (是八个键的裸对象) ⇒ `request()` 会把它当失败抛掉。
@@ -846,20 +864,33 @@ export async function getStreamState(
       cache: "no-store",
     });
   } catch (err) {
-    console.warn("[stream-state] 查询失败, 降级为历史补拉:", err);
+    // 网络失败 ⇒ **问不到** ⇒ 回落历史, **不抹游标** (缺陷 A-3 / 断言 B6)。
+    console.warn("[stream-state] 查询失败, 降级为历史补拉 (游标保留):", err);
     return null;
   }
   if (!res.ok) {
-    console.warn(`[stream-state] HTTP ${res.status} — 降级为历史补拉`);
+    // ★ 端点不存在 (服务端还没上这批) / session 不存在 ⇒ 服务端**答了** (404 也是答复)
+    //   ⇒ 按「没在跑」处理 (游标作废 —— 下一轮会重发)。
+    if (res.status === 404 || res.status === 501) {
+      console.warn(
+        `[stream-state] HTTP ${res.status} — 端点不存在, 按「没在跑」处理`,
+      );
+      return emptyStreamState();
+    }
+    // 5xx / 401 ⇒ **问不到** ⇒ 回落历史, **不抹游标**。
+    console.warn(`[stream-state] HTTP ${res.status} — 降级为历史补拉 (游标保留)`);
     return null;
   }
   let raw: Partial<StreamState> | null = null;
   try {
     raw = (await res.json()) as Partial<StreamState>;
   } catch {
+    // 响应体读不出来 ⇒ 算「问不到」。
+    console.warn("[stream-state] 响应体读不出来, 降级为历史补拉 (游标保留)");
     return null;
   }
-  if (!raw || typeof raw !== "object") return null;
+  // ⚠️ 载荷为空 ⇒ 服务端**答了** (只是没内容) ⇒ 「没在跑」, 不是「问不到」。
+  if (!raw || typeof raw !== "object") return emptyStreamState();
   return {
     running: raw.running === true,
     turnKey: typeof raw.turnKey === "string" ? raw.turnKey : null,

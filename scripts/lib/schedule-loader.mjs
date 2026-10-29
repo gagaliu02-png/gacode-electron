@@ -126,12 +126,22 @@ export function makeTmpDir(prefix) {
  *
  * @param rewriteImports  [源字面量, 目标字面量] 列表 —— 逐个替换 `from "<源字面量>"`。
  *                        例: ["./api", "./api.mjs"] / ["@/lib/schedule-api", "./schedule-api.mjs"]
+ *
+ * ⚠️ 2026-10-29 · R2-PC —— 两端 loader 的 rewrite 约定**不同**, 这里做成**两种都认**:
+ *   · PC 原约定: 键写**全路径** ("./api")        ⇒ 只匹配 `from "./api"`;
+ *   · web 约定: 键写**裸名** ("api"), loader 自己补 "./" ⇒ 只匹配 `from "./api"`。
+ *   (web 定稿版 `ca2fed4:scripts/lib/schedule-loader.mjs` 的正则是
+ *    `from\s+["']\./${from}["']` —— 即键不带 "./"。)
+ *   ⇒ 这里把键**归一** (去掉开头的 "./") 并让匹配里的 "./" **可有可无**:
+ *     · PC 既有脚本 (键带 "./") 的行为**逐字不变**;
+ *     · web 定稿版的测试文件 (键不带 "./") 也能**原样抄过来**。
  */
 export function writeModule(dir, name, src, { jsx = false, rewriteImports = [] } = {}) {
   let out = src;
   for (const [from, to] of rewriteImports) {
+    const bare = from.replace(/^\.\//, "");
     out = out.replace(
-      new RegExp(`from\\s+["']${escapeRe(from)}["']`, "g"),
+      new RegExp(`from\\s+["'](?:\\./)?${escapeRe(bare)}["']`, "g"),
       `from "${to}"`,
     );
   }

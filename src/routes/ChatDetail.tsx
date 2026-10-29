@@ -87,9 +87,10 @@ import {
   type ApprovalAction,
   type ChatMessage,
   type LibraryItem,
+  type StreamState,
 } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
-import { useChatStream } from "../lib/sse";
+import { useChatStream } from "../lib/chat-stream";
 import { notifyAiReplyArrived } from "../lib/chat-notifications";
 import {
   isTerminalDone,
@@ -145,6 +146,34 @@ import {
 //   ⛔ 不写第三份 SSE 帧解析器 —— 复用共享零件 `lib/chat-sse.ts` 的
 //     `parseDeletedDeliverables` (只认顶层字段, 不碰游标)。
 import { parseDeletedDeliverables } from "../lib/chat-sse";
+// =========================================================================
+// ★ 重构轮 R2-web · 「端侧续传中枢」(src/lib/sse/) —— 唯一的一套轮次状态机
+// ---------------------------------------------------------------------------
+// 这个页面**不再自己发明**续传语义:
+//   · 状态机 / 轮次记录 / seq 幂等 / 降级闭环 / 终态分类 —— 全部在 `src/lib/sse/` 里
+//     (与 web / 安卓**逐字一致**的定稿版, PC 只抄不改)。
+//   · 页面只做三件事: ① 把现实事件翻译成状态机事件 ② 把状态映射成 UI
+//     ③ 提供端口 (网络 / 存储的实现)。
+// =========================================================================
+import {
+  createEntryController,
+  type StreamStateProbe,
+} from "../lib/sse/entry";
+import {
+  emptyTurnRecord,
+  type TurnFrameLike,
+  type TurnSummaryLike,
+} from "../lib/sse/turn-record";
+import { type SeqFrameLike } from "../lib/sse/seq-guard";
+import {
+  OUTPUT_FILTER_HIT_CODE,
+  presentTerminal,
+  type TerminalReason,
+} from "../lib/sse/terminal";
+import { type ServerSnapshotLike } from "../lib/sse/degrade";
+// ★ 轮次记录的**存储端口实现** (PC 用 localStorage —— 选型理由见
+//   `src/lib/turn-record-store.ts` 的文件头注释)。
+import { turnRecordStore } from "../lib/turn-record-store";
 // ★ a4 契约 v1 · 交付物可见性判据 (W-3 / H-1 / H-2 / H-3 / H-9) ——
 //   判据只写一遍 (纯函数), 页面层只接线, ⛔ 不在 JSX 里 inline 判据。
 import {
@@ -192,31 +221,144 @@ function streamingId(): string {
 }
 
 /**
- * A2-D4-02 · thinking chunk 合并 ——
- * 相邻 thinking **就地拼接** (跟 web `chat/[id]/page.tsx:605-618` +
- * 安卓 `SsePipeline.WORK` 同款).
+ * ★ 重构轮 R2-web (T-16) —— **端侧不再合并 thinking**。
  *
- * ⚠️ 不合并的话, 一次思考会被切成 N 条短句 ⇒ 时间线显示「思考 20 次」,
- *    展开看到 20 条 ~5-10 字短句 (gaga 真机截图证据).
+ * ⛔ 原来这里有个 `mergeThinkingPhase` (相邻 thinking 就地拼接) —— **删掉了**:
+ *   「该合成几条」是**服务端**的决定 (v2 落库的 `phases_json` 已是合并形态),
+ *   端侧再合并一次 = 把服务端刻意分开的思考段粘回去 ⇒ 「思考 N 次」次数漂移
+ *   (gaga 真机截图证据: 🧠 思考 20 次 · 工具 0 次)。
+ *   ⇒ 累积层**原样各占一条**; 合并只发生在**渲染层**的那一处兼容分支
+ *     (`src/lib/sse/turn-record.ts` 的 `renderPhases`, `authoritative=false` 时才合并;
+ *      ⚠️ 兼容分支待下线 R5 —— 老服务端 v1 的 raw 数据靠它兜)。
+ *
+ * ⚠️ 老服务端 (v1) 下 `renderPhases` 的兼容分支会把相邻 thinking 合成一条 ⇒
+ *   观感与删掉之前**一致** (不合并的话, 一次思考被切成 N 条短句)。
  */
-function mergeThinkingPhase(
-  phases: ExecutionPhase[],
-  text: string,
-  ts: number,
-): ExecutionPhase[] {
-  const last = phases[phases.length - 1];
-  if (last && last.type === "thinking") {
-    const next = phases.slice(0, -1);
-    next.push({ ...last, text: (last.text ?? "") + text, ts });
-    return next;
-  }
-  return [...phases, { type: "thinking", text, ts }];
+
+// ────────────────────────────────────────────────────────────
+// ★ 适配层 (G-3 一处真值) —— 宿主的 `ChatChunk` ↔ 状态机的 `TurnFrameLike`
+//
+//   `src/lib/sse/` 里的类型是**自包含**的 (不引宿主工程的 `RichEventBase`),
+//   所以页面这一层要做**双向适配** —— 适配点集中在这三个函数里,
+//   别的地方不许再出现第二份字段映射。
+// ────────────────────────────────────────────────────────────
+
+/**
+ * toProbe —— 把服务端的 `stream-state` 响应适配成「端侧续传中枢」的探测形态。
+ *
+ * ⚠️ **v2 扩展键 (lastSeq / elapsedMs / toolCallCount / …) 老服务端一个都没有**
+ *   ⇒ 一律 null ⇒ 上层走本地兜底 (契约 §2.3 兜底表)。
+ */
+function toProbe(state: StreamState): StreamStateProbe {
+  return {
+    reachable: true,
+    running: state.running,
+    canAttach: state.canAttach,
+    turnKey: state.turnKey,
+    lastEventId: state.lastEventId,
+    pendingApprovals: state.pendingApprovals,
+    // ── v2 扩展键: 老服务端没有 ⇒ null (上层走兜底) ──
+    lastSeq: null,
+    turnState: state.phase,
+    upstreamAlive: state.running,
+    snapshotAvailable: null,
+    completeness: null,
+    startedAt: null,
+    elapsedMs: null,
+    toolCallCount: null,
+    thinkingCount: null,
+  };
+}
+
+/**
+ * toTurnFrame —— 把服务端的 `ChatChunk` 适配成「端侧续传中枢」的帧形态。
+ *
+ * ⚠️ 适配点集中在这里 (G-3 一处真值) —— `src/lib/sse/` 里的类型自包含,
+ *   不引宿主工程的 `RichEventBase` (那个联合会随契约演进变化)。
+ */
+function toTurnFrame(chunk: ChatChunk): TurnFrameLike & SeqFrameLike {
+  return {
+    content: chunk.content ?? null,
+    reasoning: chunk.reasoning ?? null,
+    event: (chunk.event as unknown as Record<string, unknown>) ?? null,
+    events: (chunk.events as unknown as Record<string, unknown>[]) ?? null,
+    // ★ v2: 服务端显式发的轮次序号 (T-09 幂等主键)。
+    //   ⚠️ web 定稿版的 `toTurnFrame` **漏了这一项** ⇒ 跳号判定在生产里永远不生效
+    //     (帧没有 seq ⇒ 状态机只能按 SSE 游标判重复)。PC 补上 (本批唯一的**行为**分歧,
+    //     报告 §6 有说明)。
+    seq: chunk.seq ?? null,
+    startedAt: chunk.startedAt ?? null,
+    elapsedMs: chunk.elapsedMs ?? null,
+    toolCallCount: chunk.toolCallCount ?? null,
+    thinkingCount: chunk.thinkingCount ?? null,
+    done: chunk.done ?? null,
+    messageId: chunk.messageId ?? null,
+    cancelled: chunk.cancelled ?? null,
+    error: chunk.error ?? null,
+    code: chunk.code ?? null,
+    terminalReason: chunk.terminalReason ?? null,
+  };
+}
+
+/**
+ * toChatChunk —— 把「端侧续传中枢」的帧形态适配回宿主的 `ChatChunk`。
+ *
+ * ⚠️ 这是**反向适配** (toTurnFrame 的镜像) —— 状态机给的是自包含类型,
+ *   渲染层要的是宿主类型 ⇒ 适配点集中在这里 (G-3 一处真值)。
+ */
+function toChatChunk(frame: TurnFrameLike & SeqFrameLike): ChatChunk {
+  return {
+    content: frame.content ?? undefined,
+    reasoning: frame.reasoning ?? undefined,
+    event: (frame.event as unknown as RichEventBase) ?? undefined,
+    events: (frame.events as unknown as RichEventBase[]) ?? undefined,
+    // ⚠️ `ChatChunk.seq` 是 **number** (跟 web 定稿版同一形状) ⇒ 字符串形态的
+    //   seq 在反向适配里丢掉 (正向适配 `toTurnFrame` 原样保留)。
+    seq: typeof frame.seq === "number" ? frame.seq : undefined,
+    startedAt: frame.startedAt ?? undefined,
+    elapsedMs: frame.elapsedMs ?? undefined,
+    toolCallCount: frame.toolCallCount ?? undefined,
+    thinkingCount: frame.thinkingCount ?? undefined,
+    done: frame.done ?? undefined,
+    messageId: frame.messageId ?? undefined,
+    cancelled: frame.cancelled ?? undefined,
+    error: frame.error ?? undefined,
+    code: frame.code ?? undefined,
+    terminalReason: frame.terminalReason ?? undefined,
+  };
 }
 
 // 跟进控制器 —— 进程级单例 (状态按 sessionId 分键, 组件重渲染不影响)。
 // 契约 L-58: 本机痕迹**只用于加速** (决定续传时带不带 `Last-Event-ID`),
 // 「该不该接回」的判据**永远**是服务端的 `stream-state`。
 const followController: FollowController = createFollowController();
+
+/**
+ * ★ 四要素的**服务端权威值** (架构 §2.5 / T-15 / T-16 / T-17) —— 流式期间的载体。
+ *
+ * ⛔ 端侧**只渲染不推算**: 服务端给了就用服务端的; 没给 (老服务端) 才走本地兜底
+ *   (耗时落回本地时钟, 计数落回 `countPhases` 的兜底数)。
+ */
+interface StreamingTurnMeta {
+  /** 服务端算的累计耗时 (ms)。 */
+  elapsedMs: number | null;
+  /** 逻辑工具调用次数 (端侧不数帧)。 */
+  toolCallCount: number | null;
+  /** 逻辑思考段数 (端侧不数帧)。 */
+  thinkingCount: number | null;
+  /** 终态分类 (T-12)。 */
+  terminalReason: string | null;
+  /** 轮次开始时刻 (服务端时钟) —— 本地时钟兜底用。 */
+  startedAt: number | null;
+}
+
+const EMPTY_STREAMING_TURN_META: StreamingTurnMeta = {
+  elapsedMs: null,
+  toolCallCount: null,
+  thinkingCount: null,
+  terminalReason: null,
+  startedAt: null,
+};
 
 // 附件上限 — 与 lib/upload.ts MAX_BYTES 对齐.
 // uploadAttachment 的 size 校验是**同步 throw**, 不在 promise 链里, 所以调用点必须前置拦截.
@@ -375,10 +517,18 @@ export function ChatDetail() {
   //   相邻 thinking chunk **就地拼接** (不是每 chunk 一条) —— 否则时间线会显示
   //   "思考 20 次" 的短句列表, 而不是 1 条完整思考链.
   const [streamingPhases, setStreamingPhases] = useState<ExecutionPhase[]>([]);
+  // ★ 四要素 (服务端权威值) —— 见模块顶部 `StreamingTurnMeta` 的说明。
+  //   端侧**只渲染不推算** (T-15 / T-16 / T-17)。
+  const [streamingTurnMeta, setStreamingTurnMeta] =
+    useState<StreamingTurnMeta>(EMPTY_STREAMING_TURN_META);
   // onChunk 回调闭包里的 state 是**旧值** ⇒ 终态帧要拿「本轮完整正文 / phases」
   // 发通知 (C4-08) 必须走 ref 镜像.
   const streamingContentRef = useRef<string>("");
   const streamingPhasesRef = useRef<ExecutionPhase[]>([]);
+  // ★ 四要素的 ref 镜像 (state 闭包里拿到的是旧值 ⇒ 累积必须走 ref)。
+  const streamingTurnMetaRef = useRef<StreamingTurnMeta>(
+    EMPTY_STREAMING_TURN_META,
+  );
   // C4-08: 通知标题 = 会话标题 (取不到 → 「新对话」), 同样走 ref.
   const chatTitleRef = useRef<string>("新对话");
   useEffect(() => {
@@ -670,7 +820,35 @@ export function ChatDetail() {
     setStreamingContent("");
     setStreamingEvents([]);
     setStreamingPhases([]);
+    // ★ 四要素跟着本行一起清 (下一轮重新累积)。
+    streamingTurnMetaRef.current = EMPTY_STREAMING_TURN_META;
+    setStreamingTurnMeta(EMPTY_STREAMING_TURN_META);
   }, []);
+
+  /**
+   * ★ 渲染「接入流」那一行的**快照内容** (架构 §5.2 / G-4 / 缺陷 D-1)。
+   *
+   *   两个来源:
+   *     ① 本机轮次记录 (刷新 / 重开页面后, 端上已经渲染过的那部分);
+   *     ② 服务端给的 `attach_failed.snapshot` (接不回来时, 至少还有内容可看)。
+   *
+   *   ⚠️ 快照与后续帧是**接续**的 (快照在前, 增量在后) ⇒ 这里的赋值是
+   *     「把累计正文**置成**快照」, 后续帧继续往上加。
+   */
+  const renderAttachSnapshot = useCallback(
+    (content: string, phases: ExecutionPhase[]) => {
+      // 建行 (第一次有内容才建 —— 控制帧不带内容, 建早了会挂一个空气泡)。
+      if (!localRowIdRef.current) {
+        localRowIdRef.current = `attach-${chatId}`;
+        setStreamingAssistantId(localRowIdRef.current);
+      }
+      streamingContentRef.current = content;
+      setStreamingContent(content);
+      streamingPhasesRef.current = phases;
+      setStreamingPhases(phases);
+    },
+    [chatId],
+  );
 
   /**
    * ★ 流帧处理 —— **发起流与只读接入流共用这一条** (契约 L-57)。
@@ -717,15 +895,65 @@ export function ChatDetail() {
         streamingContentRef.current += chunk.content;
         setStreamingContent((prev) => prev + chunk.content);
       }
-      // A2-D4-02 · 思考链 → phases (相邻 thinking 就地拼接)
+      // ★ T-16 · 思考链 → phases —— **原样各占一条, 端侧不合并**。
+      //   「该合成几条」是**服务端**的决定 (v2 落库的 phases_json 已是合并形态);
+      //   端侧再合并一次 = 把服务端刻意分开的思考段粘回去 ⇒ 次数漂移。
+      //   ⇒ 合并只发生在渲染层的那一处 (`sse/turn-record.ts` 的 `renderPhases`)。
+      //   ⚠️ 老服务端 (v1) 下 `renderPhases` 的兼容分支会把相邻 thinking 合成一条
+      //     ⇒ 观感与删掉合并之前**一致**。
       if (chunk.reasoning) {
         ensureRow();
-        streamingPhasesRef.current = mergeThinkingPhase(
-          streamingPhasesRef.current,
-          chunk.reasoning,
-          Date.now(),
-        );
+        streamingPhasesRef.current = [
+          ...streamingPhasesRef.current,
+          { type: "thinking", text: chunk.reasoning, ts: Date.now() },
+        ];
         setStreamingPhases(streamingPhasesRef.current);
+      }
+      // ★ 四要素 (服务端权威值) —— 端侧**只渲染不推算** (T-15 / T-16 / T-17)。
+      //   服务端给了才覆盖; 没给 (老服务端) ⇒ 保持 null ⇒ 渲染层走本地兜底。
+      if (
+        typeof chunk.elapsedMs === "number" ||
+        typeof chunk.toolCallCount === "number" ||
+        typeof chunk.thinkingCount === "number" ||
+        typeof chunk.startedAt === "number" ||
+        typeof chunk.terminalReason === "string"
+      ) {
+        const cur = streamingTurnMetaRef.current;
+        const next: StreamingTurnMeta = {
+          elapsedMs:
+            typeof chunk.elapsedMs === "number" ? chunk.elapsedMs : cur.elapsedMs,
+          toolCallCount:
+            typeof chunk.toolCallCount === "number"
+              ? chunk.toolCallCount
+              : cur.toolCallCount,
+          thinkingCount:
+            typeof chunk.thinkingCount === "number"
+              ? chunk.thinkingCount
+              : cur.thinkingCount,
+          terminalReason:
+            typeof chunk.terminalReason === "string"
+              ? chunk.terminalReason
+              : cur.terminalReason,
+          startedAt:
+            typeof chunk.startedAt === "number" ? chunk.startedAt : cur.startedAt,
+        };
+        streamingTurnMetaRef.current = next;
+        setStreamingTurnMeta(next);
+      }
+      // ★ 天眼 (T-13 / 订正 11): `error{code:'OUTPUT_FILTER_HIT'}` ⇒
+      //   **撤掉已渲染的 partial 正文**, 换成天眼文案 (合规要求)。
+      //   状态机那边已经把**记录**里的正文清了 (purgeContent) —— 这里清**渲染层**的。
+      //   ⚠️ 天眼帧的形状是 `{type:'error', code, content:'❗️天眼…'}` ——
+      //     文案在 `content` 里, 所以「撤 partial」= 把累计正文换成这一帧的 content。
+      if (chunk.code === OUTPUT_FILTER_HIT_CODE) {
+        streamingContentRef.current = chunk.content ?? "";
+        setStreamingContent(streamingContentRef.current);
+        const next: StreamingTurnMeta = {
+          ...streamingTurnMetaRef.current,
+          terminalReason: "filtered",
+        };
+        streamingTurnMetaRef.current = next;
+        setStreamingTurnMeta(next);
       }
       // 阶段 8 chat-id-13/17 — 抽 approval_request / approval_granted /
       //   approval_denied 事件走 ApprovalBanner / store, 不进 message.richEvents
@@ -862,17 +1090,135 @@ export function ChatDetail() {
         return uniq.length > 0 ? uniq : undefined;
       })();
 
-      try {
-        await stream.start({
-          sessionId: chatId,
-          message: text,
-          imageUrls,
-          attachedFileIds: fileIds,
-          knowledgeRefs,
-          onChunk: (chunk: ChatChunk) => {
-            handleStreamChunk(chunk, "streaming", attachments);
-          },
+      // =========================================================================
+      // ★ 重构轮 R2-web · 发送流**也走状态机** (G-3 一处真值)
+      //
+      //   发起流 (POST /chat/stream) 与接入流 (POST /chat/attach) 是两条路,
+      //   但**状态机只有一套** —— 帧都走 `ctrl.dispatch({type:"frame"})`:
+      //   幂等 / 降级 / 终态分类**只有一处判据** (不许在宿主层另写一套)。
+      // =========================================================================
+
+      // 新的一轮 ⇒ 旧游标作废 (游标是**按轮次**的, 契约 L-40 / L-60) ——
+      //   带着上一轮的游标去接这一轮 ⇒ 会接回上一轮的帧 ⇒ 正文重复。
+      void followController.start(chatId, null);
+      // ⚠️ 本机轮次记录先重置 —— 游标与已渲染内容在**同一条记录**里 (架构 §5.3),
+      //   不许只删一半 (缺陷 D-1 / 断言 B7)。
+      await turnRecordStore.write(emptyTurnRecord(chatId, Date.now()));
+
+      // 本轮服务端下发的最后一个合法游标 (端侧**不自增**, 契约 L-33)。
+      let lastCursor: string | null = null;
+      // 这一轮见过终态帧吗 (见过 ⇒ 不许重连)。
+      let sawTerminal = false;
+      // 重连模式 ⇒ 走续传 (带 Last-Event-ID, 契约 L-35)。
+      let resumeMode = false;
+      // 只重连一次 (无限重连 = 烧 token + 界面抖动)。
+      let reconnectTried = false;
+
+      // 「本轮在跑」的探测结果 —— 发送流由**本端**发起 ⇒ 这一轮必然在跑。
+      // ⚠️ 这是**恒真**的, 但走同一条决策路径 ⇒ 状态机只有一套。
+      const runningProbe: StreamStateProbe = {
+        reachable: true,
+        running: true,
+        canAttach: true,
+        turnKey: null,
+        lastEventId: null,
+        pendingApprovals: [],
+        lastSeq: null,
+        turnState: "running",
+        upstreamAlive: true,
+        snapshotAvailable: false,
+        completeness: "partial",
+        startedAt: null,
+        elapsedMs: null,
+        toolCallCount: null,
+        thinkingCount: null,
+      };
+
+      // 发起流 / 接入流共用的「吃一帧」—— 状态机先判, 宿主层只渲染 (G-3)。
+      const onTurnChunk = (chunk: ChatChunk, cursor: string | null) => {
+        // ★ 幂等结论由**状态机**给 (T-09 / G-3): duplicate ⇒ 不重渲染; gap ⇒ 已降级。
+        //   `cursor` = **这一帧**生效的 SSE 游标 (读帧层保证它先于本帧回调)。
+        const s = ctrl.dispatch({
+          type: "frame",
+          frame: toTurnFrame(chunk),
+          cursor: cursor ?? lastCursor,
         });
+        if (s.frameOutcome !== "applied") return;
+        if (s.state === "draining") sawTerminal = true;
+        handleStreamChunk(chunk, "streaming", attachments);
+      };
+
+      // 本轮的「轮次控制器」—— 与进场接回**共用**同一个状态机。
+      const ctrl = createEntryController(
+        chatId,
+        {
+          probe: async () => runningProbe,
+          loadRecord: async (id) => turnRecordStore.read(id),
+          saveRecord: async (rec) => {
+            await turnRecordStore.write(rec);
+          },
+          attach: async (args) => {
+            await stream.start({
+              sessionId: chatId,
+              message: text,
+              imageUrls,
+              attachedFileIds: fileIds,
+              knowledgeRefs,
+              // ★ 重连模式 ⇒ **空 body + 续传头** (契约 L-35 / L-36):
+              //   绝不能重复投喂用户消息, 也不能建新轮次。
+              resume: resumeMode
+                ? { cursor: args.cursor ?? lastCursor ?? null }
+                : null,
+              onCursor: (c) => {
+                // 游标推进 —— 只接受纯十进制数字串 (非法值由控制器直接丢弃)
+                if (typeof c === "string" && /^\d+$/.test(c)) lastCursor = c;
+                void followController.advanceCursor(chatId, c);
+              },
+              onChunk: (chunk: ChatChunk, cur: string | null) => {
+                onTurnChunk(chunk, cur);
+              },
+            });
+          },
+        },
+        {
+          // 降级 ⇒ 先渲染快照, 再回落历史 (G-4: 降级是常态分支, 不弹错误)。
+          onDegrade: (plan, session) => {
+            const snap = session.record.renderedSnapshot;
+            if (plan.renderSnapshot && snap.content) {
+              renderAttachSnapshot(
+                snap.content,
+                snap.phases as unknown as ExecutionPhase[],
+              );
+            }
+            queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+          },
+          onHistory: () => {
+            queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+          },
+        },
+      );
+
+      try {
+        await ctrl.start();
+        // ★ 重连 (缺陷 W-1 / 断言 B9) —— 这一轮**还没结束**但流断了 ⇒ 带 Last-Event-ID 重接一次。
+        //   · 游标 = 服务端下发的最后一个合法游标 (端侧**不自增**, 契约 L-33);
+        //   · **只重连一次** (无限重连 = 烧 token + 界面抖动);
+        //   · 用户按了停止 / 组件卸载 ⇒ **不重连** (那一轮已经被用户结束了)。
+        if (!sawTerminal && !reconnectTried) {
+          reconnectTried = true;
+          resumeMode = true;
+          console.warn(
+            "[sse] 这一轮还没结束就断了 ⇒ 重连一次 (带 Last-Event-ID), 游标:",
+            lastCursor,
+          );
+          try {
+            await ctrl.reconnect();
+          } catch (err2) {
+            // ★ 重连失败**不弹错误** (G-4: 降级是常态分支) ⇒ 静默回落历史补拉。
+            console.warn("[sse] 重连失败, 回落历史补拉:", err2);
+            queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+          }
+        }
       } catch (err) {
         // user abort → 静默关闭, 不弹错误
         if (isUserAbortError(err) || err instanceof UserAbortError) {
@@ -928,9 +1274,21 @@ export function ChatDetail() {
       // ① 先问服务端「这会话现在有没有在跑的轮次」
       const state = await getStreamState(chatId);
       if (cancelled) return;
-      if (!state || !state.running || !state.canAttach) {
-        // ⇒ 没有在跑的轮次 ⇒ 走历史接口即可 (historyQuery 已经在做)
+      if (!state) {
+        // ★ **问不到** (网络失败 / 5xx) —— **不是**「没在跑」!
+        //   ⇒ 回落历史补拉, **游标保留** (缺陷 A-3 / 断言 B6)。
+        //   ⛔ 这里**不许**调 followController.stop(chatId) —— 它会把唯一游标删掉
+        //      (断一次网就抹游标 ⇒ 回来只能整轮重放)。
+        console.warn("[attach] stream-state 问不到, 回落历史补拉 (游标保留)");
+        queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+        setWaitingFirstFrame(false);
+        return;
+      }
+      if (!state.running || !state.canAttach) {
+        // ⇒ 确实没有在跑的轮次 ⇒ 走历史接口即可 (historyQuery 已经在做)
         //   同时把本机的跟进记录清掉 (轮次已结束, 游标作废 —— 下一轮会重发)。
+        //   ⚠️ **turn record 不删** —— 里面是这一轮已渲染的内容, 刷新后要先渲染它
+        //      (架构 §5.3 / 断言 B7)。游标与内容在**同一条记录**里, 不许只删一半。
         await followController.stop(chatId);
         setWaitingFirstFrame(false);
         return;
@@ -954,32 +1312,102 @@ export function ChatDetail() {
       if (cancelled) return;
       const cursor = decideAttachCursor(local);
 
-      // ③ 接回这一轮
+      // ③ 接回这一轮 —— 交给「端侧续传中枢」(src/lib/sse/entry.ts)。
+      //   它管: 状态机 · 轮次记录落盘 · seq 幂等 · 降级闭环 · 终态分类。
+      //   ⚠️ 探针结果**直接喂**已经问过的 state (不重复打网络)。
       await followController.start(chatId, cursor);
-      await stream.attach({
-        sessionId: chatId,
-        cursor,
-        signal: ac.signal,
-        onControl: (frame) => {
-          if (frame.type === "attach_failed") {
-            // 契约 L-50: attach 失败**静默**回落历史补拉, 不报错给用户
-            console.warn("[attach] 接不回来, 回落历史补拉:", frame.reason);
-            void followController.stop(chatId);
+      const entry = createEntryController(
+        chatId,
+        {
+          probe: async () => toProbe(state),
+          loadRecord: (id) => turnRecordStore.read(id),
+          saveRecord: (rec) => turnRecordStore.write(rec),
+          attach: async (args) => {
+            await stream.attach({
+              sessionId: chatId,
+              // ★ 游标由**状态机**决定 (取本机轮次记录里的 seq; 非法 ⇒ null ⇒
+              //   服务端按 X-Resume-Turn 整轮接回)。本机痕迹只用于加速 (L-58)。
+              cursor: args.cursor,
+              signal: ac.signal,
+              onControl: (frame) => {
+                // ⚠️ 控制帧是**判别联合** (attach_ok | attach_failed) ——
+                //   各自的字段不一样 ⇒ 必须先按 type 收窄。
+                if (frame.type === "attach_failed") {
+                  // 契约 L-50: attach 失败**静默**回落历史补拉, 不报错给用户
+                  console.warn("[attach] 接不回来, 回落历史补拉:", frame.reason);
+                  void followController.stop(chatId);
+                  queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+                  args.onControl?.({
+                    type: "attach_failed",
+                    reason: frame.reason ?? null,
+                    // ★ v2 (订正 3): 老服务端没有 ⇒ null ⇒ 回落历史, 不报错。
+                    snapshot: (frame.snapshot ?? null) as ServerSnapshotLike | null,
+                  });
+                  return;
+                }
+                args.onControl?.({
+                  type: "attach_ok",
+                  turnKey: frame.turnKey ?? null,
+                  resumedFrom: frame.resumedFrom ?? null,
+                  replayed: frame.replayed ?? null,
+                  reason: frame.reason ?? null,
+                  // ★ v2 (订正 13): 老服务端没有 ⇒ null ⇒ 走本地兜底。
+                  summary: (frame.summary ?? null) as TurnSummaryLike | null,
+                });
+              },
+              onChunk: (chunk, cur) => {
+                args.onData?.(toTurnFrame(chunk), cur);
+              },
+              onCursor: (c) => {
+                // 游标推进 —— 只接受纯十进制数字串 (非法值由控制器直接丢弃)
+                args.onCursor?.(c);
+                void followController.advanceCursor(chatId, c);
+              },
+            });
+          },
+        },
+        {
+          // ★ 本机读回来的轮次记录 ⇒ **先渲染它** (缺陷 D-1 / 断言 B7)。
+          //   「刷新后正文没了」的老 bug 就是因为端上只存了游标、没存内容。
+          //   ⚠️ 只有**尾随重放** (本机有合法游标) 才喂给渲染层 ——
+          //   整轮重放 (无游标) 时服务端会把整轮再发一遍, 再叠本机快照就重复了。
+          onLocalRecord: (rec) => {
+            if (cancelled) return;
+            const snap = rec.renderedSnapshot;
+            if (!snap.content && snap.phases.length === 0) return;
+            if (!cursor) return;
+            renderAttachSnapshot(
+              snap.content,
+              snap.phases as unknown as ExecutionPhase[],
+            );
+          },
+          // 帧 —— 幂等结论由状态机给 (重复帧 / 跳号帧**不会**走到这里)。
+          onFrame: (frame) => {
+            if (cancelled) return;
+            handleStreamChunk(toChatChunk(frame), "attach", null);
+          },
+          // ★ 降级闭环 (G-4): 有快照 ⇒ 先渲染快照; 没有 ⇒ 回落历史。**不弹错误**。
+          onDegrade: (plan, session) => {
+            const snap = session.record.renderedSnapshot;
+            if (plan.renderSnapshot && snap.content) {
+              renderAttachSnapshot(
+                snap.content,
+                snap.phases as unknown as ExecutionPhase[],
+              );
+            }
             queryClient.invalidateQueries({ queryKey: ["history", chatId] });
-          }
+          },
+          // 回落历史 (正文 + 交付物 + 审批历史)。
+          onHistory: () => {
+            queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+          },
         },
-        onCursor: (c) => {
-          // 游标推进 —— 只接受纯十进制数字串 (非法值由控制器直接丢弃)
-          void followController.advanceCursor(chatId, c);
-        },
-        onChunk: (chunk) => {
-          if (cancelled) return;
-          handleStreamChunk(chunk, "attach", null);
-        },
-      });
-      // 流结束 (轮次终帧 / 服务端关流) ⇒ 不再跟进
+      );
+      await entry.start();
+      // 流结束 (轮次终帧 / 服务端关流) ⇒ 拉一次历史真值。
+      //   ⚠️ **不删**跟进记录 —— 流结束可能是「上游断了」而不是「这轮结束了」,
+      //   游标留着才能重连 (断言 B9)。下一轮开始时 start(chatId, null) 会重置它。
       if (!cancelled) {
-        await followController.stop(chatId);
         queryClient.invalidateQueries({ queryKey: ["history", chatId] });
       }
     })().catch((err) => {

@@ -9,6 +9,7 @@
     "build": "electron-vite build",
     "build:win": "electron-vite build && electron-builder --win --x64",
     "start": "electron-vite preview",
+    "test": "node --test \"test/**/*.test.mjs\"",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "pnpm typecheck:node && pnpm typecheck:web",

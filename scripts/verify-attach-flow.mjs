@@ -51,7 +51,7 @@ const repoSrc = (p) => readFileSync(join(process.cwd(), p), "utf8");
 const repoCode = (p) => stripComments(repoSrc(p), p);
 
 // ===========================================================================
-// 运行时加载: src/lib/sse.ts (hook) —— 用 react 桩 + fetch 桩跑真代码
+// 运行时加载: src/lib/chat-stream.ts (hook) —— 用 react 桩 + fetch 桩跑真代码
 // ===========================================================================
 const dir = makeTmpDir("verify-attach-flow");
 
@@ -99,7 +99,7 @@ writeModule(dir, "cancel", repoSrc("src/lib/cancel.ts"), {
 });
 writeModule(dir, "auth-refresh", repoSrc("src/lib/auth-refresh.ts"));
 writeModule(dir, "sse-reconnect", repoSrc("src/lib/sse-reconnect.ts"));
-const sseUrl = writeModule(dir, "sse", repoSrc("src/lib/sse.ts"), {
+const sseUrl = writeModule(dir, "sse", repoSrc("src/lib/chat-stream.ts"), {
   rewriteImports: [
     ["react", "./react-stub.mjs"],
     ["./cancel", "./cancel.mjs"],

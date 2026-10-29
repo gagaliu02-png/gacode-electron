@@ -89,6 +89,39 @@ export interface ChatChunk {
   emptyReply?: boolean;
   /** 取消帧: 本轮被服务端中止 */
   cancelled?: boolean;
+
+  // ==========================================================================
+  // ★ v2 帧信封 (重构轮 R2-web · 架构 §2.5 四要素 / T-09 / T-12 / T-15)
+  // --------------------------------------------------------------------------
+  // ⚠️ **全部 optional** —— 老服务端 (R1-b/R1-c 之前) 一个都不发。
+  //    端侧读它们时一律走「没有就兜底」, 绝不能假设存在。
+  //
+  //   · `seq`             —— 服务端轮次真值发号 (per-session 单调, **连续**)。
+  //                          幂等判据的主键 (T-09); 老服务端没有 ⇒ 只判重复不判跳号。
+  //   · `elapsedMs`       —— 服务端算的累计耗时 (四要素之一, T-15)。
+  //                          老服务端没有 ⇒ 用 message.startedAt + 本地时钟兜底。
+  //   · `toolCallCount`   —— **逻辑**工具调用次数 (四要素之一, T-17)。
+  //                          老服务端没有 ⇒ 端侧按相位数组数 (兜底, 会虚高)。
+  //   · `thinkingCount`   —— **逻辑**思考段数 (四要素之一, T-16)。
+  //   · `terminalReason`  —— 终态分类 (T-12): completed/cancelled/filtered/failed/upstream_lost。
+  //                          老服务端没有 ⇒ 从 error.code / done.cancelled 推导。
+  //   · `code`            —— 机器可读错误码。**天眼命中 = `OUTPUT_FILTER_HIT`** (订正 8/11)。
+  //   · `startedAt`       —— 轮次开始时刻 (服务端时钟)。
+  // ==========================================================================
+  /** ★ v2: 服务端分配的轮次序号 (per-session 单调, 连续)。老服务端没有。 */
+  seq?: number | null;
+  /** ★ v2: 服务端算的累计耗时 (ms)。老服务端没有 ⇒ 本地时钟兜底。 */
+  elapsedMs?: number | null;
+  /** ★ v2: 逻辑工具调用次数 (T-17)。老服务端没有 ⇒ 端侧数 (兜底)。 */
+  toolCallCount?: number | null;
+  /** ★ v2: 逻辑思考段数 (T-16)。老服务端没有 ⇒ 端侧数 (兜底)。 */
+  thinkingCount?: number | null;
+  /** ★ v2: 终态分类 (T-12)。老服务端没有 ⇒ 从 error.code / done.cancelled 推导。 */
+  terminalReason?: string | null;
+  /** 机器可读错误码 —— 天眼命中 = `OUTPUT_FILTER_HIT` (订正 8)。 */
+  code?: string | null;
+  /** ★ v2: 轮次开始时刻 (服务端时钟)。 */
+  startedAt?: number | null;
 }
 
 /**

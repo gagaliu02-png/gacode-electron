@@ -249,7 +249,7 @@ const chatSseImports = repoCode("src/lib/chat-sse.ts");
   ? pass("★ chat-sse.ts 复用通知流的 SseFrameParser (§11.4 P3 禁止写第三遍)")
   : miss("chat-sse.ts 没有复用通知流的帧解析器 (另写了一套)");
 
-const sseCode = repoCode("src/lib/sse.ts");
+const sseCode = repoCode("src/lib/chat-stream.ts");
 /from\s+"\.\/sse-reconnect"/.test(sseCode)
   ? pass("★ sse.ts 的退避/watchdog 走共享的 sse-reconnect (与通知流同一份)")
   : miss("sse.ts 没有走共享的 sse-reconnect");
