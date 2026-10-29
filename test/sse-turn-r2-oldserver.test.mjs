@@ -50,7 +50,10 @@ const R = await import(writeModule(dir, "turn-record", repoSrc("src/lib/sse/turn
 const T = await import(writeModule(dir, "terminal", repoSrc("src/lib/sse/terminal.ts")));
 const D = await import(
   writeModule(dir, "degrade", repoSrc("src/lib/sse/degrade.ts"), {
-    rewriteImports: [["turn-record", "./turn-record.mjs"]],
+    rewriteImports: [
+      ["turn-record", "./turn-record.mjs"],
+      ["seq-guard", "./seq-guard.mjs"],
+    ],
   })
 );
 const SS = await import(

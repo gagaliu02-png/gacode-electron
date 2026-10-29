@@ -2,13 +2,13 @@
 /**
  * scripts/verify-sse-turn-r2-mutation.mjs
  *
- * ★ 变异反证台 (纪律 G-2) —— 端侧续传中枢 (R2-PC / R2-PC′) 的 44 条断言。
+ * ★ 变异反证台 (纪律 G-2) —— 端侧续传中枢 (R2-PC / R2-PC′ / R2-PC″) 的 51 条断言。
  *
  * ---------------------------------------------------------------------------
  * 这脚本干什么
  * ---------------------------------------------------------------------------
  *   逐条把**生产代码改坏** ⇒ 必须有断言变红 ⇒ 还原 ⇒ 必须变绿。
- *   ⇒ 证明「44 条断言真的盯得住它们该盯的行」, 而不是「断言只会通过」。
+ *   ⇒ 证明「51 条断言真的盯得住它们该盯的行」, 而不是「断言只会通过」。
  *
  *   ⚠️ 与 a4 批 (scripts/verify-mutation-counterproof-deliverable.mjs) **同款做法**:
  *     变异只发生在**系统临时目录里的镜像** (`src/` + `scripts/` + `test/` 的拷贝),
@@ -44,9 +44,14 @@
  *   M-P23 本机快照无条件渲染          → W2a
  *   M-P24 判据永远说不                → W2b
  *   M-P25 onDegrade 无条件渲染        → W2c
- *   M-P26 降级内容也当本机旧快照      → W2d
+ *   M-P26 判据忽略服务端正文          → W2d
  *   M-P27 onDegrade 另写一套判据      → W2e
  *   M-P28 非法游标也当合法            → W2f
+ *   —— R2-PC″ 批 (PM 裁决: 判据归**计划字段** + TurnFrameLike.seq 必填) ——
+ *   M-P29 serverContentPresent 恒 false → W3a
+ *   M-P30 serverContentPresent 用 snapshotHasContent → W3e
+ *   M-P31 TurnFrameLike.seq 变成可选   → W1e
+ *   M-P32 宿主又拿内容字符串当判据      → W3f
  *
  * ---------------------------------------------------------------------------
  * 用法
@@ -422,7 +427,8 @@ const MUTATIONS = [
     file: "src/routes/ChatDetail.tsx",
     edits: [
       {
-        find: "            if (!canRenderLocalSnapshot(cursor, true)) return;",
+        find:
+          "            if (!shouldRenderSnapshot({ plan: null, localCursor: cursor })) return;",
         replace: "            // ★ 变异: 本机快照无条件渲染",
       },
     ],
@@ -431,12 +437,12 @@ const MUTATIONS = [
   },
   {
     id: "M-P24",
-    desc: "判据函数永远说「不渲染」",
-    file: "src/routes/ChatDetail.tsx",
+    desc: "判据函数永远说「不渲染」 (shouldRenderSnapshot 恒 false)",
+    file: "src/lib/sse/degrade.ts",
     edits: [
       {
-        find: `  if (isValidCursor(localCursor)) return true;
-  return !isLocalSnapshot;`,
+        find: `  if (input.plan?.serverContentPresent === true) return true;
+  return isValidCursor(input.localCursor);`,
         replace: "  return false;",
       },
     ],
@@ -450,11 +456,10 @@ const MUTATIONS = [
     edits: [
       {
         find: `            if (
-              plan.renderSnapshot &&
               snap.content &&
-              canRenderLocalSnapshot(cursor, snap.content === localSnapshotContent)
+              shouldRenderSnapshot({ plan, localCursor: cursor })
             ) {`,
-        replace: `            if (plan.renderSnapshot && snap.content) {`,
+        replace: `            if (snap.content) {`,
       },
     ],
     test: T_R2,
@@ -462,12 +467,13 @@ const MUTATIONS = [
   },
   {
     id: "M-P26",
-    desc: "降级内容也当本机旧快照 (降级内容被丢掉)",
-    file: "src/routes/ChatDetail.tsx",
+    desc: "判据忽略服务端正文 (降级内容被丢掉 · G-4 被破坏)",
+    file: "src/lib/sse/degrade.ts",
     edits: [
       {
-        find: "  return !isLocalSnapshot;",
-        replace: "  return false;",
+        find: `  if (input.plan?.serverContentPresent === true) return true;
+  return isValidCursor(input.localCursor);`,
+        replace: "  return isValidCursor(input.localCursor);",
       },
     ],
     test: T_R2,
@@ -475,12 +481,12 @@ const MUTATIONS = [
   },
   {
     id: "M-P27",
-    desc: "onDegrade 另写一套判据 (与 onLocalRecord 不同口径)",
+    desc: "onDegrade 另写一套判据 (不用共享的 shouldRenderSnapshot)",
     file: "src/routes/ChatDetail.tsx",
     edits: [
       {
-        find: "canRenderLocalSnapshot(cursor, snap.content === localSnapshotContent)",
-        replace: "snap.content === localSnapshotContent",
+        find: "              shouldRenderSnapshot({ plan, localCursor: cursor })",
+        replace: "              plan.serverContentPresent === true",
       },
     ],
     test: T_R2,
@@ -489,15 +495,73 @@ const MUTATIONS = [
   {
     id: "M-P28",
     desc: "非法游标也当合法 (判据不认「纯十进制」)",
-    file: "src/routes/ChatDetail.tsx",
+    file: "src/lib/sse/degrade.ts",
     edits: [
       {
-        find: "  if (isValidCursor(localCursor)) return true;",
-        replace: "  if (localCursor !== null) return true;",
+        find: "  return isValidCursor(input.localCursor);",
+        replace:
+          "  return input.localCursor !== null && input.localCursor !== undefined;",
       },
     ],
     test: T_R2,
     expect: "W2f",
+  },
+  // ── R2-PC″ 批 (PM 裁决): 判据归**计划字段** + TurnFrameLike.seq 必填 ──
+  {
+    id: "M-P29",
+    desc: "serverContentPresent 恒为 false (服务端给了正文也认不出来)",
+    file: "src/lib/sse/degrade.ts",
+    edits: [
+      {
+        find: "    serverContentPresent,",
+        replace: "    serverContentPresent: false,",
+      },
+    ],
+    test: T_R2,
+    expect: "W3a",
+  },
+  {
+    id: "M-P30",
+    desc: "serverContentPresent 用 snapshotHasContent (把 phases/events 也算成正文)",
+    file: "src/lib/sse/degrade.ts",
+    edits: [
+      {
+        find: `  const serverContentPresent =
+    hasSnapshot &&
+    typeof input.snapshot?.content === "string" &&
+    input.snapshot.content.trim() !== "";`,
+        replace: `  const serverContentPresent =
+    hasSnapshot && snapshotHasContent(input.snapshot ?? null);`,
+      },
+    ],
+    test: T_R2,
+    expect: "W3e",
+  },
+  {
+    id: "M-P31",
+    desc: "TurnFrameLike.seq 变成可选 (宿主漏传编译也不报错 · W-1 的根因)",
+    file: "src/lib/sse/turn-record.ts",
+    edits: [
+      {
+        find: "  seq: number | string | null;",
+        replace: "  seq?: number | string | null;",
+      },
+    ],
+    test: T_R2,
+    expect: "W1e",
+  },
+  {
+    id: "M-P32",
+    desc: "宿主层又拿**内容字符串**当判据 (回到字符串比较的老路)",
+    file: "src/routes/ChatDetail.tsx",
+    edits: [
+      {
+        find: "              shouldRenderSnapshot({ plan, localCursor: cursor })",
+        replace: '              snap.content !== ""',
+      },
+    ],
+    test: T_R2,
+    expect: "W3f",
   },
 ];
 
@@ -579,7 +643,7 @@ let passed = 0;
 let failed = 0;
 
 console.log("");
-console.log(`══ 变异反证台 (R2-PC · 44 条断言) —— ${RUNS.length} 条 ══`);
+console.log(`══ 变异反证台 (R2-PC · 51 条断言) —— ${RUNS.length} 条 ══`);
 console.log(`   镜像: ${MIRROR}`);
 console.log("");
 

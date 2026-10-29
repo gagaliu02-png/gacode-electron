@@ -64,10 +64,13 @@ R.turnRecord = await import(
 T.terminal = await import(
   writeModule(dir, "terminal", repoSrc("src/lib/sse/terminal.ts"))
 );
-// degrade 依赖 ./turn-record
+// degrade 依赖 ./turn-record 与 ./seq-guard
 D.degrade = await import(
   writeModule(dir, "degrade", repoSrc("src/lib/sse/degrade.ts"), {
-    rewriteImports: [["turn-record", "./turn-record.mjs"]],
+    rewriteImports: [
+      ["turn-record", "./turn-record.mjs"],
+      ["seq-guard", "./seq-guard.mjs"],
+    ],
   })
 );
 
@@ -917,11 +920,6 @@ const hostSrc = repoSrc(HOST);
 // —— 宿主层的「可执行单元」 (原样抠出来) ——
 const toTurnFrameSrc = extractFunction(hostSrc, "toTurnFrame", HOST_FILE);
 const toChatChunkSrc = extractFunction(hostSrc, "toChatChunk", HOST_FILE);
-const canRenderSrc = extractFunction(
-  hostSrc,
-  "canRenderLocalSnapshot",
-  HOST_FILE
-);
 // 进场那处 createEntryController 的回调 (onLocalRecord 唯一 ⇒ 它就是进场那处;
 //   onDegrade 必须跟它落在**同一个**对象字面量里 —— 本文件里有两处
 //   createEntryController (进场那处 + 发送那处, 发送那处没有 onLocalRecord))。
@@ -937,32 +935,27 @@ const onDegradeSrc = extractSiblingObjectProp(
   HOST_FILE
 );
 
-// —— ① 适配层 (toTurnFrame / toChatChunk / canRenderLocalSnapshot) ——
+// —— ① 适配层 (toTurnFrame / toChatChunk) ——
 const adapters = await import(
   writeModule(
     dir,
     "host-adapters",
-    [
-      'import { isValidCursor } from "./seq-guard";',
-      `export ${toTurnFrameSrc}`,
-      `export ${toChatChunkSrc}`,
-      `export ${canRenderSrc}`,
-    ].join("\n"),
-    { jsx: true, rewriteImports: [["seq-guard", "./seq-guard.mjs"]] }
+    [`export ${toTurnFrameSrc}`, `export ${toChatChunkSrc}`].join("\n"),
+    { jsx: true }
   )
 );
 
 // —— ② 进场回调 (onLocalRecord / onDegrade) + 宿主环境桩 ——
-//    ⚠️ 判据函数是**真的** (从宿主源码抠出来的), 只有「渲染出去」与「上下文」是桩。
+//    ⚠️ 判据是**真的** (`src/lib/sse/degrade.ts` 的 `shouldRenderSnapshot` —— web 与 PC
+//      共用**同一份**, 宿主层不许自己再判一遍), 只有「渲染出去」与「上下文」是桩。
 const hostCallbacks = await import(
   writeModule(
     dir,
     "host-callbacks",
     [
-      'import { isValidCursor } from "./seq-guard";',
+      'import { shouldRenderSnapshot } from "./degrade.mjs";',
       "let cancelled = false;",
       "let cursor = null;",
-      "let localSnapshotContent = null;",
       "const rendered = [];",
       "let invalidated = 0;",
       "const renderAttachSnapshot = (content, phases) => {",
@@ -973,19 +966,17 @@ const hostCallbacks = await import(
       "export function setup(nextCursor) {",
       "  cancelled = false;",
       "  cursor = nextCursor;",
-      "  localSnapshotContent = null;",
       "  rendered.length = 0;",
       "  invalidated = 0;",
       "}",
       "export function renderedList() { return rendered; }",
       "export function invalidatedCount() { return invalidated; }",
-      canRenderSrc,
       "export const callbacks = {",
       `  ${onLocalRecordSrc},`,
       `  ${onDegradeSrc},`,
       "};",
     ].join("\n"),
-    { jsx: true, rewriteImports: [["seq-guard", "./seq-guard.mjs"]] }
+    { jsx: true }
   )
 );
 
@@ -1007,15 +998,12 @@ const fakeRecord = (content) => ({
   updatedAt: 0,
 });
 
-/** 降级方案 (形状照 degrade.ts 的 planDegrade)。 */
-const fakePlan = (renderSnapshot) => ({
-  reason: "seq_gap",
-  renderSnapshot,
-  fallbackToHistory: true,
-  raiseError: false,
-  notice: null,
-  keepCursor: true,
-});
+/** 降级计划 —— 用**真的** `planDegrade` 算 (不手搓假计划 ⇒ 判据字段不会被写歪)。 */
+const planWithServerContent = (content) =>
+  D.degrade.planDegrade({ reason: "attach_failed", snapshot: { content } });
+/** 服务端**没给正文**的降级计划 (老服务端 / 跳号 / 问不到)。 */
+const planWithoutServerContent = () =>
+  D.degrade.planDegrade({ reason: "attach_failed" });
 
 const runningProbe = async () => ({
   reachable: true,
@@ -1169,8 +1157,8 @@ test("W2c onDegrade 与 onLocalRecord 同一口径 ⇒ 不许「跳过了又渲�
   hostCallbacks.setup(null);
   // ① 本机快照: 无合法游标 ⇒ 跳过。
   hostCallbacks.callbacks.onLocalRecord(fakeRecord("本机旧快照"));
-  // ② 降级: 要渲染的还是**同一份**本机旧快照 ⇒ 也必须跳过。
-  hostCallbacks.callbacks.onDegrade(fakePlan(true), {
+  // ② 降级: 服务端**没给正文** ⇒ 那份内容纯粹是本机的 ⇒ 也必须跳过。
+  hostCallbacks.callbacks.onDegrade(planWithoutServerContent(), {
     record: fakeRecord("本机旧快照"),
   });
   assert.equal(
@@ -1183,7 +1171,7 @@ test("W2c onDegrade 与 onLocalRecord 同一口径 ⇒ 不许「跳过了又渲�
 test("W2d 降级带的是服务端自己的内容 ⇒ 照渲染 (G-4 / T-08)", () => {
   hostCallbacks.setup(null);
   hostCallbacks.callbacks.onLocalRecord(fakeRecord("本机旧快照"));
-  hostCallbacks.callbacks.onDegrade(fakePlan(true), {
+  hostCallbacks.callbacks.onDegrade(planWithServerContent("服务端给的正文"), {
     record: fakeRecord("服务端给的正文"),
   });
   const list = hostCallbacks.renderedList();
@@ -1196,43 +1184,182 @@ test("W2d 降级带的是服务端自己的内容 ⇒ 照渲染 (G-4 / T-08)", (
 });
 
 test("W2e onLocalRecord 与 onDegrade 用的是**同一个**判据 (INV-2 / INV-3 同口径)", () => {
-  assert.ok(canRenderSrc, "宿主里没有 canRenderLocalSnapshot 这个判据");
-  const defs = (hostSrc.match(/function canRenderLocalSnapshot\b/g) || []).length;
-  assert.equal(defs, 1, "★ 判据函数只许有一个定义 (两处各写一套 ⇒ 必然漂移)");
   assert.ok(
-    onLocalRecordSrc && onLocalRecordSrc.includes("canRenderLocalSnapshot("),
-    "onLocalRecord 必须走那个判据"
+    onLocalRecordSrc && onLocalRecordSrc.includes("shouldRenderSnapshot("),
+    "onLocalRecord 必须走共享判据 shouldRenderSnapshot"
   );
   assert.ok(
-    onDegradeSrc && onDegradeSrc.includes("canRenderLocalSnapshot("),
+    onDegradeSrc && onDegradeSrc.includes("shouldRenderSnapshot("),
     "onDegrade 必须走**同一个**判据"
   );
+  // ★ 判据**只许有一份** —— 在 `src/lib/sse/degrade.ts` 里 (web 与 PC 共用同一份;
+  //   宿主层各写一套 ⇒ 必然漂移 ⇒ 界面重复 —— 缺陷 W-2 的老路)。
+  const hostDefs = (hostSrc.match(/function\s+shouldRenderSnapshot\b/g) || []).length;
+  assert.equal(hostDefs, 0, "★ 宿主层不许自己定义判据 (两端各写一套 ⇒ 必然漂移)");
+  const degradeDefs = (
+    repoSrc("src/lib/sse/degrade.ts").match(/export function shouldRenderSnapshot\b/g) || []
+  ).length;
+  assert.equal(degradeDefs, 1, "★ 判据在 degrade.ts 里只许有一份定义");
 });
 
-test("W2f 判据函数的五条口径 (INV-2 / INV-3 的唯一判据)", () => {
+test("W2f 判据函数的七条口径 (INV-2 / INV-3 的唯一判据)", () => {
+  const judge = D.degrade.shouldRenderSnapshot;
   assert.equal(
-    adapters.canRenderLocalSnapshot("42", true),
+    judge({ plan: planWithoutServerContent(), localCursor: "42" }),
     true,
     "合法游标 ⇒ 本机快照渲染"
   );
   assert.equal(
-    adapters.canRenderLocalSnapshot(null, true),
+    judge({ plan: planWithoutServerContent(), localCursor: null }),
     false,
     "无游标 ⇒ 本机快照不渲染"
   );
   assert.equal(
-    adapters.canRenderLocalSnapshot("abc", true),
+    judge({ plan: planWithoutServerContent(), localCursor: "abc" }),
     false,
     "非法游标 ⇒ 本机快照不渲染"
   );
   assert.equal(
-    adapters.canRenderLocalSnapshot(null, false),
+    judge({ plan: planWithServerContent("服务端正文"), localCursor: null }),
     true,
-    "服务端自己给的内容照渲染 (降级必须带内容)"
+    "★ 服务端给了正文 ⇒ 必须渲染 (游标脏也不许把内容丢了)"
   );
   assert.equal(
-    adapters.canRenderLocalSnapshot("42", false),
+    judge({ plan: planWithServerContent("服务端正文"), localCursor: "42" }),
     true,
-    "合法游标 ⇒ 服务端内容照渲染"
+    "服务端给了正文 + 合法游标 ⇒ 渲染"
+  );
+  assert.equal(
+    judge({ plan: null, localCursor: null }),
+    false,
+    "本机旧快照那条路 (plan: null) + 无游标 ⇒ 不渲染"
+  );
+  assert.equal(
+    judge({ plan: null, localCursor: "42" }),
+    true,
+    "本机旧快照那条路 (plan: null) + 合法游标 ⇒ 渲染"
+  );
+});
+
+// ===========================================================================
+// INV-1 续 —— 帧的 seq 是**必填** (缺陷 W-1 的根因)
+// ===========================================================================
+
+test("W1e TurnFrameLike 的 seq 是**必填** (漏传 ⇒ 编译不过 · 缺陷 W-1 的根因)", () => {
+  const src = repoSrc("src/lib/sse/turn-record.ts");
+  const start = src.indexOf("export interface TurnFrameLike");
+  assert.ok(start > 0, "没找到 TurnFrameLike");
+  const body = src.slice(start, src.indexOf("\n}", start));
+  assert.ok(/^\s*seq\??\s*:/m.test(body), "TurnFrameLike 里必须有 seq 字段");
+  assert.ok(
+    !/^\s*seq\?\s*:/m.test(body),
+    "★ seq 必须**必填** (可选 ⇒ 宿主漏传编译器不报错 ⇒ 缺陷 W-1 会复现)"
+  );
+});
+
+// ===========================================================================
+// W-2 的正解 —— 判据改由**计划字段**承担 (PM 裁决)
+//   · `plan.serverContentPresent` = 服务端给的快照**有正文**吗 (只看正文);
+//   · `shouldRenderSnapshot({ plan, localCursor })` = 服务端给了正文 ⇒ 必须渲染
+//     (G-4 / T-08); 只有本机内容 ⇒ 游标合法才渲染 (INV-2 / INV-3)。
+// ===========================================================================
+
+test("W3a 服务端给了正文 + 本机游标无效 ⇒ **必须渲染** (G-4 / T-08 · 判据由计划字段承担)", () => {
+  const plan = planWithServerContent("服务端给的正文");
+  assert.equal(
+    plan.serverContentPresent,
+    true,
+    "★ 服务端给了正文 ⇒ plan 必须认出来 (判据归计划字段, 不归字符串比较)"
+  );
+  assert.equal(
+    D.degrade.shouldRenderSnapshot({ plan, localCursor: null }),
+    true,
+    "★ 服务端给了正文 ⇒ 必须渲染 (「接回来但内容没了」是绝对不允许的)"
+  );
+  // 走宿主那条路也一样。
+  hostCallbacks.setup(null);
+  hostCallbacks.callbacks.onDegrade(plan, { record: fakeRecord("服务端给的正文") });
+  const list = hostCallbacks.renderedList();
+  assert.equal(list.length, 1, "★ 宿主层也必须渲染服务端给的正文");
+  assert.equal(list[0].content, "服务端给的正文");
+});
+
+test("W3b 只有本机正文 + 游标无效 ⇒ **不渲染** (INV-2 / INV-3)", () => {
+  const plan = planWithoutServerContent();
+  assert.equal(plan.serverContentPresent, false, "★ 服务端没给正文 ⇒ plan 必须说没有");
+  assert.equal(
+    D.degrade.shouldRenderSnapshot({ plan, localCursor: null }),
+    false,
+    "★ 只有本机内容 + 游标无效 ⇒ 不渲染 (否则整轮重放 = 界面重复)"
+  );
+  hostCallbacks.setup(null);
+  hostCallbacks.callbacks.onDegrade(plan, { record: fakeRecord("本机旧快照") });
+  assert.equal(
+    hostCallbacks.renderedList().length,
+    0,
+    "★ 宿主层也不许把本机旧快照渲染出来"
+  );
+});
+
+test("W3c 服务端正文为空 (content: \"\") + 游标无效 ⇒ **不渲染** (旧字符串比较处理错的那一格)", () => {
+  const plan = D.degrade.planDegrade({
+    reason: "attach_failed",
+    snapshot: { content: "" },
+  });
+  assert.equal(plan.serverContentPresent, false, "★ 正文为空 ⇒ 不算「服务端给了正文」");
+  assert.equal(
+    D.degrade.shouldRenderSnapshot({ plan, localCursor: null }),
+    false,
+    "★ 服务端正文为空 ⇒ 那份内容纯粹是本机的 ⇒ 游标无效 ⇒ 不渲染"
+  );
+  hostCallbacks.setup(null);
+  hostCallbacks.callbacks.onDegrade(plan, { record: fakeRecord("") });
+  assert.equal(hostCallbacks.renderedList().length, 0);
+});
+
+test("W3d 服务端正文与本机旧快照**逐字相同** + 游标无效 ⇒ 仍必须渲染 (旧字符串比较在这一格会错)", () => {
+  const plan = planWithServerContent("本机旧快照");
+  assert.equal(plan.serverContentPresent, true);
+  assert.equal(
+    D.degrade.shouldRenderSnapshot({ plan, localCursor: null }),
+    true,
+    "★ 判据不许靠比字符串 (内容相同 ≠ 同一份来源)"
+  );
+  hostCallbacks.setup(null);
+  hostCallbacks.callbacks.onLocalRecord(fakeRecord("本机旧快照"));
+  hostCallbacks.callbacks.onDegrade(plan, { record: fakeRecord("本机旧快照") });
+  assert.equal(
+    hostCallbacks.renderedList().length,
+    1,
+    "★ 服务端那份必须渲染 (旧判据在这里会误判成「同一份旧快照」而跳过 ⇒ 内容丢了)"
+  );
+});
+
+test("W3e serverContentPresent **只看正文** (phases / events 不算正文)", () => {
+  const phases = [{ type: "thinking", text: "想了一下", ts: 0 }];
+  const plan = D.degrade.planDegrade({
+    reason: "attach_failed",
+    snapshot: { content: "", phases },
+  });
+  assert.equal(
+    plan.serverContentPresent,
+    false,
+    "★ 只看正文 (snapshotHasContent 把 phases/events 也算进去 ⇒ 语义不同)"
+  );
+  assert.equal(
+    D.degrade.snapshotHasContent({ content: "", phases }),
+    true,
+    "★ (对照) snapshotHasContent 的口径确实不同 ⇒ 不能拿它当 serverContentPresent"
+  );
+});
+
+test("W3f 宿主层不许再拿**内容字符串**当判据 (判据归 plan.serverContentPresent)", () => {
+  assert.ok(
+    !/localSnapshotContent/.test(hostSrc),
+    "★ 宿主层不许再比内容字符串判「是不是同一份旧快照」"
+  );
+  assert.ok(
+    !/snap\.content\s*[!=]==/.test(hostSrc),
+    "★ 宿主层不许拿 snap.content 做比较 (判据归 plan.serverContentPresent)"
   );
 });

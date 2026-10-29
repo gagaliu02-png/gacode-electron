@@ -166,13 +166,16 @@ import {
 } from "../lib/sse/turn-record";
 // ★ v2 帧信封 —— 宿主要把服务端的**显式 seq** 搬进帧里 (T-09 幂等主键, 缺陷 W-1)。
 //   ⚠️ `seq-guard.ts` 是 `src/lib/sse/` 的定稿模块 —— 本文件**只 import, 不改**。
-import { isValidCursor, type SeqFrameLike } from "../lib/sse/seq-guard";
+import { type SeqFrameLike } from "../lib/sse/seq-guard";
 import {
   OUTPUT_FILTER_HIT_CODE,
   presentTerminal,
   type TerminalReason,
 } from "../lib/sse/terminal";
-import { type ServerSnapshotLike } from "../lib/sse/degrade";
+import {
+  shouldRenderSnapshot,
+  type ServerSnapshotLike,
+} from "../lib/sse/degrade";
 // ★ 轮次记录的**存储端口实现** (PC 用 localStorage —— 选型理由见
 //   `src/lib/turn-record-store.ts` 的文件头注释)。
 import { turnRecordStore } from "../lib/turn-record-store";
@@ -328,31 +331,6 @@ function toChatChunk(frame: TurnFrameLike & SeqFrameLike): ChatChunk {
     code: frame.code ?? undefined,
     terminalReason: frame.terminalReason ?? undefined,
   };
-}
-
-/**
- * ★ INV-2 / INV-3 —— 「本机快照能不能渲染」的**唯一**判据 (web 与 PC 逐字同款)。
- *
- * ⚠️ 两条不变式**共用这一个判据** (不许各写一套 ⇒ 必然漂移):
- *   · INV-2 —— `onLocalRecord`: 本机快照**只在「本机游标合法」时**渲染;
- *   · INV-3 —— `onDegrade`   : 渲染快照的条件**与 INV-2 一致**。
- *
- * @param localCursor     本机游标 (纯十进制串; null = 没有 / 非法)。
- * @param isLocalSnapshot 这一份内容是不是**本机旧快照**。
- *
- * 规则:
- *   ① 本机游标**合法** ⇒ 服务端从本机游标处**续传** ⇒ 本机快照 + 增量 = 连续 ⇒ 渲染;
- *   ② 本机游标**非法** ⇒ 服务端**整轮重放** ⇒ 再渲染本机旧快照 = **界面重复**
- *      (缺陷 W-2) ⇒ 本机旧快照**不渲染**;
- *      ⚠️ 但**服务端自己给的**内容 (不是本机旧快照) 照渲染 ——
- *         降级必须带内容 (G-4 / T-08), 不能因为游标脏就把内容也丢了。
- */
-function canRenderLocalSnapshot(
-  localCursor: string | null,
-  isLocalSnapshot: boolean
-): boolean {
-  if (isValidCursor(localCursor)) return true;
-  return !isLocalSnapshot;
 }
 
 // 跟进控制器 —— 进程级单例 (状态按 sessionId 分键, 组件重渲染不影响)。
@@ -1294,9 +1272,8 @@ export function ChatDetail() {
     if (!chatId) return;
     let cancelled = false;
     const ac = new AbortController();
-    // ★ INV-2 / INV-3 —— 本机旧快照的正文 (onLocalRecord 记下, onDegrade 用来判别
-    //   「要渲染的这份内容是不是那份旧快照」)。null = 本机没有旧快照。
-    let localSnapshotContent: string | null = null;
+    // ★ INV-2 / INV-3 —— 「能不能渲染」的判据在 `src/lib/sse/degrade.ts` 的
+    //   `shouldRenderSnapshot` (两端共用一份) —— 宿主层**不许**自己再判一遍。
     // 进场期间先占住「正在思考」位 ⇒ 用户不能在接回途中误发新消息。
     setWaitingFirstFrame(true);
 
@@ -1404,11 +1381,11 @@ export function ChatDetail() {
           onLocalRecord: (rec) => {
             if (cancelled) return;
             // ★ INV-2 (缺陷 W-2): 本机快照**只在「本机游标合法」时**渲染。
-            //   ⚠️ 判据与 onDegrade **同一个** (`canRenderLocalSnapshot`) —— 见 INV-3。
+            //   ⚠️ 判据与 onDegrade **同一个** (`shouldRenderSnapshot`, 在
+            //     `src/lib/sse/degrade.ts` 里) —— 见 INV-3。
             const snap = rec.renderedSnapshot;
-            // 记下本机旧快照的正文 (onDegrade 用来判别「是不是同一份旧快照」)。
-            localSnapshotContent = snap.content;
-            if (!canRenderLocalSnapshot(cursor, true)) return;
+            // `plan: null` = 「这份内容纯粹是本机的」⇒ 只有本机游标合法才渲染。
+            if (!shouldRenderSnapshot({ plan: null, localCursor: cursor })) return;
             if (!snap.content && snap.phases.length === 0) return;
             renderAttachSnapshot(
               snap.content,
@@ -1424,14 +1401,15 @@ export function ChatDetail() {
           onDegrade: (plan, session) => {
             const snap = session.record.renderedSnapshot;
             // ★ INV-3 (缺陷 W-2 的另一半): 渲染条件**与 onLocalRecord 同一口径**
-            //   (`canRenderLocalSnapshot`) —— ⛔ 不许出现「onLocalRecord 跳过了、
-            //   onDegrade 又把同一份旧快照渲染一遍」= 界面重复。
-            //   ⚠️ 但**服务端自己给的**内容 (attach_failed.snapshot, 不是本机旧快照)
-            //     照渲染 —— 降级必须带内容 (G-4 / T-08)。
+            //   (`shouldRenderSnapshot` —— 两端共用一份, 在 `src/lib/sse/degrade.ts`)。
+            //   · 服务端给了正文 (`plan.serverContentPresent`) ⇒ **必须渲染**
+            //     (G-4 / T-08: 「接回来但内容没了」是绝对不允许的);
+            //   · 只有本机内容 ⇒ 只在「本机游标合法」时渲染 ⇒ ⛔ 不许出现
+            //     「onLocalRecord 跳过了、onDegrade 又把同一份旧快照渲染一遍」
+            //     = 界面重复。
             if (
-              plan.renderSnapshot &&
               snap.content &&
-              canRenderLocalSnapshot(cursor, snap.content === localSnapshotContent)
+              shouldRenderSnapshot({ plan, localCursor: cursor })
             ) {
               renderAttachSnapshot(
                 snap.content,

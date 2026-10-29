@@ -29,6 +29,7 @@
 // ⛔ 本文件**不许** import window / fetch / js-cookie —— PC 要抄这份定稿。
 // =========================================================================
 
+import { isValidCursor } from "./seq-guard";
 import {
   mergeServerSnapshot,
   normalizeRenderedSnapshot,
@@ -80,6 +81,20 @@ export interface DegradePlan {
   notice: string | null;
   /** ★ 本地游标**要不要保留**。 */
   keepCursor: boolean;
+  /**
+   * ★ 服务端给的快照**有正文**吗 (只看正文, 不看 phases / events)。
+   *
+   * ⚠️ 这是「能不能渲染快照」的**唯一**依据 (缺陷 W-2 的正解):
+   *   · `true`  ⇒ 渲染出来的那份内容**就是服务端的**
+   *       ⇒ **必须渲染** (G-4 / T-08: 「接回来但内容没了」是绝对不允许的);
+   *   · `false` ⇒ 那份内容**纯粹是本机的**
+   *       ⇒ 只在「本机游标合法」时渲染 (游标不合法 ⇒ 服务端整轮重放
+   *         ⇒ 再渲染本机旧快照 = **界面重复**)。
+   *
+   * ⚠️ **只看正文**: `snapshotHasContent` 把 phases / events 也算进去 ——
+   *   那是「这个快照有东西可显示」, 与「服务端给了正文」**语义不同**。
+   */
+  serverContentPresent: boolean;
 }
 
 /**
@@ -96,6 +111,11 @@ export function planDegrade(input: {
 }): DegradePlan {
   const reason = normalizeReason(input.reason);
   const hasSnapshot = !!input.snapshot && typeof input.snapshot === "object";
+  // ★ 服务端给的快照**有正文**吗 (只看正文 —— 见 DegradePlan.serverContentPresent)。
+  const serverContentPresent =
+    hasSnapshot &&
+    typeof input.snapshot?.content === "string" &&
+    input.snapshot.content.trim() !== "";
 
   return {
     reason,
@@ -111,7 +131,35 @@ export function planDegrade(input: {
     // ★ 游标只在「确实没在跑 / 轮次已终结」时才可以丢;
     //   「问不到」与「跳号」都必须**留着** —— 留着才能接回来。
     keepCursor: !(reason === "not_running" || reason === "turn_ended"),
+    // ★ 服务端给了正文吗 (判据归这一处 —— 宿主层不许自己再判一遍)。
+    serverContentPresent,
   };
+}
+
+/**
+ * shouldRenderSnapshot —— 「这份快照能不能渲染」的**唯一**判据。
+ *
+ * ⚠️ 宿主层**只调这一个函数** (两端各写一套 ⇒ 必然漂移 ⇒ 界面重复):
+ *   · `onLocalRecord` (本机旧快照) ⇒ 传 `plan: null`
+ *       ⇒ 只有「本机游标合法」才渲染 —— 游标不合法 ⇒ 服务端**整轮重放**
+ *         ⇒ 再渲染本机旧快照 = **界面重复** (缺陷 W-2);
+ *   · `onDegrade` (降级快照) ⇒ 传真正的 plan
+ *       ⇒ 服务端给了正文 ⇒ **必须**渲染 (G-4 / T-08);
+ *         只有本机内容 ⇒ 同上, 看游标。
+ *
+ * ⚠️ 这里**不许**比内容字符串来判「是不是同一份旧快照」——
+ *   服务端正文与本机旧快照**逐字相同**是常事, 比字符串会把**服务端那份**
+ *   误判成本机的而跳过渲染 (内容就丢了)。
+ *
+ * @param input.plan        降级计划 (null = 服务端没给内容, 只有本机的)
+ * @param input.localCursor 本机游标 (纯十进制串; null / 非法 = 没有)
+ */
+export function shouldRenderSnapshot(input: {
+  plan?: { serverContentPresent?: boolean } | null;
+  localCursor?: string | null;
+}): boolean {
+  if (input.plan?.serverContentPresent === true) return true;
+  return isValidCursor(input.localCursor);
 }
 
 /**
