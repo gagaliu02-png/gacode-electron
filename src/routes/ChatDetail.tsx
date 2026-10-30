@@ -750,17 +750,6 @@ export function ChatDetail() {
       return { ...m, richEvents: keptEvents, phases: keptPhases };
     });
     if (!streamingAssistantId) return dedupedBase;
-    // ★ v2 (契约订正 16): **同一轮**判定 —— 本轮流式行与服务端历史行的 turnKey
-    //   相同 ⇒ 同一轮 ⇒ 只留服务端那一条 (本行是同一条的乐观副本)。
-    //   这就是「空气泡」的根治点: 之前只能靠「服务端落库前历史里没这行」的
-    //   **时间互斥**来猜, 一旦时序错开就变成同一轮两条消息。
-    //   没有 turnKey (老服务端 / 老数据) ⇒ 回落老行为, 不变。
-    if (
-      streamingTurnKey &&
-      dedupedBase.some((m) => m.turnKey != null && m.turnKey === streamingTurnKey)
-    ) {
-      return dedupedBase;
-    }
     const streamingMsg: ChatMessageModel = {
       id: streamingAssistantId,
       role: "assistant",
@@ -781,6 +770,38 @@ export function ChatDetail() {
       streamingMsg.phases,
       deletedDeliverableIds,
     );
+    // ★ v2 (契约订正 16): **同一轮**判定 —— 本轮流式行与服务端历史行的 turnKey
+    //   相同 ⇒ **同一轮** ⇒ 屏幕上只能有一条 (空气泡的根治点)。
+    //   之前只能靠「服务端落库前历史里没这行」的**时间互斥**来猜, 时序一错开就是两条。
+    //
+    //   ## 为什么是「合成」而不是「留服务端那条」
+    //
+    //   服务端那一行是**增量落库**的 ⇒ 流还在跑的时候它可能只落了一半正文。
+    //   留服务端那条 ⇒ 正在流的内容被截断; 留本地那条 ⇒ 服务端追上来之后正文反而变短。
+    //   ⇒ 合成: 服务端那一条从列表里去掉, 它的正文/事件/阶段取**较长**的那份搬进流式行
+    //   ⇒ 一轮一行, 且内容永远不倒退。
+    //
+    //   没有 turnKey (老服务端 / 老数据) ⇒ 回落老行为, 不变。
+    if (streamingTurnKey) {
+      const sameTurn = dedupedBase.find(
+        (m) => m.turnKey != null && m.turnKey === streamingTurnKey,
+      );
+      if (sameTurn) {
+        streamingMsg.content =
+          sameTurn.content.length > streamingMsg.content.length
+            ? sameTurn.content
+            : streamingMsg.content;
+        streamingMsg.richEvents =
+          (sameTurn.richEvents?.length ?? 0) > (streamingMsg.richEvents?.length ?? 0)
+            ? sameTurn.richEvents
+            : streamingMsg.richEvents;
+        streamingMsg.phases =
+          (sameTurn.phases?.length ?? 0) > (streamingMsg.phases?.length ?? 0)
+            ? sameTurn.phases
+            : streamingMsg.phases;
+        return [...dedupedBase.filter((m) => m !== sameTurn), streamingMsg];
+      }
+    }
     return [...dedupedBase, streamingMsg];
   }, [
     baseMessages,
