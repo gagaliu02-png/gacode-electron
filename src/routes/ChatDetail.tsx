@@ -1230,6 +1230,14 @@ export function ChatDetail() {
                 if (typeof c === "string" && /^\d+$/.test(c)) lastCursor = c;
                 void followController.advanceCursor(chatId, c);
               },
+              // ★ v2 (契约订正 17): 身份在**响应头**就到了 (比第一个数据帧早 3~20s)
+              //   ⇒ 本机那一行从这一刻起就带 turnKey ⇒ 就算一个帧都没收到就被杀,
+              //     回来时也能靠 turnKey **精确**认亲 (空气泡根治点)。
+              onTurnKey: (tk) => {
+                if (streamingTurnKeyRef.current) return;
+                streamingTurnKeyRef.current = tk;
+                setStreamingTurnKey(tk);
+              },
               onChunk: (chunk: ChatChunk, cur: string | null) => {
                 onTurnChunk(chunk, cur);
               },
@@ -1428,6 +1436,12 @@ export function ChatDetail() {
                 // 游标推进 —— 只接受纯十进制数字串 (非法值由控制器直接丢弃)
                 args.onCursor?.(c);
                 void followController.advanceCursor(chatId, c);
+              },
+              // ★ v2 (契约订正 17): attach 的响应头里也带这一轮的身份。
+              onTurnKey: (tk) => {
+                if (streamingTurnKeyRef.current) return;
+                streamingTurnKeyRef.current = tk;
+                setStreamingTurnKey(tk);
               },
             });
           },

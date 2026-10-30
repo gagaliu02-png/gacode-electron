@@ -70,6 +70,8 @@ import {
   type AttachControlFrame,
 } from "./chat-sse";
 import { createSseBackoff, createSseWatchdog } from "./sse-reconnect";
+// ★ v2 (契约订正 17): 轮次身份从**响应头**取 (判据只有这一份, 跟 web 同一份)。
+import { readTurnKeyHeader } from "./sse/turn-key-header";
 
 // =========================================================================
 // SSE 解析 (纯函数, 单测可注入)
@@ -119,6 +121,21 @@ export interface UseChatStreamOptions {
   /** ★ attach 控制帧 (契约 L-50 / D2) —— `attach_ok` / `attach_failed`。 */
   onControl?: (frame: AttachControlFrame) => void;
   /**
+   * ★ v2 (契约订正 17 · 2026-10-30): 响应头 `X-Turn-Key` 的接收口 ——
+   * **轮次身份在响应头就到**, 不用等第一个数据帧.
+   *
+   * 服务端**在模型出字之前不发任何数据帧** (TTFT 3~20s) ⇒ 这段窗口里客户端
+   * 被杀掉就「知道有这一轮, 不知道是哪一轮」⇒ 历史回来认不出亲 ⇒ 空气泡 +
+   * 停止键常亮。服务端在 `reply.hijack()` 之后立刻把 `X-Turn-Key` 写进响应头
+   * (毫秒级) ⇒ 这个窗口被彻底堵上。
+   *
+   * ⚠️ Electron renderer 是**跨源**的 ⇒ 浏览器只放行「被 expose 的」响应头
+   *   ⇒ 服务端必须带 `Access-Control-Expose-Headers: X-Turn-Key`
+   *   (unified-api 的 fastify-cors 已配 `exposedHeaders`)。
+   * ⚠️ 老服务端没有这个头 ⇒ 回调不触发 ⇒ 回落「帧顶层 turnKey」, 行为不变。
+   */
+  onTurnKey?: (turnKey: string) => void;
+  /**
    * ★ v2 (R2-PC): 续传模式 (契约 L-35 / L-36)。
    *
    *   传了这个字段 ⇒ **第一次请求**就走续传形态:
@@ -152,6 +169,11 @@ export interface AttachChatStreamOptions {
   onCursor?: (cursor: string) => void;
   /** 控制帧 (契约 L-50 / D2) */
   onControl?: (frame: AttachControlFrame) => void;
+  /**
+   * ★ v2 (契约订正 17): 响应头 `X-Turn-Key` —— 这一轮的身份 (attach 也在响应头就给).
+   * 见 [UseChatStreamOptions.onTurnKey] 的完整说明。
+   */
+  onTurnKey?: (turnKey: string) => void;
 }
 
 // =========================================================================
@@ -256,6 +278,8 @@ export function useChatStream(): ChatStreamHandle {
         onChunk: (chunk: ChatChunk, cursor: string | null) => void;
         onCursor?: (cursor: string) => void;
         onControl?: (frame: AttachControlFrame) => void;
+        // ★ v2 (契约订正 17): 响应头 `X-Turn-Key` —— 这一轮的身份, 在第一个数据帧之前就到。
+        onTurnKey?: (turnKey: string) => void;
       },
       ac: AbortController,
     ): Promise<void> => {
@@ -302,6 +326,20 @@ export function useChatStream(): ChatStreamHandle {
           res.status,
           `SSE HTTP ${res.status} ${res.statusText}`,
         );
+      }
+
+      // ★ v2 (契约订正 17): **轮次身份在响应头就到** —— 不用等第一个数据帧。
+      //   服务端建轮那一刻就把 `X-Turn-Key` 写进响应头 (毫秒级), 而第一个数据帧
+      //   要等模型出字 (TTFT 3~20s) ⇒ 这段窗口里客户端被杀就永远认不出亲。
+      //   ⚠️ 跨源 ⇒ 需要服务端带 `Access-Control-Expose-Headers: X-Turn-Key`。
+      const headerTurnKey = readTurnKeyHeader(res.headers);
+      if (headerTurnKey) {
+        console.log(`[gacode-sse] X-Turn-Key=${headerTurnKey}`);
+        try {
+          opts.onTurnKey?.(headerTurnKey);
+        } catch (e) {
+          console.warn("[gacode-sse] onTurnKey 回调抛异常 (忽略)", e);
+        }
       }
 
       // ★ 读帧走共享零件 (契约 P1 / §11.4 P3) ——
@@ -429,6 +467,8 @@ export function useChatStream(): ChatStreamHandle {
                   opts.onCursor?.(cursor);
                 },
                 onControl: (frame) => opts.onControl?.(frame),
+                // ★ v2 (契约订正 17): 身份从响应头透出 (比第一个数据帧早 3~20s)。
+                onTurnKey: (turnKey) => opts.onTurnKey?.(turnKey),
               },
               localAc,
             );
@@ -575,6 +615,19 @@ export function useChatStream(): ChatStreamHandle {
             res.status,
             `attach HTTP ${res.status} ${res.statusText}`,
           );
+        }
+
+        // ★ v2 (契约订正 17): attach 的响应头里也带 `X-Turn-Key` ——
+        //   「无游标续传」时端上本来就不知道是哪一轮 (没有 attach_ok 帧可看? 有, 但
+        //   attach_ok 是**控制帧**, 排在数据帧后面才到) ⇒ 响应头这条是**最早**的通道。
+        const headerTurnKey = readTurnKeyHeader(res.headers);
+        if (headerTurnKey) {
+          console.log(`[gacode-sse] attach X-Turn-Key=${headerTurnKey}`);
+          try {
+            opts.onTurnKey?.(headerTurnKey);
+          } catch (e) {
+            console.warn("[gacode-sse] attach onTurnKey 回调抛异常 (忽略)", e);
+          }
         }
 
         await readChatSse(res.body, {
