@@ -122,6 +122,16 @@ export interface ChatChunk {
   code?: string | null;
   /** ★ v2: 轮次开始时刻 (服务端时钟)。 */
   startedAt?: number | null;
+  /**
+   * ★ v2 (契约订正 16): **轮次身份** (`tk_xxx`) —— 服务端 v2 帧信封的**顶层**字段。
+   *
+   *   · 与 `stream-state` / `attach_ok` 返回的那个 turnKey 是**同一个值**;
+   *   · 与落库后历史消息的 `metadata.turnKey` 也是**同一个值**
+   *     ⇒ 「本地流式行 ↔ 服务端那一行」可以精确判成同一轮 (空气泡的根治点)。
+   *
+   *   老服务端没有 ⇒ undefined ⇒ 端侧回落老的启发式, 行为不变。
+   */
+  turnKey?: string | null;
 }
 
 /**

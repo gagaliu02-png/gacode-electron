@@ -508,6 +508,9 @@ export function ChatDetail() {
       //   也得还原出来, 否则刷新后历史里的工具卡片全没了。
       //   api.getHistory 已按 web 定稿版口径从 phases_json 里解析 (只认 type==="tool")。
       richEvents: m.richEvents,
+      // ★ v2 (契约订正 16): 这一行的**轮次身份** (metadata.turnKey) ——
+      //   与流式行的 turnKey 同值 ⇒ 可精确判「是不是同一轮」。
+      turnKey: m.turnKey ?? null,
     }));
     return list;
   }, [historyQuery.data]);
@@ -523,6 +526,12 @@ export function ChatDetail() {
   //   相邻 thinking chunk **就地拼接** (不是每 chunk 一条) —— 否则时间线会显示
   //   "思考 20 次" 的短句列表, 而不是 1 条完整思考链.
   const [streamingPhases, setStreamingPhases] = useState<ExecutionPhase[]>([]);
+  // ★ v2 (契约订正 16): 本轮流式行的**轮次身份** (`tk_xxx`)。
+  //   帧顶层的 `turnKey` (第一帧就有) ⇒ 与历史行的 `metadata.turnKey` 同值
+  //   ⇒ 「本行 ↔ 服务端那一行」可**精确**判成同一轮 (空气泡根治点)。
+  //   老服务端没有 ⇒ null ⇒ 回落老的启发式, 行为不变。
+  const [streamingTurnKey, setStreamingTurnKey] = useState<string | null>(null);
+  const streamingTurnKeyRef = useRef<string | null>(null);
   // ★ 四要素 (服务端权威值) —— 见模块顶部 `StreamingTurnMeta` 的说明。
   //   端侧**只渲染不推算** (T-15 / T-16 / T-17)。
   const [streamingTurnMeta, setStreamingTurnMeta] =
@@ -741,6 +750,17 @@ export function ChatDetail() {
       return { ...m, richEvents: keptEvents, phases: keptPhases };
     });
     if (!streamingAssistantId) return dedupedBase;
+    // ★ v2 (契约订正 16): **同一轮**判定 —— 本轮流式行与服务端历史行的 turnKey
+    //   相同 ⇒ 同一轮 ⇒ 只留服务端那一条 (本行是同一条的乐观副本)。
+    //   这就是「空气泡」的根治点: 之前只能靠「服务端落库前历史里没这行」的
+    //   **时间互斥**来猜, 一旦时序错开就变成同一轮两条消息。
+    //   没有 turnKey (老服务端 / 老数据) ⇒ 回落老行为, 不变。
+    if (
+      streamingTurnKey &&
+      dedupedBase.some((m) => m.turnKey != null && m.turnKey === streamingTurnKey)
+    ) {
+      return dedupedBase;
+    }
     const streamingMsg: ChatMessageModel = {
       id: streamingAssistantId,
       role: "assistant",
@@ -768,6 +788,7 @@ export function ChatDetail() {
     streamingContent,
     streamingEvents,
     streamingPhases,
+    streamingTurnKey,
     deletedDeliverableIds,
   ]);
 
@@ -826,6 +847,9 @@ export function ChatDetail() {
     setStreamingContent("");
     setStreamingEvents([]);
     setStreamingPhases([]);
+    // ★ v2 (契约订正 16): 轮次身份跟着本行一起清 (下一轮重新累积)。
+    streamingTurnKeyRef.current = null;
+    setStreamingTurnKey(null);
     // ★ 四要素跟着本行一起清 (下一轮重新累积)。
     streamingTurnMetaRef.current = EMPTY_STREAMING_TURN_META;
     setStreamingTurnMeta(EMPTY_STREAMING_TURN_META);
@@ -875,6 +899,11 @@ export function ChatDetail() {
       if (!chatId) return;
       // waiting first frame → 收到任意 chunk 即结束 typing
       setWaitingFirstFrame(false);
+      // ★ v2 (契约订正 16): 帧顶层的 `turnKey` ⇒ 本轮身份 (第一帧就有)。
+      if (!streamingTurnKeyRef.current && chunk.turnKey) {
+        streamingTurnKeyRef.current = chunk.turnKey;
+        setStreamingTurnKey(chunk.turnKey);
+      }
 
       // ★ a4 契约 v1 · W-1 —— 认「顶层字段 `deletedDeliverables`」这一帧。
       //   ⛔ 它**不是** events[] 里的一条富事件 (契约 §二: 走顶层字段,
@@ -1300,6 +1329,14 @@ export function ChatDetail() {
         await followController.stop(chatId);
         setWaitingFirstFrame(false);
         return;
+      }
+
+      // ★ v2 (契约订正 16): 记下**这一轮的身份** —— 接入流建的那一行要带上它,
+      //   历史回来时才能精确判「本行和服务端行是同一轮」(空气泡根治点)。
+      //   契约 D4: 它与 attach_ok 返回的那个 turnKey 是**同一个值**。
+      if (state.turnKey) {
+        streamingTurnKeyRef.current = state.turnKey;
+        setStreamingTurnKey(state.turnKey);
       }
 
       // 服务端侧待审批真值 ⇒ 补进本地缓存 (契约 L-43 / D5)。

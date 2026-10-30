@@ -359,6 +359,14 @@ export interface ChatMessage {
    * 缺失 ⇒ undefined (不是空数组, 免得渲出空折叠条容器).
    */
   knowledgeRefs?: string[];
+  /**
+   * ★ v2 (契约订正 16): **轮次身份** (`tk_xxx`) —— 服务端把这一轮的标识写在
+   *   assistant 行的 `metadata.turnKey` 里 (unified-api turn/snapshot.js)。
+   *   有了它, 「本地流式行 ↔ 服务端那一行」可以**精确**判成同一轮,
+   *   不用再靠「id 前缀 / 位置」去猜 (那是空气泡的根因)。
+   *   老服务端 / 老数据没有 ⇒ undefined ⇒ 端侧回落老的启发式, 行为不变。
+   */
+  turnKey?: string | null;
   phasesJson?: string | null;
   /**
    * A2-D4-02 · 思考 / 工具时间线 —— server 落库的 `phases_json` 解析结果.
@@ -642,6 +650,9 @@ export async function getHistory(chatId: string): Promise<{
     let attachedFileIds: string[] | undefined;
     let attachedFileNames: Array<{ fileId: string; name: string }> | undefined;
     let knowledgeRefs: string[] | undefined;
+    // ★ v2 (契约订正 16): 这一行的**轮次身份** (`metadata.turnKey`)。
+    //   与流式帧顶层的 turnKey 是**同一个值** ⇒ 两边可精确认亲 (空气泡根治)。
+    let turnKey: string | null | undefined;
     if (m.metadata) {
       try {
         const meta = typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata;
@@ -650,6 +661,7 @@ export async function getHistory(chatId: string): Promise<{
           attachedFileIds = meta.attached_file_ids as string[];
         // 知识库引用 id — 跟 web api.ts:552 同一口径 (只认数组, 元素原样透传).
         if (Array.isArray(meta?.knowledge_refs)) knowledgeRefs = meta.knowledge_refs as string[];
+        if (typeof meta?.turnKey === "string" && meta.turnKey) turnKey = meta.turnKey;
         if (Array.isArray(meta?.attached_files)) {
           attachedFileNames = (
             meta.attached_files as Array<{ file_id?: unknown; filename?: unknown }>
@@ -675,6 +687,8 @@ export async function getHistory(chatId: string): Promise<{
       // chat-id-9: 知识库引用 id — server 落进 user message 的
       //   metadata.knowledge_refs (存的是实际生效的 atom id).
       knowledgeRefs,
+      // ★ v2 (契约订正 16): 这一行的**轮次身份** —— 与流式帧顶层 turnKey 同值。
+      turnKey,
       // 阶段 8: 撤回态 — server listChatMessages 已过滤 deletedAt,
       //   recalled 这条可选字段透传到 client, 用于 MessageBubble 占位 + 关闭菜单.
       recalled: m.recalled ?? false,

@@ -35,6 +35,12 @@ export interface ChatMessageModel {
   // ============== 0.7.5 ==============
   /** chat-id-9: server metadata.knowledge_refs */
   knowledgeRefs?: string[];
+  /**
+   * ★ v2 (契约订正 16): **轮次身份** (`tk_xxx`)。
+   *   历史消息来自 `metadata.turnKey`; 流式行来自帧顶层的 `turnKey` ——
+   *   两者是**同一个值** ⇒ 「本地流式行 ↔ 服务端那一行」可精确认亲 (空气泡根治)。
+   */
+  turnKey?: string | null;
   /** chat-id-40: server metadata.quoted_message_id / quoted_content */
   quotedMessageId?: string | null;
   quotedContent?: string | null;
