@@ -28,6 +28,9 @@
  * 失败处理: ACK_DONE 静默, USER_STOP 警告日志 (漏发 = 界面骗用户说停, 服务端还在烧 token)。
  */
 
+// ★ RC-6 (F3c): 终态判据在**共享层** (`src/lib/sse/terminal.ts`) —— 与 web 那份逐字节相同。
+import { isTerminalFrame } from "./sse/terminal";
+
 /**
  * 富事件判别联合 (契约 §2) —— 与 web 定稿版 `gacode-web/src/lib/api.ts` 的
  * ChatChunk 同款。⛔ 编译期擦除 (`import type`), 不给本文件引运行时依赖。
@@ -139,7 +142,10 @@ export interface ChatChunk {
  * **必须**看 messageId 区分, 拿第一个 done 当结束会让 ACK 早退丢正文。
  */
 export function isTerminalDone(chunk: ChatChunk): boolean {
-  return chunk.done === true && chunk.messageId != null;
+  // ★ RC-6: 规则搬到共享层 (`src/lib/sse/terminal.ts` 的 `isTerminalFrame`) ——
+  //   这里只做转发 ⇒ 「什么算轮次终态」**只写一遍** (G-3), 两端不会漂移。
+  //   ⚠️ 语义与改动前**逐字相同** (`done === true && messageId != null`)。
+  return isTerminalFrame(chunk);
 }
 
 /**

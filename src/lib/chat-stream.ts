@@ -63,15 +63,24 @@ import {
 import { tryRefreshAccessToken } from "./auth-refresh";
 import {
   buildResumeHeaders,
-  CLIENT_ID_HEADER,
-  CLIENT_ID_PC,
   normalizeChatChunk,
   readChatSse,
   type AttachControlFrame,
 } from "./chat-sse";
+// ★ RC-13 (契约 L-28 / D3): 端标识 + 聊天流三条路的请求头构造 —— **一处真值**
+//   (与 web 的 `src/lib/sse/client-id.ts` 逐字节相同)。
+import { buildChatStreamHeaders, CLIENT_ID_PC } from "./sse/client-id";
 import { createSseBackoff, createSseWatchdog } from "./sse-reconnect";
 // ★ v2 (契约订正 17): 轮次身份从**响应头**取 (判据只有这一份, 跟 web 同一份)。
 import { readTurnKeyHeader } from "./sse/turn-key-header";
+// ★ RC-6 (F3c): 「流结束但没有终态帧」的可识别错 + 判据 (共享层, 与 web 那份逐字节相同)。
+import {
+  shouldReportMissingTerminal,
+  StreamEndedWithoutTerminal,
+} from "./sse/terminal";
+// ★ RC-12: 跨端并发提问 (409 TURN_ALREADY_RUNNING) 的**共享层**判据 + 错误信封解析
+//   (与 web 那份逐字节相同)。
+import { readErrorEnvelope, readConcurrentTurnError } from "./sse/concurrent";
 
 // =========================================================================
 // SSE 解析 (纯函数, 单测可注入)
@@ -286,16 +295,17 @@ export function useChatStream(): ChatStreamHandle {
       const fetchStream = async (
         accessToken: string | null,
       ): Promise<Response> => {
-        const headers: Record<string, string> = {
-          Accept: "text/event-stream",
-        };
-        // 续传模式没有 body ⇒ 不带 Content-Type (契约 L-36)
-        if (!opts.resume) headers["Content-Type"] = "application/json";
-        if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-        // ★ 续传头 (契约 L-35) —— 与 web 定稿版同一份 `buildResumeHeaders`。
-        if (opts.resume) {
-          Object.assign(headers, buildResumeHeaders(opts.cursor));
-        }
+        // ★ 发起 / 续传两条路的请求头 —— 共享构造器 (RC-13 · 契约 L-28 / D3 / L-36)。
+        //   续传模式没有 body ⇒ 不带 Content-Type (契约 L-36);
+        //   三条路**恒带** `X-Client-Id: pc` (服务端日志里的 clientId 不再是 unknown)。
+        const headers = buildChatStreamHeaders({
+          path: opts.resume ? "resume" : "start",
+          clientId: CLIENT_ID_PC,
+          authorization: accessToken,
+          accept: "text/event-stream",
+          // ★ 续传头 (契约 L-35) —— 与 web 定稿版同一份 `buildResumeHeaders`。
+          resumeHeaders: opts.resume ? buildResumeHeaders(opts.cursor) : null,
+        });
         return fetch(`${API_BASE}${STREAM_PATH(opts.sessionId)}`, {
           method: "POST",
           headers,
@@ -320,7 +330,29 @@ export function useChatStream(): ChatStreamHandle {
         // newToken=null (refresh 失败) → 仍 401, 下面 !res.ok 抛错给上层
       }
 
-      if (!res.ok || !res.body) {
+      if (!res.ok) {
+        // ★ RC-12: 409 的**机器可读码**必须带上来 ——
+        //   「这一轮正在另一台设备上跑」(TURN_ALREADY_RUNNING) 只有码能认。
+        //   ⚠️ message **逐字不变** ⇒ 既有的状态码判断不受影响。
+        let errBody: unknown = null;
+        try {
+          errBody = await res.json();
+        } catch {
+          // body 不是 JSON ⇒ 留 null (码认不出来 ⇒ 走原路径)
+        }
+        const env = readErrorEnvelope(errBody);
+        throw new SseHttpError(
+          res.status,
+          `SSE HTTP ${res.status} ${res.statusText}`,
+          {
+            code: env.code,
+            decidedBy: env.decidedBy,
+            body: errBody,
+          },
+        );
+      }
+
+      if (!res.body) {
         // 带状态码 —— 重连决策要区分「4xx 重试没用」与「连接断了可重试」。
         throw new SseHttpError(
           res.status,
@@ -516,7 +548,10 @@ export function useChatStream(): ChatStreamHandle {
           // 主动 abort → 抛 UserAbortError sentinel, 让上层用 isUserAbortError 唯它判
           throw new UserAbortError();
         } else {
-          if (opts.onError) opts.onError(e);
+          // ★ RC-12: 跨端并发提问 (409 TURN_ALREADY_RUNNING) ⇒ **不弹错**
+          //   (转成跨端 attach ⇒ 旁观那一轮) ⇒ 不走 onError (那会弹错误 banner)。
+          //   ⛔ 审批 409 (带 decidedBy) 进不来这里 (共享层判据直接排除, 断言 RC-W23)。
+          if (!readConcurrentTurnError(e) && opts.onError) opts.onError(e);
           throw e;
         }
       } finally {
@@ -536,6 +571,27 @@ export function useChatStream(): ChatStreamHandle {
         }
         // 让新一轮可以发, 即使上一轮因异常提前退出
         activeRef.current = null;
+      }
+
+      // ★ RC-6 (F3c): 流结束了但**没有终态帧** ⇒ 服务端提前关流 ⇒ 抛可识别错。
+      //
+      //   ⚠️ 三个排除项缺一不可 (判据在共享层 `shouldReportMissingTerminal`):
+      //     · `ac.signal.aborted` —— 用户主动中止 (我们自己掐断的流);
+      //     · `sawCancel`        —— 收到过取消帧 (用户按停止 / 上游早退);
+      //     · `sawDone`         —— 见过轮次终态帧 (正常完成)。
+      //   ⇒ 剩下的唯一情形 = 「服务端半路关流」⇒ 抛 `STREAM_NO_TERMINAL`,
+      //     由宿主层接进**降级闭环** (保留已渲染内容 + 回落历史) ⇒ **不弹错** (G-4)。
+      //
+      //   ⛔ 放在 try/catch **外面** ⇒ 本地那个 catch 不会把它当「网络错误」
+      //     (它会调 opts.onError ⇒ 宿主层弹错条) —— 降级**不弹错**是硬要求。
+      if (
+        shouldReportMissingTerminal({
+          aborted: ac.signal.aborted,
+          cancelled: sawCancel,
+          sawTerminal: sawDone,
+        })
+      ) {
+        throw new StreamEndedWithoutTerminal();
       }
     },
     [runStream],
@@ -580,14 +636,15 @@ export function useChatStream(): ChatStreamHandle {
         const fetchAttach = async (
           accessToken: string | null,
         ): Promise<Response> => {
-          const headers: Record<string, string> = {
-            Accept: "text/event-stream",
-            // ★ 端标识 (契约 D3 / L-30) —— 纯可选, 只用于日志与统计。
-            [CLIENT_ID_HEADER]: CLIENT_ID_PC,
-          };
-          if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-          // ★ 续传头 (契约 L-35 / L-47)
-          Object.assign(headers, buildResumeHeaders(opts.cursor ?? null));
+          // ★ 只读接入路 (attach) 的请求头 —— 共享构造器 (RC-13 · 契约 L-28 / D3)。
+          const headers = buildChatStreamHeaders({
+            path: "attach",
+            clientId: CLIENT_ID_PC,
+            authorization: accessToken,
+            accept: "text/event-stream",
+            // ★ 续传头 (契约 L-35 / L-47)
+            resumeHeaders: buildResumeHeaders(opts.cursor ?? null),
+          });
           return fetch(`${API_BASE}${ATTACH_PATH(opts.sessionId)}`, {
             method: "POST",
             headers,
@@ -670,13 +727,30 @@ export function useChatStream(): ChatStreamHandle {
  *
  * 为什么要单独一个类: 重连决策需要区分「请求本身不合法 (4xx, 重试没用)」
  * 与「连接断了 (可重试)」。`request()` 那套把状态码吞了, 这里自己带。
+ *
+ * ★ RC-12: 再带一个**机器可读码** (`code`) —— 「这一轮正在另一台设备上跑」
+ *   (409 TURN_ALREADY_RUNNING) 只有码能认 (⛔ 不靠 message 文本匹配)。
+ *   `decidedBy` 也带上来 ⇒ 审批 409 能被区分开 (断言 RC-W23)。
  */
 export class SseHttpError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /** 机器可读错误码 (如 `TURN_ALREADY_RUNNING`); 没有 ⇒ null。 */
+  readonly code: string | null;
+  /** 409 时: 谁先裁决了 (web | pc | android); 没有 ⇒ null。 */
+  readonly decidedBy: string | null;
+  /** 原始响应体 (诊断用); 没有 ⇒ null。 */
+  readonly body: unknown;
+  constructor(
+    status: number,
+    message: string,
+    extra?: { code?: string | null; decidedBy?: string | null; body?: unknown },
+  ) {
     super(message);
     this.name = "SseHttpError";
     this.status = status;
+    this.code = extra?.code ?? null;
+    this.decidedBy = extra?.decidedBy ?? null;
+    this.body = extra?.body ?? null;
   }
 }
 

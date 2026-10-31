@@ -291,3 +291,83 @@ export function readTerminalReason(frame: {
   // ⑥ 中途哨兵 / 普通帧 —— 不是终态。
   return null;
 }
+
+// =========================================================================
+// ★ RC-6 (F3c) —— 「流结束但没有终态帧」的可识别错 + 终态判据 (RC-5 · RC-W3)
+// ---------------------------------------------------------------------------
+// 为什么全部放在这里 (G-3 一处真值):
+//   · 终态判据 (`isTerminalOrFailed`) —— 宿主层的 `isTerminalDone`
+//     (web: src/lib/api.ts · PC: src/lib/cancel.ts) **反过来调**本文件的
+//     `isTerminalFrame` ⇒ 「什么算轮次终态」这条规则只写一遍, 两端不会漂移。
+//   · 「要不要报『流结束但没有终态帧』」—— 纯函数 `shouldReportMissingTerminal`,
+//     宿主层只调它, **不**自己写条件 (排除项就那三个, 少写一个就误报)。
+//   · 错误类 + 判别函数 —— 两端**同一个**类 ⇒ 宿主层 catch 里认得出。
+//
+// ⛔ 本文件仍然**不许** import window / fetch / js-cookie —— PC 抄这份定稿。
+// =========================================================================
+
+/** 「流结束但没有终态帧」的机器可读码。 */
+export const STREAM_NO_TERMINAL_CODE = "STREAM_NO_TERMINAL";
+
+/**
+ * StreamEndedWithoutTerminal —— 服务端**提前关流**, 一帧轮次终态都没给。
+ *
+ * ⚠️ 为什么不抛普通 Error: 调用方要能**精确**地把它从「真错误」里分出来 ——
+ *   它**不是**错误, 是「接不回来了」⇒ 走**降级闭环**
+ *   (保留已渲染的内容 + 回落历史补拉), **不许**进通用错误弹窗 (G-4)。
+ */
+export class StreamEndedWithoutTerminal extends Error {
+  /** 唯一判别位 —— 调用方用 isStreamNoTerminalError() 判, 不要看 message。 */
+  readonly code = STREAM_NO_TERMINAL_CODE;
+  constructor(message = "流结束但没有终态帧") {
+    super(message);
+    this.name = "StreamEndedWithoutTerminal";
+  }
+}
+
+/**
+ * isStreamNoTerminalError —— 判别「这个错是不是 STREAM_NO_TERMINAL」的唯一入口。
+ *
+ * ⚠️ 只看 `code` 字段 (不看 name / message) ⇒ 跨模块、跨端都认得出。
+ */
+export function isStreamNoTerminalError(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    (err as { code?: unknown }).code === STREAM_NO_TERMINAL_CODE
+  );
+}
+
+/**
+ * shouldReportMissingTerminal —— 「流结束了但没有终态帧」要不要报出来 (纯函数)。
+ *
+ * ⚠️ 三个排除项缺一不可 (少一个就误报 / 漏报):
+ *   · `aborted`     —— 用户主动中止 (我们自己掐断的流, 永远等不到终态帧);
+ *   · `cancelled`   —— 收到过取消帧 (用户按停止 / 上游早退);
+ *   · `sawTerminal` —— 见过轮次终态帧 (正常完成)。
+ *
+ *   ⇒ 剩下的**唯一**情形 = 「服务端半路关流」⇒ 抛 STREAM_NO_TERMINAL。
+ */
+export function shouldReportMissingTerminal(state: {
+  aborted: boolean;
+  cancelled: boolean;
+  sawTerminal: boolean;
+}): boolean {
+  return !state.aborted && !state.cancelled && !state.sawTerminal;
+}
+
+/**
+ * isTerminalOrFailed —— 「这一轮有没有走到终态」(RC-5 · 断言 RC-W3)。
+ *
+ * ⛔ `resumeFailed` 是服务端给的**失败终态** (续传失败帧) ⇒ 认它才算终态;
+ *   否则「续传失败 ⇒ 服务端关流」这一路上, 流式态永远关不掉 (RC-W3 防的就是这个)。
+ *
+ * ⚠️ 只在**共享层**判一次 —— 宿主层不许自己再写一遍 (G-3)。
+ */
+export function isTerminalOrFailed(frame: {
+  done?: boolean | null;
+  messageId?: string | null;
+  resumeFailed?: boolean | null;
+}): boolean {
+  return isTerminalFrame(frame) || frame.resumeFailed === true;
+}

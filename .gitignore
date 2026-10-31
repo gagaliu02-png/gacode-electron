@@ -61,6 +61,11 @@ scripts/*
 #   (18 条变异, 在**临时镜像**里变异 —— 同 a4 批的做法, 全程不碰工作区)。
 #   同款声明式例外 —— 父目录已放行 + `scripts/*` 已重新忽略, 这里逐个豁免。
 !scripts/verify-sse-turn-r2-mutation.mjs
+# RC 轮 (2026-10-31): 变异跑批器 + 变异台 —— G-2「没有变异反证的断言 = 没验过」的那道闸。
+#   变异只发生在 %TEMP%\rc-mutation-work 下的临时镜像里, 全程不碰工作区。
+#   同款声明式例外 —— 父目录已放行 + `scripts/*` 已重新忽略, 这里逐个豁免。
+!scripts/rc-mutation.mjs
+!scripts/rc-mutation-report.json
 !scripts/lib/
 scripts/lib/*
 !scripts/lib/schedule-loader.mjs

@@ -172,12 +172,25 @@ import { type SeqFrameLike } from "../lib/sse/seq-guard";
 import {
   OUTPUT_FILTER_HIT_CODE,
   presentTerminal,
+  isStreamNoTerminalError,
   type TerminalReason,
 } from "../lib/sse/terminal";
 import {
   shouldRenderSnapshot,
   type ServerSnapshotLike,
 } from "../lib/sse/degrade";
+// ★ RC-7 (F4): 断线重连**状态机** (退避 + 预算 + park + jitter) —— 共享层定稿,
+//   web 与 PC 逐字节相同 (`src/lib/sse/reconnect.ts`)。
+//   宿主层**只调**, 不自己写退避 (G-3: 一处真值)。
+import {
+  runReconnectFlow,
+  sleepWithSignal,
+  waitForSignal,
+  type SignalTarget,
+} from "../lib/sse/reconnect";
+// ★ RC-12: 跨端并发提问 (409 TURN_ALREADY_RUNNING) ⇒ 不弹错 ⇒ 转跨端 attach。
+//   判据在**共享层** (`../lib/sse/concurrent.ts`, 与 web 那份逐字节相同)。
+import { readConcurrentTurnError } from "../lib/sse/concurrent";
 // ★ 轮次记录的**存储端口实现** (PC 用 localStorage —— 选型理由见
 //   `src/lib/turn-record-store.ts` 的文件头注释)。
 import { turnRecordStore } from "../lib/turn-record-store";
@@ -226,6 +239,31 @@ import {
 function streamingId(): string {
   return `streaming-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
+
+// =========================================================================
+// RC-7 · 重连的「恢复信号」事件源
+// -------------------------------------------------------------------------
+//   共享层 (`src/lib/sse/reconnect.ts`) ⛔ 不许 import window ⇒ 事件源由宿主层传进去。
+//   · `online`            —— 网络回来了 (window)
+//   · `visibilitychange`  —— 页面回到前台 (document; 注意它在 document 上, 不在 window 上)
+//   共享层另外用 `accept` 过滤掉「切到后台」那一次 visibilitychange。
+// =========================================================================
+const reconnectSignalTarget: SignalTarget = {
+  addEventListener(type, listener) {
+    if (type === "visibilitychange") {
+      document.addEventListener("visibilitychange", listener);
+    } else {
+      window.addEventListener(type, listener);
+    }
+  },
+  removeEventListener(type, listener) {
+    if (type === "visibilitychange") {
+      document.removeEventListener("visibilitychange", listener);
+    } else {
+      window.removeEventListener(type, listener);
+    }
+  },
+};
 
 /**
  * ★ 重构轮 R2-web (T-16) —— **端侧不再合并 thinking**。
@@ -534,6 +572,14 @@ export function ChatDetail() {
   //   老服务端没有 ⇒ null ⇒ 回落老的启发式, 行为不变。
   const [streamingTurnKey, setStreamingTurnKey] = useState<string | null>(null);
   const streamingTurnKeyRef = useRef<string | null>(null);
+  // ★ RC-12: 「本端现在正在旁观那一轮」吗?
+  //   跨端并发提问时服务端 409 ⇒ 本端要么**已经在旁观** (这一轮是别的设备起的),
+  //   要么**还没接** (那一轮是本端发出请求之后才起来的) ⇒ 只有后一种才需要再接一次。
+  //   ⛔ 已经旁观着的时候**不许**再接一次 (同一 id 会多出一行 + 内容重复)。
+  const attachLiveRef = useRef(false);
+  // ★ RC-12: 「进场接回」的**重跑令牌** —— bump 一次 ⇒ 那条路径 (契约 L-57 / L-58)
+  //   重跑一遍 (先问 stream-state, 在跑才接) ⇒ 跨端并发提问时转成「旁观者」。
+  const [attachEpoch, setAttachEpoch] = useState(0);
   // ★ 四要素 (服务端权威值) —— 见模块顶部 `StreamingTurnMeta` 的说明。
   //   端侧**只渲染不推算** (T-15 / T-16 / T-17)。
   const [streamingTurnMeta, setStreamingTurnMeta] =
@@ -566,6 +612,10 @@ export function ChatDetail() {
   // 取最后一次成功发送的 user (text + attachments), 供重试 / 重新生成复用.
   const lastUserTextRef = useRef<string>("");
   const lastUserAttachmentsRef = useRef<PendingAttachment[]>([]);
+
+  // ★ RC-7: 这一轮的「叫停」开关 —— 用户按停止 / 组件卸载时 abort 它。
+  //   重连状态机靠它判断「用户停 = 真停」(铁律三)。
+  const turnAcRef = useRef<AbortController | null>(null);
 
   // 0.7.5 增量 — model 选择 (chat-id-31) / 知识库挂载 (chat-id-30) /
   //   流式起始时间戳 (chat-id-20) / call tree (chat-id-12) / phases 合并 (chat-id-35)
@@ -1175,8 +1225,14 @@ export function ChatDetail() {
       let sawTerminal = false;
       // 重连模式 ⇒ 走续传 (带 Last-Event-ID, 契约 L-35)。
       let resumeMode = false;
-      // 只重连一次 (无限重连 = 烧 token + 界面抖动)。
-      let reconnectTried = false;
+      // ★ RC-7: 这一轮的「叫停」开关 (用户按停止 / 组件卸载 ⇒ 置 aborted)。
+      //   重连状态机靠它判断「用户停 = 真停」(铁律三) —— PC 的 `stream.abort()`
+      //   只掐它自己那条流, 跨不过重连循环 ⇒ 这里自己拿一个控制器。
+      const turnAc = new AbortController();
+      turnAcRef.current = turnAc;
+      // ⚠️ RC-7: 旧的「只重连一次」一次性标志 (`reconnectTried`) 已经**删掉** ——
+      //   断线后的重连交给共享层的**状态机** (退避 + 预算 + park + jitter),
+      //   无限重连的担心由**预算 (60 次) + 挂起 (≤5 分钟)** 兜住。
 
       // 「本轮在跑」的探测结果 —— 发送流由**本端**发起 ⇒ 这一轮必然在跑。
       // ⚠️ 这是**恒真**的, 但走同一条决策路径 ⇒ 状态机只有一套。
@@ -1228,6 +1284,8 @@ export function ChatDetail() {
               imageUrls,
               attachedFileIds: fileIds,
               knowledgeRefs,
+              // ★ RC-7: 这一轮的叫停开关 (用户按停止 ⇒ 这条流 + 后续重连一起收手)。
+              signal: turnAc.signal,
               // ★ 重连模式 ⇒ **空 body + 续传头** (契约 L-35 / L-36):
               //   绝不能重复投喂用户消息, 也不能建新轮次。
               resume: resumeMode
@@ -1272,29 +1330,99 @@ export function ChatDetail() {
 
       try {
         await ctrl.start();
-        // ★ 重连 (缺陷 W-1 / 断言 B9) —— 这一轮**还没结束**但流断了 ⇒ 带 Last-Event-ID 重接一次。
-        //   · 游标 = 服务端下发的最后一个合法游标 (端侧**不自增**, 契约 L-33);
-        //   · **只重连一次** (无限重连 = 烧 token + 界面抖动);
-        //   · 用户按了停止 / 组件卸载 ⇒ **不重连** (那一轮已经被用户结束了)。
-        if (!sawTerminal && !reconnectTried) {
-          reconnectTried = true;
-          resumeMode = true;
-          console.warn(
-            "[sse] 这一轮还没结束就断了 ⇒ 重连一次 (带 Last-Event-ID), 游标:",
-            lastCursor,
-          );
-          try {
-            await ctrl.reconnect();
-          } catch (err2) {
-            // ★ 重连失败**不弹错误** (G-4: 降级是常态分支) ⇒ 静默回落历史补拉。
-            console.warn("[sse] 重连失败, 回落历史补拉:", err2);
+        // ★ RC-6 (F3c): 「流结束但没有终态帧」现在由流层**抛** `STREAM_NO_TERMINAL`
+        //   ⇒ 断链一律落到下面的 catch ⇒ 重连 (RC-7) → 降级闭环。
+        //   ⇒ 这里**不再**有「正常返回但没终态 ⇒ 重连」的分支 (那条路已被 RC-6 收编;
+        //     剩下的「正常返回」只有两种: 见过终态帧 / 见过取消帧 —— 都不该重连)。
+      } catch (err) {
+        // ★ RC-6 (F3c) + RC-7 (F4): 「流结束但没有终态帧」= 断链 ⇒ **不是**错误 ⇒
+        //   ① RC-7 重连状态机 (退避 + 预算 + park + jitter) —— 每一发都走**续传**
+        //      (带 Last-Event-ID, body 空) ⇒ 重连**绝不重新提问**; 没网**不烧预算**;
+        //      预算用尽 (60 次) ⇒ 挂起等恢复 (≤5 分钟), 不是无限重试;
+        //   ② 轮询兜底 (每 3 秒一次, 上限 60 秒) 在 runReconnectFlow 里;
+        //   ③ 降级闭环: 静默补拉历史 (**不弹错**) —— 断言 RC-W11。
+        //   · 用户按了停止 / 组件卸载 ⇒ **不重连** (铁律三: 用户停 = 真停)。
+        if (isStreamNoTerminalError(err)) {
+          console.warn("[sse] 流结束但没有终态帧 ⇒ 重连/降级 (不弹错)", err);
+          if (!turnAc.signal.aborted) {
+            resumeMode = true;
+            await runReconnectFlow({
+              isOnline: () =>
+                typeof navigator === "undefined" ? true : navigator.onLine !== false,
+              // 等「恢复信号」: 网络回来 (online) 或 页面回到前台 (visibilitychange)。
+              awaitSignal: (timeoutMs) =>
+                waitForSignal(reconnectSignalTarget, timeoutMs, {
+                  events: ["online", "visibilitychange"],
+                  // 只有**真的可见**才算唤醒 (切到后台不算)。
+                  accept: (type) =>
+                    type !== "visibilitychange" ||
+                    document.visibilityState === "visible",
+                  signal: turnAc.signal,
+                }),
+              shouldStop: () => turnAc.signal.aborted,
+              runOnce: async (attempt) => {
+                console.warn(
+                  `[sse] 这一轮还没结束就断了 ⇒ 重连 (attempt=${attempt}, 带 Last-Event-ID), 游标:`,
+                  lastCursor,
+                );
+                try {
+                  // 重连走的是**同一个**控制器 ⇒ 游标从落盘的记录里读 ⇒ 这一发必然带 Last-Event-ID。
+                  await ctrl.reconnect();
+                } catch (err2) {
+                  // ★ 重连失败**不弹错误** (G-4: 降级是常态分支) ⇒ 静默回落历史补拉。
+                  console.warn("[sse] 重连失败:", err2);
+                  return { kind: "connection_lost", reason: String(err2) };
+                }
+                return sawTerminal
+                  ? { kind: "completed" }
+                  : {
+                      kind: "connection_lost",
+                      reason: "重连后这一轮仍然没有终态帧",
+                    };
+              },
+              sleep: (ms) => sleepWithSignal(ms, turnAc.signal),
+              // 降级轮询兜底的一拍 ⇒ 静默补拉一次历史 (不弹错误)。
+              onPollTick: () => {
+                queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+              },
+              log: (m) => console.warn(m),
+            });
+          }
+          if (!sawTerminal) {
+            // 重连也没拿到终态帧 ⇒ 标成「未完成」(T-12 的 upstream_lost)
+            ctrl.dispatch({ type: "terminal", reason: "upstream_lost" });
+            // PC 的流式行是**临时**的 (正常终态也是 clearLocalRow + 拉历史) ⇒ 同款处理。
+            clearLocalRow();
+            // ★ 降级闭环的最后一步: 静默补拉历史 (服务端那一轮可能已经落库了)。
             queryClient.invalidateQueries({ queryKey: ["history", chatId] });
           }
+          setWaitingFirstFrame(false);
+          return;
         }
-      } catch (err) {
         // user abort → 静默关闭, 不弹错误
         if (isUserAbortError(err) || err instanceof UserAbortError) {
           clearLocalRow();
+          setWaitingFirstFrame(false);
+          return;
+        }
+        // ★ RC-12 (跨端并发提问): 服务端 **409 TURN_ALREADY_RUNNING**
+        //   ⇒ 这一轮正在**另一台设备**上跑 ⇒ 本端不当「失败」⇒ 转成**旁观者**。
+        //
+        //   · 契约订正 5: 被拒的那次请求**没建轮** ⇒ 本地的流式行撤掉;
+        //   · ⛔ **不弹错** (G-4: 这是常态分支) ⇒ 不走 setStreamError;
+        //   · ⛔ 审批 409 (带 decidedBy) **进不来这里** (共享层判据直接排除, 断言 RC-W23)。
+        if (readConcurrentTurnError(err)) {
+          console.warn(
+            "[sse] 命中 TURN_ALREADY_RUNNING ⇒ 这一轮正在另一台设备上跑 ⇒ 转跨端 attach (旁观)",
+          );
+          clearLocalRow();
+          // 转跨端 attach —— **复用**「进场接回」那条路径 (契约 L-57 / L-58):
+          //   「该不该接」的判据**永远**是服务端的 stream-state ⇒ bump 一次进场令牌
+          //   ⇒ 那条路径重跑一遍 (probe → attach)。
+          //   ⚠️ 已经在旁观 (attachLiveRef) ⇒ **别再接一次** (同一 id 会多出一行)。
+          if (!attachLiveRef.current) {
+            setAttachEpoch((e) => e + 1);
+          }
           setWaitingFirstFrame(false);
           return;
         }
@@ -1505,7 +1633,14 @@ export function ChatDetail() {
           },
         },
       );
-      await entry.start();
+      // ★ RC-12: 标记「本端正在旁观这一轮」——
+      //   跨端并发提问时用它判「要不要再接一次」(已经在旁观就别接, 否则同一 id 多一行)。
+      attachLiveRef.current = true;
+      try {
+        await entry.start();
+      } finally {
+        attachLiveRef.current = false;
+      }
       // 流结束 (轮次终帧 / 服务端关流) ⇒ 拉一次历史真值。
       //   ⚠️ **不删**跟进记录 —— 流结束可能是「上游断了」而不是「这轮结束了」,
       //   游标留着才能重连 (断言 B9)。下一轮开始时 start(chatId, null) 会重置它。
@@ -1519,12 +1654,13 @@ export function ChatDetail() {
 
     return () => {
       cancelled = true;
+      attachLiveRef.current = false;
       // 只掐**读流**, 不删跟进记录 (游标要留着 —— 跳走再回来才能续传)。
       // ⚠️ 契约 L-53: 中止不得掐全体 —— 接入流只是读, 掐它不影响服务端那一轮。
       ac.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId]);
+  }, [chatId, attachEpoch]);
 
   // =========================================================================
   // ★ 审批裁决 (契约 L-21 / L-22 / L-26 ~ L-30 / 任务书 P-10 / P-12 / P-14)
@@ -1598,6 +1734,8 @@ export function ChatDetail() {
   );
 
   const handleStop = useCallback(() => {
+    // ★ RC-7: 用户按了停止 ⇒ 这一轮的叫停开关也要断 (否则重连状态机会接着跑)。
+    turnAcRef.current?.abort();
     stream.abort("user");
   }, [stream]);
 
@@ -1725,6 +1863,8 @@ export function ChatDetail() {
   useEffect(() => {
     return () => {
       stream.abort("navigate");
+      // ★ RC-7: 卸载 ⇒ 重连状态机也别再跑了 (铁律三: 用户停 = 真停)。
+      turnAcRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

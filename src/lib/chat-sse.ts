@@ -44,12 +44,9 @@ export const LAST_EVENT_ID_HEADER = "Last-Event-ID";
 export const RESUME_TURN_HEADER = "X-Resume-Turn";
 /** 续传头的固定值。 */
 export const RESUME_TURN_VALUE = "1";
-/** 端标识头 (D3 / L-30) —— **纯可选**, 只用于日志与统计, 不得用于鉴权或分支。 */
-export const CLIENT_ID_HEADER = "X-Client-Id";
-/** web 端的端标识值 (D3)。 */
-export const CLIENT_ID_WEB = "web";
-/** PC 端的端标识值 (D3)。 */
-export const CLIENT_ID_PC = "pc";
+// ⛔ 端标识 (CLIENT_ID_HEADER / CLIENT_ID_WEB / CLIENT_ID_PC) **不再**在这里定义 ——
+//   它的唯一真相源是 `src/lib/sse/client-id.ts` (RC-13 · 契约 L-28 / D3),
+//   web 与 PC 那份逐字节相同 ⇒ 两端不可能漂。
 
 // =========================================================================
 // 游标 (L-33 / L-34)

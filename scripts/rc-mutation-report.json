@@ -1,0 +1,305 @@
+{
+  "tool": "rc-mutation",
+  "end": "pc",
+  "repo": "D:\\gaga\\gaclaw-project\\gacode-electron",
+  "at": "2026-10-31T12:48:52.843Z",
+  "total": 13,
+  "turnedRed": 13,
+  "sourceTreeUntouched": true,
+  "results": [
+    {
+      "id": "M-RC-W3",
+      "guards": [
+        "RC-W3"
+      ],
+      "file": "src/lib/sse/terminal.ts",
+      "test": "test/sse-no-terminal.test.mjs",
+      "why": "终态判据退回「只认 isTerminalDone」⇒ 续传失败帧不再是终态 ⇒ 流式态关不掉",
+      "pass": 15,
+      "fail": 2,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A1 ★ RC-W3 终态判据对 {resumeFailed:true} 返回 true",
+        "D1 web/PC 两仓 src/lib/sse/terminal.ts md5 相同",
+        "A1 ★ RC-W3 终态判据对 {resumeFailed:true} 返回 true",
+        "D1 web/PC 两仓 src/lib/sse/terminal.ts md5 相同"
+      ],
+      "ms": 538
+    },
+    {
+      "id": "M-RC-W12",
+      "guards": [
+        "RC-W12"
+      ],
+      "file": "src/lib/sse/reconnect.ts",
+      "test": "test/sse-reconnect.test.mjs",
+      "why": "决策函数改动了传入的 state ⇒ 不再是纯函数",
+      "pass": 15,
+      "fail": 5,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A1 ★ RC-W12 createReconnectDecision 是纯函数",
+        "A4 ★ RC-W15 offline ⇒ budgetUsed 不增长",
+        "A5 ★ RC-W16 预算用尽",
+        "A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同",
+        "A1 ★ RC-W12 createReconnectDecision 是纯函数",
+        "A4 ★ RC-W15 offline ⇒ budgetUsed 不增长",
+        "A5 ★ RC-W16 预算用尽",
+        "A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
+      ],
+      "ms": 634
+    },
+    {
+      "id": "M-RC-W13",
+      "guards": [
+        "RC-W13"
+      ],
+      "file": "src/lib/sse/reconnect.ts",
+      "test": "test/sse-reconnect.test.mjs",
+      "why": "退避指数位移错一格 ⇒ 序列变成 2000,4000,…",
+      "pass": 16,
+      "fail": 4,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A2 ★ RC-W13 退避序列 = 1000, 2000, 4000, …, 30000",
+        "A3 ★ RC-W14 jitter 落在 ±20% 内, 且注入 rand 后可确定复现",
+        "A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同",
+        "A2 ★ RC-W13 退避序列 = 1000, 2000, 4000, …, 30000",
+        "A3 ★ RC-W14 jitter 落在 ±20% 内, 且注入 rand 后可确定复现",
+        "A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
+      ],
+      "ms": 675
+    },
+    {
+      "id": "M-RC-W14",
+      "guards": [
+        "RC-W14"
+      ],
+      "file": "src/lib/sse/reconnect.ts",
+      "test": "test/sse-reconnect.test.mjs",
+      "why": "删掉 jitter ⇒ 惊群 (一堆客户端同时醒来)",
+      "pass": 18,
+      "fail": 2,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A3 ★ RC-W14 jitter 落在 ±20% 内, 且注入 rand 后可确定复现",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同",
+        "A3 ★ RC-W14 jitter 落在 ±20% 内, 且注入 rand 后可确定复现",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
+      ],
+      "ms": 640
+    },
+    {
+      "id": "M-RC-W15",
+      "guards": [
+        "RC-W15"
+      ],
+      "file": "src/lib/sse/reconnect.ts",
+      "test": "test/sse-reconnect.test.mjs",
+      "why": "offline 也往下走 ⇒ 烧预算 (电梯里 60 次半小时就烧完)",
+      "pass": 18,
+      "fail": 2,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A4 ★ RC-W15 offline ⇒ budgetUsed 不增长",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同",
+        "A4 ★ RC-W15 offline ⇒ budgetUsed 不增长",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
+      ],
+      "ms": 670
+    },
+    {
+      "id": "M-RC-W16",
+      "guards": [
+        "RC-W16"
+      ],
+      "file": "src/lib/sse/reconnect.ts",
+      "test": "test/sse-reconnect.test.mjs",
+      "why": "预算永远用不完 ⇒ 永不 park ⇒ 无限重试",
+      "pass": 16,
+      "fail": 4,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A5 ★ RC-W16 预算用尽",
+        "A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s",
+        "A10 流层: 续传最终失败 ⇒ 每 3s 轮询一次历史, 60s 后停",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同",
+        "A5 ★ RC-W16 预算用尽",
+        "A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s",
+        "A10 流层: 续传最终失败 ⇒ 每 3s 轮询一次历史, 60s 后停",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
+      ],
+      "ms": 744
+    },
+    {
+      "id": "M-RC-W17",
+      "guards": [
+        "RC-W17"
+      ],
+      "file": "src/lib/sse/reconnect.ts",
+      "test": "test/sse-reconnect.test.mjs",
+      "why": "★ park 被唤醒时把 attempt 重置为 1 ⇒ 退化成「重新提问」⇒ **双 LLM**",
+      "pass": 18,
+      "fail": 2,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A6 ★ RC-W17 attempt 永不减少",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同",
+        "A6 ★ RC-W17 attempt 永不减少",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
+      ],
+      "ms": 624
+    },
+    {
+      "id": "M-RC-W19",
+      "guards": [
+        "RC-W19"
+      ],
+      "file": "src/lib/sse/reconnect.ts",
+      "test": "test/sse-reconnect.test.mjs",
+      "why": "轮询没有上限 ⇒ 无限轮询",
+      "pass": 17,
+      "fail": 3,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A7 ★ RC-W19 降级轮询: 间隔 3s、上限 60s、超时后停",
+        "A10 流层: 续传最终失败 ⇒ 每 3s 轮询一次历史, 60s 后停",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同",
+        "A7 ★ RC-W19 降级轮询: 间隔 3s、上限 60s、超时后停",
+        "A10 流层: 续传最终失败 ⇒ 每 3s 轮询一次历史, 60s 后停",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
+      ],
+      "ms": 625
+    },
+    {
+      "id": "M-RC-W20",
+      "guards": [
+        "RC-W20"
+      ],
+      "file": "src/lib/sse/reconnect.ts",
+      "test": "test/sse-reconnect.test.mjs",
+      "why": "只改本仓那一份 ⇒ web/PC 的 src/lib/sse/reconnect.ts 不再逐字节相同",
+      "pass": 16,
+      "fail": 4,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A0 共享层常量 = 安卓那份",
+        "A7 ★ RC-W19 降级轮询: 间隔 3s、上限 60s、超时后停",
+        "A10 流层: 续传最终失败 ⇒ 每 3s 轮询一次历史, 60s 后停",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同",
+        "A0 共享层常量 = 安卓那份",
+        "A7 ★ RC-W19 降级轮询: 间隔 3s、上限 60s、超时后停",
+        "A10 流层: 续传最终失败 ⇒ 每 3s 轮询一次历史, 60s 后停",
+        "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
+      ],
+      "ms": 614
+    },
+    {
+      "id": "M-RC-W21",
+      "guards": [
+        "RC-W21"
+      ],
+      "file": "src/lib/sse/concurrent.ts",
+      "test": "test/sse-concurrent.test.mjs",
+      "why": "判据退化成 message 文本匹配 ⇒ 别的 409 会被误判成跨端并发",
+      "pass": 15,
+      "fail": 3,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A1b ★ RC-W21 消息文本里含这串字 **不算** 命中",
+        "A4 便捷判据 isConcurrentTurnError 与 readConcurrentTurnError 同源",
+        "D1 web/PC 两仓 src/lib/sse/concurrent.ts md5 相同",
+        "A1b ★ RC-W21 消息文本里含这串字 **不算** 命中",
+        "A4 便捷判据 isConcurrentTurnError 与 readConcurrentTurnError 同源",
+        "D1 web/PC 两仓 src/lib/sse/concurrent.ts md5 相同"
+      ],
+      "ms": 598
+    },
+    {
+      "id": "M-RC-W23",
+      "guards": [
+        "RC-W23"
+      ],
+      "file": "src/lib/sse/concurrent.ts",
+      "test": "test/sse-concurrent.test.mjs",
+      "why": "不再排除审批 409 ⇒ 「已被别人裁决」被误吞成跨端并发",
+      "pass": 15,
+      "fail": 3,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A2 ★ RC-W23 审批 409",
+        "A4 便捷判据 isConcurrentTurnError 与 readConcurrentTurnError 同源",
+        "D1 web/PC 两仓 src/lib/sse/concurrent.ts md5 相同",
+        "A2 ★ RC-W23 审批 409",
+        "A4 便捷判据 isConcurrentTurnError 与 readConcurrentTurnError 同源",
+        "D1 web/PC 两仓 src/lib/sse/concurrent.ts md5 相同"
+      ],
+      "ms": 753
+    },
+    {
+      "id": "M-RC-W24",
+      "guards": [
+        "RC-W24"
+      ],
+      "file": "src/lib/sse/client-id.ts",
+      "test": "test/sse-client-id.test.mjs",
+      "why": "只有「发起」路带端标识 ⇒ 续传/attach 的日志仍恒 unknown",
+      "pass": 7,
+      "fail": 5,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A3 ★ RC-W24 三条路",
+        "A6 续传头",
+        "B3 ★ RC-W24 宿主三处真实求值出来的头**都**带 X-Client-Id",
+        "B4 ★ RC-W25 求值出来的头里的值就是本端标识",
+        "B5 续传路的头带 Last-Event-ID",
+        "A3 ★ RC-W24 三条路",
+        "A6 续传头",
+        "B3 ★ RC-W24 宿主三处真实求值出来的头**都**带 X-Client-Id",
+        "B4 ★ RC-W25 求值出来的头里的值就是本端标识",
+        "B5 续传路的头带 Last-Event-ID"
+      ],
+      "ms": 590
+    },
+    {
+      "id": "M-RC-W25",
+      "guards": [
+        "RC-W25"
+      ],
+      "file": "src/lib/sse/client-id.ts",
+      "test": "test/sse-client-id.test.mjs",
+      "why": "端标识写死 ⇒ PC 的日志会自称 web (两端串了)",
+      "pass": 8,
+      "fail": 4,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A4 ★ RC-W25 头里的值 = 传进来的端标识",
+        "B3 ★ RC-W24 宿主三处真实求值出来的头**都**带 X-Client-Id",
+        "B4 ★ RC-W25 求值出来的头里的值就是本端标识",
+        "B5 续传路的头带 Last-Event-ID",
+        "A4 ★ RC-W25 头里的值 = 传进来的端标识",
+        "B3 ★ RC-W24 宿主三处真实求值出来的头**都**带 X-Client-Id",
+        "B4 ★ RC-W25 求值出来的头里的值就是本端标识",
+        "B5 续传路的头带 Last-Event-ID"
+      ],
+      "ms": 592
+    }
+  ]
+}
