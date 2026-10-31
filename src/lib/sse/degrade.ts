@@ -52,7 +52,10 @@ export type DegradeReason =
   | "cursor_ahead"
   // ── 端侧自己判出来的 ──
   | "seq_gap"
-  | "stream_state_unreachable";
+  | "stream_state_unreachable"
+  // ── RC-3 (契约订正 19) ──
+  //   服务端**进程重启过** ⇒ 内存里的轮次没了 ⇒ 这一轮接不回来了。
+  | "stale_epoch";
 
 /** 服务端给的轮次快照 (降级时**必须带内容**, T-08)。 */
 export interface ServerSnapshotLike extends TurnSummaryLike {
@@ -130,7 +133,13 @@ export function planDegrade(input: {
     notice: null,
     // ★ 游标只在「确实没在跑 / 轮次已终结」时才可以丢;
     //   「问不到」与「跳号」都必须**留着** —— 留着才能接回来。
-    keepCursor: !(reason === "not_running" || reason === "turn_ended"),
+    //   ★ RC-3: `stale_epoch` (服务端重启过) ⇒ 内存里的轮次**已经没了**
+    //     ⇒ 游标留着也接不回来 ⇒ 丢掉 (否则每次重连都白试一次)。
+    keepCursor: !(
+      reason === "not_running" ||
+      reason === "turn_ended" ||
+      reason === "stale_epoch"
+    ),
     // ★ 服务端给了正文吗 (判据归这一处 —— 宿主层不许自己再判一遍)。
     serverContentPresent,
   };
@@ -219,6 +228,8 @@ export function normalizeReason(raw: string | null | undefined): DegradeReason {
     case "cursor_ahead":
     case "seq_gap":
     case "stream_state_unreachable":
+    // ★ RC-3 (契约订正 19): 服务端进程重启过。
+    case "stale_epoch":
       return raw;
     default:
       return "unknown";

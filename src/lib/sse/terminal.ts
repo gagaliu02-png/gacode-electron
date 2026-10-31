@@ -369,5 +369,87 @@ export function isTerminalOrFailed(frame: {
   messageId?: string | null;
   resumeFailed?: boolean | null;
 }): boolean {
-  return isTerminalFrame(frame) || frame.resumeFailed === true;
+  return isTerminalFrame(frame) || isResumeFailedFrame(frame);
+}
+
+// =========================================================================
+// ★ RC-5 —— 「续传接不回来」帧 (resumeFailed) 的判据与文案
+// ---------------------------------------------------------------------------
+// 为什么在这里 (G-3 一处真值):
+//   · `isResumeFailedFrame` —— 「这一帧是不是『本端续传接不回来』」
+//     ⛔ **与「终态帧上的 resumeFailed」不是一回事** (服务端 resumeFailed.js 的警告):
+//       · 这里的 = **本端续传接不回来** (正文空、**没有** messageId);
+//       · 终态帧上的 = **上游 (gaclaw) 自己**报了 resume 失败 (那一轮**有**正文、有 messageId)。
+//     ⇒ 端侧必须**分开认** —— 混了 ⇒ 「上游失败」被当成「接不回来」⇒ 内容被抹。
+//   · `readResumeStatusLabel` —— 失败原因码 ⇒ 端侧文案。
+//
+// ⛔ 本文件仍然**不许** import window / fetch / js-cookie —— PC 抄这份定稿。
+// =========================================================================
+
+/**
+ * 「续传接不回来」的**默认**文案。
+ *
+ * ⚠️ 与安卓 `chat_turn_stalled_marker` **逐字一致**
+ *   (安卓: `未收到服务端回复，以上为中断前的内容`) ⇒ 三端同一句话。
+ */
+export const RESUME_FAILED_LABEL = "未收到服务端回复，以上为中断前的内容";
+
+/**
+ * 服务端 `resumeStatus` 的已知取值 ⇒ 端侧文案。
+ *
+ * ⚠️ 取值域来自服务端 `turn/attach.js` 的 `ATTACH_FAIL` (8 种) ——
+ *   端侧只**列**在这里, 判据仍是服务端给的码 (端侧不猜、不推算)。
+ */
+export const RESUME_STATUS_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  /** 服务端没有在跑的轮次了。 */
+  no_active_stream: "服务端已没有在跑的这一轮",
+  /** 回放缓冲区过期 ⇒ 接不回这一轮的中段。 */
+  buffer_expired: "这一轮的中段已过期，未能接回",
+  /** 这一轮确实结束了。 */
+  not_running: "这一轮已结束",
+  /** 轮次已落终态 (内容应当在历史里)。 */
+  turn_ended: "这一轮已结束",
+  /** 上游 (模型) 已经不在了。 */
+  upstream_dead: "上游已断开，未能接回",
+  /** 回放有洞 (游标与本轮第一帧之间断了)。 */
+  log_gap: "回放有缺口，未能接回",
+  /** 游标形态非法。 */
+  bad_cursor: "续传游标无效",
+  /** 游标超前于已持久化的内容。 */
+  cursor_ahead: "续传游标超前，未能接回",
+  /** ★ RC-3: 服务端进程重启过 ⇒ 内存里的这一轮没了。 */
+  stale_epoch: "服务端已重启，这一轮未能接回",
+  /** 兜底。 */
+  unknown: RESUME_FAILED_LABEL,
+});
+
+/**
+ * readResumeStatusLabel —— 失败原因码 ⇒ 端侧文案 (纯函数)。
+ *
+ * ⚠️ 未知码 ⇒ **默认文案**, **绝不抛**:
+ *   服务端以后加新码, 老端侧不能崩 (与 `normalizeReason` 同款纪律)。
+ *
+ * @param status 服务端给的 `resumeStatus` (可空)
+ */
+export function readResumeStatusLabel(status: string | null | undefined): string {
+  if (typeof status !== "string") return RESUME_FAILED_LABEL;
+  const v = status.trim();
+  if (v === "") return RESUME_FAILED_LABEL;
+  const hit = RESUME_STATUS_LABELS[v];
+  return hit ?? RESUME_FAILED_LABEL;
+}
+
+/**
+ * isResumeFailedFrame —— 这一帧是不是「**本端续传接不回来**」(RC-5)。
+ *
+ * ⚠️ 只认**严格的** `true` —— 别的取值 (`"yes"` / `1` / `"true"`) 一律不当。
+ *   (与 `isTerminalOrFailed` 的判据一致: 宁可漏认也不误认。)
+ *
+ * ⛔ 与「终态帧上的 resumeFailed」**不是一回事** —— 见本文件上方的警告。
+ *   终态帧 (`done && messageId`) 走 `isTerminalFrame` 认, 不走这里。
+ */
+export function isResumeFailedFrame(frame: {
+  resumeFailed?: boolean | null;
+}): boolean {
+  return frame.resumeFailed === true;
 }

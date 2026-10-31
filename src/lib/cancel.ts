@@ -36,6 +36,8 @@ import { isTerminalFrame } from "./sse/terminal";
  * ChatChunk 同款。⛔ 编译期擦除 (`import type`), 不给本文件引运行时依赖。
  */
 import type { RichEventBase } from "./rich-events";
+// ★ RC-5: 失败帧里的快照形状 (契约订正 20: 键恒在, 值可为 null)。
+import type { AttachSnapshot } from "./chat-sse";
 
 const API_BASE = "https://www.gaga.sale/api/v1";
 
@@ -135,6 +137,27 @@ export interface ChatChunk {
    *   老服务端没有 ⇒ undefined ⇒ 端侧回落老的启发式, 行为不变。
    */
   turnKey?: string | null;
+
+  // ==========================================================================
+  // ★ RC-5 —— 「本端续传接不回来」帧 (服务端 `turn/resumeFailed.js` 的唯一出口)
+  // --------------------------------------------------------------------------
+  // ⚠️ **不是**终态帧 —— 它**没有** messageId (服务端故意不给) ⇒
+  //   `isTerminalDone` 命中不了 ⇒ 端侧必须**单独**认它 (RC-W4)。
+  //
+  // ⚠️ **不是**「上游报了 resume 失败」—— 那一轮**有**正文、有 messageId
+  //   ⇒ 走 `isTerminalDone` 那条路。两种 resumeFailed **语义不同**, 别混。
+  // ==========================================================================
+  /** ★ RC-5: 本端续传**接不回来** (服务端给的失败帧)。 */
+  resumeFailed?: boolean;
+  /** ★ RC-5: 失败原因码 (`resumeStatus`) —— 服务端给的机器可读码。 */
+  resumeStatus?: string | null;
+  /**
+   * ★ RC-5: 失败帧带的**轮次快照** (契约订正 20)。
+   *
+   *   ⚠️ **键恒在** (值可以是 null) ⇒ 端侧靠「键在不在」区分
+   *     「有快照可用」与「连快照都没有 (⇒ 去拉历史)」。
+   */
+  snapshot?: AttachSnapshot | null;
 }
 
 /**

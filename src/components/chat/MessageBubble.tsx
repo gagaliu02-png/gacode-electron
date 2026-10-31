@@ -49,7 +49,13 @@ import { CallTreeCard, type CallTreeNode } from "./CallTreeCard";
 import { FileIcon } from "../ui/Glyphs";
 // ★ 重构轮 R2-PC (T-12): 终态分类的**表现形态**归到 sse/ 那一套 ——
 //   `presentTerminal` 是**唯一**的「终态 ⇒ 端侧文案/语气/要不要撤正文」判据。
-import { isTerminalReason, presentTerminal } from "../../lib/sse/terminal";
+// ★ RC-5: 「未收到服务端回复」的文案也取**共享层**那一份 (G-3: 一处真值) ——
+//   安卓 / web / PC 同一句话, 不许各写一遍。
+import {
+  isTerminalReason,
+  presentTerminal,
+  RESUME_FAILED_LABEL,
+} from "../../lib/sse/terminal";
 
 // ============================================================================
 // A2-D4-06 · 渲染层剥图 (抄 web `gacode-web/src/components/chat/MessageBubble.tsx:133-198`)
@@ -198,6 +204,18 @@ export interface MessageBubbleProps {
    * ⚠️ 服务端给了 `elapsedMs` 时不用它。
    */
   startedAt?: number | null;
+  /**
+   * ★ RC-5: 「**客户端放弃等一个不会来的结果**」—— 与安卓 `messages_local.stalled` 同款。
+   *
+   *   · `true` ⇒ 续传接不回来了 (服务端给了 `resumeFailed` 帧) ⇒ 这一轮的正文
+   *     **只到中断前** ⇒ 气泡上要标「未收到服务端回复」。
+   *   · ⛔ 与 `terminalReason` **不是一回事**:
+   *     `terminalReason` 是 T-12 的五类终态 (服务端权威);
+   *     `stalled` 是「**我们不等了**」这个**端侧状态** (安卓同款: 落库后重进仍然是 stalled,
+   *     用户不会以为「白等」或者「白烧」)。
+   *   · 老数据 / 正常轮次 ⇒ undefined / false。
+   */
+  stalled?: boolean;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -409,6 +427,7 @@ function AssistantBubble({
   thinkingCount,
   terminalReason,
   startedAt,
+  stalled,
 }: Pick<
   MessageBubbleProps,
   | "content"
@@ -429,6 +448,7 @@ function AssistantBubble({
   | "thinkingCount"
   | "terminalReason"
   | "startedAt"
+  | "stalled"
 > & { messageId: string }) {
   const showCursor = !!isStreaming;
   const hasRichEvents = !!richEvents && richEvents.length > 0;
@@ -584,6 +604,22 @@ function AssistantBubble({
         {/* 流式态: 还没收到任何文字但有事件 → 显示占位 */}
         {isStreaming && !hasContent && !hasRichEvents && !hasCallTree ? (
           <TypingDots />
+        ) : null}
+
+        {/* ★ RC-5: 「未收到服务端回复」标注 —— 与安卓 `chat_turn_stalled_marker` 同款。
+            ⛔ 只在 `stalled` 的行上出现 (续传接不回来 ⇒ 这一轮只到中断前);
+              正常轮次 / 用户主动停止**不**标 (那是另一回事, 别混)。
+            ⚠️ 文案取**共享层**那一份 (G-3: 一处真值) —— 安卓/web/PC 同一句话。 */}
+        {stalled === true ? (
+          <div
+            data-testid="stalled-marker"
+            className={[
+              "mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 px-2 py-1",
+              "text-xs text-amber-600",
+            ].join(" ")}
+          >
+            {RESUME_FAILED_LABEL}
+          </div>
         ) : null}
 
         {/* chat-id-9: assistant 也支持 knowledge_refs (server 暂未回传, 解析就位) */}

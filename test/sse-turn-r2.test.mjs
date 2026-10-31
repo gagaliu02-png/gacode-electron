@@ -47,6 +47,7 @@ const repoCode = (p) => stripComments(repoSrc(p), p);
 // 加载 src/lib/sse/ 下的 6 个模块 (整目录自包含 ⇒ 相对 import 改写成 .mjs)
 // ---------------------------------------------------------------------------
 const dir = makeTmpDir("verify-sse-turn-r2");
+writeModule(dir, "turn-key-header", repoSrc("src/lib/sse/turn-key-header.ts"));
 
 const S = {}; // seq-guard
 const R = {}; // turn-record
@@ -120,6 +121,7 @@ const chatSse = await import(
     rewriteImports: [
       ["notifications-sse", "./notifications-sse.mjs"],
       ["rich-events", "./rich-events.mjs"],
+      ["sse/turn-key-header", "./turn-key-header.mjs"],
     ],
   })
 );

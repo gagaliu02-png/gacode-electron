@@ -41,6 +41,7 @@ const REPO = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const repoSrc = (p) => readFileSync(join(REPO, p), "utf8");
 
 const dir = makeTmpDir("verify-sse-turn-r2-old");
+writeModule(dir, "turn-key-header", repoSrc("src/lib/sse/turn-key-header.ts"));
 
 // ---------------------------------------------------------------------------
 // 加载 sse/ 那 6 个模块 (整目录自包含 ⇒ 只改相对 import)
@@ -101,6 +102,7 @@ const chatSse = await import(
     rewriteImports: [
       ["notifications-sse", "./notifications-sse.mjs"],
       ["rich-events", "./rich-events.mjs"],
+      ["sse/turn-key-header", "./turn-key-header.mjs"],
     ],
   })
 );
@@ -112,6 +114,7 @@ const api = await import(
   writeModule(dir, "api", repoSrc("src/lib/api.ts"), {
     rewriteImports: [
       ["rich-events", "./rich-events.mjs"],
+      ["sse/turn-key-header", "./turn-key-header.mjs"],
       ["notifications", "./notifications.mjs"],
     ],
   })

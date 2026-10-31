@@ -61,6 +61,44 @@ const END = "pc"; // web | pc
 const PEER_DIR = "gacode-web"; // 对端仓目录名 (md5 比对用)
 
 /**
+ * 变异台用到的**逐仓**锚点。
+ *
+ * ⚠️ 为什么要有这个块: web 与 PC 的宿主层**缩进不同**
+ *   (web 的 `page.tsx` 缩进 8 格 / PC 的 `ChatDetail.tsx` 缩进 6 格)
+ *   ⇒ `find` 必须逐仓给, 否则「打不中」= 变异跑批直接退出码 2。
+ *
+ * ⚠️ 两端**都**列出来 (而不是按 END 挑) ⇒ 两个仓的这份脚本**逐字节相同**
+ *   ⇒ 变异台本身不会漂 (G-3 一处真值)。
+ */
+const ANCHORS = {
+  web: {
+    uiFile: "src/app/(main)/chat/[id]/page.tsx",
+    mW4Find:
+      '        queryClient.invalidateQueries({ queryKey: ["history", chatId] });\n' +
+      '        console.warn(\n' +
+      '          "[sse] 续传接不回来 ⇒ 降级 (不弹错):",',
+    mW4Replace:
+      '        console.warn(\n' +
+      '          "[sse] 续传接不回来 ⇒ 降级 (不弹错):",',
+    mW5Find: "            { ...last, stalled: true },",
+    mW5Replace: '            { ...last, content: "" },',
+  },
+  pc: {
+    uiFile: "src/routes/ChatDetail.tsx",
+    mW4Find:
+      '      queryClient.invalidateQueries({ queryKey: ["history", chatId] });\n' +
+      '      console.warn(\n' +
+      '        "[sse] 续传接不回来 ⇒ 降级 (不弹错):",',
+    mW4Replace:
+      '      console.warn(\n' +
+      '        "[sse] 续传接不回来 ⇒ 降级 (不弹错):",',
+    mW5Find: "      setStreamingStalled(true);",
+    mW5Replace: '      setStreamingStalled(false);\n      setStreamingContent("");',
+  },
+};
+const A = ANCHORS[END];
+
+/**
  * 单个测试文件的最长运行时间 (ms)。
  *
  * ⚠️ 为什么必须有: 变异可能把实现改成**死循环** (例: 删掉重连预算上限 ⇒
@@ -81,7 +119,7 @@ const MUTATIONS = [
     id: "M-RC-W3",
     guards: ["RC-W3"],
     file: "src/lib/sse/terminal.ts",
-    find: "return isTerminalFrame(frame) || frame.resumeFailed === true;",
+    find: "return isTerminalFrame(frame) || isResumeFailedFrame(frame);",
     replace: "return isTerminalFrame(frame);",
     test: "test/sse-no-terminal.test.mjs",
     why: "终态判据退回「只认 isTerminalDone」⇒ 续传失败帧不再是终态 ⇒ 流式态关不掉",
@@ -236,6 +274,90 @@ const MUTATIONS = [
     test: "test/sse-client-id.test.mjs",
     why: "端标识写死 ⇒ PC 的日志会自称 web (两端串了)",
   },
+  // ==========================================================================
+  // RC-5 / RC-3 端侧 (批 C)
+  // ==========================================================================
+  {
+    id: "M-RC-W1",
+    guards: ["RC-W1"],
+    file: "src/lib/chat-sse.ts",
+    find:
+      '  if (typeof epoch === "string") {\n' +
+      "    const v = epoch.trim();\n" +
+      '    if (v !== "") headers[TURN_EPOCH_HEADER] = v;\n' +
+      "  }",
+    replace: "  // 变异: 端侧不送 epoch (⇒ 服务端永远判不出 stale_epoch)",
+    test: "test/sse-turn-epoch.test.mjs",
+    why: "端侧记了 epoch 却不带回去 ⇒ 服务端重启后只能回笼统的 not_running",
+  },
+  {
+    id: "M-RC-W2",
+    guards: ["RC-W2"],
+    file: "src/lib/sse/terminal.ts",
+    find:
+      "  const hit = RESUME_STATUS_LABELS[v];\n" +
+      "  return hit ?? RESUME_FAILED_LABEL;",
+    replace:
+      "  const hit = RESUME_STATUS_LABELS[v];\n" +
+      '  if (!hit) throw new Error("未知 resumeStatus: " + v);\n' +
+      "  return hit;",
+    test: "test/sse-turn-epoch.test.mjs",
+    why: "未知 resumeStatus 直接抛 ⇒ 服务端以后加新码, 老端侧就崩 (M-RC-W6 是同一个破口的另一半: 漏判)",
+  },
+  {
+    id: "M-RC-W4",
+    guards: ["RC-W4"],
+    file: A.uiFile,
+    find: A.mW4Find,
+    replace: A.mW4Replace,
+    test: "test/sse-resume-failed.test.mjs",
+    why: "读到 resumeFailed 不补拉 history ⇒ 屏幕上的内容永远停在半截",
+  },
+  {
+    id: "M-RC-W5",
+    guards: ["RC-W5"],
+    file: A.uiFile,
+    find: A.mW5Find,
+    replace: A.mW5Replace,
+    test: "test/sse-resume-failed.test.mjs",
+    why: "把 stalled 改成空内容 ⇒ 用户看到的是「这一轮没回一个字」而不是「没接回来」",
+  },
+  {
+    id: "M-RC-W6",
+    guards: ["RC-W6"],
+    file: "src/lib/sse/terminal.ts",
+    find:
+      "  const hit = RESUME_STATUS_LABELS[v];\n" +
+      "  return hit ?? RESUME_FAILED_LABEL;",
+    replace:
+      "  switch (v) {\n" +
+      '    case "no_active_stream":\n' +
+      '    case "buffer_expired":\n' +
+      '    case "not_running":\n' +
+      '    case "turn_ended":\n' +
+      '    case "upstream_dead":\n' +
+      '    case "log_gap":\n' +
+      '    case "bad_cursor":\n' +
+      '    case "cursor_ahead":\n' +
+      "      return RESUME_STATUS_LABELS[v];\n" +
+      "    default:\n" +
+      '      throw new Error("未列入白名单的 resumeStatus: " + v);\n' +
+      "  }",
+    test: "test/sse-resume-failed.test.mjs",
+    why: "改成按 resumeStatus 白名单穷举分支, 未知值直接抛 ⇒ 端侧见到没见过的取值就崩 (且 stale_epoch 也被白名单漏掉)",
+  },
+  {
+    id: "M-RC-W7",
+    guards: ["RC-W7"],
+    file: "src/lib/sse/terminal.ts",
+    find:
+      'export const RESUME_FAILED_LABEL = "未收到服务端回复，以上为中断前的内容";',
+    replace:
+      'export const RESUME_FAILED_LABEL = "未收到服务端回复，以上为中断前的内容";\n' +
+      "// 变异: 只改本仓这一份 ⇒ web/PC 的共享层不再逐字节相同",
+    test: "test/sse-resume-failed.test.mjs",
+    why: "只改本仓那一份 ⇒ web/PC 的 src/lib/sse/** 不再逐文件相同 (判据会漂)",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -358,17 +480,46 @@ for (const m of MUTATIONS) {
 const results = [];
 let hardError = null;
 
+/**
+ * 行尾归一 —— 变异配方里写的 `\n` 按**目标文件的**行尾翻译。
+ *
+ * ⚠️ 为什么需要: 本仓的文件行尾**不统一**
+ *   (`src/lib/sse/reconnect.ts` 是 LF; `src/lib/sse/terminal.ts`、
+ *    `src/lib/chat-sse.ts`、宿主层的 `page.tsx` / `ChatDetail.tsx` 是 CRLF)
+ *   ⇒ 配方里写死 `\n` 会「打不中」⇒ 跑批直接退出码 2
+ *   (看着像配方过期, 其实只是行尾不同 —— 换行不该成为「配方失效」的理由)。
+ *
+ * ⚠️ 配方里**已经**带 `\r` 的 (本仓没有) ⇒ 原样使用, 不做二次翻译。
+ */
+function eolOf(content) {
+  return content.includes("\r\n") ? "\r\n" : "\n";
+}
+function toEol(s, eol) {
+  if (eol === "\n" || s.includes("\r")) return s;
+  return s.replace(/\n/g, "\r\n");
+}
+
 for (const m of list) {
-  // ① 先还原成原样 (每条变异都从干净基线出发)
-  writeFileSync(join(ws, m.file), pristine.get(m.file));
+  // ① 先把**所有**会被变异到的文件还原成原样 (每条变异都从干净基线出发)
+  //
+  //   ⚠️ 必须还原**全部**, 不只是本条要打的那个文件 ——
+  //     否则上一条变异留下的「脏」工作区会污染这一条的测试结果
+  //     (症状: 某条变异明明只该红 1 条, 却红了一堆 ⇒ 看着像断言有毛病,
+  //      其实是串味)。
+  for (const [f, content] of pristine) {
+    writeFileSync(join(ws, f), content);
+  }
   // ② 打上变异
   const src = readFileSync(join(ws, m.file), "utf8");
-  if (!src.includes(m.find)) {
+  const eol = eolOf(src);
+  const find = toEol(m.find, eol);
+  const replace = toEol(m.replace, eol);
+  if (!src.includes(find)) {
     hardError = `变异 ${m.id}: find 没打中 ${m.file} ⇒ **代码已经变了, 请更新变异配方**`;
     console.error(`✘ ${hardError}`);
     break;
   }
-  const mutated = src.replace(m.find, m.replace);
+  const mutated = src.replace(find, replace);
   writeFileSync(join(ws, m.file), mutated);
   // ③ 跑对应的测试
   const t0 = Date.now();

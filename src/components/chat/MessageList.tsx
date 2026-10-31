@@ -86,6 +86,14 @@ export interface ChatMessageModel {
    * ⚠️ 服务端给了 `elapsedMs` 时**不用**它 (服务端值才是权威的)。
    */
   startedAt?: number | null;
+  /**
+   * ★ RC-5: 「**客户端放弃等一个不会来的结果**」—— 与安卓 `messages_local.stalled` 同款。
+   *
+   *   · `true` ⇒ 续传接不回来了 ⇒ 这一行的正文**只到中断前** ⇒ 气泡上标
+   *     「未收到服务端回复, 以上为中断前的内容」。
+   *   · ⛔ 与 `terminalReason` **不是一回事** (服务端权威的五类终态 vs 端侧状态)。
+   */
+  stalled?: boolean;
 }
 
 interface Props {
@@ -165,7 +173,10 @@ export function MessageList({
               isStreaming={
                 !!streamingAssistantId &&
                 m.id === streamingAssistantId &&
-                m.role === "assistant"
+                m.role === "assistant" &&
+                // ★ RC-5: `stalled` 的行**不是**在流式 ⇒ 不打 pulse 光标、不挂秒表
+                //   「正在跑」态 (这一轮已经不等了)。
+                m.stalled !== true
               }
               createdAt={m.createdAt}
               recalled={m.recalled}
@@ -182,6 +193,8 @@ export function MessageList({
               thinkingCount={m.thinkingCount}
               terminalReason={m.terminalReason}
               startedAt={m.startedAt}
+              // ★ RC-5: 「未收到服务端回复」标注 (安卓同款 `stalled`)。
+              stalled={m.stalled}
               onAction={
                 onMessageAction
                   ? (action, ok) => onMessageAction(m, action, ok)

@@ -89,8 +89,12 @@ test("A7 头对象异常 (null / undefined / get 抛异常) ⇒ null, 不许把�
 
 test("B1 chat-stream.ts 真的用 readTurnKeyHeader 取响应头 (发起流 + attach 两条路)", () => {
   const s = repoSrc("src/lib/chat-stream.ts");
+  // ⚠️ 只认「从共享层 import readTurnKeyHeader」这件事, 不认 import 列表的**字面形状**
+  //   —— RC-3 把 `readTurnEpochHeader` 并进了同一行 import, 判据的**来源**没变。
   assert.ok(
-    s.includes('import { readTurnKeyHeader } from "./sse/turn-key-header";'),
+    /import\s*\{[^}]*\breadTurnKeyHeader\b[^}]*\}\s*from\s*["']\.\/sse\/turn-key-header["']/.test(
+      s,
+    ),
     "chat-stream.ts 必须 import 那份唯一判据",
   );
   assert.equal(

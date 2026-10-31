@@ -74,3 +74,54 @@ export function readTurnKeyHeader(
   const v = raw.trim();
   return v.length > 0 ? v : null;
 }
+
+// =========================================================================
+// ★ RC-3 —— 进程级 epoch (`X-Turn-Epoch` · 契约订正 19)
+// =========================================================================
+
+/**
+ * 响应头名字 (**小写**) —— 服务端的**进程级** epoch。
+ *
+ * ⚠️ 与 `X-Turn-Key` **不是一回事**:
+ *   · `X-Turn-Key`   认「**哪一轮**」 (turnKey) —— 跨请求稳定, 与进程无关;
+ *   · `X-Turn-Epoch` 认「**哪个进程**」 (epoch) —— 服务端**重启就变**。
+ *
+ *   ⇒ 端侧重连时把上次的 epoch 带回去 ⇒ 服务端一比就知道「我重启过了」
+ *     ⇒ 端侧拿到的是 `stale_epoch` (「服务端重启, 这一轮没了」),
+ *       而不是笼统的 `not_running` (端侧只能干瞪眼)。
+ *
+ * ⛔ 老服务端没有这个头 ⇒ 读出来是 null ⇒ 端侧**不带**这个头 ⇒ 服务端
+ *   「没带就不判」(judgeTurnEpoch 内部保证) ⇒ 行为与改动前逐字一致。
+ */
+export const TURN_EPOCH_HEADER = "x-turn-epoch";
+
+/**
+ * 从 SSE 响应头里取服务端的**进程级 epoch** (RC-3)。
+ *
+ * @param headers 形如 `Headers` 的对象 (只需要 `.get(name)`)
+ * @returns 这一轮的 epoch; **取不到时返回 null** (老服务端没有这个头)
+ *
+ * ## 判据 (与 `readTurnKeyHeader` 同款, 只有一条)
+ *
+ *   · 头存在、且去掉首尾空白后**非空** ⇒ 返回它;
+ *   · 否则 ⇒ null。
+ *
+ * ⛔ **不许**校验格式 (不许猜、不许补前缀) —— 端上拿到什么就用什么:
+ *   服务端换了生成方式, 端侧不该认不出「服务端重启过」这件事。
+ *
+ * ⛔ **不许**在这里抛 —— 头对象有问题 (老浏览器 / 测试桩) ⇒ 当「服务端没给」。
+ */
+export function readTurnEpochHeader(
+  headers: { get(name: string): string | null } | null | undefined,
+): string | null {
+  if (!headers || typeof headers.get !== "function") return null;
+  let raw: string | null;
+  try {
+    raw = headers.get(TURN_EPOCH_HEADER);
+  } catch (_: unknown) {
+    return null;
+  }
+  if (typeof raw !== "string") return null;
+  const v = raw.trim();
+  return v.length > 0 ? v : null;
+}

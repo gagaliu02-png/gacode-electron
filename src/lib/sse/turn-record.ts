@@ -91,6 +91,14 @@ export interface TurnRecord {
   turnKey: string | null;
   /** 续传游标 (纯十进制串; null = 本机零状态)。 */
   seq: string | null;
+  /**
+   * ★ RC-3 (契约订正 19): 服务端的**进程级** epoch (`X-Turn-Epoch`)。
+   *
+   *   · 端侧重连时把它带回去 ⇒ 服务端一比就知道「我重启过了」
+   *     ⇒ 端侧拿到 `stale_epoch` 而不是笼统的 `not_running`。
+   *   · 老服务端没有 ⇒ null ⇒ 端侧**不带**这个头 ⇒ 服务端「没带就不判」。
+   */
+  epoch: string | null;
   /** 本端已渲染的内容。 */
   renderedSnapshot: TurnRenderedSnapshot;
   /** 更新时间 ms epoch (TTL 清理用)。 */
@@ -121,6 +129,8 @@ export function emptyTurnRecord(sessionId: string, now: number = 0): TurnRecord 
     sessionId,
     turnKey: null,
     seq: null,
+    // ★ RC-3: 老服务端 / 新轮次都还没有 epoch ⇒ null (⇒ 重连时不带这个头)。
+    epoch: null,
     renderedSnapshot: emptyRenderedSnapshot(),
     updatedAt: now,
   };
@@ -180,6 +190,8 @@ export function normalizeTurnRecord(
     turnKey: strOrNull(o.turnKey),
     // ⛔ 游标必须还是**纯十进制串** (L-33) —— 落盘的老数据可能是脏的。
     seq: seq && /^\d+$/.test(seq) ? seq : null,
+    // ★ RC-3: 老记录没有这个键 ⇒ null (⇒ 重连时不带 epoch ⇒ 服务端不判 stale)。
+    epoch: strOrNull(o.epoch),
     renderedSnapshot: normalizeRenderedSnapshot(o.renderedSnapshot),
     updatedAt: numOrNull(o.updatedAt) ?? now,
   };

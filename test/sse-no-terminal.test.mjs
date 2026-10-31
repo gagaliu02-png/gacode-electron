@@ -220,6 +220,9 @@ const guardScope = (over = {}) => ({
   ac: { signal: { aborted: false } },
   sawDone: false,
   sawCancel: false,
+  // ★ RC-5: 宿主判据是 `sawTerminal: sawDone || sawFailed` ——
+  //   「续传接不回来」也是**这一轮没有下文了**, 不该再报「没有终态帧」。
+  sawFailed: false,
   // 真的共享层那个函数 —— 宿主写的**实参**由宿主自己的变量算, 判定由共享层做。
   shouldReportMissingTerminal: T.shouldReportMissingTerminal,
   ...over,

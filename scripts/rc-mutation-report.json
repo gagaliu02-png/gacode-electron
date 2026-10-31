@@ -2,9 +2,9 @@
   "tool": "rc-mutation",
   "end": "pc",
   "repo": "D:\\gaga\\gaclaw-project\\gacode-electron",
-  "at": "2026-10-31T12:48:52.843Z",
-  "total": 13,
-  "turnedRed": 13,
+  "at": "2026-10-31T13:47:51.467Z",
+  "total": 19,
+  "turnedRed": 19,
   "sourceTreeUntouched": true,
   "results": [
     {
@@ -25,7 +25,7 @@
         "A1 ★ RC-W3 终态判据对 {resumeFailed:true} 返回 true",
         "D1 web/PC 两仓 src/lib/sse/terminal.ts md5 相同"
       ],
-      "ms": 538
+      "ms": 513
     },
     {
       "id": "M-RC-W12",
@@ -51,7 +51,7 @@
         "A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s",
         "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
       ],
-      "ms": 634
+      "ms": 522
     },
     {
       "id": "M-RC-W13",
@@ -75,7 +75,7 @@
         "A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s",
         "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
       ],
-      "ms": 675
+      "ms": 541
     },
     {
       "id": "M-RC-W14",
@@ -95,7 +95,7 @@
         "A3 ★ RC-W14 jitter 落在 ±20% 内, 且注入 rand 后可确定复现",
         "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
       ],
-      "ms": 640
+      "ms": 529
     },
     {
       "id": "M-RC-W15",
@@ -115,7 +115,7 @@
         "A4 ★ RC-W15 offline ⇒ budgetUsed 不增长",
         "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
       ],
-      "ms": 670
+      "ms": 521
     },
     {
       "id": "M-RC-W16",
@@ -139,7 +139,7 @@
         "A10 流层: 续传最终失败 ⇒ 每 3s 轮询一次历史, 60s 后停",
         "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
       ],
-      "ms": 744
+      "ms": 565
     },
     {
       "id": "M-RC-W17",
@@ -159,7 +159,7 @@
         "A6 ★ RC-W17 attempt 永不减少",
         "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
       ],
-      "ms": 624
+      "ms": 547
     },
     {
       "id": "M-RC-W19",
@@ -181,7 +181,7 @@
         "A10 流层: 续传最终失败 ⇒ 每 3s 轮询一次历史, 60s 后停",
         "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
       ],
-      "ms": 625
+      "ms": 540
     },
     {
       "id": "M-RC-W20",
@@ -205,7 +205,7 @@
         "A10 流层: 续传最终失败 ⇒ 每 3s 轮询一次历史, 60s 后停",
         "C1 ★ RC-W20 web/PC 两仓 src/lib/sse/reconnect.ts md5 相同"
       ],
-      "ms": 614
+      "ms": 514
     },
     {
       "id": "M-RC-W21",
@@ -227,7 +227,7 @@
         "A4 便捷判据 isConcurrentTurnError 与 readConcurrentTurnError 同源",
         "D1 web/PC 两仓 src/lib/sse/concurrent.ts md5 相同"
       ],
-      "ms": 598
+      "ms": 464
     },
     {
       "id": "M-RC-W23",
@@ -249,7 +249,7 @@
         "A4 便捷判据 isConcurrentTurnError 与 readConcurrentTurnError 同源",
         "D1 web/PC 两仓 src/lib/sse/concurrent.ts md5 相同"
       ],
-      "ms": 753
+      "ms": 495
     },
     {
       "id": "M-RC-W24",
@@ -275,7 +275,7 @@
         "B4 ★ RC-W25 求值出来的头里的值就是本端标识",
         "B5 续传路的头带 Last-Event-ID"
       ],
-      "ms": 590
+      "ms": 493
     },
     {
       "id": "M-RC-W25",
@@ -299,7 +299,121 @@
         "B4 ★ RC-W25 求值出来的头里的值就是本端标识",
         "B5 续传路的头带 Last-Event-ID"
       ],
-      "ms": 592
+      "ms": 518
+    },
+    {
+      "id": "M-RC-W1",
+      "guards": [
+        "RC-W1"
+      ],
+      "file": "src/lib/chat-sse.ts",
+      "test": "test/sse-turn-epoch.test.mjs",
+      "why": "端侧记了 epoch 却不带回去 ⇒ 服务端重启后只能回笼统的 not_running",
+      "pass": 13,
+      "fail": 2,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "B1 ★ RC-W1 有 epoch ⇒ 续传请求**带上** X-Turn-Epoch",
+        "B3 无游标时走「按无游标接回」, epoch 照样带",
+        "B1 ★ RC-W1 有 epoch ⇒ 续传请求**带上** X-Turn-Epoch",
+        "B3 无游标时走「按无游标接回」, epoch 照样带"
+      ],
+      "ms": 527
+    },
+    {
+      "id": "M-RC-W2",
+      "guards": [
+        "RC-W2"
+      ],
+      "file": "src/lib/sse/terminal.ts",
+      "test": "test/sse-turn-epoch.test.mjs",
+      "why": "未知 resumeStatus 直接抛 ⇒ 服务端以后加新码, 老端侧就崩 (M-RC-W6 是同一个破口的另一半: 漏判)",
+      "pass": 14,
+      "fail": 1,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A6 ★ RC-W2 未知 resumeStatus ⇒ **不抛异常** + 有文案",
+        "A6 ★ RC-W2 未知 resumeStatus ⇒ **不抛异常** + 有文案"
+      ],
+      "ms": 537
+    },
+    {
+      "id": "M-RC-W4",
+      "guards": [
+        "RC-W4"
+      ],
+      "file": "src/routes/ChatDetail.tsx",
+      "test": "test/sse-resume-failed.test.mjs",
+      "why": "读到 resumeFailed 不补拉 history ⇒ 屏幕上的内容永远停在半截",
+      "pass": 23,
+      "fail": 1,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "C1 ★ RC-W4 读到 resumeFailed ⇒ 补拉 history",
+        "C1 ★ RC-W4 读到 resumeFailed ⇒ 补拉 history"
+      ],
+      "ms": 558
+    },
+    {
+      "id": "M-RC-W5",
+      "guards": [
+        "RC-W5"
+      ],
+      "file": "src/routes/ChatDetail.tsx",
+      "test": "test/sse-resume-failed.test.mjs",
+      "why": "把 stalled 改成空内容 ⇒ 用户看到的是「这一轮没回一个字」而不是「没接回来」",
+      "pass": 23,
+      "fail": 1,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "C2 ★ RC-W5 该消息落成 stalled",
+        "C2 ★ RC-W5 该消息落成 stalled"
+      ],
+      "ms": 607
+    },
+    {
+      "id": "M-RC-W6",
+      "guards": [
+        "RC-W6"
+      ],
+      "file": "src/lib/sse/terminal.ts",
+      "test": "test/sse-resume-failed.test.mjs",
+      "why": "改成按 resumeStatus 白名单穷举分支, 未知值直接抛 ⇒ 端侧见到没见过的取值就崩 (且 stale_epoch 也被白名单漏掉)",
+      "pass": 21,
+      "fail": 3,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "A3 ★ RC-W2/RC-W6 未知 resumeStatus ⇒ 不抛异常 + 落默认文案",
+        "A4 ★ RC-W6 resumeStatus='stale_epoch' ⇒ 不抛异常 + 有文案",
+        "D1 ★ RC-W7 web/PC 两仓 src/lib/sse/** 逐文件 md5 相同",
+        "A3 ★ RC-W2/RC-W6 未知 resumeStatus ⇒ 不抛异常 + 落默认文案",
+        "A4 ★ RC-W6 resumeStatus='stale_epoch' ⇒ 不抛异常 + 有文案",
+        "D1 ★ RC-W7 web/PC 两仓 src/lib/sse/** 逐文件 md5 相同"
+      ],
+      "ms": 763
+    },
+    {
+      "id": "M-RC-W7",
+      "guards": [
+        "RC-W7"
+      ],
+      "file": "src/lib/sse/terminal.ts",
+      "test": "test/sse-resume-failed.test.mjs",
+      "why": "只改本仓那一份 ⇒ web/PC 的 src/lib/sse/** 不再逐文件相同 (判据会漂)",
+      "pass": 23,
+      "fail": 1,
+      "turnedRed": true,
+      "timedOut": false,
+      "failing": [
+        "D1 ★ RC-W7 web/PC 两仓 src/lib/sse/** 逐文件 md5 相同",
+        "D1 ★ RC-W7 web/PC 两仓 src/lib/sse/** 逐文件 md5 相同"
+      ],
+      "ms": 528
     }
   ]
 }

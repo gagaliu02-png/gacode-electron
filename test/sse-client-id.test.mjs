@@ -64,6 +64,7 @@ const repoCode = (p) => stripComments(repoSrc(p), p);
 //     本测试只用到 `buildResumeHeaders` (纯函数), 帧解析器根本不会被调到。
 // ---------------------------------------------------------------------------
 const dir = makeTmpDir("verify-sse-client-id");
+writeModule(dir, "turn-key-header", repoSrc("src/lib/sse/turn-key-header.ts"));
 writeModule(
   dir,
   "notifications-sse",
@@ -82,6 +83,7 @@ const { buildResumeHeaders } = await import(
     rewriteImports: [
       ["notifications-sse", "./notifications-sse.mjs"],
       ["rich-events", "./rich-events.mjs"],
+      ["sse/turn-key-header", "./turn-key-header.mjs"],
     ],
   })
 );

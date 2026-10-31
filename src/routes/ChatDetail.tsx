@@ -173,10 +173,15 @@ import {
   OUTPUT_FILTER_HIT_CODE,
   presentTerminal,
   isStreamNoTerminalError,
+  // ★ RC-5: 「本端续传接不回来」帧的判据 + 文案 (共享层, 与 web 那份逐字节相同)。
+  isResumeFailedFrame,
+  readResumeStatusLabel,
   type TerminalReason,
 } from "../lib/sse/terminal";
 import {
   shouldRenderSnapshot,
+  // ★ RC-5: 失败帧里带的**服务端快照** (契约订正 20: 键恒在, 值可为 null)。
+  readServerSnapshot,
   type ServerSnapshotLike,
 } from "../lib/sse/degrade";
 // ★ RC-7 (F4): 断线重连**状态机** (退避 + 预算 + park + jitter) —— 共享层定稿,
@@ -572,6 +577,13 @@ export function ChatDetail() {
   //   老服务端没有 ⇒ null ⇒ 回落老的启发式, 行为不变。
   const [streamingTurnKey, setStreamingTurnKey] = useState<string | null>(null);
   const streamingTurnKeyRef = useRef<string | null>(null);
+  // ★ RC-5: 本轮「续传接不回来」了吗?
+  //   ⛔ 与 `terminalReason` **不是一回事** (安卓同款 `messages_local.stalled`):
+  //     `terminalReason` 是 T-12 的五类终态 (服务端权威);
+  //     `stalled` 是「**我们不等了**」这个**端侧状态** ⇒ 气泡上标
+  //     「未收到服务端回复，以上为中断前的内容」⇒ 用户看得见「没接回来」,
+  //     而不是「界面卡住了」。
+  const [streamingStalled, setStreamingStalled] = useState(false);
   // ★ RC-12: 「本端现在正在旁观那一轮」吗?
   //   跨端并发提问时服务端 409 ⇒ 本端要么**已经在旁观** (这一轮是别的设备起的),
   //   要么**还没接** (那一轮是本端发出请求之后才起来的) ⇒ 只有后一种才需要再接一次。
@@ -809,6 +821,9 @@ export function ChatDetail() {
       richEvents: dedupeRichEvents(streamingEvents),
       // A2-D4-02 · 思考 / 工具时间线随消息下传 → ExecutionTimeline
       phases: streamingPhases,
+      // ★ RC-5: 续传接不回来 ⇒ 这一行只到中断前 ⇒ 气泡上标「未收到服务端回复」。
+      //   ⛔ 与 `terminalReason` **不是一回事** (安卓同款 `messages_local.stalled`)。
+      stalled: streamingStalled || undefined,
     };
     // ★ a4 契约 v1 · W-3 · 气泡收敛 —— **流式路径**也要滤掉「已被服务端删除的交付物」。
     //   ⛔ 判据在 `lib/deliverable-visibility.ts` (H-9) —— 这里**只接线**, 不 inline 判据。
@@ -862,6 +877,7 @@ export function ChatDetail() {
     streamingEvents,
     streamingPhases,
     streamingTurnKey,
+    streamingStalled,
     deletedDeliverableIds,
   ]);
 
@@ -920,6 +936,8 @@ export function ChatDetail() {
     setStreamingContent("");
     setStreamingEvents([]);
     setStreamingPhases([]);
+    // ★ RC-5: 「没接回来」的标记跟着本行一起清 (下一轮重新累积)。
+    setStreamingStalled(false);
     // ★ v2 (契约订正 16): 轮次身份跟着本行一起清 (下一轮重新累积)。
     streamingTurnKeyRef.current = null;
     setStreamingTurnKey(null);
@@ -954,6 +972,53 @@ export function ChatDetail() {
   );
 
   /**
+   * ★ RC-5: 「本端续传接不回来」⇒ 降级闭环 (G-4: **不弹错**)。
+   *
+   *   服务端给的失败帧形状 (契约订正 20): `{done:true, resumeFailed:true,
+   *   resumeStatus, snapshot}` —— ⛔ **没有** messageId ⇒ 它**不是**终态帧。
+   *
+   *   流程 (五步, 缺一不可):
+   *     ① 渲染服务端给的快照 (有正文才渲染 —— 空快照渲染出来是空气泡);
+   *     ② 标 `stalled` (安卓同款语义: 「未收到服务端回复」) ⇒ 用户看得见;
+   *     ③ 关掉「等首帧」态 (输入框恢复可用);
+   *     ④ 回落历史 (服务端那一轮可能已经落库了);
+   *     ⑤ **不发** ACK_DONE (服务端那一轮**可能还在跑** —— 见下)。
+   *
+   *   ⛔ **不发** ACK_DONE —— 失败帧只说「你接不回来」, 不是「这一轮结束了」
+   *     ⇒ 误发会把还在跑的推理杀掉 (`chat-stream.ts` 里 `sawFailed` 也**不并进**
+   *     `sawDone`, 就是这个原因)。
+   *   ⛔ **不弹错** —— 「接不回来」是常态分支 (G-4), 不是异常。
+   */
+  const handleResumeFailed = useCallback(
+    (chunk: ChatChunk) => {
+      // 服务端契约订正 20: `snapshot` 键**恒在** (值可为 null)
+      //   ⇒ 「有快照可用」与「连快照都没有」由**键在不在**区分。
+      const serverSnap = readServerSnapshot(chunk);
+      // 服务端给的快照比本机新 ⇒ 以它为准 (与 attach_failed 的降级路径同款口径)。
+      if (serverSnap?.content && serverSnap.content !== streamingContentRef.current) {
+        streamingContentRef.current = serverSnap.content;
+        setStreamingContent(serverSnap.content);
+        if (serverSnap.phases && serverSnap.phases.length > 0) {
+          streamingPhasesRef.current = serverSnap.phases as unknown as ExecutionPhase[];
+          setStreamingPhases(streamingPhasesRef.current);
+        }
+      }
+      // 标 stalled —— 用户要看得见「这一轮没接回来」, 而不是「界面卡住了」。
+      //   ⚠️ 与安卓同款 (安卓: messages_local.stalled)。
+      setStreamingStalled(true);
+      // 关掉「等首帧」态 (输入框恢复可用) —— **保留**这一行的内容 (不清行!).
+      setWaitingFirstFrame(false);
+      // 回落历史 (服务端那一轮可能已经落库了) ⇒ 静默补拉, 不弹错。
+      queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+      console.warn(
+        "[sse] 续传接不回来 ⇒ 降级 (不弹错):",
+        readResumeStatusLabel(chunk.resumeStatus ?? null),
+      );
+    },
+    [chatId, queryClient],
+  );
+
+  /**
    * ★ 流帧处理 —— **发起流与只读接入流共用这一条** (契约 L-57)。
    *
    * 两者的帧语义完全一样 (正文 / 思考 / 富事件 / 审批事件) ⇒ 同一个 handler,
@@ -972,6 +1037,12 @@ export function ChatDetail() {
       if (!chatId) return;
       // waiting first frame → 收到任意 chunk 即结束 typing
       setWaitingFirstFrame(false);
+      // ★ RC-5: 失败帧**不是内容帧** (正文空、无 messageId) ⇒ 单独一条路走,
+      //   ⛔ 不许把它当普通帧累积 (它会把空正文当增量, 也会误触发终态分支)。
+      if (isResumeFailedFrame(chunk)) {
+        handleResumeFailed(chunk);
+        return;
+      }
       // ★ v2 (契约订正 16): 帧顶层的 `turnKey` ⇒ 本轮身份 (第一帧就有)。
       if (!streamingTurnKeyRef.current && chunk.turnKey) {
         streamingTurnKeyRef.current = chunk.turnKey;
@@ -1149,6 +1220,7 @@ export function ChatDetail() {
       removePendingApproval,
       markDeletedDeliverables,
       clearLocalRow,
+      handleResumeFailed,
     ],
   );
 
@@ -1163,6 +1235,8 @@ export function ChatDetail() {
       setStreamingPhases([]);
       streamingContentRef.current = "";
       streamingPhasesRef.current = [];
+      // ★ RC-5: 新的一轮 ⇒ 「没接回来」的标记作废 (下一轮重新累积)。
+      setStreamingStalled(false);
       setStreamError(null);
       setWaitingFirstFrame(true);
       // ⚠️ 任务书 P-12 —— 这里**不再**清空待审批列表:
@@ -1256,6 +1330,23 @@ export function ChatDetail() {
 
       // 发起流 / 接入流共用的「吃一帧」—— 状态机先判, 宿主层只渲染 (G-3)。
       const onTurnChunk = (chunk: ChatChunk, cursor: string | null) => {
+        // ★ RC-5: 失败帧**不是内容帧** ⇒ 单独一条路走。
+        //
+        //   ⛔ **必须在状态机之前拦** —— 这一帧没有自己的 `id:` 行 ⇒ 读帧层给回的
+        //     游标是**上一帧**的 ⇒ 状态机会把它判成「重复帧」直接丢掉
+        //     ⇒ 降级闭环永远不触发 (这一轮就白等)。
+        //   ⛔ 也不许当普通帧累积 (它正文是空串, 会把空正文当增量)。
+        if (isResumeFailedFrame(chunk)) {
+          // 状态机侧: 降级闭环 (判据在共享层 `turn-session.ts`, 与 web 同一份)。
+          ctrl.dispatch({
+            type: "resume_failed",
+            reason: chunk.resumeStatus ?? null,
+            snapshot: readServerSnapshot(chunk),
+          });
+          // 宿主层侧: 渲染快照 + 标 stalled + 关流式态 + 回落历史 (不弹错)。
+          handleStreamChunk(chunk, "streaming", attachments);
+          return;
+        }
         // ★ 幂等结论由**状态机**给 (T-09 / G-3): duplicate ⇒ 不重渲染; gap ⇒ 已降级。
         //   `cursor` = **这一帧**生效的 SSE 游标 (读帧层保证它先于本帧回调)。
         const s = ctrl.dispatch({
@@ -1289,7 +1380,12 @@ export function ChatDetail() {
               // ★ 重连模式 ⇒ **空 body + 续传头** (契约 L-35 / L-36):
               //   绝不能重复投喂用户消息, 也不能建新轮次。
               resume: resumeMode
-                ? { cursor: args.cursor ?? lastCursor ?? null }
+                ? {
+                    cursor: args.cursor ?? lastCursor ?? null,
+                    // ★ RC-3 (契约订正 19): 把本机记住的服务端 epoch 带回去
+                    //   ⇒ 服务端重启过就能回 `stale_epoch` (而不是笼统的 `not_running`)。
+                    epoch: ctrl.session.record.epoch ?? null,
+                  }
                 : null,
               onCursor: (c) => {
                 // 游标推进 —— 只接受纯十进制数字串 (非法值由控制器直接丢弃)
@@ -1303,6 +1399,11 @@ export function ChatDetail() {
                 if (streamingTurnKeyRef.current) return;
                 streamingTurnKeyRef.current = tk;
                 setStreamingTurnKey(tk);
+              },
+              // ★ RC-3 (契约订正 19): 服务端的**进程级** epoch 从响应头就到 ——
+              //   存进轮次记录 ⇒ 下次续传带回去 ⇒ 服务端重启过端侧能知道。
+              onTurnEpoch: (ep) => {
+                ctrl.dispatch({ type: "epoch", epoch: ep });
               },
               onChunk: (chunk: ChatChunk, cur: string | null) => {
                 onTurnChunk(chunk, cur);
@@ -1521,6 +1622,11 @@ export function ChatDetail() {
       const local = await followController.read(chatId);
       if (cancelled) return;
       const cursor = decideAttachCursor(local);
+      // ★ RC-3 (契约订正 19): 本机记住的服务端**进程级** epoch ⇒ attach 时带回去
+      //   ⇒ 服务端中途重启过就能回 `stale_epoch` (而不是笼统的 `not_running`)。
+      //   ⚠️ 没有就不带 (老服务端 / 老数据 ⇒ 行为与改动前逐字一致)。
+      const localRecord = await turnRecordStore.read(chatId);
+      const localEpoch = localRecord?.epoch ?? null;
 
       // ③ 接回这一轮 —— 交给「端侧续传中枢」(src/lib/sse/entry.ts)。
       //   它管: 状态机 · 轮次记录落盘 · seq 幂等 · 降级闭环 · 终态分类。
@@ -1538,6 +1644,8 @@ export function ChatDetail() {
               // ★ 游标由**状态机**决定 (取本机轮次记录里的 seq; 非法 ⇒ null ⇒
               //   服务端按 X-Resume-Turn 整轮接回)。本机痕迹只用于加速 (L-58)。
               cursor: args.cursor,
+              // ★ RC-3: 带本机记住的服务端 epoch (有值才带 —— 见 `buildResumeHeaders`)。
+              epoch: localEpoch,
               signal: ac.signal,
               onControl: (frame) => {
                 // ⚠️ 控制帧是**判别联合** (attach_ok | attach_failed) ——
@@ -1578,6 +1686,11 @@ export function ChatDetail() {
                 if (streamingTurnKeyRef.current) return;
                 streamingTurnKeyRef.current = tk;
                 setStreamingTurnKey(tk);
+              },
+              // ★ RC-3 (契约订正 19): attach 的响应头里也带服务端的进程级 epoch
+              //   ⇒ 存进轮次记录 ⇒ 下次续传带回去。
+              onTurnEpoch: (ep) => {
+                entry.dispatch({ type: "epoch", epoch: ep });
               },
             });
           },
@@ -1723,14 +1836,16 @@ export function ChatDetail() {
   const handleSubmit = useCallback(
     (text: string, attachments: PendingAttachment[]): boolean => {
       if (!chatId) return false;
-      if (streamingAssistantId) return false; // 已经在流式, 拒绝并发
+      // ★ RC-5: `stalled` 的那一轮**已经不等了** ⇒ 允许用户发下一条
+      //   (否则输入框永久锁死, 用户以为应用卡死)。
+      if (streamingAssistantId && !streamingStalled) return false; // 已经在流式, 拒绝并发
       if (waitingFirstFrame) return false; // 正在等首帧 / 正在接回, 拒绝并发
       lastUserTextRef.current = text;
       lastUserAttachmentsRef.current = attachments;
       void startStream(text, attachments);
       return true;
     },
-    [chatId, streamingAssistantId, waitingFirstFrame, startStream],
+    [chatId, streamingAssistantId, streamingStalled, waitingFirstFrame, startStream],
   );
 
   const handleStop = useCallback(() => {
@@ -1980,7 +2095,9 @@ export function ChatDetail() {
   }
 
   const title = currentChat?.title || "新对话";
-  const isStreaming = !!streamingAssistantId;
+  // ★ RC-5: `stalled` ⇒ 这一轮**已经不等了** ⇒ 不算「在流式」
+  //   (输入框恢复可用, 不挂秒表「正在跑」态, 不挂 pulse 光标)。
+  const isStreaming = !!streamingAssistantId && !streamingStalled;
 
   // Header ⋮ DropdownMenu items — 阶段 8 chat-id-1
   // 对齐 web `Header.tsx:227-239`: 只有「重命名 / 删除会话」两项.

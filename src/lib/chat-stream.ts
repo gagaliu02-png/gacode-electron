@@ -72,9 +72,12 @@ import {
 import { buildChatStreamHeaders, CLIENT_ID_PC } from "./sse/client-id";
 import { createSseBackoff, createSseWatchdog } from "./sse-reconnect";
 // ★ v2 (契约订正 17): 轮次身份从**响应头**取 (判据只有这一份, 跟 web 同一份)。
-import { readTurnKeyHeader } from "./sse/turn-key-header";
+// ★ RC-3 (契约订正 19): 进程级 epoch 也从**响应头**取 (同一个文件, 同一份判据)。
+import { readTurnKeyHeader, readTurnEpochHeader } from "./sse/turn-key-header";
 // ★ RC-6 (F3c): 「流结束但没有终态帧」的可识别错 + 判据 (共享层, 与 web 那份逐字节相同)。
+// ★ RC-5: 「本端续传接不回来」帧的判据 (同一个共享层文件, 与 web 那份逐字节相同)。
 import {
+  isResumeFailedFrame,
   shouldReportMissingTerminal,
   StreamEndedWithoutTerminal,
 } from "./sse/terminal";
@@ -145,6 +148,18 @@ export interface UseChatStreamOptions {
    */
   onTurnKey?: (turnKey: string) => void;
   /**
+   * ★ RC-3 (契约订正 19 · 2026-10-31): 响应头 `X-Turn-Epoch` 的接收口 ——
+   * 服务端的**进程级** epoch。
+   *
+   *   服务端**重启** ⇒ 内存里的轮次没了 ⇒ 端侧带着旧游标回来只会拿到笼统的
+   *   `not_running` (端侧根本不知道「是服务端重启了」还是「这轮真结束了」)。
+   *   ⇒ 端侧把上次的 epoch 带回去 ⇒ 服务端一比 ⇒ `stale_epoch` ⇒ 端侧能**明确**
+   *   地告诉用户「服务端重启了, 这一轮没了」。
+   *
+   * ⚠️ 老服务端没有这个头 ⇒ 回调不触发 ⇒ 端侧不带 epoch ⇒ 行为与改动前逐字一致。
+   */
+  onTurnEpoch?: (epoch: string) => void;
+  /**
    * ★ v2 (R2-PC): 续传模式 (契约 L-35 / L-36)。
    *
    *   传了这个字段 ⇒ **第一次请求**就走续传形态:
@@ -152,10 +167,11 @@ export interface UseChatStreamOptions {
    *     · 否则 ⇒ 发 `X-Resume-Turn: 1` (接回本轮, 不建新轮次);
    *     · ⚠️ 两种情况 **body 都留空** —— body 带内容会被服务端当成「建新轮次」
    *       (契约 L-36: 空 body 豁免「body 不能全空」的 400 守卫)。
+   *     · ★ RC-3: `epoch` 有值 ⇒ 再带 `X-Turn-Epoch` ⇒ 服务端能判 stale_epoch。
    *
    *   传了 ⇒ `message` 参数被忽略 (续传不重建轮次)。
    */
-  resume?: { cursor?: string | null } | null;
+  resume?: { cursor?: string | null; epoch?: string | null } | null;
 }
 
 /** attach (只读接入一条在跑的轮次) 的入参。 */
@@ -183,6 +199,16 @@ export interface AttachChatStreamOptions {
    * 见 [UseChatStreamOptions.onTurnKey] 的完整说明。
    */
   onTurnKey?: (turnKey: string) => void;
+  /**
+   * ★ RC-3 (契约订正 19): 响应头 `X-Turn-Epoch` —— 服务端的**进程级** epoch。
+   * 见 [UseChatStreamOptions.onTurnEpoch] 的完整说明。
+   */
+  onTurnEpoch?: (epoch: string) => void;
+  /**
+   * ★ RC-3 (契约订正 19): 端侧记住的服务端**进程级** epoch ⇒ attach 时带回去。
+   * 有值 ⇒ 请求带 `X-Turn-Epoch`; 没有 ⇒ 不带 (行为与改动前逐字一致)。
+   */
+  epoch?: string | null;
 }
 
 // =========================================================================
@@ -240,6 +266,14 @@ interface ActiveStream {
   turnState: { userStopped: boolean };
   /** 最近一次**合法**游标 (纯十进制数字串) —— 断线重连时用。 */
   cursor: string | null;
+  /**
+   * ★ RC-3 (契约订正 19): 服务端的**进程级** epoch (响应头 `X-Turn-Epoch`)。
+   *
+   *   · 首次请求前 = null (还没问过服务端 ⇒ 无从知道);
+   *   · 收到响应头后 = 服务端给的值 ⇒ **下一次**续传带回去
+   *     ⇒ 服务端重启过就能回 `stale_epoch` 而不是笼统的 `not_running`。
+   */
+  epoch: string | null;
   /** 本端是否**拥有**这一轮 (attach 只读 ⇒ 不拥有 ⇒ 不发 USER_STOP)。 */
   ownsTurn: boolean;
 }
@@ -289,6 +323,10 @@ export function useChatStream(): ChatStreamHandle {
         onControl?: (frame: AttachControlFrame) => void;
         // ★ v2 (契约订正 17): 响应头 `X-Turn-Key` —— 这一轮的身份, 在第一个数据帧之前就到。
         onTurnKey?: (turnKey: string) => void;
+        // ★ RC-3 (契约订正 19): 进程级 epoch 也从响应头取。
+        onTurnEpoch?: (epoch: string) => void;
+        // ★ RC-3: 端侧记住的服务端 epoch ⇒ 续传时带回去 (有值才带)。
+        epoch?: string | null;
       },
       ac: AbortController,
     ): Promise<void> => {
@@ -304,7 +342,10 @@ export function useChatStream(): ChatStreamHandle {
           authorization: accessToken,
           accept: "text/event-stream",
           // ★ 续传头 (契约 L-35) —— 与 web 定稿版同一份 `buildResumeHeaders`。
-          resumeHeaders: opts.resume ? buildResumeHeaders(opts.cursor) : null,
+          //   ★ RC-3: 额外带 `X-Turn-Epoch` (有 epoch 才带 —— 没值就一个字节都不加)。
+          resumeHeaders: opts.resume
+            ? buildResumeHeaders(opts.cursor, opts.epoch ?? null)
+            : null,
         });
         return fetch(`${API_BASE}${STREAM_PATH(opts.sessionId)}`, {
           method: "POST",
@@ -374,6 +415,19 @@ export function useChatStream(): ChatStreamHandle {
         }
       }
 
+      // ★ RC-3 (契约订正 19): **进程级** epoch 也从响应头取 ——
+      //   端侧存下来 ⇒ 下次重连带回去 ⇒ 服务端重启时端侧能知道
+      //   (⇒ 服务端回 `stale_epoch`, 而不是笼统的 `not_running`)。
+      //   ⚠️ 老服务端没有这个头 ⇒ 读出来 null ⇒ 回调不触发 ⇒ 不带 ⇒ 行为不变。
+      const headerEpoch = readTurnEpochHeader(res.headers);
+      if (headerEpoch) {
+        try {
+          opts.onTurnEpoch?.(headerEpoch);
+        } catch (e) {
+          console.warn("[gacode-sse] onTurnEpoch 回调抛异常 (忽略)", e);
+        }
+      }
+
       // ★ 读帧走共享零件 (契约 P1 / §11.4 P3) ——
       //   `readChatSse` 复用通知流的增量解析器, 并把 `id:` 行当游标。
       await readChatSse(res.body, {
@@ -410,6 +464,9 @@ export function useChatStream(): ChatStreamHandle {
         // ★ v2 (R2-PC): 续传模式 ⇒ 起始游标就是 `resume.cursor`
         //   (合法 ⇒ Last-Event-ID; 非法/null ⇒ X-Resume-Turn)。
         cursor: opts.resume?.cursor ?? null,
+        // ★ RC-3: 续传时端侧可能已经知道 epoch (上一轮记下的) ⇒ 先填上;
+        //   新轮次 (非续传) ⇒ null ⇒ 首个请求不带这个头 (服务端会回一个给我们)。
+        epoch: opts.resume?.epoch ?? null,
         ownsTurn: true,
       };
       activeRef.current = active;
@@ -425,6 +482,11 @@ export function useChatStream(): ChatStreamHandle {
 
       let sawDone = false;
       let sawCancel = false;
+      // ★ RC-5: 见过「本端续传接不回来」的失败帧吗。
+      //   ⛔ **不许**把它并进 `sawDone` —— `sawDone` 驱动收尾的 `ACK_DONE` DELETE,
+      //     而服务端那一轮**可能还在跑** (失败帧只是「你接不回来」, 不是「这一轮结束了」)
+      //     ⇒ 发 ACK_DONE 会把还在跑的推理**误杀**。
+      let sawFailed = false;
       /** 已重连次数 (0 = 首次请求)。超过 MAX_RECONNECT_ATTEMPTS ⇒ 放弃。 */
       let attempt = 0;
 
@@ -491,6 +553,10 @@ export function useChatStream(): ChatStreamHandle {
                     sawDone = true;
                   } else if (isCancelFrame(chunk)) {
                     sawCancel = true;
+                  } else if (isResumeFailedFrame(chunk)) {
+                    // ★ RC-5: 失败帧 ⇒ 「这一轮接不回来了」⇒ **不算**「流结束但没终态帧」
+                    //   (⇒ 不进重连循环 —— 重连也接不回来, 白烧预算)。
+                    sawFailed = true;
                   }
                   opts.onChunk(chunk, cur);
                 },
@@ -501,6 +567,14 @@ export function useChatStream(): ChatStreamHandle {
                 onControl: (frame) => opts.onControl?.(frame),
                 // ★ v2 (契约订正 17): 身份从响应头透出 (比第一个数据帧早 3~20s)。
                 onTurnKey: (turnKey) => opts.onTurnKey?.(turnKey),
+                // ★ RC-3 (契约订正 19): 进程级 epoch 从响应头透出 + 续传时带回去。
+                //   ⚠️ 收到就**存进 active** ⇒ 同一条流里的后续重连请求会带上它
+                //     ⇒ 服务端中途重启过, 重连时就能回 `stale_epoch`。
+                onTurnEpoch: (epoch) => {
+                  active.epoch = epoch;
+                  opts.onTurnEpoch?.(epoch);
+                },
+                epoch: active.epoch,
               },
               localAc,
             );
@@ -531,8 +605,10 @@ export function useChatStream(): ChatStreamHandle {
 
           // 流正常结束 (服务端关流):
           //   · 收到轮次终态 / 取消帧 ⇒ 这一轮完了, 不重连。
+          //   · ★ RC-5: 收到「续传接不回来」帧 ⇒ 这一轮**接不回来了**
+          //     ⇒ 也不重连 (重连也接不回来, 白烧预算)。
           //   · 否则 = **异常断流** (服务端半路断了) ⇒ 退避后走续传模式接回。
-          if (sawDone || sawCancel) break;
+          if (sawDone || sawCancel || sawFailed) break;
           if (attempt >= MAX_RECONNECT_ATTEMPTS) break;
           console.warn(
             `[gacode-sse] 会话流提前结束, ${backoff.current}ms 后续传 (第 ${attempt + 1} 次)`,
@@ -578,7 +654,9 @@ export function useChatStream(): ChatStreamHandle {
       //   ⚠️ 三个排除项缺一不可 (判据在共享层 `shouldReportMissingTerminal`):
       //     · `ac.signal.aborted` —— 用户主动中止 (我们自己掐断的流);
       //     · `sawCancel`        —— 收到过取消帧 (用户按停止 / 上游早退);
-      //     · `sawDone`         —— 见过轮次终态帧 (正常完成)。
+      //     · `sawDone`         —— 见过轮次终态帧 (正常完成);
+      //     · ★ RC-5 `sawFailed` —— 见过「续传接不回来」帧 (这一轮**接不回来了**,
+      //       再重连也是白试 ⇒ 不进重连循环)。
       //   ⇒ 剩下的唯一情形 = 「服务端半路关流」⇒ 抛 `STREAM_NO_TERMINAL`,
       //     由宿主层接进**降级闭环** (保留已渲染内容 + 回落历史) ⇒ **不弹错** (G-4)。
       //
@@ -588,7 +666,7 @@ export function useChatStream(): ChatStreamHandle {
         shouldReportMissingTerminal({
           aborted: ac.signal.aborted,
           cancelled: sawCancel,
-          sawTerminal: sawDone,
+          sawTerminal: sawDone || sawFailed,
         })
       ) {
         throw new StreamEndedWithoutTerminal();
@@ -618,6 +696,8 @@ export function useChatStream(): ChatStreamHandle {
         ac,
         turnState: { userStopped: false },
         cursor: opts.cursor ?? null,
+        // ★ RC-3: attach 时端侧可能已经知道 epoch ⇒ 带回去让服务端判 stale。
+        epoch: opts.epoch ?? null,
         // ★ attach 只读 ⇒ 本端不拥有这一轮 ⇒ 不发 USER_STOP (契约 L-53)
         ownsTurn: false,
       };
@@ -643,7 +723,11 @@ export function useChatStream(): ChatStreamHandle {
             authorization: accessToken,
             accept: "text/event-stream",
             // ★ 续传头 (契约 L-35 / L-47)
-            resumeHeaders: buildResumeHeaders(opts.cursor ?? null),
+            //   ★ RC-3: 额外带 `X-Turn-Epoch` (有 epoch 才带)。
+            resumeHeaders: buildResumeHeaders(
+              opts.cursor ?? null,
+              opts.epoch ?? null,
+            ),
           });
           return fetch(`${API_BASE}${ATTACH_PATH(opts.sessionId)}`, {
             method: "POST",
@@ -684,6 +768,18 @@ export function useChatStream(): ChatStreamHandle {
             opts.onTurnKey?.(headerTurnKey);
           } catch (e) {
             console.warn("[gacode-sse] attach onTurnKey 回调抛异常 (忽略)", e);
+          }
+        }
+
+        // ★ RC-3 (契约订正 19): attach 的响应头里也带 `X-Turn-Epoch` ——
+        //   端侧存下来 ⇒ 下次续传带回去 ⇒ 服务端重启过就能回 `stale_epoch`。
+        const headerEpoch = readTurnEpochHeader(res.headers);
+        if (headerEpoch) {
+          active.epoch = headerEpoch;
+          try {
+            opts.onTurnEpoch?.(headerEpoch);
+          } catch (e) {
+            console.warn("[gacode-sse] attach onTurnEpoch 回调抛异常 (忽略)", e);
           }
         }
 

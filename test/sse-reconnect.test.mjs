@@ -73,6 +73,7 @@ const md5 = (p) => createHash("md5").update(readFileSync(p)).digest("hex");
 // 加载共享层 (零依赖 ⇒ 转译加载器即可)
 // ---------------------------------------------------------------------------
 const dir = makeTmpDir("verify-sse-reconnect");
+writeModule(dir, "turn-key-header", repoSrc("src/lib/sse/turn-key-header.ts"));
 const R = await import(
   writeModule(dir, "reconnect", repoSrc("src/lib/sse/reconnect.ts"))
 );
@@ -105,10 +106,11 @@ const { buildResumeHeaders } = await import(
   writeModule(dir, "chat-sse", repoSrc("src/lib/chat-sse.ts"), {
     rewriteImports:
       END === "web"
-        ? [["notification-stream", "./notification-stream.mjs"]]
+        ? [["notification-stream", "./notification-stream.mjs"], ["sse/turn-key-header", "./turn-key-header.mjs"]]
         : [
             ["notifications-sse", "./notifications-sse.mjs"],
             ["rich-events", "./rich-events.mjs"],
+            ["sse/turn-key-header", "./turn-key-header.mjs"],
           ],
   })
 );

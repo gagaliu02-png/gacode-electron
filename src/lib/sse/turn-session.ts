@@ -129,6 +129,25 @@ export type TurnSessionEvent =
   | { type: "frame"; frame: TurnFrameLike & SeqFrameLike; cursor?: string | null }
   /** 判定有洞 (seq 跳号) ⇒ 降级。 */
   | { type: "gap"; expected: number; received: number }
+  /**
+   * ★ RC-5: 「**本端续传接不回来**」⇒ 降级闭环。
+   *
+   *   ⛔ **不是**内容帧 (服务端给的失败帧正文空、**没有** messageId)
+   *     ⇒ 宿主层**不许**把它当内容帧渲染。
+   *
+   *   ⛔ **不是**错误 (G-4) ⇒ 走降级: 渲染快照 → 回落历史 → 标 stalled → **不弹错**。
+   */
+  | {
+      type: "resume_failed";
+      reason?: string | null;
+      snapshot?: ServerSnapshotLike | null;
+    }
+  /**
+   * ★ RC-3: 服务端的**进程级** epoch 变了 ⇒ 记进轮次记录。
+   *
+   *   ⇒ 下次重连时把它带回去 ⇒ 服务端能判「我重启过了」(stale_epoch)。
+   */
+  | { type: "epoch"; epoch: string | null }
   /** 终态帧到了。 */
   | { type: "terminal"; reason: TerminalReason }
   /** 终态内容已排空 ⇒ 关闭。 */
@@ -324,6 +343,53 @@ export function transition(
         { ...session, state: "degraded", degradeReason: plan.reason, degradePlan: plan },
         now
       );
+    }
+
+    // ── RC-5: 续传接不回来 ⇒ 降级闭环 (不弹错) ──────────────────────────
+    case "resume_failed": {
+      if (session.state === "closed") return session;
+      // ★ 服务端契约订正 20: 失败帧**恒带** `snapshot` 键 (值可以是 null)
+      //   ⇒ 「有快照可用」与「连快照都没有」由**键在不在**区分。
+      //   ⇒ 有快照就渲染 (T-08), 没有就回落历史 (G-4: 降级必须带内容)。
+      const plan = planDegrade({
+        reason: event.reason ?? null,
+        snapshot: event.snapshot ?? null,
+      });
+      const record = {
+        ...session.record,
+        renderedSnapshot: applyDegrade(
+          session.record.renderedSnapshot,
+          plan,
+          event.snapshot ?? null
+        ),
+      };
+      // ⚠️ 终态记成 `upstream_lost` (T-12): 这一轮**没跑完** ⇒
+      //   `presentTerminal("upstream_lost")` 的 `keepPartial=true` / `purgeContent=false`
+      //   / `isError=false` ⇒ **保留已渲染的正文, 不弹错**。
+      const presentation = presentTerminal("upstream_lost");
+      return touch(
+        {
+          ...session,
+          // ★ 出 `live` ⇒ entry.ts 不会再补发一个 `upstream_lost` (不重复收尾)。
+          state: "degraded",
+          terminal: presentation,
+          degradeReason: plan.reason,
+          degradePlan: plan,
+          record: {
+            ...record,
+            renderedSnapshot: { ...record.renderedSnapshot, terminalReason: "upstream_lost" },
+          },
+        },
+        now
+      );
+    }
+
+    // ── RC-3: 记下服务端的进程级 epoch ─────────────────────────────────
+    case "epoch": {
+      // ⚠️ 没变 ⇒ 不动记录 (⇒ 不触发落盘, 免得每帧都写 IndexedDB)。
+      if (session.record.epoch === event.epoch) return session;
+      const record = { ...session.record, epoch: event.epoch };
+      return touch({ ...session, record }, now);
     }
 
     // ── 终态 ────────────────────────────────────────────────────────────

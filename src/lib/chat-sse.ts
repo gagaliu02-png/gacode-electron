@@ -35,6 +35,7 @@
 // =========================================================================
 
 import { SseFrameParser } from "./notifications-sse";
+import { TURN_EPOCH_HEADER } from "./sse/turn-key-header";
 import { normalizeRichEvent, normalizeRichEvents } from "./rich-events";
 import type { ChatChunk } from "./cancel";
 
@@ -88,14 +89,25 @@ export function advanceEventCursor(
  *
  * ⚠️ 非法游标**绝不能**被发出去 (服务端会回 `bad_last_event_id`, L-38)
  *   ⇒ 这里统一降级成「按无游标接回」。
+ *
+ * ★ RC-3 (契约订正 19): `epoch` 有值时**额外**带 `X-Turn-Epoch` ——
+ *   服务端一比就知道「我重启过了」⇒ 回 `stale_epoch` (而不是笼统的 `not_running`)。
+ *   ⚠️ **没有 epoch 时绝不能带这个头** —— 服务端「带了且不等才判失败」,
+ *   带一个空串 / 乱值会让服务端把「老端侧」判成「进程重启过」。
  */
 export function buildResumeHeaders(
-  cursor: string | null | undefined
+  cursor: string | null | undefined,
+  epoch?: string | null
 ): Record<string, string> {
-  if (isValidEventCursor(cursor)) {
-    return { [LAST_EVENT_ID_HEADER]: cursor };
+  const headers: Record<string, string> = isValidEventCursor(cursor)
+    ? { [LAST_EVENT_ID_HEADER]: cursor as string }
+    : { [RESUME_TURN_HEADER]: RESUME_TURN_VALUE };
+  // ★ RC-3: 只在**真的有** epoch 时才带 (老服务端 ⇒ 不带 ⇒ 行为与改动前逐字一致)。
+  if (typeof epoch === "string") {
+    const v = epoch.trim();
+    if (v !== "") headers[TURN_EPOCH_HEADER] = v;
   }
-  return { [RESUME_TURN_HEADER]: RESUME_TURN_VALUE };
+  return headers;
 }
 
 // =========================================================================
