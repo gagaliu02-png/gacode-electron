@@ -240,10 +240,12 @@ export interface TurnFrameLike {
 /**
  * mergeFrame —— 把一帧并进已渲染快照。
  *
- * ⚠️ **不做 thinking 合并** (T-16): 相邻 thinking chunk 原样各占一条 ——
- *   「该合成几条」是**服务端**的决定 (落库的 phases_json 即已合并形态),
+ * ⚠️ **不做 thinking 合并** (T-16): 「该合成几条」是**服务端**的决定,
  *   端侧只渲染不推算。
- *   ⇒ 老服务端的 raw 数据由 `renderPhases` 的**兼容分支**兜 (见下)。
+ *   ⇒ 但直播帧的 reasoning 是**逐 delta 原文** (服务端已合并的那份在落库的
+ *     `phases_json` 里), 所以这里按**服务端给的段号** (`thinkingCount`) 落位 ——
+ *     **零推算**, 且与落库形态逐段一致 (见 `appendServerThinking`)。
+ *   ⇒ 老服务端没给段号 ⇒ 走 `appendServerThinking` 的**兼容分支** (相邻并一条)。
  */
 export function mergeFrame(
   snapshot: TurnRenderedSnapshot,
@@ -258,7 +260,12 @@ export function mergeFrame(
     next.content = snapshot.content + frame.content;
   }
   if (typeof frame.reasoning === "string" && frame.reasoning !== "") {
-    next.phases.push({ type: "thinking", text: frame.reasoning, ts: 0 });
+    next.phases = appendServerThinking(
+      next.phases,
+      frame.reasoning,
+      0,
+      frame.thinkingCount
+    );
   }
   if (frame.event && typeof frame.event === "object") {
     next.events.push(frame.event);
@@ -364,6 +371,93 @@ export function purgeRenderedContent(
 // =========================================================================
 // 渲染口径 (thinking 合并的单点化 —— T-16)
 // =========================================================================
+
+/**
+ * appendServerThinking —— **直播路径**: 按**服务端的分段决定**追加一段 thinking。
+ *
+ * ## 为什么直播路径不能"原样收下"
+ *
+ *   服务端的 live 帧里, `payload.reasoning` 是**逐 delta 的原文**
+ *   (一帧 15 个字, 一轮 109 帧), 而**落库的 `phases_json` 是合并过的**
+ *   (同一轮 4 段, 1355/1607/6295/5552 字) —— 两个形状**不一样**。
+ *
+ *   ⇒ 端侧在直播路径上"原样收下" ⇒ 直播视图碎成"一小句一小句" (用户报的 bug),
+ *     而历史视图是 4 段 ⇒ **同一个问题, 刷新前和刷新后长得不一样**。
+ *
+ * ## 为什么不是"端侧自己合并" (那正是 V1 的老毛病)
+ *
+ *   端侧合并 = 端侧**推算**服务端怎么分的段 ⇒ 三端各推各的 ⇒ 跨端不一致
+ *   (任务书 M13/M14 查的就是这个)。T-15 的纪律是「**端侧只渲染不推算**」。
+ *
+ * ## 那直播路径怎么办 —— 服务端已经把答案发下来了
+ *
+ *   v2 帧信封**顶层**的 `thinkingCount` 就是**服务端合并后的段数**
+ *   (`turnStore.ingest` → `normalizePhases(turn.phases).thinkingCount`,
+ *   与落库 `phases_json` **同一个函数、同一份 phases** ⇒ 天然相等)。
+ *
+ *   ⇒ **`thinkingCount` 就是服务端的分段决定**: 第 N 段 ⇒ `thinkingCount == N`。
+ *   ⇒ 端侧只要按它落位 (段号变了 ⇒ 开新段; 段号没变 ⇒ 并进当前段),
+ *     **零推算**, 而且直播视图与历史视图**逐段一致**。
+ *
+ * ## 判据 (一句话)
+ *
+ *   `serverSegmentIndex === 当前已渲染的 thinking 段数` ⇒ 并进最后一段;
+ *   否则 ⇒ 开新段。
+ *
+ *   · 段号**大于**已渲染段数 ⇒ 服务端已经进入下一段了 (前面有工具调用把它切开了);
+ *   · 段号**小于**已渲染段数 ⇒ 数据异常 (乱序/重复) ⇒ 开新段 (宁可多一段, 不并错段);
+ *   · 服务端**没给**段号 (老服务端 v1) ⇒ 走**兼容分支**: 相邻 thinking 并成一条
+ *     (老服务端逐 delta 下发, 不并就是碎段 —— 这条分支待 R5 下线)。
+ *
+ * @param phases  已渲染的相位数组
+ * @param text    本次 thinking 的原文 (一段 delta)
+ * @param ts      本次的时间戳 (合并时取**最新**的, 与服务端 normalizePhases 同口径)
+ * @param serverSegmentIndex 服务端给的段号 (1-based); null/undefined/非正数 ⇒ 兼容分支
+ * @returns 新的相位数组 (原数组不被改)
+ */
+export function appendServerThinking(
+  phases: SsePhase[],
+  text: string,
+  ts: number,
+  serverSegmentIndex: number | null | undefined
+): SsePhase[] {
+  const out = Array.isArray(phases) ? phases.slice() : [];
+  const seg =
+    typeof serverSegmentIndex === "number" && Number.isFinite(serverSegmentIndex)
+      ? Math.floor(serverSegmentIndex)
+      : null;
+
+  if (seg != null && seg >= 1) {
+    // ── 权威路径: 服务端给了段号 ⇒ 按它的决定落位 (零推算) ──────────────
+    let rendered = 0;
+    let lastIdx = -1;
+    for (let i = 0; i < out.length; i++) {
+      const p = out[i];
+      if (p && p.type === "thinking") {
+        rendered++;
+        lastIdx = i;
+      }
+    }
+    if (lastIdx >= 0 && seg === rendered) {
+      // 还在服务端当前这一段 ⇒ 并进去 (文本拼接, ts 取最新 —— 与服务端同口径)
+      const cur = out[lastIdx];
+      out[lastIdx] = { ...cur, text: (cur.text ?? "") + text, ts };
+      return out;
+    }
+    out.push({ type: "thinking", text, ts });
+    return out;
+  }
+
+  // ── 兼容分支 (老服务端 / 服务端没给段号): 相邻 thinking 并成一条 ──────
+  const lastIdx = out.length - 1;
+  const last = lastIdx >= 0 ? out[lastIdx] : null;
+  if (last && last.type === "thinking") {
+    out[lastIdx] = { ...last, text: (last.text ?? "") + text, ts };
+    return out;
+  }
+  out.push({ type: "thinking", text, ts });
+  return out;
+}
 
 /**
  * renderPhases —— 决定**渲染**出来的相位数组。

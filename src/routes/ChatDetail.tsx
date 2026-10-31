@@ -160,7 +160,9 @@ import {
   type StreamStateProbe,
 } from "../lib/sse/entry";
 import {
+  appendServerThinking,
   emptyTurnRecord,
+  type SsePhase,
   type TurnFrameLike,
   type TurnSummaryLike,
 } from "../lib/sse/turn-record";
@@ -951,18 +953,24 @@ export function ChatDetail() {
         streamingContentRef.current += chunk.content;
         setStreamingContent((prev) => prev + chunk.content);
       }
-      // ★ T-16 · 思考链 → phases —— **原样各占一条, 端侧不合并**。
+      // ★ T-16 · 思考链 → phases —— 按**服务端的分段决定**落位 (端侧零推算)。
       //   「该合成几条」是**服务端**的决定 (v2 落库的 phases_json 已是合并形态);
       //   端侧再合并一次 = 把服务端刻意分开的思考段粘回去 ⇒ 次数漂移。
-      //   ⇒ 合并只发生在渲染层的那一处 (`sse/turn-record.ts` 的 `renderPhases`)。
-      //   ⚠️ 老服务端 (v1) 下 `renderPhases` 的兼容分支会把相邻 thinking 合成一条
-      //     ⇒ 观感与删掉合并之前**一致**。
+      //   ⇒ 直播帧的 reasoning 是**逐 delta 原文** (一轮 109 帧 × 15 字),
+      //     而落库的是**合并过的** (同一轮 4 段) ⇒ 两个形状不一样。
+      //     旧写法 (每条 delta 各自一个 phase) ⇒ 直播视图碎成"一小句一小句",
+      //     跟刷新之后的历史视图对不上 (gaga 真机报的 bug)。
+      //   ⇒ 帧**顶层**的 `thinkingCount` 就是服务端合并后的段数 (与落库同一个函数)
+      //     ⇒ 按它落位 = 零推算, 且直播视图与历史视图逐段一致。
+      //   ⇒ 老服务端 (v1) 没给段号 ⇒ `appendServerThinking` 走兼容分支 (相邻并一条)。
       if (chunk.reasoning) {
         ensureRow();
-        streamingPhasesRef.current = [
-          ...streamingPhasesRef.current,
-          { type: "thinking", text: chunk.reasoning, ts: Date.now() },
-        ];
+        streamingPhasesRef.current = appendServerThinking(
+          streamingPhasesRef.current as unknown as SsePhase[],
+          chunk.reasoning,
+          Date.now(),
+          chunk.thinkingCount
+        ) as unknown as ExecutionPhase[];
         setStreamingPhases(streamingPhasesRef.current);
       }
       // ★ 四要素 (服务端权威值) —— 端侧**只渲染不推算** (T-15 / T-16 / T-17)。
