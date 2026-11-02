@@ -43,6 +43,7 @@
 import type { ReactNode } from "react";
 import {
   AlertTriangleIcon,
+  ArchiveIcon,
   BranchIcon,
   CircleCheckIcon,
   DocTypeIcon,
@@ -57,6 +58,7 @@ import {
   WrenchIcon,
 } from "../ui/Glyphs";
 import { ToolTimingBadge } from "./ToolTimingBadge";
+import { describeCompaction } from "../../lib/rich-events";
 import type {
   RichEventBase,
   RichToolDone,
@@ -112,6 +114,9 @@ export function RichEventBubble({ event }: Props) {
       return <QrcodeCard event={event} />;
     case "gateway_connected":
       return <GatewayCard event={event} />;
+    // ── 上下文压缩 (契约 订正 21（第 21 个活类型） · 2026-11-02) ─────────
+    case "compaction":
+      return <CompactionCard event={event} />;
     // ── P-9 · supervisor 链路树 (契约 §2.1) ──────────────────────────
     case "step_started":
     case "step_done":
@@ -595,6 +600,36 @@ function GatewayCard({
       <span className="font-mono text-fg truncate">{label}</span>
       {event.account_id ? (
         <span className="ml-auto text-fg-muted truncate">{event.account_id}</span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * compaction —— 上下文压缩提示 (契约 订正 21（第 21 个活类型） · 2026-11-02)。
+ *
+ * 压缩不是错误、也不是工具调用 —— 只是「后台把很长的上下文折叠了」。
+ * ⇒ 样式刻意做得很轻, ⛔ 不用红色/警告色 (免得用户以为出错了)。
+ * 文案跟 web 端**同一份** (describeCompaction 在 lib/rich-events.ts 里共用)。
+ */
+function CompactionCard({
+  event,
+}: {
+  event: Extract<RichEvent, { type: "compaction" }>;
+}) {
+  const detail = describeCompaction(event);
+  const heavy = event.strategy === "heavy";
+  return (
+    <div className="my-1 rounded-md bg-bg-sunken/60 px-3 py-2 text-xs flex items-center gap-2">
+      <ArchiveIcon className="text-fg-muted" size={14} strokeWidth={1.6} />
+      <span className="text-fg">上下文已压缩</span>
+      {heavy ? (
+        <span className="text-[10px] text-fg-muted shrink-0">深度压缩</span>
+      ) : null}
+      {detail ? (
+        <span className="ml-auto text-[10px] text-fg-muted font-mono truncate">
+          {detail}
+        </span>
       ) : null}
     </div>
   );

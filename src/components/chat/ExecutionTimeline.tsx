@@ -22,6 +22,7 @@
  */
 import { useState } from "react";
 import {
+  ArchiveIcon,
   BrainIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -34,6 +35,7 @@ import {
 //   · `renderPhases` —— 相邻 thinking 的合并**只有这一处** (主路径原样 / 兼容分支合并);
 //   · `countPhases`  —— 端侧兜底计数 (服务端给了权威值时**不用**它)。
 import { renderPhases, countPhases, type SsePhase } from "../../lib/sse/turn-record";
+import { describeCompaction } from "../../lib/rich-events";
 
 // ════════════════════════════════════════════════════════════
 // phase 模型 + helpers
@@ -98,6 +100,20 @@ function summarizeToolEvent(ev: Record<string, unknown>): string {
   return parts.join(" ") || "tool 调用";
 }
 
+/**
+ * compaction 的时间线摘要 (契约 订正 21)。
+ * 文案跟气泡里**同一份** (describeCompaction) ⇒ 三端一致。
+ */
+function compactionDetail(ev: Record<string, unknown>): string {
+  const detail = describeCompaction({
+    strategy: (ev.strategy as string | null) ?? null,
+    removed_messages: (ev.removed_messages as number | null) ?? null,
+    before_tokens: (ev.before_tokens as number | null) ?? null,
+    after_tokens: (ev.after_tokens as number | null) ?? null,
+  });
+  return detail || "已折叠早期上下文";
+}
+
 /** tool phase 用图标 — 按 type 选 (image / file / web_preview / tool_start) */
 function ToolIcon({ ev }: { ev: Record<string, unknown> }) {
   const t = ev.type as string | undefined;
@@ -106,6 +122,7 @@ function ToolIcon({ ev }: { ev: Record<string, unknown> }) {
   if (t === "web_preview" || t === "web") {
     return <GlobeIcon className="w-3 h-3" />;
   }
+  if (t === "compaction") return <ArchiveIcon className="w-3 h-3" />;
   return <WrenchIcon className="w-3 h-3" />;
 }
 
@@ -206,20 +223,27 @@ export function ExecutionTimeline({
             }
             // tool phase
             const ev = (p.event ?? {}) as Record<string, unknown>;
+            // ★ [2026-11-02] compaction 不是工具调用 —— 别让它显示成
+            //   "compaction compaction" (summarizeToolEvent 的兜底会拼 type)。
+            const isCompaction = ev.type === "compaction";
+            const label = isCompaction
+              ? "上下文压缩"
+              : (ev.type as string) || "tool";
+            const detail = isCompaction
+              ? compactionDetail(ev)
+              : summarizeToolEvent(ev);
             return (
               <div
                 key={`p-${idx}`}
                 className="px-2.5 py-1.5 flex items-center gap-1.5"
               >
                 <ToolIcon ev={ev} />
-                <span className="font-medium">
-                  {(ev.type as string) || "tool"}
-                </span>
+                <span className="font-medium">{label}</span>
                 <span
                   className="opacity-70 truncate"
-                  title={summarizeToolEvent(ev)}
+                  title={detail}
                 >
-                  {summarizeToolEvent(ev)}
+                  {detail}
                 </span>
               </div>
             );

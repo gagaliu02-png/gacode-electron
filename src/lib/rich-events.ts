@@ -7,7 +7,7 @@
  * ---------------------------------------------------------------------------
  *   1. **判别联合** (契约 §2 / L-4 / L-11 / 任务书 W-8)
  *      `RichEventBase` 从「`type: string` + 开放索引签名」收窄成
- *      **20 个活 type + 5 个 tool_done subtype + 9 个 reserved 死类型** 的判别联合。
+ *      **21 个活 type + 5 个 tool_done subtype + 9 个 reserved 死类型** 的判别联合。
  *      未知 `type` 在**编译期**就报错 (契约 §14.4 W7 断言)。
  *      ⚠️ 其中 3 个 (think / planify_start / planify_done) 按契约 L-2
  *        **只建模、不渲染** —— 归一层把它们当「未知事件」跳过 (见 L2_UNKNOWN_RICH_EVENT_TYPES)。
@@ -42,13 +42,17 @@ export type ToolDoneSubtype =
   | "doc_summary";
 
 /**
- * 20 个**活**的独立 `type`。
+ * 21 个**活**的独立 `type`。
  *
  * ⚠️ 契约 §2.1 那张表有 20 行, 但 `image` 有 3 个产出点、`result` 有 2 个
- *   ⇒ 去重后 §2.1 是 **17 个**; 再加 §2.2 补的 3 个 ⇒ **20 个**。
+ *   ⇒ 去重后 §2.1 是 **17 个**; 再加 §2.2 补的 3 个 ⇒ **20 个**;
+ *   再加**契约订正 21** 补的 `compaction` ⇒ **21 个**。
  *
  * ⚠️ 末尾 3 个 (think / planify_start / planify_done) 按契约 **L-2** 只建模、
  *   **不渲染** —— 归一层当「未知事件」跳过。
+ *
+ * ⚠️ `compaction` (2026-11-02 新增 · 契约**订正 21** · 第 21 个活类型)
+ *   是**活**类型 —— 端侧**要渲染**(「上下文已压缩」提示), 不是只建模不渲染。
  */
 export type LiveRichEventType =
   // §2.1 —— 工具链
@@ -74,6 +78,8 @@ export type LiveRichEventType =
   | "step_done"
   | "step_failed"
   | "report"
+  // 订正 21 —— 上下文压缩 (2026-11-02 新增 · 第 21 个活类型)
+  | "compaction"
   // §2.2 —— 草案漏掉的 3 个活类型 (L-2: 必须按「未知事件」处理)
   | "think"
   | "planify_start"
@@ -317,6 +323,53 @@ export interface RichPlanifyDone {
   ts: number | null;
 }
 
+/**
+ * 上下文压缩 (契约**订正 21** · 2026-11-02 新增)。
+ *
+ * gaclaw 在压缩历史**之前**推一条 ⇒ 端侧据此显示「上下文已压缩」提示,
+ * 让用户知道「刚才那一大段被折叠了」—— 而不是盯着界面干等。
+ *
+ * ⚠️ `strategy` ∈ `'light' | 'heavy'` (阈值 32000 / 60000 tokens)。
+ * ⚠️ 5 个字段都是 gaclaw 字面量写入 ⇒ 恒非空; 但端侧仍按 L-8 归一
+ *   (键不存在 ⇒ null), 读取方不得假设键存在。
+ * ⚠️ **没有 `id`** —— 压缩不是工具调用, 没有 tool_use_id。
+ */
+export interface RichCompaction {
+  type: "compaction";
+  /** 压缩档位: 'light' | 'heavy' */
+  strategy: string | null;
+  /** 被折叠进摘要的消息条数 */
+  removed_messages: number | null;
+  /** 压缩前的上下文 token 数 */
+  before_tokens: number | null;
+  /** 压缩后的上下文 token 数 */
+  after_tokens: number | null;
+  ts: number | null;
+}
+
+/**
+ * compaction 的一行提示文案 —— **三端同款** (契约**订正 21**)。
+ *
+ * ⛔ 各端**不许**各写一份 (同语义 ⇒ 同文案)。
+ * ⚠️ 字段缺失 (L-8: 键不存在 ≡ null) ⇒ 只拼**有值**的那几段, 不许出 "null"。
+ */
+export function describeCompaction(
+  ev: Pick<
+    RichCompaction,
+    "strategy" | "removed_messages" | "before_tokens" | "after_tokens"
+  >,
+): string {
+  const parts: string[] = [];
+  const before = typeof ev.before_tokens === "number" ? ev.before_tokens : null;
+  const after = typeof ev.after_tokens === "number" ? ev.after_tokens : null;
+  if (before != null && after != null) parts.push(`${before} → ${after} tokens`);
+  else if (before != null) parts.push(`${before} tokens`);
+  const removed =
+    typeof ev.removed_messages === "number" ? ev.removed_messages : null;
+  if (removed != null && removed > 0) parts.push(`折叠 ${removed} 条消息`);
+  return parts.join(" · ");
+}
+
 // --- 9 个死类型: 保留占位 (L-5), 但生产永不产出 ---
 export interface RichPlan {
   type: "plan";
@@ -379,6 +432,7 @@ export type RichEventBase =
   | RichStepDone
   | RichStepFailed
   | RichReport
+  | RichCompaction
   | RichThink
   | RichPlanifyStart
   | RichPlanifyDone
@@ -420,7 +474,7 @@ export interface ChatPhase {
 // 类型名单 (运行时判据)
 // =========================================================================
 
-/** 20 个活 type 的集合. */
+/** 21 个活 type 的集合. */
 export const LIVE_RICH_EVENT_TYPES: readonly LiveRichEventType[] = [
   "tool_start",
   "tool_done",
@@ -439,6 +493,7 @@ export const LIVE_RICH_EVENT_TYPES: readonly LiveRichEventType[] = [
   "step_done",
   "step_failed",
   "report",
+  "compaction",
   "think",
   "planify_start",
   "planify_done",
@@ -581,6 +636,14 @@ const FIELD_SPECS: Record<LiveRichEventType, readonly string[]> = {
     "callTree",
     "ts",
     "summary",
+  ],
+  // ⚠️ `compaction` 没有 `id` —— 压缩不是工具调用, 没有 tool_use_id。
+  compaction: [
+    "strategy",
+    "removed_messages",
+    "before_tokens",
+    "after_tokens",
+    "ts",
   ],
   think: ["id", "corr", "reasoning", "ts"],
   planify_start: ["id", "corr", "task", "maxSteps", "ts"],
