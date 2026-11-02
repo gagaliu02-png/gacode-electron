@@ -487,6 +487,28 @@ export function useChatStream(): ChatStreamHandle {
       //     而服务端那一轮**可能还在跑** (失败帧只是「你接不回来」, 不是「这一轮结束了」)
       //     ⇒ 发 ACK_DONE 会把还在跑的推理**误杀**。
       let sawFailed = false;
+      // ★ [批 G8 · 2026-11-02] ACK_DONE 的发送时机 —— 从「流结束之后」提前到「见到终态帧就发」。
+      //
+      // 病根 (**死等**, 生产日志实证):
+      //   · 服务端 v2: 终态帧广播完**不关流**, 等 client 的 ACK_DONE 才 close
+      //     (v3.0.x done-frame-lost: 立即 close 会把 done 帧被 RST 截掉)。
+      //   · 旧实现: ACK_DONE 只在 finally 里发 —— 而 finally = 响应结束之后。
+      //   ⇒ 流不结束 ⇒ 不发 ACK ⇒ 服务端不关流 ⇒ 流不结束
+      //   ⇒ 本端还多一层: watchdog 判「长时间无事件」⇒ 掐流重连 ⇒ 这一轮已结束、
+      //     重连接不上 ⇒ 弹**重试条** ⇒ 用户重试还是死等 ⇒ 一直让重试。
+      //
+      // ACK 的语义是「**这一轮我收齐了**」⇒ 见到轮次终态帧就该发, 不必等流结束。
+      // ⚠️ 只能发一次 (finally 里还有一条兜底路径) ⇒ 用 ackDoneSent 闸住。
+      let ackDoneSent = false;
+      const sendAckDoneOnce = () => {
+        if (ackDoneSent) return;
+        // 用户中止 ⇒ 那是 USER_STOP 的事, 不许发 ACK (否则等于把「我停了」说成「这轮完了」)。
+        if (ac.signal.aborted) return;
+        // 收到过取消帧 ⇒ 这一轮是「被取消」的, 不发 ACK。
+        if (sawCancel) return;
+        ackDoneSent = true;
+        sendCancelDelete(opts.sessionId, "ACK_DONE");
+      };
       /** 已重连次数 (0 = 首次请求)。超过 MAX_RECONNECT_ATTEMPTS ⇒ 放弃。 */
       let attempt = 0;
 
@@ -551,6 +573,9 @@ export function useChatStream(): ChatStreamHandle {
                   lastEventAt.current = Date.now();
                   if (isTerminalDone(chunk)) {
                     sawDone = true;
+                    // ★ [批 G8] 见到轮次终态帧 ⇒ **立刻** ACK (不等流结束) ⇒ 服务端立刻关流
+                    //   ⇒ 读流退出 ⇒ finally ⇒ 本端流式态收口 (不再卡在重试条上)。
+                    sendAckDoneOnce();
                   } else if (isCancelFrame(chunk)) {
                     sawCancel = true;
                   } else if (isResumeFailedFrame(chunk)) {
@@ -643,7 +668,9 @@ export function useChatStream(): ChatStreamHandle {
         if (ac.signal.aborted && turnState.userStopped) {
           sendCancelDelete(opts.sessionId, "USER_STOP");
         } else if (!ac.signal.aborted && sawDone && !sawCancel) {
-          sendCancelDelete(opts.sessionId, "ACK_DONE");
+          // ★ [批 G8] 兜底: 终态帧那一路已经发过 ACK ⇒ 这里不会重发 (闸口在
+          //   sendAckDoneOnce 里)。留这条是为了「终态帧在 flush 路径才到」的场合。
+          sendAckDoneOnce();
         }
         // 让新一轮可以发, 即使上一轮因异常提前退出
         activeRef.current = null;

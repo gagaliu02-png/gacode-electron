@@ -528,19 +528,14 @@ function AssistantBubble({
         {/* chat-id-12: 链路树卡片 (从 chunk.events 解析, 整棵树挂到气泡顶部) */}
         {hasCallTree ? <CallTreeCard nodes={callTree!} /> : null}
 
-        {/* 工具 / 富事件 — 在正文之前 (server 累积顺序跟到末尾顺序一致) */}
-        {hasRichEvents
-          ? richEvents!.map((ev, i) => (
-              <RichEventBubble key={`ev-${i}-${String(ev.type)}`} event={ev} />
-            ))
-          : null}
-
         {/* Markdown 正文 — 对齐 web MessageBubble.tsx:372:
             bg-background + border border-border, 左下角 4px 小圆角 (rounded-bl-[4px]).
             时间戳在气泡**内**的 footer 行 (web MessageBubble.tsx:494-510).
-            ⚠️ 气泡在「有正文**或**有 phases」时都渲染 —— 跟 web 一致:
-               思考还没产出正文时, 时间线就已经可见 (web 的气泡容器无条件渲染). */}
-        {hasContent || hasPhases ? (
+            ⚠️ 气泡在「有正文 **或** 有 phases **或** 有富事件」时都渲染 —— 跟 web / 安卓一致:
+               思考还没产出正文时, 时间线就已经可见 (web 的气泡容器无条件渲染).
+            ★ [批 G8 · 2026-11-02] 加 hasRichEvents: 富事件挪进气泡**内**后,
+               「只有工具事件、没有正文」的消息也得有气泡装它 (web 同款). */}
+        {hasContent || hasPhases || hasRichEvents ? (
           <div className="rounded-[16px] rounded-bl-[4px] bg-background border border-border text-foreground px-4 py-3 text-sm leading-relaxed shadow-sm">
             {/* A2-D4-02: 思考 / 工具时间线 (正文**上方**, 对齐 web MessageBubble.tsx:396-398).
                 phases 为空 ⇒ 组件自身 return null ⇒ 不渲染空框.
@@ -560,6 +555,17 @@ function AssistantBubble({
                   />
                 ) : null}
               </>
+            ) : null}
+            {/* ★ [批 G8 · 2026-11-02] 工具 / 富事件 —— 挪进气泡**内部**。
+                旧实现把它们渲染在气泡**外面** (上方浮动一排) ⇒ 跟 web / 安卓不一致
+                (web: MessageBubble.tsx:451 在气泡容器内; 安卓: events 是气泡组件的参数)。
+                gaga 2026-11-02 反馈 bug4「工具调用信息不该浮在气泡上面」。 */}
+            {hasRichEvents ? (
+              <div className="mt-2 flex flex-col gap-2">
+                {richEvents!.map((ev, i) => (
+                  <RichEventBubble key={`ev-${i}-${String(ev.type)}`} event={ev} />
+                ))}
+              </div>
             ) : null}
             {/* ★ R2-PC (T-12): 终态标记 —— 只有「非正常完成」才显形。
                 ⛔ 天眼 (filtered) 不是错误 ⇒ 用 warn 语气, 不弹红色报错。 */}

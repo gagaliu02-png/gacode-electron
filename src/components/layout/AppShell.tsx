@@ -225,7 +225,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { data: chatsData, isLoading: chatsLoading } = useQuery({
     queryKey: ["chats"],
     queryFn: getChats,
-    refetchInterval: 60_000, // 每分钟后台刷一次, sidebar 实时性够用
+    // ★ [批 G8 · 2026-11-02] 对标 web / 安卓: 会话列表**聚焦即刷新**
+    //   (web: Drawer.tsx 的 ["chats"] 走 react-query 默认的 staleTime 0 +
+    //   refetchOnWindowFocus ⇒ 窗口一回焦点就重拉; 安卓: 抽屉按需 refresh())。
+    //   旧口径只有 60 秒轮询 ⇒ 新建的会话要等最多 60 秒才出现, 而轮询在窗口
+    //   不活跃时还不跑 ⇒ 用户看着像「刷新不出来」(gaga 2026-11-02 反馈 bug1)。
+    //   ⇒ 聚焦刷新为主 + 60 秒轮询兜底。
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+    refetchInterval: 60_000, // 兜底: 每分钟后台刷一次
   });
   const allChats: ChatSession[] = useMemo(() => chatsData?.chats ?? [], [chatsData]);
 

@@ -613,6 +613,18 @@ export function ChatDetail() {
   // A2-D4-06 · 本轮上传的图 URL (还没落进 history) ——
   //   新对话场景下首次发图的 URL 漏在 history 之外, AI 流里引用它时不会被剥.
   const [pendingUserImageUrls, setPendingUserImageUrls] = useState<string[]>([]);
+  // ★ [批 G8 · 2026-11-02] 乐观上屏的用户行 —— 对标**安卓** (sendInternal 立刻写 user 行,
+  //   REPLACE 策略) 与 **web** (发送后先插一条临时 user 行)。
+  //   旧实现: 发出去的消息要等**服务端 history 回来**才出现在屏幕上 ⇒ 用户看着像「没发出去」
+  //   (gaga 2026-11-02 反馈 bug2)。⇒ 这里先本地插一行, 等服务端那一行到了自动撤掉。
+  const [pendingUserMsg, setPendingUserMsg] = useState<{
+    id: string;
+    content: string;
+    imageUrls?: string[];
+    attachedFileIds?: string[];
+    attachedFileNames?: Array<{ fileId: string; name: string }>;
+    createdAt: string;
+  } | null>(null);
   // 流式 error 状态 (network / sse / server). 仅在被动失败时显示; USER_STOP 不显示.
   const [streamError, setStreamError] = useState<{
     kind: StreamingErrorKind;
@@ -628,6 +640,8 @@ export function ChatDetail() {
   // ★ RC-7: 这一轮的「叫停」开关 —— 用户按停止 / 组件卸载时 abort 它。
   //   重连状态机靠它判断「用户停 = 真停」(铁律三)。
   const turnAcRef = useRef<AbortController | null>(null);
+  // ★ [批 G8] 「等服务端落库完再刷一次会话列表」的定时器 (bug1) —— 换轮/卸载时要清。
+  const chatsRefreshTimerRef = useRef<number | null>(null);
 
   // 0.7.5 增量 — model 选择 (chat-id-31) / 知识库挂载 (chat-id-30) /
   //   流式起始时间戳 (chat-id-20) / call tree (chat-id-12) / phases 合并 (chat-id-35)
@@ -813,7 +827,27 @@ export function ChatDetail() {
       if (keptEvents === deduped && keptPhases === m.phases) return m;
       return { ...m, richEvents: keptEvents, phases: keptPhases };
     });
-    if (!streamingAssistantId) return dedupedBase;
+    // ★ [批 G8] 乐观上屏的用户行 —— 服务端那一行到了就自动撤掉临时行 (同内容判据)。
+    //   ⛔ 判据用**内容**而不是 id: 服务端的 user 行 id 客户端还不知道 (认亲靠 history 重拉)。
+    const historyHasSameUser =
+      !!pendingUserMsg &&
+      dedupedBase.some((m) => m.role === "user" && m.content === pendingUserMsg.content);
+    const withPendingUser: ChatMessageModel[] =
+      pendingUserMsg && !historyHasSameUser
+        ? [
+            ...dedupedBase,
+            {
+              id: pendingUserMsg.id,
+              role: "user",
+              content: pendingUserMsg.content,
+              imageUrls: pendingUserMsg.imageUrls,
+              attachedFileIds: pendingUserMsg.attachedFileIds,
+              attachedFileNames: pendingUserMsg.attachedFileNames,
+              createdAt: pendingUserMsg.createdAt,
+            },
+          ]
+        : dedupedBase;
+    if (!streamingAssistantId) return withPendingUser;
     const streamingMsg: ChatMessageModel = {
       id: streamingAssistantId,
       role: "assistant",
@@ -866,10 +900,10 @@ export function ChatDetail() {
           (sameTurn.phases?.length ?? 0) > (streamingMsg.phases?.length ?? 0)
             ? sameTurn.phases
             : streamingMsg.phases;
-        return [...dedupedBase.filter((m) => m !== sameTurn), streamingMsg];
+        return [...withPendingUser.filter((m) => m !== sameTurn), streamingMsg];
       }
     }
-    return [...dedupedBase, streamingMsg];
+    return [...withPendingUser, streamingMsg];
   }, [
     baseMessages,
     streamingAssistantId,
@@ -879,6 +913,8 @@ export function ChatDetail() {
     streamingTurnKey,
     streamingStalled,
     deletedDeliverableIds,
+    // ★ [批 G8] 乐观上屏那一行
+    pendingUserMsg,
   ]);
 
   // chat-id-19 rerun 显示条件: 不在流式 + 历史非空 + 最后一条是 assistant.
@@ -1193,6 +1229,13 @@ export function ChatDetail() {
         // 刷新 history + chats (server 落库后 title 改了)
         queryClient.invalidateQueries({ queryKey: ["history", chatId] });
         queryClient.invalidateQueries({ queryKey: ["chats"] });
+        // ★ [批 G8 · 2026-11-02] 终态帧这一刻, 服务端**还没落库**(webhook 还要 ~1s),
+        //   ⇒ 上面那次 invalidate 拉回来的仍是旧列表 ⇒ 新会话不出现 (bug1)。
+        //   ⇒ 再补一次**延迟**刷新 (等服务端落库完)。web 的同款做法是把 invalidate
+        //   放在 auto-title 的 800ms 定时器里 (web chat/[id]/page.tsx:763)。
+        chatsRefreshTimerRef.current = window.setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ["chats"] });
+        }, 2000);
         // small UX touch: fullContent / emptyReply 由父组件消费, 此处不强求
         void serverId;
         return;
@@ -1261,6 +1304,23 @@ export function ChatDetail() {
           return merged;
         });
       }
+
+      // ★ [批 G8] 乐观上屏 —— 立刻把**本轮用户消息**插进列表 (不等服务端 history)。
+      //   附件名从 attachments 里取 (与 web 的 attachedFileNames 同口径)。
+      setPendingUserMsg({
+        id: `pending-user-${Date.now()}`,
+        content: text,
+        imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+        attachedFileIds: fileIds.length > 0 ? fileIds : undefined,
+        attachedFileNames:
+          attachments.length > 0
+            ? attachments.map((a) => ({
+                fileId: a.fileId ?? a.url ?? "",
+                name: a.name ?? "文件",
+              }))
+            : undefined,
+        createdAt: new Date().toISOString(),
+      });
 
       // M3 3B: 知识库引用 id 列表 — 合并两条来源 (跟 web chat/[id]/page.tsx:759-774 同款):
       //   ① 用户本轮通过 KnowledgeAttachSheet 挂的 (pendingKnowledgeRefs)
@@ -1980,6 +2040,11 @@ export function ChatDetail() {
       stream.abort("navigate");
       // ★ RC-7: 卸载 ⇒ 重连状态机也别再跑了 (铁律三: 用户停 = 真停)。
       turnAcRef.current?.abort();
+      // ★ [批 G8] 延迟刷会话列表的定时器也要清 (别在卸载后还去 invalidate)。
+      if (chatsRefreshTimerRef.current != null) {
+        window.clearTimeout(chatsRefreshTimerRef.current);
+        chatsRefreshTimerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
