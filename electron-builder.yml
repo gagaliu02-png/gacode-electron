@@ -59,16 +59,23 @@
 #   - 顺带: handleRetry（真·错误重试）加 reconstructLastUserSubmission 兜底 ——
 #     页面重载后 ref 为空时, 「重试」按钮原来点了没反应
 #   - output 改 release-norerun-v16/ 绕开 v15 目录 (每次换新目录)
+# 0.7.17 (侧栏入口清理 + 「我的」页跟 web 对齐 + 新增「设置」页 · gaga 2026-11-04 截图 · 批 G12):
+#   - 侧栏画叉的三个入口删掉: 通知(挪到顶卡铃铛) / 我的(挪到底部用户卡) / 我的应用(永久下线)
+#   - 「我的」页整页重写成 web 同款: 只读卡 名字/UID/性别/简介 + 菜单卡 交付中心/IM 配对码
+#   - 新增真「设置」页 (/settings): 隐私组 修改密码 + 注销账号, 关于组 版本号 (不做检查更新)
+#   - 新增 IM 配对码页 (/profile/im-binding) — POST /im-bindings/issue
+#   - 改密口径跟 web/安卓对齐: 发明文 { oldPassword, newPassword } (服务端才验旧密码)
+#   - output 改 release-settings-v17/ 绕开 v16 目录 (每次换新目录)
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.16
+buildVersion: 0.7.17
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-norerun-v16
+  output: release-settings-v17
 
 files:
   - dist/**/*
