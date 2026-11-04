@@ -1,69 +1,49 @@
 /**
- * routes/Profile.tsx — 阶段 3 我的 (补齐)
+ * routes/Profile.tsx — 「我的」页 (批 G12 · 2026-11-04 · **对齐 web**)
  *
  * 数据: useQuery(["profile"], getProfile)
  * 端点: GET /gacode/profile — server 端 profile.routes.js, 返 ProfileData
  *   (id / username / displayName / gender / bio / avatar / email / createdAt).
  *
- * 功能 (2026-10-19 v0.7.2 补齐):
- *   - 顶部: 头像 (大圆) + displayName + username + email
- *   - 元信息: 性别 / 简介 / UID (含一键复制) / 注册时间
- *   - 操作入口: 编辑资料 / 改密 / 设置 (v2) / 交付中心 / 头像设置
- *     (「我的应用」已按 S-1 删除 —— 唯一入口是侧栏 AppShell 那个带门禁的)
- *   - 底部: 登出 + 注销账户 (DELETE /auth/account, 物理删数据 + 二次确认)
- *   - 上传头像: file picker → uploadAvatar → invalidate profile (顶部相机按钮 + 「头像设置」入口都触发同一逻辑)
+ * ★ [批 G12 · 2026-11-04] 本页**整页重写**, 逐条对齐 web
+ *   (gacode-web/src/app/(main)/profile/page.tsx, 2026-10-27 对齐安卓 ProfileTab):
+ *   - 顶部: 只剩右对齐「编辑」按钮 (🔔 铃铛入口**删掉** —— web 2026-10-27
+ *     按 gaga 要求删的, PC 这边是滞后副本。通知入口在**侧栏顶卡**的铃铛上)
+ *   - 中央: 72px 头像 (rounded-xl) + displayName + email
+ *     (@username 删掉 —— web 没有)
+ *   - 只读卡 (space-y-2): 名字 / UID(可复制) / 性别 / 简介
+ *     (PC 原有的「邮箱」「注册时间」两行删掉 —— 邮箱挪到名字下面, 注册时间 web 没有)
+ *   - 菜单卡 (安卓同款 DeliveryCenterMenuItem): 交付中心 + IM 配对码
+ *   - 页脚: "gacode-electron · v{版本号}" (版本号走 window.gacode.appVersion)
  *
- * 2026-10-26 对齐 web (docs/align-c-profile-notify.md 组 2a · C2-01 ~ C2-26):
- *   - C2-01/02: 单层容器 + 逐块 margin (顶部区 mb-4 / 头像区 mb-8 / 卡片 space-y-2
- *               / 注销区 mt-6 / 页脚 mt-8), 不再用统一 space-y-6
- *   - C2-03: 页内补「通知中心」铃铛入口 (跟 web 一样左铃铛 / 右编辑)
- *   - C2-06/07/08: 头像 72px + rounded-xl (骨架同步)
- *   - C2-10: 邮箱行改 text-fg-muted + opacity-70
- *   - C2-11/12/13/14/15: 信息区改成 web 的**多张独立卡** (space-y-2) + ProfileRow
- *               (label 主色 / value text-fg-muted truncate max-w-[200px]) + 补「名字」行
- *   - C2-16: 复制 UID 按钮 w-8 h-8 → w-7 h-7
- *   - C2-18: 复制 toast 文案/variant 跟 web 一致
- *   - C2-19/21/23: 注销按钮视觉 + 弹窗文案 + 成功/失败 toast 跟 web 一致
- *   - C2-24: 补页脚版本号
- *   - C2-25: 「编辑」按钮补 aria-label
- *   - C2-26: 未读轮询走 NOTIFICATION_POLL_MS (45s)
+ * ★ PC 独有、本批**删掉**的 (web 全都没有):
+ *   - 头像右下角相机按钮 (头像上传走「编辑资料」页, web 同款)
+ *   - 5 个 ActionRow (编辑资料 / 修改密码 / 头像设置 / 交付中心 / 设置)
+ *   - 「登出」大按钮 (侧栏底部已有, web Drawer 底部也有)
+ *   - 「注销账户」按钮 (**迁到「设置」页** —— web 2026-10-27 就是这么迁的)
  *
- *   - C2-07: 头像缺省图改用 Cody 占位图 (cody_192.png, 跟 web 同款)
- * ⚠️ PC 独有 (按 gaga 指示不列入差异, 保留): 相机按钮 + @username + 操作入口列表
- *   (编辑资料/修改密码/头像设置/交付中心/设置) + 登出按钮 + 邮箱/注册时间
- *   两行。
+ * ⚠️ 头像缺省图 = Cody 占位图 (web 同款, cody_192.png)。
+ *   PC 打包后 renderer 走 file:// ⇒ 不能用根绝对路径 "/assets/..." (会解析到
+ *   文件系统根 → 裂图), 必须用 import.meta.env.BASE_URL 拼相对路径
+ *   (打包态 "./", dev "/") —— 同仓 AppShell.tsx 的 cody_48.png 已是这个写法。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  deleteAccount,
-  getProfile,
-  listNotifications,
-  uploadAvatar,
-  type ProfileData,
-} from "../lib/api";
-import {
-  formatUnreadBadge,
-  NOTIFICATION_POLL_MS,
-} from "../lib/notifications";
+import { useQuery } from "@tanstack/react-query";
+import { getProfile, listDeliverables, type ProfileData } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useToast } from "../components/ui/Toast";
 import { Button } from "../components/ui/Button";
-import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { ProfileMenuItem } from "../components/profile/ProfileMenuItem";
 import {
-  BellIcon,
-  CameraIcon,
   CheckGlyph,
   ChevronRightIcon,
   CopyIcon,
-  LockIcon,
-  PackageBoxIcon,
-  SettingsIcon,
-  SquarePenIcon,
-  TrashIcon,
+  MessageSquareIcon,
+  PackageOpenIcon,
 } from "../components/ui/Glyphs";
+import { recordDeletedDeliverables } from "../lib/deliverable-deleted-store";
 
 const GENDER_LABEL: Record<string, string> = {
   male: "男",
@@ -74,128 +54,67 @@ const GENDER_LABEL: Record<string, string> = {
 
 export function Profile() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { user: authUser, logout } = useAuth();
-  const { toast } = useToast();
+  const { user: authUser } = useAuth();
 
   const { data: profile, isLoading } = useQuery({
     queryKey: ["profile"],
     queryFn: getProfile,
   });
 
-  // C2-03: 页内铃铛的未读数 — 跟侧栏 AppShell 的铃铛共用同一条 queryKey,
-  // React Query 直接复用同一次请求 (web 端也是这个形状)。
-  const { data: notifData } = useQuery({
-    queryKey: ["notifications", { unread: true }],
-    queryFn: () => listNotifications(true),
-    retry: false,
-    staleTime: 30 * 1000,
-    refetchInterval: NOTIFICATION_POLL_MS,
-    refetchIntervalInBackground: false,
-  });
-  const unreadCount = notifData?.unreadCount ?? 0;
-
   // profile 可能比 useAuth().user 更全 (displayName / avatar / bio / gender),
   // 优先 profile. 没拿到 profile 时回退 authUser (登录瞬态).
   const user: ProfileData | null = profile || (authUser as ProfileData | null);
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const logoutMutation = useMutation({
-    mutationFn: () => logout(),
-    onSuccess: () => {
-      queryClient.clear();
-      toast({ message: "已登出", variant: "success" });
-      navigate("/login", { replace: true });
+  // 交付中心计数 —— 复用已有的 listDeliverables (不新写 api 函数)。
+  //   pageSize=1 只取 1 条, 但后端照样返回 total (全量计数)。
+  //   ⚠️ 必须有降级: 拿不到就显示「—」, 不能让整页崩 (跟 web 同款)。
+  const { data: deliverablesData, isError: deliverablesFailed } = useQuery({
+    queryKey: ["deliverables", { count: true }],
+    queryFn: async () => {
+      const res = await listDeliverables({ page: 1, pageSize: 1 });
+      // a4 契约 v1 · 拉模式兜底 —— 列表接口的 `removedIds` ⇒ 同一个删除集。
+      //   (web: applyRemovedIdsFallback; PC 端等价物 = recordDeletedDeliverables)
+      const userId = authUser?.id ?? null;
+      if (userId && res.removedIds && res.removedIds.length > 0) {
+        recordDeletedDeliverables(userId, res.removedIds);
+      }
+      return res;
     },
-    onError: () => {
-      toast({ message: "登出失败,请重试", variant: "danger" });
-    },
+    retry: false,
+    staleTime: 60 * 1000,
   });
-
-  const avatarMutation = useMutation({
-    mutationFn: (file: File) => uploadAvatar(file),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["profile"] });
-      toast({ message: "头像已更新", variant: "success" });
-    },
-    onError: (err) => {
-      toast({
-        message: `头像上传失败: ${err instanceof Error ? err.message : String(err)}`,
-        variant: "danger",
-      });
-    },
-  });
-
-  const handlePickAvatar = () => fileInputRef.current?.click();
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast({ message: "请选择图片文件", variant: "warning" });
-      return;
-    }
-    // 2MB 上限跟 web 一致 (gacode-web/src/app/(main)/profile/edit/page.tsx:72-75),
-    // 本仓 ProfileEdit.tsx:99-102 也已是同款口径 —— 只有本文件是旧值。
-    if (file.size > 2 * 1024 * 1024) {
-      toast({ message: "图片不能超过 2 MB", variant: "warning" });
-      return;
-    }
-    avatarMutation.mutate(file);
-    // reset input 让下次选同一文件也能触发 change
-    e.target.value = "";
-  };
+  const deliverableTotal =
+    !deliverablesFailed && typeof deliverablesData?.total === "number"
+      ? deliverablesData.total
+      : null;
 
   const displayName = user?.displayName || user?.username || "User";
-  const username = user?.username || "-";
-  const email = user?.email || "(未设置)";
   const genderText = user?.gender ? GENDER_LABEL[user.gender] || "保密" : "保密";
   const bioText = user?.bio?.trim() ? user.bio : "未设置";
-  // C2-07: 头像缺省图 —— 跟 web `gacode-web/src/app/(main)/profile/page.tsx:156`
-  // 同款 (user.avatar 为空时用 Cody 占位图 cody_192.png)。
-  // ⚠️ PC 打包后 renderer 走 file:// ⇒ 不能用根绝对路径 "/assets/..." (会解析到
-  //    文件系统根 → 裂图), 必须用 import.meta.env.BASE_URL 拼相对路径
-  //    (打包态 "./", dev "/") —— 同仓 AppShell.tsx 的 cody_48.png 已是这个写法。
   const avatarSrc =
     user?.avatar || `${import.meta.env.BASE_URL}assets/cody/cody_192.png`;
   const uid = user?.id || "—";
 
   return (
-    <div className="min-h-full px-4 lg:px-8 py-6 max-w-2xl mx-auto">
-      {/* 顶部操作区 — 铃铛入口 (web 同款) + 「编辑」按钮右对齐 */}
-      <div className="flex items-center justify-between mb-4">
-        <button
-          type="button"
-          onClick={() => navigate("/notifications")}
-          aria-label="通知中心"
-          className="relative w-9 h-9 rounded-full text-fg-muted hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center"
-        >
-          <BellIcon strokeWidth={1.6} />
-          {unreadCount > 0 ? (
-            <span className="absolute top-1.5 right-1.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[10px] font-semibold bg-brand text-brand-on">
-              {formatUnreadBadge(unreadCount)}
-            </span>
-          ) : null}
-        </button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate("/profile/edit")}
-          aria-label="编辑资料"
-        >
-          编辑
-        </Button>
-      </div>
+    <div className="min-h-full px-4 lg:px-8 py-6">
+      <div className="max-w-2xl mx-auto">
+        {/* 顶部操作区 — 只有右对齐的「编辑」按钮 (web 同款) */}
+        <div className="flex items-center justify-end mb-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate("/profile/edit")}
+            aria-label="编辑资料"
+          >
+            编辑
+          </Button>
+        </div>
 
-      {/* 头像 + displayName */}
-      <div className="flex flex-col items-center mb-8">
-        <div className="relative">
+        {/* 中央: 头像 + 用户名 + email */}
+        <div className="flex flex-col items-center mb-8">
           {isLoading ? (
             <div className="w-[72px] h-[72px] rounded-xl bg-bg-elevated animate-pulse" />
           ) : (
-            // C2-07: 头像缺省图 = Cody 占位图 (web 同款) —— 不再回退到首字母圆底。
             <img
               src={avatarSrc}
               alt={displayName}
@@ -204,131 +123,45 @@ export function Profile() {
               className="w-[72px] h-[72px] rounded-xl object-cover"
             />
           )}
-          <button
-            type="button"
-            onClick={handlePickAvatar}
-            disabled={avatarMutation.isPending}
-            className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-brand text-brand-on flex items-center justify-center hover:bg-brand-hover transition-colors duration-150 disabled:opacity-50"
-            aria-label="更换头像"
-          >
-            <CameraIcon size={16} strokeWidth={1.6} />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleFileChange}
+          <h1 className="text-2xl font-medium mt-3 text-center">{displayName}</h1>
+          {user?.email ? (
+            <p className="text-xs text-fg-muted mt-1 opacity-70">{user.email}</p>
+          ) : null}
+        </div>
+
+        {/* 卡片列表 — 只读 (名字 / UID / 性别 / 简介) */}
+        <div className="space-y-2">
+          <ProfileRow label="名字" value={displayName} />
+          <ProfileRow
+            label="UID"
+            value={uid}
+            rightSlot={<CopyUidButton uid={user?.id || ""} />}
+          />
+          <ProfileRow label="性别" value={genderText} />
+          <ProfileRow label="简介" value={bioText} />
+        </div>
+
+        {/* 菜单卡 — 安卓 ProfileTab 同款 (交付中心 + IM 配对码) */}
+        <div className="mt-4 space-y-2">
+          <ProfileMenuItem
+            icon={<PackageOpenIcon className="w-5 h-5" />}
+            title="交付中心"
+            subtitle={deliverableTotal === null ? "—" : `${deliverableTotal} 项交付物`}
+            onClick={() => navigate("/deliveries")}
+          />
+          <ProfileMenuItem
+            icon={<MessageSquareIcon className="w-5 h-5" />}
+            title="IM 配对码"
+            subtitle="去微信/元宝绑定本账号"
+            onClick={() => navigate("/profile/im-binding")}
           />
         </div>
-        <h1 className="text-2xl font-medium mt-3 text-center">{displayName}</h1>
-        <p className="text-sm text-fg-muted mt-1">@{username}</p>
-        {email !== "(未设置)" ? (
-          <p className="text-xs text-fg-muted mt-1 opacity-70">{email}</p>
-        ) : null}
-      </div>
 
-      {/* 信息卡片 — web 是 4 个独立卡 (space-y-2), PC 保留自己的邮箱/注册时间两行 */}
-      <div className="space-y-2">
-        <ProfileRow label="名字" value={displayName} />
-        <ProfileRow
-          label="UID"
-          value={uid}
-          rightSlot={<CopyUidButton uid={user?.id || ""} />}
-        />
-        <ProfileRow label="邮箱" value={email} />
-        <ProfileRow label="性别" value={genderText} />
-        <ProfileRow label="简介" value={bioText} />
-        <ProfileRow
-          label="注册时间"
-          value={user?.createdAt ? formatDate(user.createdAt) : "-"}
-        />
+        {/* 页脚版本号 — 版本走 preload bridge (单一真相源 = 运行时真版本) */}
+        <div className="mt-8 text-center text-xs text-fg-muted opacity-50">
+          gacode-electron · v{window.gacode?.appVersion || "—"}
+        </div>
       </div>
-
-      {/* 操作入口 (PC 独有) */}
-      <div className="space-y-2 mt-6">
-        <ActionRow
-          icon={<SquarePenIcon />}
-          label="编辑资料"
-          onClick={() => navigate("/profile/edit")}
-        />
-        <ActionRow
-          icon={<LockIcon />}
-          label="修改密码"
-          onClick={() => navigate("/profile/change-password")}
-        />
-        {/* S-1 — 「我的应用」入口**只有一处**: 侧栏 AppShell.tsx 里那个带
-            `user.id === "6"` 门禁的版本。Profile 页原来还有一份**无门禁**的
-            (任何登录用户都看得到) ⇒ 双入口。已删除, 只保留侧栏门禁版。 */}
-        {/* profile-5: 新增三个入口. 头像设置复用顶部 file picker 逻辑,
-            走 handlePickAvatar (跟相机按钮同一份代码路径). */}
-        <ActionRow
-          icon={<CameraIcon size={16} strokeWidth={1.6} />}
-          label="头像设置"
-          onClick={handlePickAvatar}
-        />
-        <ActionRow
-          icon={<PackageBoxIcon />}
-          label="交付中心"
-          onClick={() => navigate("/deliveries")}
-        />
-        <ActionRow
-          icon={<SettingsIcon size={20} />}
-          label="设置"
-          // /settings 路由尚未实现 (gacode-web/android 都有独立设置页, electron
-          // 暂未建), 弹 toast 提示. 后续 v2 设置中心上线后再 enable.
-          onClick={() =>
-            toast({
-              message: "设置中心将在后续版本上线",
-              variant: "default",
-            })
-          }
-        />
-      </div>
-
-      {/* 登出 (PC 独有) */}
-      <div className="mt-6">
-        <Button
-          variant="danger"
-          size="lg"
-          loading={logoutMutation.isPending}
-          onClick={() => setConfirmOpen(true)}
-          className="w-full"
-        >
-          登出
-        </Button>
-      </div>
-
-      {/* 注销账户 (P0 — GDPR) — 跟操作入口视觉上区分开 (红字危险色), 放最底部 */}
-      <div className="mt-6">
-        <DeleteAccountRow
-          onDeleted={() => {
-            // 跟 localDB 那种"清状态后跳 login"对齐: queryClient 清空 + 调
-            // authStorage.clear (IPC) + auth.logout 清内存态, Protected 路由
-            // 后续 user=null 会自动跳 /login.
-            queryClient.clear();
-            void logout();
-            navigate("/login", { replace: true });
-          }}
-        />
-      </div>
-
-      {/* 页脚版本号 (C2-24) */}
-      <div className="mt-8 text-center text-xs text-fg-muted opacity-50">
-        gacode-electron · v0.7.8
-      </div>
-
-      {confirmOpen ? (
-        <ConfirmDialog
-          title="确认登出?"
-          message="登出后需要重新登录才能继续使用。"
-          confirmLabel="确认登出"
-          confirmVariant="danger"
-          loading={logoutMutation.isPending}
-          onCancel={() => setConfirmOpen(false)}
-          onConfirm={() => logoutMutation.mutate()}
-        />
-      ) : null}
     </div>
   );
 }
@@ -362,21 +195,24 @@ function ProfileRow({ label, value, onClick, rightSlot }: ProfileRowProps) {
       <span className="text-sm font-medium shrink-0">{label}</span>
       <span className="flex items-center gap-2 min-w-0">
         <span className="text-sm text-fg-muted truncate max-w-[200px]">{value}</span>
-        {rightSlot ?? (interactive ? <ChevronRightIcon strokeWidth={1.6} className="text-fg-muted" /> : null)}
+        {rightSlot ??
+          (interactive ? (
+            <ChevronRightIcon strokeWidth={1.6} className="text-fg-muted shrink-0" />
+          ) : null)}
       </span>
     </Wrapper>
   );
 }
 
 // ────────────────────────────────────────────────────────────
-// profile-3: UID 一键复制 (P1)
+// CopyUidButton — UID 一键复制 (web 同款: 复制成功变绿勾 + toast)
 // ────────────────────────────────────────────────────────────
 
 function CopyUidButton({ uid }: { uid: string }) {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
 
-  // 1.5 秒后自动恢复 copy 图标 (跟 gacode-web 行为一致)
+  // 1.5 秒后自动恢复 copy 图标 (跟 web 行为一致)
   useEffect(() => {
     if (!copied) return;
     const t = window.setTimeout(() => setCopied(false), 1500);
@@ -414,145 +250,3 @@ function CopyUidButton({ uid }: { uid: string }) {
     </button>
   );
 }
-
-// ────────────────────────────────────────────────────────────
-// profile-6: 注销账户 (P0) — DELETE /auth/account + 二次确认
-//   (跟 web 同款: 弹窗直接二次确认, 不要求输入 username ——
-//    gacode-web/src/app/(main)/profile/page.tsx:258-288)
-// ────────────────────────────────────────────────────────────
-
-function DeleteAccountRow({
-  onDeleted,
-}: {
-  onDeleted: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const [open, setOpen] = useState(false);
-
-  const deleteMutation = useMutation({
-    mutationFn: () => deleteAccount(),
-    onSuccess: () => {
-      toast({
-        title: "账户已注销",
-        description: "你的所有数据已永久删除",
-        variant: "default",
-      });
-      setOpen(false);
-      onDeleted();
-    },
-    onError: (err) => {
-      toast({
-        title: "注销失败",
-        description:
-          (err as Error)?.message || "请稍后重试",
-        variant: "danger",
-      });
-    },
-  });
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="w-full rounded-md bg-bg-elevated p-4 flex items-center gap-3 hover:bg-danger-soft/30 transition-colors duration-150 text-danger"
-        aria-label="注销账户"
-      >
-        {/* lucide `trash-2` (20px / sw2) — 共享 <TrashIcon>
-            (web `app/(main)/profile/page.tsx:264` 的
-             <Trash2 className="w-5 h-5 shrink-0" /> 同款) */}
-        <TrashIcon size={20} className="w-5 h-5 shrink-0" />
-        <span className="flex-1 text-left text-base font-medium">注销账户</span>
-      </button>
-
-      {open ? (
-        <ConfirmDialog
-          title="确定要注销账户吗?"
-          message="注销后,你的所有数据(账户、会话、知识库、设置)将被永久删除, 且无法恢复。此操作不可撤销, 请确认要继续。"
-          confirmLabel={
-            deleteMutation.isPending ? "正在注销..." : "我确定, 注销"
-          }
-          cancelLabel="取消"
-          confirmVariant="danger"
-          loading={deleteMutation.isPending}
-          // 2026-10-26 — pending 形态对齐 web `app/(main)/profile/page.tsx:284`:
-          //   web 是**文字-only**「正在注销...」(AlertDialogAction 无 spinner,
-          //   见 components/ui/alert-dialog.tsx:173-199) ⇒ PC 不出转圈环.
-          //   (PC 的 Button 默认「spinner + 保留 children」并存 ⇒ 必须显式选 text-only.)
-          loadingStyle="text-only"
-          onCancel={() => {
-            // ⚠️ 保持现状: pending 时遮罩点击不关弹窗 —— PC 与安卓一致
-            //   (安卓 SettingsSheet.kt:451「请求已发出时不许点外部关」),
-            //   按「web 对齐安卓」的层次, web 才是待修的那一端。
-            if (deleteMutation.isPending) return;
-            setOpen(false);
-          }}
-          onConfirm={() => {
-            deleteMutation.mutate();
-          }}
-        />
-      ) : null}
-    </>
-  );
-}
-
-// ────────────────────────────────────────────────────────────
-// helpers
-// ────────────────────────────────────────────────────────────
-
-function ActionRow({
-  icon,
-  label,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="w-full rounded-md bg-bg-elevated p-4 flex items-center gap-3 text-left hover:bg-bg-sunken transition-colors duration-150"
-    >
-      <span className="shrink-0 w-5 h-5 flex items-center justify-center">
-        {icon}
-      </span>
-      <span className="flex-1 text-sm font-medium">{label}</span>
-      <ChevronRightIcon strokeWidth={1.6} className="text-fg-muted" />
-    </button>
-  );
-}
-
-function formatDate(iso: string): string {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
-}
-
-// ────────────────────────────────────────────────────────────
-// icons — 本文件**不再保留**本地图标 (2026-10-27 组件意识收编)
-//   先前收编: 本地 `BellIcon` / `CameraIcon` / `EditIcon` / `LockIcon` /
-//   `DeliveriesIcon` / `ChevronRightIcon` / `CopyIcon` / `CheckIcon` 与
-//   components/ui/Glyphs.tsx 的共享导出重复实现 ⇒ 已删, 改 import 共享组件:
-//     · BellIcon         → 共享 <BellIcon> (lucide v0.407.0 `bell` 真值,
-//                          20px/sw2) —— 调用点传 strokeWidth={1.6}
-//     · CameraIcon       → 共享 <CameraIcon> (lucide v0.407.0 `camera` 真值,
-//                          24px/sw2) —— 调用点传 size=16 / strokeWidth={1.6}
-//     · EditIcon         → 共享 <SquarePenIcon> (lucide v0.407.0 `square-pen`
-//                          真值, 20px/sw1.6)
-//     · LockIcon         → 共享 <LockIcon> (lucide v0.407.0 `lock` 真值,
-//                          20px/sw1.6)
-//     · DeliveriesIcon   → 共享 <PackageBoxIcon> (lucide v0.407.0 `package`
-//                          真值, 20px/sw1.6)
-//     · ChevronRightIcon → 共享 <ChevronRightIcon> (lucide v0.407.0
-//                          `chevron-right` 真值, 16px/sw2) —— 调用点传
-//                          strokeWidth={1.6} + 保留原 className `text-fg-muted`
-//     · CopyIcon         → 共享 <CopyIcon> (lucide v0.407.0 `copy` 真值,
-//                          14px/sw2) —— 调用点传 strokeWidth={1.6}
-//     · CheckIcon        → 共享 <CheckGlyph> (lucide v0.407.0 `check` 真值,
-//                          14px/sw3) —— 调用点传 strokeWidth={2} + 保留原
-//                          className `text-success`
-// ────────────────────────────────────────────────────────────

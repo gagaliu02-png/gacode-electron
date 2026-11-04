@@ -35,8 +35,9 @@ import {
 import { Notifications } from "./routes/Notifications";
 import { Profile } from "./routes/Profile";
 import { ProfileEdit } from "./routes/ProfileEdit";
-import { ProfileChangePassword } from "./routes/ProfileChangePassword";
-import { ProfileApps } from "./routes/ProfileApps";
+import { IMBinding } from "./routes/IMBinding";
+import { Settings } from "./routes/Settings";
+import { SettingsChangePassword } from "./routes/SettingsChangePassword";
 import { Browser } from "./routes/Browser";
 
 const queryClient = new QueryClient({
@@ -253,7 +254,11 @@ export function App() {
                   </Protected>
                 }
               />
-              {/* 个人中心 — 阶段 3 接真数据 + 编辑/改密/我的应用 */}
+              {/* 个人中心 — 阶段 3 接真数据 + 编辑资料
+                  ★ [批 G12 · 2026-11-04] /profile/change-password 和 /profile/apps
+                    两条路由**已删** (web 端改密在 /settings/change-password,
+                    「我的应用」永久下线) ⇒ 页面本体 (ProfileChangePassword.tsx /
+                    ProfileApps.tsx) 一并删掉。 */}
               <Route
                 path="/profile"
                 element={
@@ -270,19 +275,29 @@ export function App() {
                   </Protected>
                 }
               />
+              {/* IM 配对码 (安卓同款) — web 同路径 */}
               <Route
-                path="/profile/change-password"
+                path="/profile/im-binding"
                 element={
                   <Protected>
-                    <ProfileChangePassword />
+                    <IMBinding />
+                  </Protected>
+                }
+              />
+              {/* 设置页 (批 G12) — web 同路径: /settings + /settings/change-password */}
+              <Route
+                path="/settings"
+                element={
+                  <Protected>
+                    <Settings />
                   </Protected>
                 }
               />
               <Route
-                path="/profile/apps"
+                path="/settings/change-password"
                 element={
                   <Protected>
-                    <ProfileApps />
+                    <SettingsChangePassword />
                   </Protected>
                 }
               />

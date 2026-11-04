@@ -42,10 +42,9 @@ import {
   ClockIcon,
   GlobeIcon,
   LogoutIcon,
-  PackageIcon,
   PackageOpenIcon,
   PinIcon,
-  UserIcon,
+  SettingsIcon,
 } from "../ui/Glyphs";
 import { ChatItem } from "../chat/ChatItem";
 import {
@@ -116,8 +115,10 @@ function resolveTitle(pathname: string): string {
   if (pathname.startsWith("/notifications")) return "通知中心";
   if (pathname === "/profile") return "我的";
   if (pathname === "/profile/edit") return "编辑资料";
-  if (pathname === "/profile/change-password") return "修改密码";
-  if (pathname === "/profile/apps") return "我的应用";
+  if (pathname === "/profile/im-binding") return "IM 配对码";
+  // ★ [批 G12 · 2026-11-04] 设置页跟 web 同路径 (web: /settings + /settings/change-password)
+  if (pathname === "/settings") return "设置";
+  if (pathname === "/settings/change-password") return "修改密码";
   if (pathname === "/browser") return "浏览器";
   return "Gacode";
 }
@@ -164,19 +165,14 @@ const NAV_ITEMS: NavItem[] = [
     icon: <CalendarIcon size={20} className="w-5 h-5" />,
   },
   {
-    label: "通知",
-    to: "/notifications",
-    icon: <BellIcon />,
-  },
-  {
+    // ★ [批 G12 · 2026-11-04] 「通知」「我的」两个菜单行**已删** —— 对齐 web Drawer:
+    //   web 的「通知」在**顶卡**里 (铃铛图标, Drawer.tsx:191-199),
+    //   「我的」在**底部用户行**里 (Drawer.tsx:327-350, aria-label="我的")。
+    //   web 菜单区只有 知识库 / 交付中心 / 日程中心 三项 (Drawer.tsx:213-231)。
+    //   「浏览器」是 PC 独有 (web 端没有内嵌浏览器) ⇒ 保留。
     label: "浏览器",
     to: "/browser",
     icon: <GlobeIcon />,
-  },
-  {
-    label: "我的",
-    to: "/profile",
-    icon: <UserIcon />,
   },
 ];
 
@@ -378,6 +374,17 @@ export function AppShell({ children }: { children: ReactNode }) {
               </span>
             ) : null}
           </button>
+          {/* ⚙️ 设置 — 2026-11-04 (对齐 web Drawer.tsx:202-211: 设置入口放在抽屉那个
+              通知的旁边)。web 2026-10-27 加的, PC 之前**根本没有**设置页 ⇒
+              本批补齐 (页内容 = 修改密码 / 注销账号 / 关于, 同 web)。 */}
+          <button
+            type="button"
+            aria-label="设置"
+            onClick={() => navigate("/settings")}
+            className="w-9 h-9 rounded-full text-fg-muted hover:bg-bg-sunken transition-colors duration-150 inline-flex items-center justify-center shrink-0"
+          >
+            <SettingsIcon />
+          </button>
         </div>
 
         {/* 主菜单 — 对齐 web Drawer.tsx:205 `rounded-md bg-bg-elevated m-3 mb-0 p-2 space-y-1` */}
@@ -398,20 +405,9 @@ export function AppShell({ children }: { children: ReactNode }) {
               </button>
             );
           })}
-          {/* 对齐 web Drawer.tsx:221-227 — 「我的应用」入口 (仅 userId==6) */}
-          {user && user.id === "6" ? (
-            <button
-              type="button"
-              onClick={() => navigate("/profile/apps")}
-              className="w-full flex items-center gap-3 px-3 py-2 text-base font-medium rounded-md transition-colors duration-150 text-fg-muted hover:bg-bg-base"
-            >
-              <span className="w-5 h-5 shrink-0 text-fg-muted inline-flex items-center justify-center">
-                <PackageIcon />
-              </span>
-              <span className="flex-1 text-left">我的应用</span>
-              <ChevronRightIcon />
-            </button>
-          ) : null}
+          {/* ★ [批 G12 · 2026-11-04] 「我的应用」入口**已删** —— web 端 2026-10-27
+              起「我的应用」**永久下线** (gaga 原话), PC 这边是 web 的滞后副本
+              (页面本体只是「功能正在开发中」占位卡) ⇒ 入口 + 页面 + 路由一起删。 */}
         </nav>
 
         {/* 对话列表: 置顶 + 最近 — 对齐 web Drawer.tsx:231

@@ -783,6 +783,16 @@ PC `NotificationItem`（`NotificationItem.tsx:45-99`）：
 
 ## 5. Profile
 
+> **⚠️ 批 G12（2026-11-04）本页已按 web 重写** —— 下面 5.1 ~ 5.5 记的是**改动前**的
+> PC 状态（571 行 / 6 个 ActionRow / 页内铃铛 / 相机按钮 / 注销账户…），**作废**。
+> 现状（PC `src/routes/Profile.tsx`，跟 web `profile/page.tsx` 逐条同款）：
+> - 顶部只剩右对齐「编辑」按钮（🔔 页内铃铛已删 —— web 2026-10-27 同款，通知入口在侧栏顶卡）
+> - 中央 = 72px 头像 + displayName + email（`@username` 已删）
+> - 只读卡正好 4 张：**名字 / UID(可复制) / 性别 / 简介**（原「邮箱」「注册时间」两行已删）
+> - 菜单卡 2 张：**交付中心**（副标题「N 项交付物」）+ **IM 配对码**（副标题「去微信/元宝绑定本账号」）
+> - 底部：`gacode-electron · v{window.gacode.appVersion}`（版本走 preload bridge，不再硬编码）
+> - **已删**：相机按钮 / 5 个 ActionRow / 登出大按钮 / 注销账户（→ 迁到「设置」页）
+
 ### 5.0 文件与规模
 
 | | web | PC |
@@ -2039,6 +2049,12 @@ className={["shrink-0 w-8 h-8 rounded-md inline-flex items-center justify-center
 ---
 
 ## 12. ProfileApps
+
+> **⚠️ 批 G12（2026-11-04）本节整体作废 —— 两端都没了。**
+> web 端「我的应用」2026-10-27 起**永久下线**（页面只剩「功能正在开发中」占位卡）；
+> PC 是它的滞后副本 ⇒ 本批把 PC 的**入口（侧栏那个 `user.id === "6"` 门禁项）**、
+> **页面（`src/routes/ProfileApps.tsx`）**、**路由（`/profile/apps`）** 一起删掉。
+> 下面 12.0 ~ 12.5 记的是**改动前**的状态，仅作历史留档。
 
 ### 12.0 文件与规模
 

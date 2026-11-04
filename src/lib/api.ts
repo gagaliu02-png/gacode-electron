@@ -1655,6 +1655,36 @@ export async function uploadAvatar(
   return { url };
 }
 
+// ─────────── IM 配对码 (批 G12 · 2026-11-04) ───────────
+// 对齐 web `gacode-web/src/lib/api.ts:2032` 的 issueImBindingCode +
+//      安卓 IMBindingScreen (ui/imbindings/IMBindingScreen.kt)。
+//
+// server contract (unified-api/src/modules/im-bindings/im-bindings.routes.js:66-91):
+//   POST /api/v1/im-bindings/issue   (requireAuth)
+//   body { label? }        — label maxLength 64
+//   resp { ok, data: { code, expiresIn, label } }
+//     · code      = 6 位数字 (纯数字, 无分隔)
+//     · expiresIn = **秒** (CODE_TTL_MS = 5*60*1000 ⇒ 300) —— 不是毫秒!
+//     · label     = 服务端回显 (可能为 null)
+//
+// ⚠️ 本页**不做**「已绑定列表 / 解绑」—— 那两个端点要 gaclaw internal token
+//    (不是用户 auth), 安卓 PM 拍板的口径就是「只发码」。
+export interface ImBindingCode {
+  /** 6 位数字配对码 */
+  code: string;
+  /** 剩余有效秒数 (后端 TTL 300s) —— ⚠️ 单位是秒, 别当毫秒用 */
+  expiresIn: number;
+  /** 服务端回显的备注 (通常是用户名) */
+  label: string | null;
+}
+
+export function issueImBindingCode(label?: string): Promise<ImBindingCode> {
+  return request<ImBindingCode>("/im-bindings/issue", {
+    method: "POST",
+    body: JSON.stringify({ label }),
+  });
+}
+
 // =========================================================================
 // 2026-10-19 v0.7.2 — Profile / Auth 扩展 (审计 §3.9 / §3.11 补齐)
 //
@@ -1721,27 +1751,32 @@ export async function hashPasswordArgon2id(password: string): Promise<string> {
 /**
  * changePassword — 已登录用户改密.
  *
- * server contract (unified-api/auth.routes.js:140-147):
+ * server contract (unified-api/src/modules/auth/auth.routes.js:195-214):
  *   POST /api/v1/auth/change-password
- *   body { newPasswordHash } — argon2id encoded
+ *   body { oldPassword, newPassword } — **明文**
  *   requires JWT (Authorization: Bearer <accessToken>)
  *
- * 注意:
- *   - 服务端不接受 oldPassword (additionalProperties: false). 函数签名保留
- *     oldPassword 是为了 UI 层 client-side 一致性校验 (旧密码字段),
- *     实际 hash 后只发 newPasswordHash.
- *   - oldPassword 留空时不阻塞提交, server 不验旧密码 (这条是设计: 改密
- *     走 JWT 鉴权 + 用户已经在自己设备上登录, 再加 oldPassword 校验是
- *     UX 上冗余, server schema 已经隐式排除).
+ * ★ [批 G12 · 2026-11-04] 口径改成跟 web / 安卓**完全一致** (原来 PC 自己算
+ *   argon2id 只发 `{ newPasswordHash }`):
+ *   - 服务端 schema 现在**同时接受** newPasswordHash (旧) 和 newPassword (明文),
+ *     但 oldPassword 只在**明文**这一条路上会被真正校验
+ *     (auth.routes.js:73-85 + auth.service.js 的 verify 分支)。
+ *   - PC 原来发 hash ⇒ server 收不到 oldPassword ⇒ 「旧密码」输入框只是
+ *     摆设, 拿着别人 token 就能改密 ⇒ 比 web / 安卓**弱一档**。
+ *   - 改成发明文后: server 校验当前密码 ⇒ 三端同款 (明文口径是官方设计,
+ *     端侧没集成 argon2-jvm 只能发明文; PC 虽有 hash-wasm 但 server 那边
+ *     verify 分支只认明文)。
+ *
+ * ⚠️ 保留 hashPasswordArgon2id (导出) — forgot-password 那条链路还在用同款参数,
+ *    且未来若 server 收紧回 hash 口径, 端侧不用重新接。
  */
 export async function changePassword(
-  _oldPassword: string,
+  oldPassword: string,
   newPassword: string,
 ): Promise<{ ok: true }> {
-  const newPasswordHash = await hashPasswordArgon2id(newPassword);
   return request<{ ok: true }>("/auth/change-password", {
     method: "POST",
-    body: JSON.stringify({ newPasswordHash }),
+    body: JSON.stringify({ oldPassword, newPassword }),
   });
 }
 
