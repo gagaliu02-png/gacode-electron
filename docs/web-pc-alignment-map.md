@@ -1120,7 +1120,7 @@ PC `UidRow` / `InfoRow` / `ActionRow`（`:303-471`）：
 | 输入卡 focus | `bg-bg-elevated rounded-md px-4 py-3 flex items-end gap-2` + `border border-transparent` + `focus-within:border-border` | **无卡片层**（PC 0.7.6 主动删，注释「不再垫底板」） | 真差异（PC 主动决策） |
 | 发送按钮 | `rounded-full bg-brand text-brand-on hover:bg-brand-hover`（`rounded-full`） | `rounded-md bg-brand text-brand-on hover:bg-brand-hover active:bg-brand-active disabled:opacity-40` | 真差异：**`rounded-full` vs `rounded-md`**；PC 多 `active:` |
 | 停止按钮 | `rounded-full bg-danger text-white hover:bg-danger/90 transition-colors duration-150 inline-flex items-center justify-center` | `rounded-md bg-danger text-white hover:bg-danger/90 active:opacity-80 transition-colors duration-150` | 真差异：`rounded-full` vs `rounded-md`；PC 多 `active:opacity-80` |
-| 重生成 | **不存在** | `rounded-md bg-brand text-brand-on ... data-testid="rerun-button"`（`canRerun && onRerun` 时取代发送键） | PC 独有 |
+| 重生成 | **不存在** | **已删除（2026-11-04 · gaga 拍板）** —— 原来 PC 独有 `data-testid="rerun-button"`（`canRerun && onRerun` 时**取代**发送键）⇒ 每轮答完输入框永远停在 ↺「重试」态、发送键被顶掉 | **已对齐**（两端都没有；PC 右侧按钮回到 stop / send 两态） |
 
 ### 6.2b 子组件对照：`ApprovalBanner`（两端都是真差异，且方向相反）
 
@@ -1156,7 +1156,7 @@ PC `UidRow` / `InfoRow` / `ActionRow`（`:303-471`）：
 | 输入 placeholder（流式） | `AI 正在回复...` | `正在流式生成… 完成后再发下一条` | 否 |
 | caption | `生成中 · 点击停止按钮中断` / `AI 生成内容请核实重要信息` | **不存在**（PC ChatInputBar 无 caption 节点） | 否 |
 | 停止按钮 aria | `停止生成` | `停止生成` | 一致 |
-| 重生成 aria | 不存在 | `重新生成最后一条回复` | 否 |
+| 重生成 aria | 不存在 | **已删除**（2026-11-04） | — |
 | 删除确认标题 | （web ChatDetail 无删除对话框） | `删除对话` | 否 |
 | 删除确认正文 | — | `确认删除对话 "{title}"? 此操作无法撤销。` | — |
 | 删除确认按钮 | — | `删除` / `取消` | — |

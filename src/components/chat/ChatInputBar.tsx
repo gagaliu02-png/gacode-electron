@@ -23,7 +23,7 @@
  *   - ✅ 点 `+` → 调 onPlusClick 通知 ChatDetail, ChatDetail 弹 PlusActionsSheet
  *   - ✅ 通过 useImperativeHandle 暴露 `insertEmoji` / `addAttachment` / `focus`,
  *     让 ChatDetail 在 EmojiPicker 选中 / 文件上传完成后把数据写回 textarea/chips
- *   - 单一 textarea, drag 高亮, slash menu, send/stop/rerun 三态全部保留
+ *   - 单一 textarea, drag 高亮, slash menu, send/stop 两态全部保留
  *   - drop 上传 + paste 图片: 仍由 ChatInputBar 自己处理 (chat-level, 不上传给 parent)
  *
  * 设计:
@@ -52,7 +52,6 @@ import {
   ArrowUpIcon,
   PaperclipIcon,
   PlusIcon,
-  RotateCcwIcon,
   StopSquareIcon,
 } from "../ui/Glyphs";
 import { SlashMenu, type SlashCommand } from "./SlashMenu";
@@ -185,14 +184,10 @@ export interface ChatInputBarProps {
   caption?: string;
   /** 整体禁用 (e.g. 创建中) — 卡片降透明度 + textarea/发送按钮禁用 */
   disabled?: boolean;
-  /**
-   * 阶段 8 chat-id-19 — 重新生成按钮 callback.
-   * canRerun=true 时, 右侧主按钮 (send/stop slot) 切换成 rerun 图标,
-   * 点击 → onRerun() (parent 取消 + 重发最后一条 user 消息).
-   * canRerun=false 时, 恢复 send 按钮 (行为不变).
-   */
-  canRerun?: boolean;
-  onRerun?: () => void;
+  /* ★ [2026-11-04 · gaga 拍板删除] 原「重新生成」三态按钮 (阶段 8 chat-id-19):
+   *   它在「最后一条是 assistant」时**顶掉发送键** ⇒ 每轮答完输入框就永远停在 ↺,
+   *   看着像卡在重试态, 而且发新消息只能按 Enter。
+   *   判据 = web / 安卓 (都没有这个状态) ⇒ 右侧按钮回到 stop / send 两态。*/
   /** chat-id-25: slash 命令菜单 — 接收 cmd 后 ChatInputBar 自动清除 '/' 前缀.
    *  ChatDetail 自实现 image/file/camera/knowledge 的真实行为 (走 PlusActionsSheet),
    *  translate/summary 仍由 ChatInputBar 自动插入中文模板到 textarea.
@@ -228,8 +223,6 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
       placeholder,
       caption = "AI 生成内容请核实重要信息",
       disabled = false,
-      canRerun = false,
-      onRerun,
       onSlashCommand,
       onPlusClick,
     }: ChatInputBarProps,
@@ -776,10 +769,9 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
               ) : null}
             </div>
 
-            {/* send / stop / rerun — 三态按钮 (阶段 8 chat-id-19)
+            {/* send / stop — 两态按钮 (2026-11-04 删除「重新生成」态, 对齐 web / 安卓)
                 - 流式中 → stop (red)
-                - 非流式 + canRerun → rerun (brand, 复用同一位置) — 跟 web 同款
-                - 非流式 + !canRerun → send (brand, 默认) */}
+                - 非流式 → send (brand, 默认) */}
             {isStreaming ? (
               <button
                 type="button"
@@ -788,17 +780,6 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-danger text-white hover:bg-danger/90 transition-colors duration-150"
               >
                 <StopSquareIcon />
-              </button>
-            ) : canRerun && onRerun ? (
-              <button
-                type="button"
-                aria-label="重新生成最后一条回复"
-                title="重新生成最后一条回复"
-                onClick={onRerun}
-                className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-brand text-brand-on hover:bg-brand-hover transition-colors duration-150"
-                data-testid="rerun-button"
-              >
-                <RotateCcwIcon />
               </button>
             ) : (
               <button
@@ -863,5 +844,4 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
 //     PaperclipIcon  22×22 / sw1.6  (lucide `paperclip`)
 //     ArrowUpIcon    16×16 / sw2    (lucide `arrow-up`, 同 web ChatInputBar)
 //     StopSquareIcon 14×14 / sw1.6  (自定义图形,非 lucide — 实心方块)
-//     RotateCcwIcon  16×16 / sw1.8  (lucide `rotate-ccw`)
 //     PlusIcon       20×20 / sw2    (lucide `plus`)

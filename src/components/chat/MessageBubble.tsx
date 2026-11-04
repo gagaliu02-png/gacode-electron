@@ -15,7 +15,7 @@
  * 阶段 8 (chat-id-13..18 P0):
  *   - 挂 MessageMenu (复制 / 保存到知识库 / 点赞 / 点踩 / 撤回 / 删除)
  *   - recalled 占位气泡 (贴 web 的 "X 撤回了一条消息" 同款, 用 CSS rounded-[8px] 浅底)
- *   - 重新生成 (chat-id-19) 不在 ⋮ 菜单, 在 ChatInputBar 旁; 详见 ChatDetail.tsx
+ *   - 重新生成 (chat-id-19) ★ 2026-11-04 已删除 (输入框右侧那个态会顶掉发送键)
  *
  * 0.7.5 (ChatDetail P1) 增量:
  *   - chat-id-9:  挂 ReferenceFold (知识库引用折叠条)

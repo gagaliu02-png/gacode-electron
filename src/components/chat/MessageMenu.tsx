@@ -10,7 +10,10 @@
  *     - 保存到知识库   : 任意 role, 走 createLibraryItem(text snippet)
  *     - 撤回            : assistant only, 2 分钟窗口, PATCH /messages/:id/recall
  *     - 删除            : 任意 role, DELETE /messages/:id
- *     - 重新生成         : 在 ChatInputBar 右侧 (chat-id-19), 不放 ⋮ 菜单
+ *   已删 (2026-11-04 · gaga 拍板):
+ *     - 重新生成         : 原在 ChatInputBar 右侧 (chat-id-19) — 它会顶掉发送键,
+ *                         对话结束后输入框永远停在"重试"态 ⇒ 连同该按钮整体删除
+ *                         (判据 = web / 安卓, 两端都没有这个入口)
  *   删 (gagaOS §⑥ — 整体删除, server 无 /messages/:id/feedback endpoint):
  *     - 点赞 / 点踩    : assistant only
  *

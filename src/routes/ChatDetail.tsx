@@ -34,10 +34,12 @@
  *   - chat-id-16: 消息 ⋮ → deleteMessage DELETE, 软删, ConfirmDialog 二次确认
  *   - chat-id-17: ⚠️ gagaOS 2026-10-19 新拍板 推翻之前 yes, **点赞 / 点砍**功能
  *                 整体删除 (server 端没 /messages/:id/feedback endpoint), 保留
- *                 复制 / 重新生成 (ChatInputBar 右侧) / 撤回 / 保存 KB / 删除 5 项
- *                 — 见 MessageMenu.tsx
+ *                 复制 / 撤回 / 保存 KB / 删除 4 项 — 见 MessageMenu.tsx
+ *                 (原第 5 项「重新生成」已于 2026-11-04 随 chat-id-19 一并删除)
  *   - chat-id-18: 消息 ⋮ → clipboard.writeText + toast
- *   - chat-id-19: ChatInputBar 右侧三态按钮 (stop / rerun / send), 重发最后一条 user
+ *   - chat-id-19: ★ 2026-11-04 删除 —— 原「ChatInputBar 右侧三态按钮 (stop / rerun / send)」,
+ *                 rerun 态会顶掉发送键 ⇒ 每轮答完输入框永远停在"重试"态。
+ *                 判据 = web / 安卓 (都没这状态) ⇒ 右侧按钮回到 stop / send 两态。
  *
  * 0.7.5 ChatDetail P1 (f08e147) 增量:
  *   - chat-id-30: 知识库挂载 chip + KnowledgeAttachSheet; ChatInputBar 内置 📚 按钮
@@ -471,9 +473,10 @@ function toApprovalRequest(ev: RichEventBase): ApprovalRequest | null {
 }
 
 // ────────────────────────────────────────────────────────────
-// chat-id-19 rerun: 从历史里拿最后一条 user 消息的 (text + attachments),
+// 从历史里拿最后一条 user 消息的 (text + attachments),
 //   严格只读 server 端同步下来的字段. 历史里的 user message 必然有 serverId,
 //   image_urls / attached_file_ids 都来自 metadata, 重发时同样能跑知识库知识图匹配.
+//   (原为「重新生成」按钮服务; 那个按钮 2026-11-04 删除后, 留给**错误重试**兜底)
 // ────────────────────────────────────────────────────────────
 function reconstructLastUserSubmission(messages: ChatMessageModel[]): {
   text: string;
@@ -917,14 +920,9 @@ export function ChatDetail() {
     pendingUserMsg,
   ]);
 
-  // chat-id-19 rerun 显示条件: 不在流式 + 历史非空 + 最后一条是 assistant.
-  // (web 同款: 在最后一条 assistant 后留 rerun 入口)
-  const canRerun = useMemo(() => {
-    if (streamingAssistantId) return false;
-    if (messages.length === 0) return false;
-    const last = messages[messages.length - 1];
-    return last.role === "assistant" && last.content.trim().length > 0;
-  }, [streamingAssistantId, messages]);
+  // ★ [2026-11-04 · gaga 拍板删除] 原 chat-id-19 的 `canRerun`:
+  //   「不在流式 + 最后一条是 assistant」⇒ 每轮答完就把输入框右侧的发送键顶成 ↺ 重试键,
+  //   对话结束后永远停在"重试"态, 发新消息只能按 Enter。判据 = web / 安卓 (都没这状态) ⇒ 删除。
 
   // =========================================================================
   // A2-D4-06 · 渲染层剥图: 当前 chat 中所有 user message 已上传过的 imageUrls 并集
@@ -1917,34 +1915,24 @@ export function ChatDetail() {
   const handleRetry = useCallback(() => {
     if (!streamError) return;
     setStreamError(null);
-    const text = lastUserTextRef.current;
-    if (!text) return;
-    void startStream(text, streamError.userAttachments);
-  }, [streamError, startStream]);
-
-  // chat-id-19 — 重发最后一条 user 消息.
-  // 策略: 优先用 ref 里最近一次成功提交的 (text, attachments); ref 缺失时退化到
-  //   从 history 末尾反向扫 user 消息, 用 server metadata 重构.
-  const handleRerun = useCallback(() => {
-    if (!chatId) return;
-    if (streamingAssistantId) return; // canRerun 已是 false, 兜底
     let text = lastUserTextRef.current;
-    let attachments = lastUserAttachmentsRef.current;
+    let attachments = streamError.userAttachments;
     if (!text) {
+      // ★ ref 是本次会话内提交时记的; 页面重载后为空 ⇒ 从历史末尾反向扫 user 消息重构
+      //   (原来只有「重新生成」按钮用这个helper, 删掉那个按钮后留给**真·错误重试**用)
       const last = reconstructLastUserSubmission(baseMessages);
-      if (!last || !last.text.trim()) {
-        toast({ message: "找不到上一条用户消息, 重新发送", variant: "warning" });
-        return;
-      }
+      if (!last || !last.text.trim()) return;
       text = last.text;
       attachments = last.attachments;
       lastUserTextRef.current = text;
       lastUserAttachmentsRef.current = attachments;
     }
-    // 重新生成: 先 cancel 当前 (防御, 实际 canRerun=false 时不该触发到这里)
-    stream.abort("user");
     void startStream(text, attachments);
-  }, [chatId, streamingAssistantId, baseMessages, startStream, stream, toast]);
+  }, [streamError, startStream, baseMessages]);
+
+  // ★ [2026-11-04 · gaga 拍板删除] 原 chat-id-19 `handleRerun` (输入框右侧 ↺ 「重新生成」):
+  //   它在「最后一条是 assistant」时顶掉发送键 ⇒ 每轮答完输入框永远停在"重试"态。
+  //   判据 = web / 安卓 (都没这个入口) ⇒ 连同 canRerun 一起删除。
 
   // ────────────── 头部操作 (重命名 / 固定 / 删除) ──────────────
 
@@ -2562,7 +2550,7 @@ export function ChatDetail() {
         </div>
       ) : null}
 
-      {/* 输入栏 — chat-id-19 加 canRerun + onRerun. 0.7.5 hotfix 2 — 单一 `+` 按钮
+      {/* 输入栏 — 0.7.5 hotfix 2 — 单一 `+` 按钮
           替代原本 4 个 inline 附件按钮. `+` → onPlusClick → ChatDetail 弹 PlusActionsSheet.
           ChatInputBar 通过 ref 暴露 insertEmoji / addAttachment / focus.
           外层容器对齐 web ChatInput.tsx:63-84 — 底边线 + p-4 + bg-background, 内部限宽居中. */}
@@ -2574,8 +2562,6 @@ export function ChatDetail() {
           <ChatInputBar
             ref={inputBarRef}
             isStreaming={isStreaming}
-            canRerun={canRerun}
-            onRerun={handleRerun}
             onStop={handleStop}
             onSubmit={handleSubmit}
             onPlusClick={() => setPlusOpen(true)}
