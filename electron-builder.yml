@@ -50,16 +50,25 @@
 #     「思考 N 次 · 工具 N 次」折叠区 (安卓同款: PhasesList → ToolPhaseRow →
 #     RichBubbleList); assistant 气泡正文只剩 Markdown
 #   - output 改 release-tool-fold-v15/ 绕开 v14 目录 (每次换新目录)
+# 0.7.16 (输入框右侧删掉「重新生成」(↺) 态 · gaga 2026-11-04 截图反馈 · 批 G10):
+#   - 现象: 对话早答完了, 输入框右侧却一直停在橙色 ↺ (看着像卡在"重试"态),
+#     而且**发送键被它顶掉** —— 点它会重跑上一条回答, 发新消息只能按 Enter
+#   - 根因: PC 输入框右侧是三态按钮 (stop / rerun / send), canRerun = 最后一条
+#     是 assistant 且有正文 ⇒ 每轮答完立刻变 ↺, 而且永远变不回来
+#   - 修: 删掉 rerun 态 (判据 = web / 安卓, 两端都没这个状态) ⇒ 回到 stop / send 两态
+#   - 顺带: handleRetry（真·错误重试）加 reconstructLastUserSubmission 兜底 ——
+#     页面重载后 ref 为空时, 「重试」按钮原来点了没反应
+#   - output 改 release-norerun-v16/ 绕开 v15 目录 (每次换新目录)
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.15
+buildVersion: 0.7.16
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-tool-fold-v15
+  output: release-norerun-v16
 
 files:
   - dist/**/*
