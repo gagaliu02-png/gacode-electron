@@ -556,11 +556,14 @@ function AssistantBubble({
                 ) : null}
               </>
             ) : null}
-            {/* ★ [批 G8 · 2026-11-02] 工具 / 富事件 —— 挪进气泡**内部**。
-                旧实现把它们渲染在气泡**外面** (上方浮动一排) ⇒ 跟 web / 安卓不一致
-                (web: MessageBubble.tsx:451 在气泡容器内; 安卓: events 是气泡组件的参数)。
-                gaga 2026-11-02 反馈 bug4「工具调用信息不该浮在气泡上面」。 */}
-            {hasRichEvents ? (
+            {/* ★ [批 G9 · 2026-11-04] 富事件(工具过程)**不再**渲染在正文 ——
+                统一收进上面的「思考 / 工具」折叠区 (安卓同款:
+                ExecutionInfoContainer → PhasesList → ToolPhaseRow → RichBubbleList)。
+                gaga 2026-11-04 反馈: 「这些 tool 的使用过程应该收纳到思考和工具这个
+                子气泡里, 而不是直接在正文的地方显示」。
+                ⚠️ 兜底: 极老数据(有 richEvents 却**没有** phases)仍在正文渲染 ——
+                   不让任何一条事件凭空消失 (正常路径走不到这里)。 */}
+            {hasRichEvents && !hasPhases ? (
               <div className="mt-2 flex flex-col gap-2">
                 {richEvents!.map((ev, i) => (
                   <RichEventBubble key={`ev-${i}-${String(ev.type)}`} event={ev} />

@@ -61,15 +61,35 @@ test("GC-G3-10 PC 的渲染层必须有 compaction 分支", () => {
 });
 
 test("GC-G3-11 PC 的时间线必须特判 compaction (不许 'compaction compaction')", () => {
-  const code = stripComments(
+  // ★ [批 G9 · 2026-11-04] 判据的位置挪了 —— tool phase 现在渲染成**完整卡片**
+  //   (RichEventBubble), 不再是时间线自己拼的一行摘要 ⇒ 「不许 compaction
+  //   compaction」这条守在**卡片层** (RichEventBubble 的 compaction 分支)。
+  //   时间线这一侧只守: 「不许自己拼 type 字符串」(summarizeToolEvent 已删)。
+  const timeline = stripComments(
     repoSrc("src/components/chat/ExecutionTimeline.tsx"),
     "src/components/chat/ExecutionTimeline.tsx",
   );
   assert.ok(
-    code.includes('ev.type === "compaction"'),
-    "PC 的 ExecutionTimeline 必须特判 compaction",
+    !timeline.includes("summarizeToolEvent"),
+    "PC 的 ExecutionTimeline 不许自己拼 type 摘要 (那是 'compaction compaction' 的来源)",
   );
-  assert.ok(code.includes("上下文压缩"), "时间线的 compaction 行必须是人话");
+  assert.ok(
+    timeline.includes("<RichEventBubble"),
+    "PC 的 ExecutionTimeline 必须把 tool phase 交给富事件卡片渲染",
+  );
+
+  const bubble = stripComments(
+    repoSrc("src/components/chat/RichEventBubble.tsx"),
+    "src/components/chat/RichEventBubble.tsx",
+  );
+  assert.ok(
+    bubble.includes('case "compaction"'),
+    "PC 的富事件卡片必须有 compaction 分支",
+  );
+  assert.ok(
+    bubble.includes("上下文已压缩"),
+    "compaction 卡片必须是人话 (不许 'compaction compaction')",
+  );
 });
 
 // ===========================================================================

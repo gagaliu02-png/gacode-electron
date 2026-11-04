@@ -45,16 +45,21 @@
 #   - bug3 一直弹重试 ⇒ ACK_DONE 见到终态帧就发 (解开与服务端的互等, 同 web 批 G7)
 #   - bug4 工具卡片浮在气泡外面 ⇒ 富事件挪进 assistant 气泡容器内部 (对标 web / 安卓)
 #   - output 改 release-sse-parity-v14/ 绕开 v13 目录 (每次换新目录)
+# 0.7.15 (工具使用过程收纳进「思考和工具」折叠区 · gaga 2026-11-04 截图反馈):
+#   - 工具卡片 (tool_start 带参数 / tool_done 带耗时) 从**正文**挪进
+#     「思考 N 次 · 工具 N 次」折叠区 (安卓同款: PhasesList → ToolPhaseRow →
+#     RichBubbleList); assistant 气泡正文只剩 Markdown
+#   - output 改 release-tool-fold-v15/ 绕开 v14 目录 (每次换新目录)
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.14
+buildVersion: 0.7.15
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-sse-parity-v14
+  output: release-tool-fold-v15
 
 files:
   - dist/**/*

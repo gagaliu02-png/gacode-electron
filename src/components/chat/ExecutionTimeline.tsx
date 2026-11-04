@@ -9,11 +9,25 @@
  *   - 折叠态: header "思考 N 次 · 工具 M 次 ⌄", 点击展开
  *   - 展开态: 一条 phase 一行 (thinking / tool 两种形态)
  *   - thinking 行可再点开看原文 (纯文本 + 等宽字体, 不破坏 Markdown 渲染)
- *   - tool 行: 只展示 ev.type + 摘要标题, 不重复渲染 RichEventBubble
+ *
+ * ★ [批 G9 · 2026-11-04] **工具过程收纳进本折叠区** (安卓同款) ───────────────
+ *   旧实现: tool phase 只给一行摘要 (icon + type + 标题), 而**完整卡片**
+ *   (带参数 / 带耗时的 tool_start / tool_done) 渲染在**正文下方**
+ *   ⇒ gaga 2026-11-04 反馈: 「工具的使用过程应该收纳到思考和工具这个子气泡里,
+ *   而不是直接在正文的地方显示」。
+ *
+ *   现在: tool phase 渲染成**完整卡片** (安卓 `ToolPhaseRow → RichBubbleList →
+ *   ToolCallBubble` 同款), 跟思考段在展开区里**按到达顺序交错**。
+ *   ⛔ tool_start / tool_done **不合并成一条** —— 安卓的 `mergeEvents` 只动
+ *   `msg.events`, `msg.phases` 是**追加**的 ⇒ 安卓也是两张卡 (参数卡 + 完成卡)。
+ *   ⇒ 参数不会因为「完成」而消失。
+ *
+ *   ⚠️ 事件先过**归一层** (`normalizeRichEvent`) ⇒ 死类型 / 未知类型跳过,
+ *     不渲染 JSON 字面 —— 跟正文那条渲染路径 (`parsePhasesRichEvents`) 同一口径。
  *
  * 图标: PC 无 lucide-react →
- *   - ChevronRight / Globe / Brain / ChevronDown / Wrench / FileText / Image
- *     全部复用 `components/ui/Glyphs.tsx` (2026-10-26 并入, A2-D4-02 收尾)
+ *   - ChevronRight / Brain / ChevronDown 全部复用 `components/ui/Glyphs.tsx`
+ *     (2026-10-26 并入, A2-D4-02 收尾)
  *
  * 挂载点 (M3 批次): `components/chat/MessageBubble.tsx` assistant 气泡正文**上方**
  *   (对齐 web `MessageBubble.tsx:396-398`).
@@ -22,20 +36,18 @@
  */
 import { useState } from "react";
 import {
-  ArchiveIcon,
   BrainIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  FileTextIcon,
-  GlobeIcon,
-  ImageIcon,
-  WrenchIcon,
 } from "../ui/Glyphs";
 // ★ 重构轮 R2-web (T-16 / T-17): 计数与合并的**口径**归到 sse/ 那一套。
 //   · `renderPhases` —— 相邻 thinking 的合并**只有这一处** (主路径原样 / 兼容分支合并);
 //   · `countPhases`  —— 端侧兜底计数 (服务端给了权威值时**不用**它)。
 import { renderPhases, countPhases, type SsePhase } from "../../lib/sse/turn-record";
-import { describeCompaction } from "../../lib/rich-events";
+// ★ [批 G9 · 2026-11-04] 归一层 (死类型 / 未知类型跳过) —— 与正文渲染同一口径。
+import { normalizeRichEvent } from "../../lib/rich-events";
+// ★ [批 G9 · 2026-11-04] tool phase 渲染成完整卡片 (安卓 ToolPhaseRow 同款)。
+import { RichEventBubble } from "./RichEventBubble";
 
 // ════════════════════════════════════════════════════════════
 // phase 模型 + helpers
@@ -78,52 +90,6 @@ export interface ExecutionTimelineProps {
 function fallbackCount(phases: SsePhase[]) {
   const r = countPhases(phases);
   return { thinking: r.thinking, tool: r.tool };
-}
-
-/** tool event 摘要 — 从事件对象里抓一组常用字段, 找第一个非空字符串 */
-function summarizeToolEvent(ev: Record<string, unknown>): string {
-  // 顺序: title → name → tool → url → 序列化对象
-  const candidates = [
-    ev.title,
-    ev.name,
-    ev.tool,
-    typeof ev.url === "string" ? ev.url.split("/").pop() : undefined,
-  ];
-  for (const c of candidates) {
-    if (typeof c === "string" && c.trim()) return c.trim();
-  }
-  // 兜底: 把对象最前面几个常见字段拼起来
-  const parts: string[] = [];
-  if (ev.type) parts.push(String(ev.type));
-  if (ev.tool) parts.push(String(ev.tool));
-  if (ev.id) parts.push(`#${String(ev.id).slice(-6)}`);
-  return parts.join(" ") || "tool 调用";
-}
-
-/**
- * compaction 的时间线摘要 (契约 订正 21)。
- * 文案跟气泡里**同一份** (describeCompaction) ⇒ 三端一致。
- */
-function compactionDetail(ev: Record<string, unknown>): string {
-  const detail = describeCompaction({
-    strategy: (ev.strategy as string | null) ?? null,
-    removed_messages: (ev.removed_messages as number | null) ?? null,
-    before_tokens: (ev.before_tokens as number | null) ?? null,
-    after_tokens: (ev.after_tokens as number | null) ?? null,
-  });
-  return detail || "已折叠早期上下文";
-}
-
-/** tool phase 用图标 — 按 type 选 (image / file / web_preview / tool_start) */
-function ToolIcon({ ev }: { ev: Record<string, unknown> }) {
-  const t = ev.type as string | undefined;
-  if (t === "image") return <ImageIcon className="w-3 h-3" />;
-  if (t === "file") return <FileTextIcon className="w-3 h-3" />;
-  if (t === "web_preview" || t === "web") {
-    return <GlobeIcon className="w-3 h-3" />;
-  }
-  if (t === "compaction") return <ArchiveIcon className="w-3 h-3" />;
-  return <WrenchIcon className="w-3 h-3" />;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -221,30 +187,18 @@ export function ExecutionTimeline({
                 </div>
               );
             }
-            // tool phase
-            const ev = (p.event ?? {}) as Record<string, unknown>;
-            // ★ [2026-11-02] compaction 不是工具调用 —— 别让它显示成
-            //   "compaction compaction" (summarizeToolEvent 的兜底会拼 type)。
-            const isCompaction = ev.type === "compaction";
-            const label = isCompaction
-              ? "上下文压缩"
-              : (ev.type as string) || "tool";
-            const detail = isCompaction
-              ? compactionDetail(ev)
-              : summarizeToolEvent(ev);
+            // ── tool phase ────────────────────────────────────────────
+            // ★ [批 G9 · 2026-11-04] tool phase 渲染成**完整卡片** (安卓同款:
+            //   ToolPhaseRow → RichBubbleList → ToolCallBubble) —— 参数 / 耗时
+            //   都看得见, 而不是一行摘要。跟思考段按到达顺序交错。
+            const raw = p.event;
+            if (!raw || typeof raw !== "object") return null;
+            // 过归一层: 死类型 / 未知类型跳过 (不渲染 JSON 字面)
+            const norm = normalizeRichEvent(raw);
+            if (!norm.event) return null;
             return (
-              <div
-                key={`p-${idx}`}
-                className="px-2.5 py-1.5 flex items-center gap-1.5"
-              >
-                <ToolIcon ev={ev} />
-                <span className="font-medium">{label}</span>
-                <span
-                  className="opacity-70 truncate"
-                  title={detail}
-                >
-                  {detail}
-                </span>
+              <div key={`p-${idx}`} className="px-2.5 py-1">
+                <RichEventBubble event={norm.event} />
               </div>
             );
           })}
