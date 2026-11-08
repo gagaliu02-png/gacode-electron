@@ -797,6 +797,23 @@ export function ChatDetail() {
     setStreamingPhases([]);
     setStreamError(null);
     setWaitingFirstFrame(false);
+    // ★ [批 G13-4 · 2026-11-08] **轮次身份 + stalled 标记也必须复位** (原来漏了这两个)。
+    //
+    //   ① `streamingStalled` 漏复位 ⇒ 新会话的流式行带着上一个会话的「未收到服务端回复」标记
+    //      ⇒ `isStreaming = !!streamingAssistantId && !streamingStalled`
+    //      ⇒ **停止键不亮** (gaga 2026-11-08 报障: 「暂停按钮状态都不会变」)。
+    //      ⚠️ 只有「上一个会话续传接不回来」过才会置 true ⇒ 所以是**偶发**,
+    //         第一次点会话是好的 —— 跟「只有第一次」那个症状长得一样, 但根因不同。
+    //   ② `streamingTurnKey` 漏复位 ⇒ 新会话建行时带上**上一个会话的轮次身份**
+    //      ⇒ 历史合并把这一行配到**别的轮次**上 ⇒ 空气泡 (web 端同款根因)。
+    //
+    //   ⚠️ state 与 ref 镜像**一起**复位 (跟 [clearLocalRow] 同一口径) ——
+    //      只复位 state ⇒ 下一帧的 ref 镜像还是旧值 ⇒ 旧身份又冒回来了。
+    setStreamingStalled(false);
+    setStreamingTurnKey(null);
+    streamingTurnKeyRef.current = null;
+    setStreamingTurnMeta(EMPTY_STREAMING_TURN_META);
+    streamingTurnMetaRef.current = EMPTY_STREAMING_TURN_META;
     return () => {
       // 卸载时只清**内存态** —— 本机落盘的那份要留着 (跨刷新存活, 任务书 P-6)。
       setPendingApprovals([]);
@@ -861,6 +878,10 @@ export function ChatDetail() {
       // ★ RC-5: 续传接不回来 ⇒ 这一行只到中断前 ⇒ 气泡上标「未收到服务端回复」。
       //   ⛔ 与 `terminalReason` **不是一回事** (安卓同款 `messages_local.stalled`)。
       stalled: streamingStalled || undefined,
+      // ★ [批 G13-4 · 2026-11-08] 这一行的**轮次身份** —— 与历史行的 `metadata.turnKey`
+      //   同值 ⇒ 「是不是同一轮」可以精确命中 (web 端同款: buildAttachRow 带 turnKey)。
+      //   没有 ⇒ null ⇒ 回落老的启发式, 行为不变。
+      turnKey: streamingTurnKey ?? null,
     };
     // ★ a4 契约 v1 · W-3 · 气泡收敛 —— **流式路径**也要滤掉「已被服务端删除的交付物」。
     //   ⛔ 判据在 `lib/deliverable-visibility.ts` (H-9) —— 这里**只接线**, 不 inline 判据。
@@ -979,6 +1000,38 @@ export function ChatDetail() {
     streamingTurnMetaRef.current = EMPTY_STREAMING_TURN_META;
     setStreamingTurnMeta(EMPTY_STREAMING_TURN_META);
   }, []);
+
+  /**
+   * ★ [批 G13-4 · 2026-11-08] **切会话 ⇒ 本机的「流式行 id」必须复位**。
+   *
+   * ## 病根 (gaga 2026-11-08 真机报障)
+   *
+   * > 「PC端则是只有第一次点击 session 会加载 SSE 内容，后面的 SSE 内容进来了不会变」
+   * > 「PC端和 web 端的暂停按钮状态都不会变」
+   *
+   * `localRowIdRef` 是**组件级 ref** —— 上面的 chatId effect (:792-804) 复位了 6 个
+   * useState, 却**没复位这个 ref**。而 `ensureRow()` (:1099-1104) 第一行就是
+   * `if (localRowIdRef.current) return;` ⇒
+   *
+   *   切到**第二个**会话时, ref 还是上个会话的 `attach-<旧id>` ⇒
+   *   `ensureRow()` 永远早退 ⇒ **`setStreamingAssistantId` 永远不调**
+   *   ⇒ 内容写进了 state 却**没有行可挂** (:853 `if (!streamingAssistantId) return`)
+   *   ⇒ 界面纹丝不动;
+   *   ⇒ `isStreaming` (:2153 `!!streamingAssistantId && !streamingStalled`) 恒 false
+   *   ⇒ **停止按钮永远不亮**。
+   *
+   * ⇒ **两个症状是同一个 bug**。
+   *
+   * ⚠️ 为什么「只有第一次」会中招: 侧栏点会话走 `navigate('/chat/'+id)`,
+   *   `/chat/:id` 那条路由**没有 key** ⇒ ChatDetail **不重挂载** ⇒ ref 跨会话存活。
+   *   (web 没这个 bug: 它把行 id 收在 attach effect 每轮重建的局部对象里。)
+   */
+  useEffect(() => {
+    localRowIdRef.current = null;
+    // ⚠️ 这两个 ref 同样跨会话存活 ⇒ 新会话的正文会**接在旧会话的正文后面**。
+    streamingContentRef.current = "";
+    streamingPhasesRef.current = [];
+  }, [chatId]);
 
   /**
    * ★ 渲染「接入流」那一行的**快照内容** (架构 §5.2 / G-4 / 缺陷 D-1)。

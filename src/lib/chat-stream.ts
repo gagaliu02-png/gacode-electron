@@ -274,7 +274,12 @@ interface ActiveStream {
    *     ⇒ 服务端重启过就能回 `stale_epoch` 而不是笼统的 `not_running`。
    */
   epoch: string | null;
-  /** 本端是否**拥有**这一轮 (attach 只读 ⇒ 不拥有 ⇒ 不发 USER_STOP)。 */
+  /**
+   * ★ [批 G13-4 · 2026-11-08] 本轮所属会话 —— 中止时发 DELETE 要用.
+   *   (attach 那一轮是**别的端**起的, 但中止它照样要能掐上游那一轮 ⇒ 需要知道 sessionId.)
+   */
+  sessionId: string;
+  /** 本端是否**拥有**这一轮 (attach 只读 ⇒ 不拥有 ⇒ 收尾 ACK 走别的路径)。 */
   ownsTurn: boolean;
 }
 
@@ -285,18 +290,32 @@ export function useChatStream(): ChatStreamHandle {
   //
   // ⚠️ 发起流与**只读接入流**分两个 ref:
   //   · `activeRef` = 本端**拥有**的那一轮 (自己发起的) ⇒ 中止要发 USER_STOP;
-  //   · `attachRef` = 本端**只读**接入的那一轮 ⇒ 中止**只掐本地读流**,
-  //     绝不得掐服务端那一轮 (契约 L-53)。
+  //   · `attachRef` = 本端**只读**接入的那一轮 (别的端起的) ⇒ 中止**照样**发 USER_STOP.
+  //
+  // ★ [批 G13-4 · 2026-11-08] 这里曾经写着「中止只掐本地读流, 绝不得掐服务端那一轮
+  //   (契约 L-53)」—— **那是误读契约**:
+  //     · L-53「暂停」= 中止当前这一轮;
+  //     · **L-54「任何在线端 (含只读接入端) 都能中止」**;
+  //     · **L-55(1) 中止必须「掐上游」(gaclaw 那一轮停)**, 且
+  //       L-55(2) 豁免的是「别的端中止时**别掐我的连接**」, 不是「接入端不许中止」。
+  //   ⇒ 只读接入端按停止 ⇒ 发 DELETE intent=USER_STOP ⇒ 服务端掐上游 + 广播终态帧
+  //     ⇒ 别的端也看得到「这一轮被停了」(L-55.3/4)。
+  //   ⛔ 不发的话 = 服务端继续烧 token 跑完整轮并落库, 而界面显示已停 ⇒ 界面骗人。
   const activeRef = useRef<ActiveStream | null>(null);
   const attachRef = useRef<ActiveStream | null>(null);
 
   const abort = useCallback((reason: "user" | "navigate" = "user"): void => {
     const active = activeRef.current ?? attachRef.current;
     if (!active) return;
-    if (reason === "user" && active.ownsTurn) {
-      // ⛔ 只读接入流 (attach) 不置 userStopped —— 它没有收尾路径, 也不会发
-      //   USER_STOP; 服务端那一轮照跑 (契约 L-53)。
-      active.turnState.userStopped = true;
+    if (reason === "user") {
+      if (active.ownsTurn) {
+        // 发起流: 置 userStopped ⇒ 它自己的收尾路径 (finally) 会发 USER_STOP。
+        active.turnState.userStopped = true;
+      } else {
+        // ★ 只读接入流 (attach): 没有收尾路径 ⇒ **这里直接发** USER_STOP
+        //   (契约 L-54 / L-55 —— 任何在线端都能中止, 且中止必须掐上游那一轮)。
+        sendCancelDelete(active.sessionId, "USER_STOP");
+      }
     }
     // 立即 abort fetch + reader.read()
     active.ac.abort();
@@ -468,6 +487,8 @@ export function useChatStream(): ChatStreamHandle {
         //   新轮次 (非续传) ⇒ null ⇒ 首个请求不带这个头 (服务端会回一个给我们)。
         epoch: opts.resume?.epoch ?? null,
         ownsTurn: true,
+        // ★ [批 G13-4] 中止时要按 sessionId 发 DELETE ⇒ 记着。
+        sessionId: opts.sessionId,
       };
       activeRef.current = active;
 
@@ -710,8 +731,10 @@ export function useChatStream(): ChatStreamHandle {
    *   · **不建轮次**、不写消息行、不落交付物。
    *   · 首帧恒为控制帧 `attach_ok` / `attach_failed` ⇒ 端侧**静默**处理,
    *     不给用户报错 (契约 L-50)。
-   *   · ⛔ attach 只是「读」—— 中止它**不得**掐服务端那一轮 (契约 L-53) ⇒
-   *     不发 USER_STOP、不发 ACK_DONE。
+   *   · ⛔ attach 只是「读」—— 收尾**不**发 ACK_DONE (那一轮不是本端发起的 ⇒ 本端没资格
+   *     替它收尾; 它的发起端会自己 ACK)。
+   *   · ⚠️ 但**用户按「停止」**要发 USER_STOP (契约 L-54「任何在线端 (含只读接入端)
+   *     都能中止」+ L-55(1)「中止必须掐上游那一轮」) ⇒ 见 abort()。
    */
   const attach = useCallback(
     async (opts: AttachChatStreamOptions): Promise<void> => {
@@ -725,10 +748,13 @@ export function useChatStream(): ChatStreamHandle {
         cursor: opts.cursor ?? null,
         // ★ RC-3: attach 时端侧可能已经知道 epoch ⇒ 带回去让服务端判 stale。
         epoch: opts.epoch ?? null,
-        // ★ attach 只读 ⇒ 本端不拥有这一轮 ⇒ 不发 USER_STOP (契约 L-53)
+        // ★ attach 只读 ⇒ 本端**不拥有**这一轮 ⇒ 收尾 ACK 走别的路径。
+        //   ⚠️ 但**中止**照样能掐上游那一轮 (契约 L-54/L-55) —— 见 abort()。
         ownsTurn: false,
+        // ★ [批 G13-4] 中止时要按 sessionId 发 DELETE ⇒ 记着。
+        sessionId: opts.sessionId,
       };
-      // 挂到只读槽位 ⇒ 用户按「停止」能掐掉本地读流, 但**不**掐服务端那一轮。
+      // 挂到只读槽位 ⇒ 用户按「停止」能掐掉本地读流 + 掐上游那一轮。
       attachRef.current = active;
 
       if (opts.signal) {
