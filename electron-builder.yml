@@ -66,16 +66,24 @@
 #   - 新增 IM 配对码页 (/profile/im-binding) — POST /im-bindings/issue
 #   - 改密口径跟 web/安卓对齐: 发明文 { oldPassword, newPassword } (服务端才验旧密码)
 #   - output 改 release-settings-v17/ 绕开 v16 目录 (每次换新目录)
+# 0.7.18 (切会话后接不上 + 停止键不亮 · 批 G13 · GC-G13-4):
+#   - 切会话接不上: localRowIdRef 是组件级 ref, 切 chatId 的 effect 复位了 6 个 useState 却没复位它
+#     ⇒ ensureRow() 第一行 if (localRowIdRef.current) return 永远早退 ⇒ setStreamingAssistantId 永远不调
+#     ⇒ 内容写进 state 却没行可挂 ⇒ 界面纹丝不动 + isStreaming 恒 false ⇒ 停止键永远不亮
+#     (「只有第一次点 session 会加载」是因为侧栏路由没 key ⇒ ChatDetail 不重挂载 ⇒ ref 跨会话存活)
+#   - 停止键不亮: 接入态下 streamingMessageId 恒为 null ⇒ 亮灭判据漏了「接入流在跑」
+#   - 三个 state + 三个 ref 镜像 (stalled / turnKey / turnMeta) 切会话时一起复位
+#   - output 改 release-settings-v18/ 绕开 v17 目录 (每次换新目录)
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.17
+buildVersion: 0.7.18
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-settings-v17
+  output: release-settings-v18
 
 files:
   - dist/**/*
