@@ -61,6 +61,12 @@ export const SCHEDULE_SRC = {
   //   ERR_MODULE_NOT_FOUND (verify-schedule-b7-archived / verify-schedule-detail-b6 直接炸在 import 处).
   //   ⚠️ rich-events.ts **零 import** ⇒ 不用再往下带依赖.
   richEvents: "src/lib/rich-events.ts",
+  // [P3 · 2026-11-12] api.ts 新增了**运行时** import { clientCapabilityHeader }
+  //   from "./client-capabilities" (端侧能力声明, 契约附录 订正 24 §3)
+  //   ⇒ 拷贝链必须带上它, 否则转译后的 api.mjs 指向一个不存在的模块 ⇒
+  //   ERR_MODULE_NOT_FOUND。
+  //   ⚠️ client-capabilities.ts **零 import** ⇒ 不用再往下带依赖。
+  clientCapabilities: "src/lib/client-capabilities.ts",
   format: "src/components/schedule/format.ts",
   calendarUtils: "src/components/schedule/calendar-utils.ts",
   formRules: "src/components/schedule/form/scheduleFormRules.ts",
@@ -164,10 +170,13 @@ export async function loadScheduleModules(dir) {
   // [SSE 批04 2026-10-28] api.ts 的运行时依赖 —— 必须与 api.mjs 写在**同一个**临时目录,
   //   否则 import "./rich-events" 解析不到 (ERR_MODULE_NOT_FOUND).
   writeModule(dir, "rich-events", readSrc(SCHEDULE_SRC.richEvents));
+  // [P3 · 2026-11-12] api.ts 的第二个运行时依赖 —— 同上, 必须跟 api.mjs 同目录。
+  writeModule(dir, "client-capabilities", readSrc(SCHEDULE_SRC.clientCapabilities));
   writeModule(dir, "api", readSrc(SCHEDULE_SRC.api), {
     rewriteImports: [
       ["./notifications", "./notifications.mjs"],
       ["./rich-events", "./rich-events.mjs"],
+      ["./client-capabilities", "./client-capabilities.mjs"],
     ],
   });
   const httpUrl = writeModule(dir, "schedule-http", readSrc(SCHEDULE_SRC.http), {

@@ -149,6 +149,9 @@ export async function tryRefresh(): Promise<boolean> {
   }
 }
 
+// ★ [P3 · 2026-11-12] 端侧能力声明（契约附录 订正 24 §3）。
+import { clientCapabilityHeader } from "./client-capabilities";
+
 export async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -163,6 +166,24 @@ export async function request<T>(
   const token = getAccessToken();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  // ★ [P3 · 2026-11-12] 端侧能力声明（契约附录 订正 24 §3）。
+  //
+  //   `X-Client-Capabilities` 决定服务端**要不要把 `pc_*` 工具下发给模型**：
+  //     · 缺这个头 ⇒ 一个 `pc_*` 都不下发 ⇒ 模型看不见（老端行为逐字不变）
+  //     · `client-tools` 是**总闸**；`pty` / `fs` / `screen` / `os` 是子能力
+  //       ⇒ 服务端按子能力逐个裁，不会因为有总闸就把全部 `pc_*` 都塞给模型
+  //   `X-Client-Id` 只是**展示用**（卡片上写「这是手机发来的」），⛔ 不做鉴权。
+  //
+  //   ⚠️ 值必须跟服务端那份**唯一真相源**一致：
+  //      gaclaw/src/llm/client-tools.js 的 `PC_TOOL_SPECS` / `CAP_MASTER`。
+  //   ⚠️ PC 端**只有真装了 node-pty** 才声明 `pty`（没装的话模型调 `pc_shell`
+  //      会挂起等一个永远不回来的结果）⇒ 能力表是**按实际能力**报的。
+  const caps = clientCapabilityHeader();
+  if (caps) {
+    headers.set("X-Client-Capabilities", caps);
+    headers.set("X-Client-Id", "pc");
   }
 
   let res = await fetch(`${API_BASE}${path}`, {

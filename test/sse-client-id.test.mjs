@@ -278,6 +278,9 @@ test("B3 ★ RC-W24 宿主三处真实求值出来的头**都**带 X-Client-Id",
     CLIENT_ID_WEB: C.CLIENT_ID_WEB,
     CLIENT_ID_PC: C.CLIENT_ID_PC,
     buildResumeHeaders,
+    // ★ [P3 · 2026-11-12] 宿主现在多传一个 clientCapabilities (契约附录 订正 24 §3)
+    //   —— 求值实参源码时必须有这个绑定, 否则 ReferenceError。
+    clientCapabilityHeader: () => null,
   };
   const calls = [
     ...extractHeaderCalls(sendFn, HOST_FILE),
@@ -303,6 +306,9 @@ test("B4 ★ RC-W25 求值出来的头里的值就是本端标识 (web / pc)", (
     CLIENT_ID_WEB: C.CLIENT_ID_WEB,
     CLIENT_ID_PC: C.CLIENT_ID_PC,
     buildResumeHeaders,
+    // ★ [P3 · 2026-11-12] 宿主现在多传一个 clientCapabilities (契约附录 订正 24 §3)
+    //   —— 求值实参源码时必须有这个绑定, 否则 ReferenceError。
+    clientCapabilityHeader: () => null,
   };
   const calls = [
     ...extractHeaderCalls(sendFn, HOST_FILE),
@@ -327,6 +333,9 @@ test("B5 续传路的头带 Last-Event-ID (L-35) 且**不带** Content-Type (L-3
     CLIENT_ID_WEB: C.CLIENT_ID_WEB,
     CLIENT_ID_PC: C.CLIENT_ID_PC,
     buildResumeHeaders,
+    // ★ [P3 · 2026-11-12] 宿主现在多传一个 clientCapabilities (契约附录 订正 24 §3)
+    //   —— 求值实参源码时必须有这个绑定, 否则 ReferenceError。
+    clientCapabilityHeader: () => null,
   };
   const calls = extractHeaderCalls(sendFn, HOST_FILE);
   const resumeCall = calls.find((c) => c.pathLiterals.includes("resume"));

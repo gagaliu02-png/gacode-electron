@@ -70,6 +70,8 @@ import {
 // ★ RC-13 (契约 L-28 / D3): 端标识 + 聊天流三条路的请求头构造 —— **一处真值**
 //   (与 web 的 `src/lib/sse/client-id.ts` 逐字节相同)。
 import { buildChatStreamHeaders, CLIENT_ID_PC } from "./sse/client-id";
+// ★ [P3 · 2026-11-12] 端侧能力声明 (契约附录 订正 24 §3)。
+import { clientCapabilityHeader } from "./client-capabilities";
 import { createSseBackoff, createSseWatchdog } from "./sse-reconnect";
 // ★ v2 (契约订正 17): 轮次身份从**响应头**取 (判据只有这一份, 跟 web 同一份)。
 // ★ RC-3 (契约订正 19): 进程级 epoch 也从**响应头**取 (同一个文件, 同一份判据)。
@@ -365,6 +367,9 @@ export function useChatStream(): ChatStreamHandle {
           resumeHeaders: opts.resume
             ? buildResumeHeaders(opts.cursor, opts.epoch ?? null)
             : null,
+          // ★ [P3 · 2026-11-12] 端侧能力声明 (契约附录 订正 24 §3)。
+          //   服务端按这个头裁剪 `pc_*` 工具; 没探到能力就不带 ⇒ 服务端不下发。
+          clientCapabilities: clientCapabilityHeader(),
         });
         return fetch(`${API_BASE}${STREAM_PATH(opts.sessionId)}`, {
           method: "POST",
@@ -781,6 +786,8 @@ export function useChatStream(): ChatStreamHandle {
               opts.cursor ?? null,
               opts.epoch ?? null,
             ),
+            // ★ [P3 · 2026-11-12] 端侧能力声明 (契约附录 订正 24 §3)。
+            clientCapabilities: clientCapabilityHeader(),
           });
           return fetch(`${API_BASE}${ATTACH_PATH(opts.sessionId)}`, {
             method: "POST",

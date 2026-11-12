@@ -549,6 +549,9 @@ const hostScope =
         },
         JSON,
         buildResumeHeaders,
+        // ★ [P3 · 2026-11-12] 宿主现在多传一个 clientCapabilities (契约附录 订正 24 §3)
+        //   —— 求值实参源码时必须有这个绑定, 否则 ReferenceError。
+        clientCapabilityHeader: () => null,
         CLIENT_ID_WEB: "web",
       }
     : {
@@ -556,6 +559,9 @@ const hostScope =
         accessToken: "tok",
         JSON,
         buildResumeHeaders,
+        // ★ [P3 · 2026-11-12] 宿主现在多传一个 clientCapabilities (契约附录 订正 24 §3)
+        //   —— 求值实参源码时必须有这个绑定, 否则 ReferenceError。
+        clientCapabilityHeader: () => null,
         CLIENT_ID_PC: "pc",
       };
 

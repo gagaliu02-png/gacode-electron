@@ -1,3 +1,10 @@
 allowBuilds:
   electron: true
   esbuild: true
+  # [P3 · 2026-11-12] node-pty 是**原生模块** —— 装完必须跑它自己的构建脚本
+  # (prebuild-install / node-gyp), 否则装出来的 .node 是 Node ABI 的,
+  # 在 Electron 里加载会报 "was compiled against a different Node.js version"。
+  # ⇒ 必须在 allowBuilds 里显式放行 (pnpm 10+ 默认**拦截**所有 postinstall)。
+  node-pty: true
+patchedDependencies:
+  node-pty@1.1.0: patches/node-pty@1.1.0.patch

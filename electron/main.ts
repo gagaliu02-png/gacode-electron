@@ -14,6 +14,8 @@ import * as crypto from 'crypto';
 import { createTray } from './tray';
 import { createAppMenu } from './menu';
 import { registerNotificationIpc } from './notifications';
+// [P3/P4 · 2026-11-12] 端侧执行（`pc_*`）—— 主进程那半：执行器 + 闸门 + 设备通道。
+import { registerClientToolIpc, setClientToolWindow } from './client-tools/ipc';
 import { getAppIcon, logIconStatus } from './icon';
 
 // CommonJS 下 __dirname 已有,这里只是为了类型注释
@@ -231,6 +233,9 @@ function createWindow(): void {
       webviewTag: true, // 阶段 4: 允许 `<webview>` 标签 (Browser.tsx 用)
     },
   });
+
+  // [P3/P4 · 2026-11-12] 端侧执行 —— 记下主窗口, 派单到达时用它通知渲染层。
+  setClientToolWindow(mainWindow);
 
   // 阶段 0: 加载本地 React 渲染产物(electron-vite build 输出在 out/renderer/index.html)
   // dev 模式 electron-vite 自动起 vite dev server(端口 5173 默认),通过 ELECTRON_RENDERER_URL env 传入
@@ -884,6 +889,9 @@ app.whenReady().then(() => {
   registerAuthStorageIpc();
   registerBookmarksIpc();
   registerOpenWithSystemIpc();
+  // ★ [P3/P4 · 2026-11-12] 端侧执行 (`pc_*`) —— 执行 / 闸门 / 审计 / 设备通道。
+  //   ⚠️ 必须在 app.whenReady() 之后 (要用 app.getPath('userData'))。
+  registerClientToolIpc();
 
   // 0.7.5 global-11: electron-updater 自动更新 — 配置 OK, build 跑通但不
   // 实际触发 (publish 配置 github 但 gagaOS 拍 push 时再 git push + tag).

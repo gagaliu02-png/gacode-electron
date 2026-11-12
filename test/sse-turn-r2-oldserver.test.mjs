@@ -107,15 +107,19 @@ const chatSse = await import(
   })
 );
 
-// PC 的 api.ts 运行时依赖只有两个: ./rich-events 与 ./notifications
+// PC 的 api.ts 运行时依赖只有三个: ./rich-events 与 ./notifications 与 ./client-capabilities
 //   (notifications 走 date-fns —— loader 在临时目录里建了 node_modules junction)。
+//   ⚠️ [P3 · 2026-11-12] client-capabilities 是端侧能力声明 (契约附录 订正 24 §3)
+//     —— api.ts 的**运行时** import ⇒ 不带它就是 ERR_MODULE_NOT_FOUND。
 writeModule(dir, "notifications", repoSrc("src/lib/notifications.ts"));
+writeModule(dir, "client-capabilities", repoSrc("src/lib/client-capabilities.ts"));
 const api = await import(
   writeModule(dir, "api", repoSrc("src/lib/api.ts"), {
     rewriteImports: [
       ["rich-events", "./rich-events.mjs"],
       ["sse/turn-key-header", "./turn-key-header.mjs"],
       ["notifications", "./notifications.mjs"],
+      ["client-capabilities", "./client-capabilities.mjs"],
     ],
   })
 );

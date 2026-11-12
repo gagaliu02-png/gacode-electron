@@ -205,6 +205,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [accessToken, refreshToken, user]);
 
+  // ★ [P3/P4 · 2026-11-12] 把 access token 推给**主进程** —— 设备通道要用。
+  //   主进程持有设备通道的 SSE 长连（渲染层一刷新通道就断 ⇒ 服务端会认为
+  //   「电脑离线」⇒ 手机发指令会立刻失败，L-25r）。
+  //   ⚠️ token 只在内存里传，**不落盘**（跟渲染层同款口径）。
+  useEffect(() => {
+    const bridge = window.gacode?.clientTools;
+    if (!bridge) return;
+    void bridge.setAccessToken(accessToken);
+  }, [accessToken]);
+
   // 启动 hydrate:
   //   1) E2E bypass — URL 带 ?e2e_user=<base64 json> 时直接用注入的 user,
   //      跳过 refresh + /auth/me. 仅用于 CI 截图 / 手动验证布局.

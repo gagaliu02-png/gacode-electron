@@ -81,20 +81,34 @@
 #     (与 web / 安卓三端同款逻辑; 两端那份 src/lib/sse/reconnect.ts 逐字节相同)
 #   - output 改 release-sse-backoff-v19/ 绕开 v18 目录 (每次换新目录)
 
+# 0.7.20 (P3/P4 · 端侧执行 `pc_*` · 契约 订正 24 / 订正 25):
+#   - 主进程新增端侧执行: node-pty 真终端 (ConPTY) + 9 个 `pc_*` 工具 + 闸门 + 审计
+#   - ⚠️ node-pty 是**原生模块** (.node) ⇒ 必须 asarUnpack:
+#     asar 里的 .node 加载不了; 且 conpty.dll / OpenConsole.exe 必须在
+#     **同级** build/Release/conpty/ 下 (node-pty 的 conpty.cc 用
+#     GetModuleFileName 定位同目录 conpty\conpty.dll) ⇒ unpack 整个 node-pty 目录
+#   - files 里显式带上 node_modules/node-pty (自定义 files 列表会覆盖默认项)
+#   - output 改 release-clienttools-v20/ 绕开 v19 目录 (每次换新目录)
+
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.19
+buildVersion: 0.7.20
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-sse-backoff-v19
+  output: release-clienttools-v20
 
 files:
   - dist/**/*
   - package.json
+  - node_modules/node-pty/**/*
   - '!**/*.map'
+
+# ★ 0.7.20: 原生模块必须解包 (asar 里的 .node 加载不了)
+asarUnpack:
+  - '**/node_modules/node-pty/**'
 
 # 应用图标运行时解析（electron/icon.ts）:
 #   - 打包后仓内 build/ **不在 files: 里** ⇒ 主进程只能靠 process.resourcesPath 找图标
@@ -111,6 +125,15 @@ extraResources:
 asar: true
 disableSanityCheckAsar: true
 compression: maximum
+
+# ★ 0.7.20: **关掉** electron-builder 自带的 `npmRebuild`。
+#   它会在打包前跑一遍 `npm rebuild` ⇒ 把 node-pty 的 `build/Release/` 重来一遍
+#   ⇒ 我们自己 postinstall 拷进去的 `conpty/conpty.dll` + `conpty/OpenConsole.exe`
+#   会被抹掉（node-pty 的 conpty.cc 是用 GetModuleFileName 找**同目录**的
+#   conpty\conpty.dll 的 ⇒ DLL 没了，运行时直接报错）。
+#   ⇒ 原生模块的重编由 `scripts/electron-rebuild-node-pty.mjs`（postinstall）负责，
+#      打包阶段只负责**如实打包**。
+npmRebuild: false
 
 # 0.7.5 global-11: electron-updater 配置 publish
 # provider=github + owner/repo — electron-builder 打包时会自动生成 latest.yml

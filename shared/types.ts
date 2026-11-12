@@ -144,6 +144,137 @@ export interface GacodeBridge {
    *   · **不清**: cookie / localStorage —— 那些是各站点的登录态, 清了用户得重登。
    */
   clearBrowserCache: () => Promise<{ ok: boolean; error?: string }>;
+
+  /**
+   * ★ [P3/P4 · 2026-11-12] 端侧执行（`pc_*`）的桥。
+   *
+   * ## 为什么整块都在主进程
+   *
+   *   端侧执行**必须**跑在主进程：渲染层一刷新，正在跑的命令就断了；
+   *   `node-pty` / 桌面采集 / `tasklist` 也只有主进程能碰。
+   *   ⇒ 渲染层只做「发起 + 显示」，**执行 + 闸门 + 审计**全在主进程。
+   *
+   * ## 闸门
+   *
+   *   `execute` 走的**也是**主进程那条闸门 —— 渲染层**不得**自己判。
+   *   总开关默认 **开**（gaga 拍板），急停一按立刻全拒。
+   */
+  clientTools: {
+    /**
+     * 把 access token 推给主进程（设备通道要用）。
+     * ⚠️ 内存持有，**不持久化** —— 跟渲染层同款口径（accessToken 不落盘）。
+     */
+    setAccessToken: (token: string | null) => Promise<{ ok: boolean }>;
+
+    /**
+     * node-pty 现在能不能用（决定要不要声明 `pty` 子能力）。
+     * ⚠️ 没装好就不能声明 —— 否则模型会调 `pc_shell`，然后挂起等一个永远不回来的结果。
+     */
+    ptyAvailable: () => Promise<boolean>;
+
+    /** 设备通道状态 + 闸门状态（UI 显示「我的电脑：xx（在线 / 离线）」）。 */
+    status: () => Promise<ClientToolStatus>;
+
+    /** 总开关 / 急停。 */
+    setGate: (next: {
+      masterEnabled?: boolean;
+      killSwitch?: boolean;
+    }) => Promise<ClientGateState>;
+
+    /** 读审计（保留 30 天）。 */
+    audit: (limit?: number) => Promise<ClientToolAuditEntry[]>;
+
+    /** 一键清空审计。 */
+    clearAudit: () => Promise<{ cleared: number }>;
+
+    /** 跑一个端侧工具（**同样过闸门**）。 */
+    execute: (input: {
+      tool: string;
+      args?: Record<string, unknown>;
+      cwd?: string;
+      timeoutMs?: number;
+    }) => Promise<ClientToolResult>;
+
+    /** 收到派单时通知（UI 显示「正在你的电脑上执行」）。 */
+    onRequest: (callback: (req: ClientToolRequest) => void) => () => void;
+  };
+}
+
+// ===========================================================================
+// 端侧执行（`pc_*`）的类型
+// ===========================================================================
+
+/** 闸门状态。 */
+export interface ClientGateState {
+  /** 总开关 —— 默认 **开**。 */
+  masterEnabled: boolean;
+  /** 急停 —— 一键全拒。 */
+  killSwitch: boolean;
+  updatedAt: number;
+}
+
+/** 端侧产物。`kind:'workspace'` **不进**交付中心（L-24o）。 */
+export interface ClientToolArtifact {
+  kind: 'file' | 'workspace';
+  name: string;
+  path: string;
+  size?: number;
+  mimeType?: string;
+  fileCount?: number;
+  totalSize?: number;
+  entryFile?: string | null;
+}
+
+/** 端侧执行结果。 */
+export interface ClientToolResult {
+  status: 'ok' | 'error' | 'denied';
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  error?: string;
+  artifacts?: ClientToolArtifact[];
+}
+
+/** 一条端侧派单（= 服务端 `client_tool_request`）。 */
+export interface ClientToolRequest {
+  type: 'client_tool_request';
+  id: string | null;
+  /** ★ 裁决身份（回传按它寻址，L-24a）。 */
+  pending_id: string | null;
+  tool: string | null;
+  args: Record<string, unknown> | null;
+  cwd: string | null;
+  timeout_ms: number | null;
+  risk_level: string | null;
+  title: string | null;
+  device_id: string | null;
+  origin_client: string | null;
+  session_id: string | null;
+}
+
+/** 审计条目。 */
+export interface ClientToolAuditEntry {
+  ts: number;
+  tool: string | null;
+  pendingId?: string | null;
+  originClient?: string | null;
+  outcome: 'allowed' | 'denied' | 'error';
+  reason?: string;
+  summary?: string;
+  durationMs?: number;
+  exitCode?: number;
+}
+
+/** 设备通道 + 闸门的合并状态。 */
+export interface ClientToolStatus {
+  deviceId: string;
+  deviceName: string;
+  /** 设备通道是否已建立（= 服务端认为的「在线」，L-25t）。 */
+  connected: boolean;
+  registered: boolean;
+  lastError: string | null;
+  replacedDeviceId: string | null;
+  gate: ClientGateState;
 }
 
 /** 收藏夹条目 — 跟 Android 端 `BookmarkEntity` shape 对齐. */

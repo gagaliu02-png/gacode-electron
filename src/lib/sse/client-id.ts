@@ -62,6 +62,13 @@ export interface ChatStreamHeaderOptions {
   accept?: string | null;
   /** 续传头 (`Last-Event-ID` / `X-Resume-Turn`) —— 只在 resume / attach 两条路有。 */
   resumeHeaders?: Record<string, string> | null;
+  /**
+   * 端侧能力声明 (契约附录 **订正 24 §3**) —— **可选**。
+   *
+   * ⚠️ 只有 PC 端会传 (它真的能执行 `pc_*`); web / 安卓**不传** ⇒
+   *    服务端不下发 `pc_*` ⇒ 老端行为**逐字不变** (L-24e)。
+   */
+  clientCapabilities?: string | null;
 }
 
 /**
@@ -93,5 +100,8 @@ export function buildChatStreamHeaders(
   }
   // ★ 三条路**恒带**端标识 (契约 L-28 / D3)。
   headers[CLIENT_ID_HEADER] = opts.clientId;
+  // ★ 端侧能力声明 (契约附录 订正 24 §3) —— **缺失即「该端没有端侧能力」**
+  //   ⇒ 服务端**不下发** `pc_*` 工具 ⇒ 老端行为逐字不变 (L-24e)。
+  if (opts.clientCapabilities) headers["X-Client-Capabilities"] = opts.clientCapabilities;
   return headers;
 }

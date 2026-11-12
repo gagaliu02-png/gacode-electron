@@ -4,6 +4,7 @@ import * as path from 'path';
 import type {
   BookmarkEntry,
   BrowserTabClosedEvent,
+  ClientToolRequest,
   DeepLinkEvent,
   GacodeBridge,
 } from '../shared/types';
@@ -134,9 +135,32 @@ contextBridge.exposeInMainWorld('gacode', {
   //   恢复成完整的 `satisfies GacodeBridge`.
 
   // ★ [批 G19 · 2026-11-12] 清内嵌浏览器缓存。
-  //   <webview> 标签**没有** clearCache 方法 (渲染层调不到 session) ⇒ 走主进程。
+  //   <webview> 标签**没有** clearCache 方法 (渲染层调不到 session) ⇒ 走主进程.
   clearBrowserCache: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('gacode:clear-browser-cache'),
+
+  // ★ [P3/P4 · 2026-11-12] 端侧执行 (`pc_*`) —— 全部落在**主进程**。
+  //   渲染层只做「发起 + 显示」; 执行 / 闸门 / 审计都在主进程那侧.
+  clientTools: {
+    // 把 access token 推给主进程 (设备通道要用). 内存持有, 不持久化.
+    setAccessToken: (token: string | null): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('gacode:client-tool-set-token', token),
+    ptyAvailable: (): Promise<boolean> =>
+      ipcRenderer.invoke('gacode:client-tool-pty-available'),
+    status: () => ipcRenderer.invoke('gacode:client-tool-status'),
+    setGate: (next: { masterEnabled?: boolean; killSwitch?: boolean }) =>
+      ipcRenderer.invoke('gacode:client-tool-set-gate', next),
+    audit: (limit?: number) => ipcRenderer.invoke('gacode:client-tool-audit', limit),
+    clearAudit: () => ipcRenderer.invoke('gacode:client-tool-clear-audit'),
+    execute: (input: {
+      tool: string;
+      args?: Record<string, unknown>;
+      cwd?: string;
+      timeoutMs?: number;
+    }) => ipcRenderer.invoke('gacode:client-tool-execute', input),
+    onRequest: (callback: (req: ClientToolRequest) => void): (() => void) =>
+      listenMain<ClientToolRequest>('gacode:client-tool-request', (e) => callback(e)),
+  },
 } satisfies GacodeBridge);
 
 console.log('[gacode-electron] preload loaded');

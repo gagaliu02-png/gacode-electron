@@ -1,0 +1,81 @@
+diff --git a/binding.gyp b/binding.gyp
+index 5f63978b07ab50aaf7523219a2170ec737a6b5db..b2b572a6aa347d03ea311f682ccb96d65dcc67f3 100644
+--- a/binding.gyp
++++ b/binding.gyp
+@@ -5,9 +5,11 @@
+     ],
+     'conditions': [
+       ['OS=="win"', {
+-        'msvs_configuration_attributes': {
+-          'SpectreMitigation': 'Spectre'
+-        },
++        # ⚠️ [本地补丁 · 2026-11-12] 去掉 `SpectreMitigation`。
++        #   原值 'Spectre' 要求 MSVC 装「Spectre 缓解库」那个可选组件，
++        #   本机 BuildTools **没装** ⇒ MSB8040 编译直接失败：
++        #     「此项目需要缓解了 Spectre 漏洞的库」。
++        #   ⇒ 去掉这一项（编译选项，不影响功能）。
+         'msvs_settings': {
+             'VCCLCompilerTool': {
+               'AdditionalOptions': [
+@@ -47,27 +49,32 @@
+           'sources' : [
+             'src/win/conpty_console_list.cc'
+           ],
+-        },
+-        {
+-          'target_name': 'pty',
+-          'include_dirs' : [
+-            '<!(node -p "require(\'node-addon-api\').include_dir")',
+-            'deps/winpty/src/include',
+-          ],
+-          # Disabled due to winpty
+-          'msvs_disabled_warnings': [ 4506, 4530 ],
+-          'dependencies' : [
+-            'deps/winpty/src/winpty.gyp:winpty-agent',
+-            'deps/winpty/src/winpty.gyp:winpty',
+-          ],
+-          'sources' : [
+-            'src/win/winpty.cc',
+-            'src/win/path_util.cc'
+-          ],
+-          'libraries': [
+-            '-lshlwapi'
+-          ],
+         }
++        # =====================================================================
++        # [本地补丁 · 2026-11-12] **删掉了原来的 `pty` target**（winpty 那条腿）。
++        #
++        #   为什么能删: node-pty 在 Windows 上**只用 conpty** ——
++        #     lib/windowsPtyAgent.js:38
++        #       `this._useConpty = this._getWindowsBuildNumber() >= 18309;`
++        #     ⇒ Win10 1809（2018）之后的机器一律走 conpty 分支，
++        #       `loadNativeModule('pty')`（winpty 那条腿）**根本不会被调用**；
++        #     `lib/index.js:51` 在 win32 上也把 `native` 置 null。
++        #     实际需要的原生模块只有 `conpty.node` + `conpty_console_list.node`。
++        #
++        #   为什么必须删: `pty` target 依赖 `deps/winpty/src/winpty.gyp`，
++        #     而那个 gyp 里有两条 `<!(cmd /c "cd shared && ...bat")` ——
++        #     在 Windows 上跑 node-gyp 时它**必然失败**（cmd 的嵌套引号把
++        #     `GetCommitHash.bat` 拆成了命令名 ⇒ 「不是内部或外部命令」），
++        #     ⇒ 整个 `electron-rebuild` 挂掉 ⇒ 原生模块永远停在 Node ABI 的
++        #     prebuild ⇒ 在 Electron 里加载会报
++        #     "was compiled against a different Node.js version"。
++        #
++        #   代价: Win10 1809 **之前**的机器用不了（node-pty 会退到 prebuild 里的
++        #     Node ABI `pty.node` ⇒ 加载失败）。那个年代的 Windows 早停服了。
++        #
++        #   ⚠️ 这是**本地补丁**（pnpm patchedDependencies）—— 不要手改 node_modules，
++        #      会被下一次 install 冲掉。
++        # =====================================================================
+       ]
+     }, { # OS!="win"
+       'targets': [
+@@ -84,7 +91,7 @@
+             # http://www.gnu.org/software/gnulib/manual/html_node/forkpty.html
+             #   One some systems (at least including Cygwin, Interix,
+             #   OSF/1 4 and 5, and Mac OS X) linking with -lutil is not required.
+-            ['OS=="mac" or OS=="solaris"', {
++            ['OS=="mac" or "solaris"', {
+               'libraries!': [
+                 '-lutil'
+               ]

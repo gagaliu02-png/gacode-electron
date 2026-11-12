@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+// ★ [P3 · 2026-11-12] 端侧能力探测（契约附录 订正 24 §3）。
+import { initClientCapabilities } from "./lib/client-capabilities";
 import {
   HashRouter,
   Routes,
@@ -85,6 +87,13 @@ function Protected({ children }: { children: React.ReactNode }) {
 }
 
 export function App() {
+  // ★ [P3 · 2026-11-12] 探测端侧能力表（决定要不要声明 `pty`）。
+  //   ⚠️ 探测没回来之前**不带** `X-Client-Capabilities` ⇒ 服务端不下发 `pc_*`
+  //      ⇒ 安全降级（宁可少给能力，也别给一个调不通的）。
+  useEffect(() => {
+    void initClientCapabilities();
+  }, []);
+
   return (
     /*
      * 用 HashRouter 而不是 BrowserRouter — file:// 加载 + BrowserRouter 会触发
