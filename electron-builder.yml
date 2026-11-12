@@ -75,15 +75,21 @@
 #   - 三个 state + 三个 ref 镜像 (stalled / turnKey / turnMeta) 切会话时一起复位
 #   - output 改 release-settings-v18/ 绕开 v17 目录 (每次换新目录)
 
+# 0.7.19 (批 G18 · 端侧重连退避改成等恢复信号 —— 解锁回前台立刻重试, 不干等 30s):
+#   - 退避从「干等满退避时长」改成「带超时地等恢复信号」(网络回来 / 回前台 / 手动重试)
+#     ⇒ 退避上限 30s, 用户解锁那一刻本该立刻再试, 却要白等 ⇒ 现在不等了
+#     (与 web / 安卓三端同款逻辑; 两端那份 src/lib/sse/reconnect.ts 逐字节相同)
+#   - output 改 release-sse-backoff-v19/ 绕开 v18 目录 (每次换新目录)
+
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.18
+buildVersion: 0.7.19
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-settings-v18
+  output: release-sse-backoff-v19
 
 files:
   - dist/**/*
