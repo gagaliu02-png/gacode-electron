@@ -382,6 +382,36 @@ export function TrashIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps)
   );
 }
 
+/**
+ * lucide `eraser` — 16×16 / sw1.6
+ *
+ * ★ [批 G19 · 2026-11-12] 新增 —— 浏览器工具栏「清除缓存」按钮。
+ *   path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/eraser.js`:
+ *   · `m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21`
+ *   · `M22 21H7`
+ *   · `m5 11 9 9`
+ */
+export function EraserIcon({ className, size = 16, strokeWidth = 1.6 }: GlyphProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" />
+      <path d="M22 21H7" />
+      <path d="m5 11 9 9" />
+    </svg>
+  );
+}
+
 /** lucide `x` — 20×20 / sw2 (关闭 / 退出多选 / 关闭错误提示) */
 export function CloseIcon({ className, size = 20, strokeWidth = 2 }: GlyphProps) {
   return (

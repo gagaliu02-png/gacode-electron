@@ -132,6 +132,11 @@ contextBridge.exposeInMainWorld('gacode', {
   //   能力 (web 的「重试下载」只是浏览器重新 fetch `item.url`).
   //   对应的 `GacodeBridge` 类型声明也已从 shared/types.ts 删掉 ⇒ 这里
   //   恢复成完整的 `satisfies GacodeBridge`.
+
+  // ★ [批 G19 · 2026-11-12] 清内嵌浏览器缓存。
+  //   <webview> 标签**没有** clearCache 方法 (渲染层调不到 session) ⇒ 走主进程。
+  clearBrowserCache: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('gacode:clear-browser-cache'),
 } satisfies GacodeBridge);
 
 console.log('[gacode-electron] preload loaded');

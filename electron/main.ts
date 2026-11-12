@@ -6,6 +6,7 @@ import {
   Menu,
   ipcMain,
   nativeTheme,
+  session,
 } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -319,6 +320,45 @@ function createWindow(): void {
 // =========================================================================
 // 阶段 4 — IPC handlers (BrowserView + taskbar progress)
 // =========================================================================
+
+// =========================================================================
+// ★ [批 G19 · 2026-11-12] 清内嵌浏览器缓存
+//
+//   为什么必须在这里:
+//     缓存属于 Chromium 的 **session**。渲染层拿不到 session 对象 ——
+//     <webview> 标签**没有** clearCache 方法 (实测 typeof wv.clearCache ===
+//     "undefined", 直接调会 TypeError) ⇒ 只能主进程来清。
+//
+//   清什么:
+//     · HTTP 缓存 (页面显示不正常 / 图片不更新 / 改版后样式没变)
+//     · DNS 主机解析缓存
+//   不清什么:
+//     · cookie / localStorage —— 那是各站点的登录态, 清了用户得重新登录。
+// =========================================================================
+function registerBrowserCacheIpc(): void {
+  ipcMain.handle(
+    'gacode:clear-browser-cache',
+    async (): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const ses = session.defaultSession;
+        await ses.clearCache();
+        // DNS 解析缓存也顺手清一下 (有的站点换了 IP 但本机还拿着旧的)。
+        try {
+          await ses.clearHostResolverCache();
+        } catch {
+          /* 老版本 Electron 没这个方法 ⇒ 忽略 */
+        }
+        console.log('[gacode-electron] Browser cache cleared');
+        return { ok: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[gacode-electron] clearBrowserCache failed', err);
+        return { ok: false, error: msg };
+      }
+    },
+  );
+  console.log('[gacode-electron] Browser cache IPC handler registered');
+}
 
 function registerBrowserTabIpc(): void {
   // 开一个新 tab → 返 { tabId }
@@ -838,6 +878,7 @@ app.whenReady().then(() => {
   createTray(() => mainWindow);
   registerNotificationIpc(() => mainWindow);
   registerBrowserTabIpc();
+  registerBrowserCacheIpc();
   registerTaskbarProgressIpc();
   registerWindowStateIpc();
   registerAuthStorageIpc();

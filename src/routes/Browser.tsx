@@ -22,7 +22,7 @@
  *     change 事件触发更新)
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { BottomSheet } from "../components/ui/BottomSheet";
@@ -39,19 +39,30 @@ import {
   ArrowLeftBarIcon,
   ArrowRightBarIcon,
   BookmarkIcon,
+  EraserIcon,
   FolderIcon,
   HouseIcon,
   RefreshCwIcon,
   SparkleStarIcon,
 } from "../components/ui/Glyphs";
 
-const QUICK_LINKS: Array<{ label: string; url: string }> = [
-  { label: "gaga 官网", url: "https://www.gaga.sale" },
-  { label: "gacode-web", url: "https://gacode-web.vercel.app" },
-  { label: "gaclaw 网关", url: "https://www.gaga.sale/api/v1/health" },
-];
+/**
+ * ★ [批 G19 · 2026-11-12 · gaga 拍板] 主页从 gaga.sale 改成 bing。
+ *
+ *   旧值 `https://www.gaga.sale` 是**我们自己的站点** —— 浏览器默认打开自家站点
+ *   对用户没意义, 而且那个站点跟浏览器功能是两码事 ⇒ 换成通用搜索引擎。
+ */
+const HOME_URL = "https://www.bing.com";
 
-const HOME_URL = "https://www.gaga.sale";
+/**
+ * ★ [批 G19] 输入框下面那排「快捷网址」**不再写死**。
+ *
+ *   旧实现是 3 个硬编码链接 (gaga 官网 / gacode-web.vercel.app / 网关 health),
+ *   后面两个**早就失效了** ⇒ 整排删掉写死列表, 改成取**收藏夹前 5 条**
+ *   (收藏夹已经在本组件里读好了, 见 `bookmarks` state)。
+ *   收藏夹为空 ⇒ 整排不渲染。
+ */
+const QUICK_LINKS_LIMIT = 5;
 
 interface Tab {
   id: string;
@@ -73,7 +84,8 @@ function normalizeUrl(input: string): string | null {
   if (/^[\w-]+(\.[\w-]+)+/.test(trimmed)) {
     return `https://${trimmed}`;
   }
-  return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+  // ★ [批 G19] 关键词兜底也走 bing —— 主页既然是 bing, 搜索再走 google 就割裂了。
+  return `https://www.bing.com/search?q=${encodeURIComponent(trimmed)}`;
 }
 
 const HISTORY_LIMIT = 8;
@@ -123,6 +135,9 @@ export function Browser() {
   const active = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
   const isBookmarked = !!bookmarks.find((b) => b.url === active?.url);
 
+  // ★ [批 G19] 快捷网址 = 收藏夹前 5 条 (原来写死 3 个, 两个已失效)。
+  const quickLinks = useMemo(() => bookmarks.slice(0, QUICK_LINKS_LIMIT), [bookmarks]);
+
   useEffect(() => {
     setUrlInput(active?.url ?? "");
   }, [active?.url, active?.id]);
@@ -135,38 +150,6 @@ export function Browser() {
     });
     return () => {
       alive = false;
-    };
-  }, []);
-
-  // 0.7.5 browser-15: 监听 webview 内部 postMessage (长按链接 / 图片)
-  // 注入脚本在 WebviewPane 的 did-finish-load / will-navigate 后跑, 通过
-  // window.parent.postMessage 把 { type: 'gacode:longpress', payload: { x, y, url, kind } }
-  // 推过来.
-  useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      const data = e.data as
-        | { type?: string; payload?: unknown }
-        | undefined;
-      if (!data || data.type !== "gacode:longpress" || !data.payload) return;
-      const p = data.payload as {
-        x?: number;
-        y?: number;
-        url?: string;
-        kind?: string;
-      };
-      if (
-        typeof p.x !== "number" ||
-        typeof p.y !== "number" ||
-        typeof p.url !== "string" ||
-        (p.kind !== "link" && p.kind !== "image")
-      ) {
-        return;
-      }
-      setLongPressAnchor({ x: p.x, y: p.y, url: p.url, kind: p.kind });
-    };
-    window.addEventListener("message", onMessage);
-    return () => {
-      window.removeEventListener("message", onMessage);
     };
   }, []);
 
@@ -183,19 +166,57 @@ export function Browser() {
     });
   };
 
-  const openInTab = (url: string) => {
+  /**
+   * ★ [批 G19 · 2026-11-12 · gaga 拍板] 在**当前标签**里导航。
+   *
+   * ## 为什么要拆出来 (旧 `openInTab` 的毛病)
+   *
+   *   旧实现: `submit()` → `openInTab(url)` → **找不到同 URL 的 tab 就另开一个新 tab**。
+   *   ⇒ 用户在地址栏输入网址按「前往」, 当前标签**原地不动**, 反而多出一个标签 ——
+   *     每输一次网址标签就涨一个。
+   *   ⇒ 而「新标签页 = 空白, 输入网址后才显示网页」这条需求**根本做不成**:
+   *     空白标签上输入网址 → 旧逻辑会另开一个带网址的标签, 空白标签还在原地。
+   *
+   *   现在拆成两个语义各归其位的动作:
+   *     · `navigateCurrent(url)` —— **当前标签**原地导航 (地址栏「前往」/ 收藏夹 / 快捷网址)
+   *     · `openInNewTab(url)`  —— **另开**一个新标签 (长按菜单「在新标签中打开」)
+   */
+  const navigateCurrent = (url: string) => {
     if (!active) return;
+    // 同一个地址 ⇒ 刷新当前页 (否则「再输一遍同样的网址」毫无反应)。
     if (active.url === url) {
-      setActiveTabId(active.id);
+      try {
+        getWebviewForActive()?.reload();
+      } catch {
+        /* ignore */
+      }
       recordHistory(url);
       return;
     }
-    const existing = tabs.find((t) => t.url === url);
-    if (existing) {
-      setActiveTabId(existing.id);
-      recordHistory(url);
-      return;
-    }
+    const id = active.id;
+    setTabs((cur) =>
+      cur.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              url,
+              title: hostFromUrl(url),
+              loading: true,
+              failed: false,
+              progress: 0,
+              canGoBack: false,
+              canGoForward: false,
+            }
+          : t,
+      ),
+    );
+    // 地址栏显示规范化后的完整 URL (浏览器常规行为)。
+    setUrlInput(url);
+    recordHistory(url);
+  };
+
+  /** 另开一个新标签并加载 url (长按菜单「在新标签中打开」用)。 */
+  const openInNewTab = (url: string) => {
     const id = uid();
     setTabs((cur) => [
       ...cur,
@@ -214,10 +235,54 @@ export function Browser() {
     recordHistory(url);
   };
 
+  // 0.7.5 browser-15: guest → 宿主的消息 (长按链接 / 图片 / 开新标签)
+  //
+  // ★ [批 G19] **通道换了** —— 原来是 `window.parent.postMessage`, 但 Electron 的
+  //   <webview> guest 里 `window.parent` 就是它自己 ⇒ 那条消息永远送不到宿主
+  //   (实测 `window.parent === window`) ⇒ 长按菜单其实一直是坏的。
+  //   现在改成 guest 打一条带 `HOST_MSG_MARKER` 前缀的 console.log, 宿主从
+  //   <webview> 的 `console-message` 事件里取 (见 WebviewPane)。
+  const handleHostMessage = useCallback(
+    (data: { type?: string; url?: string; x?: number; y?: number; kind?: string }) => {
+      if (!data || typeof data.type !== "string") return;
+
+      // guest 要开新窗口 (target=_blank 链接 / window.open) ⇒ 我们自己开一个标签。
+      if (data.type === "open-in-new-tab") {
+        const url = data.url;
+        // 只放行 http(s) —— guest 是外部站点, 不能让它指挥宿主去开
+        // file:// / javascript: 之类的地址。
+        if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+          openInNewTab(url);
+        }
+        return;
+      }
+
+      // 长按 / 右键菜单
+      if (data.type !== "longpress") return;
+      if (
+        typeof data.x !== "number" ||
+        typeof data.y !== "number" ||
+        typeof data.url !== "string" ||
+        (data.kind !== "link" && data.kind !== "image")
+      ) {
+        return;
+      }
+      setLongPressAnchor({
+        x: data.x,
+        y: data.y,
+        url: data.url,
+        kind: data.kind,
+      });
+    },
+    // ⚠️ deps: openInNewTab 每次渲染都是新的 ⇒ 这个 callback 也是;
+    //   但它只用到稳定的 state setter ⇒ 闭包里不会有过期值。
+    [openInNewTab],
+  );
+
   const submit = (rawUrl?: string) => {
     const target = normalizeUrl(rawUrl ?? urlInput);
     if (!target) return;
-    openInTab(target);
+    navigateCurrent(target);
   };
 
   const onSubmit = (e: React.FormEvent) => {
@@ -227,10 +292,12 @@ export function Browser() {
 
   const closeTab = (id: string) => {
     if (tabs.length <= 1) {
+      // ★ [批 G19] 关掉最后一个标签 ⇒ 补一个**空白**标签 (跟「新建标签」同款),
+      //   不是直接弹主页 —— 空白是「还没打开任何网页」的状态, 用户想看主页可以点「主页」按钮。
       const newTab: Tab = {
         id: uid(),
-        title: "首页",
-        url: HOME_URL,
+        title: "新标签",
+        url: "",
         loading: false,
         failed: false,
         progress: 0,
@@ -254,7 +321,9 @@ export function Browser() {
     const tab: Tab = {
       id,
       title: "新标签",
-      url: HOME_URL,
+      // ★ [批 G19] 新标签页 = **空白** (url 为空 ⇒ 不挂 webview)。
+      //   用户在下面输入网址 / 搜索词之后才真的加载网页。
+      url: "",
       loading: false,
       failed: false,
       progress: 0,
@@ -263,6 +332,7 @@ export function Browser() {
     };
     setTabs((cur) => [...cur, tab]);
     setActiveTabId(id);
+    setUrlInput("");
   };
 
   // ────────────── 操作 webview 的 helper ──────────────
@@ -298,6 +368,9 @@ export function Browser() {
 
   const refresh = () => {
     if (!active) return;
+    // ★ [批 G19] 空白标签 (url 为空) 没有东西可刷新 ⇒ 直接返回,
+    //   否则会把它置成 loading + 转圈, 但永远转不完 (没有 webview)。
+    if (!active.url) return;
     const id = active.id;
     setTabs((cur) =>
       cur.map((t) =>
@@ -309,6 +382,38 @@ export function Browser() {
       wv?.reload();
     } catch {
       /* ignore */
+    }
+  };
+
+  // ────────────── 清除缓存 (批 G19) ──────────────
+  //
+  //   缓存属于 Chromium 的 **session** ⇒ 渲染层清不了:
+  //   `<webview>` 标签**没有** clearCache 方法 (实测 typeof wv.clearCache ===
+  //   "undefined", 直接调是 TypeError) ⇒ 走主进程 IPC
+  //   (electron/main.ts registerBrowserCacheIpc → session.defaultSession.clearCache())。
+  //
+  //   ⚠️ 同一窗口里所有 webview 共用一个 session ⇒ 清一次就都清了 (这正是我们要的:
+  //     「网页打开不正常 / 图片不更新」时清一遍缓存重来)。
+  //   ⚠️ 只清**缓存**, 不动 cookie / localStorage —— 那些是登录态, 清了用户得重登。
+  const clearCache = async () => {
+    const bridge = window.gacode?.clearBrowserCache;
+    if (!bridge) {
+      toast({ message: "当前环境不支持清除缓存", variant: "warning" });
+      return;
+    }
+    try {
+      const res = await bridge();
+      if (res?.ok) {
+        toast({ message: "缓存已清除", variant: "success" });
+      } else {
+        toast({
+          message: `清除缓存失败: ${res?.error ?? "未知错误"}`,
+          variant: "danger",
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast({ message: `清除缓存失败: ${msg}`, variant: "danger" });
     }
   };
 
@@ -414,7 +519,7 @@ export function Browser() {
       );
     }, 300);
     // 0.7.5 browser-15: 注入长按监听脚本到 webview 内容 (did-finish-load 后)
-    void injectLongPressScript(id);
+    void injectGuestScript(id);
   };
 
   const handleWebviewProgress = (id: string, p: number) => {
@@ -440,13 +545,13 @@ export function Browser() {
     recordHistory(url);
     if (id === activeTabId) setUrlInput(url);
     // 0.7.5 browser-15: navigation 完成后重注入监听 (SPA 路由切换后脚本丢)
-    void injectLongPressScript(id);
+    void injectGuestScript(id);
   };
 
   // 0.7.5 browser-15: 长按菜单当前项的 items (从 longPressAnchor 派生)
   const longPressItems: LongPressMenuItem[] = longPressAnchor
     ? buildLongPressItems(longPressAnchor, {
-        openInTab: (url) => openInTab(url),
+        openInTab: (url) => openInNewTab(url),
         copyToClipboard: async (url) => {
           try {
             await navigator.clipboard.writeText(url);
@@ -563,6 +668,7 @@ export function Browser() {
               onFailed={() => handleWebviewFailed(active.id)}
               onNavigate={(url) => handleWebviewNavigate(active.id, url)}
               onProgress={(p) => handleWebviewProgress(active.id, p)}
+              onHostMessage={handleHostMessage}
             />
           </>
         ) : (
@@ -650,6 +756,15 @@ export function Browser() {
             <FolderIcon size={16} strokeWidth={1.6} />
           </IconButton>
 
+          {/* ★ [批 G19] 清除缓存 —— 页面显示不正常 / 图片不更新时清一遍 */}
+          <IconButton
+            ariaLabel="清除缓存"
+            title="清除缓存"
+            onClick={() => void clearCache()}
+          >
+            <EraserIcon size={16} strokeWidth={1.6} />
+          </IconButton>
+
           <Button
             type="submit"
             variant="default"
@@ -660,28 +775,32 @@ export function Browser() {
           </Button>
         </form>
 
-        {/* 常用链接 */}
-        <div className="flex flex-wrap gap-2">
-          {QUICK_LINKS.map((l) => (
-            <button
-              key={l.url}
-              type="button"
-              onClick={() => openInTab(l.url)}
-              className="text-xs px-2 py-1 rounded-md bg-bg-sunken text-fg-muted hover:text-fg hover:bg-bg-elevated"
-            >
-              {l.label}
-            </button>
-          ))}
-          {history.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => setHistory([])}
-              className="ml-auto text-xs text-fg-subtle hover:text-fg"
-            >
-              清空历史
-            </button>
-          ) : null}
-        </div>
+        {/* 快捷网址 — ★ [批 G19] 取**收藏夹前 5 条** (原来是一排写死的链接,
+            而且里面两个早就失效了)。收藏夹为空 ⇒ 整排不渲染。 */}
+        {quickLinks.length > 0 || history.length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {quickLinks.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                title={b.url}
+                onClick={() => navigateCurrent(b.url)}
+                className="text-xs px-2 py-1 rounded-md bg-bg-sunken text-fg-muted hover:text-fg hover:bg-bg-elevated max-w-[220px] truncate"
+              >
+                {b.title || hostFromUrl(b.url)}
+              </button>
+            ))}
+            {history.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setHistory([])}
+                className="ml-auto text-xs text-fg-subtle hover:text-fg"
+              >
+                清空历史
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {/* 收藏夹 sheet */}
@@ -786,7 +905,7 @@ export function Browser() {
 // 仍然可以传字符串到顶层文档的 message listener).
 // ────────────────────────────────────────────────────────────
 
-function injectLongPressScript(tabId: string): Promise<void> {
+function injectGuestScript(tabId: string): Promise<void> {
   const wv = document.querySelector(
     `webview[data-tab-id="${tabId}"]`,
   ) as ElectronWebview | null;
@@ -794,7 +913,7 @@ function injectLongPressScript(tabId: string): Promise<void> {
   // webview 的 executeJavaScript 在主进程执行, 内容沙箱化, 但允许
   // postMessage 出去. 这里 catch + 静默 — SPA 路由过程 / 主进程繁忙都可能失败,
   // 不要让 toast 噪音.
-  const js = LONG_PRESS_SCRIPT;
+  const js = GUEST_SCRIPT;
   try {
     const r = wv.executeJavaScript(js, true) as Promise<unknown> | undefined;
     return Promise.resolve(r as unknown as void);
@@ -803,24 +922,103 @@ function injectLongPressScript(tabId: string): Promise<void> {
   }
 }
 
-const LONG_PRESS_SCRIPT = `(function () {
-  if (window.__gacode_longpress_installed__) return;
-  window.__gacode_longpress_installed__ = true;
-  function post(payload) {
-    try { window.parent.postMessage({ type: 'gacode:longpress', payload }, '*'); } catch (e) {}
+/**
+ * ★ [批 G19 · 2026-11-12] guest → 宿主的**唯一通道**。
+ *
+ * ## 为什么不是 `window.parent.postMessage`
+ *
+ *   Electron 的 <webview> guest 是**独立的 frame tree** ⇒ guest 里的
+ *   `window.parent` **就是它自己** (实测 `window.parent === window` 为 true)
+ *   ⇒ `window.parent.postMessage(...)` 只是把消息发给 guest 自己,
+ *     **永远送不到宿主**。
+ *   (0.7.5 的长按菜单就是这么写的 ⇒ 那个功能其实一直是坏的, 只是没人报。)
+ *
+ * ## 用哪个通道
+ *
+ *   guest 的 `console.log` ⇒ 宿主的 <webview> 会派发 `console-message` 事件
+ *   (实测能完整收到)。⇒ guest 把消息**打成一个带标记前缀的 console.log**,
+ *   宿主按前缀过滤 + JSON.parse 还原。
+ *
+ *   ⚠️ 消息只能带 http(s) 的 URL —— guest 是**外部站点**, 不能让它指挥宿主
+ *      去开 file:// / javascript: 之类的地址。
+ */
+const HOST_MSG_MARKER = "__GACODE_HOST__";
+
+const GUEST_SCRIPT = `(function () {
+  if (window.__gacode_guest_installed__) return;
+  window.__gacode_guest_installed__ = true;
+
+  // ── guest → 宿主 的唯一出口 (见 HOST_MSG_MARKER 的说明) ──
+  function postHost(payload) {
+    try { console.log('${HOST_MSG_MARKER}' + JSON.stringify(payload)); } catch (e) {}
   }
+  function postLongPress(payload) {
+    payload.type = 'longpress';
+    postHost(payload);
+  }
+  function postNewTab(url) {
+    postHost({ type: 'open-in-new-tab', url: String(url) });
+  }
+
+  // ★ [批 G19 · 2026-11-12] target="_blank" / "_new" 链接 ⇒ 我们自己开新标签。
+  //
+  // ## 病根 (实测, 不是猜)
+  //
+  //   Electron 的 <webview> 对 guest 发起的 window-open 请求 (target=_blank 的
+  //   链接、window.open()):
+  //     · **不**派发 <webview> 上的 'new-window' DOM 事件 (实测 newWindow: []);
+  //     · **不**真开一个窗口 (实测 CDP target 列表里没有新 page);
+  //     · guest 自己也不导航 (实测 did/will-navigate 都是空)。
+  //   ⇒ 链接**点了完全没反应**。百度首页那排导航 (新闻/hao123/地图/贴吧/视频…)
+  //     全是 target="_blank" ⇒ 整个页面点不动。
+  //
+  //   (顺带验过: 跟 <webview> 的 sandbox 属性**无关** —— 带与不带,
+  //    自造的同标签链接都能正常跳。)
+  //
+  // ## 修法
+  //
+  //   在 guest 里**捕获阶段**拦下这类点击 ⇒ preventDefault 掉弹窗请求 ⇒
+  //   通知渲染层 ⇒ 渲染层用 openInNewTab() 在**我们的浏览器**里开一个新标签
+  //   (浏览器该有的行为: _blank = 新标签)。
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    var a = el && el.closest ? el.closest('a[href]') : null;
+    if (!a) return;
+    var t = (a.getAttribute('target') || '').toLowerCase();
+    if (t !== '_blank' && t !== '_new') return;
+    var href = a.href;
+    if (!href || href.indexOf('javascript:') === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    postNewTab(href);
+  }, true);
+
+  // ★ window.open(...) ⇒ 同样交给渲染层开标签 (别让 guest 自己开窗)。
+  try {
+    var origOpen = window.open;
+    if (origOpen && !origOpen.__gacode_patched) {
+      var patched = function (url) {
+        try { postNewTab(url || ''); } catch (e) {}
+        return null;
+      };
+      patched.__gacode_patched = true;
+      window.open = patched;
+    }
+  } catch (e) {}
+
+  // ── 长按 / 右键菜单 (0.7.5 browser-15 · 原逻辑逐字保留, 只换了通道) ──
   // 右键 (contextmenu) — 找最近的 <a> 或 <img>
   document.addEventListener('contextmenu', function (e) {
     var target = e.target;
     while (target && target !== document.body) {
       if (target.tagName === 'A' && target.href) {
         e.preventDefault();
-        post({ x: e.clientX, y: e.clientY, url: target.href, kind: 'link' });
+        postLongPress({ x: e.clientX, y: e.clientY, url: target.href, kind: 'link' });
         return;
       }
       if (target.tagName === 'IMG' && target.src) {
         e.preventDefault();
-        post({ x: e.clientX, y: e.clientY, url: target.src, kind: 'image' });
+        postLongPress({ x: e.clientX, y: e.clientY, url: target.src, kind: 'image' });
         return;
       }
       target = target.parentNode;
@@ -842,11 +1040,11 @@ const LONG_PRESS_SCRIPT = `(function () {
       var target = e.target;
       while (target && target !== document.body) {
         if (target.tagName === 'A' && target.href) {
-          post({ x: startX, y: startY, url: target.href, kind: 'link' });
+          postLongPress({ x: startX, y: startY, url: target.href, kind: 'link' });
           return;
         }
         if (target.tagName === 'IMG' && target.src) {
-          post({ x: startX, y: startY, url: target.src, kind: 'image' });
+          postLongPress({ x: startX, y: startY, url: target.src, kind: 'image' });
           return;
         }
         target = target.parentNode;
@@ -970,6 +1168,18 @@ interface WebviewPaneProps {
   onFailed: () => void;
   onNavigate: (url: string) => void;
   onProgress: (p: number) => void;
+  /**
+   * ★ [批 G19] guest 发给宿主的消息 (长按菜单 / 开新标签)。
+   *   通道 = guest 的 console.log (带 HOST_MSG_MARKER 前缀) ⇒ 本组件从
+   *   <webview> 的 `console-message` 事件里解析出来转交。
+   */
+  onHostMessage: (data: {
+    type?: string;
+    url?: string;
+    x?: number;
+    y?: number;
+    kind?: string;
+  }) => void;
 }
 
 function WebviewPane({
@@ -978,6 +1188,7 @@ function WebviewPane({
   onFailed,
   onNavigate,
   onProgress,
+  onHostMessage,
 }: WebviewPaneProps) {
   const ref = useRef<ElectronWebview | null>(null);
 
@@ -1006,11 +1217,38 @@ function WebviewPane({
       const url = (e as unknown as { url?: string }).url;
       if (url) onNavigate(url);
     };
+    // ★ [批 G19] guest → 宿主 的消息通道。
+    //   guest 把消息打成一条带 HOST_MSG_MARKER 前缀的 console.log,
+    //   <webview> 会派发 `console-message` 事件 ⇒ 这里取出来解析。
+    //   ⚠️ 页面自己的 console 输出**不会**带这个前缀 ⇒ 直接过滤掉。
+    const handleConsoleMessage = (e: Event) => {
+      const raw = (e as unknown as { message?: string }).message;
+      if (typeof raw !== "string") return;
+      const idx = raw.indexOf(HOST_MSG_MARKER);
+      if (idx === -1) return;
+      const body = raw.slice(idx + HOST_MSG_MARKER.length);
+      try {
+        const parsed = JSON.parse(body) as {
+          type?: string;
+          url?: string;
+          x?: number;
+          y?: number;
+          kind?: string;
+        };
+        if (parsed && typeof parsed === "object") onHostMessage(parsed);
+      } catch {
+        /* 不是我们的消息 (或页面伪造的垃圾) ⇒ 忽略 */
+      }
+    };
     wv.addEventListener("did-start-loading", handleDidStartLoading);
     wv.addEventListener("did-stop-loading", handleDidStopLoading);
     wv.addEventListener("did-finish-load", handleDidFinishLoad as EventListener);
     wv.addEventListener("did-fail-load", handleDidFailLoad);
     wv.addEventListener("will-navigate", handleWillNavigate as EventListener);
+    wv.addEventListener(
+      "console-message",
+      handleConsoleMessage as EventListener,
+    );
     // Electron 扩展事件 (CustomEvent 携带 number payload, 不是标准 Event)
     wv.addEventListener(
       "did-change-progress",
@@ -1023,11 +1261,30 @@ function WebviewPane({
       wv.removeEventListener("did-fail-load", handleDidFailLoad);
       wv.removeEventListener("will-navigate", handleWillNavigate as EventListener);
       wv.removeEventListener(
+        "console-message",
+        handleConsoleMessage as EventListener,
+      );
+      wv.removeEventListener(
         "did-change-progress",
         handleProgress as unknown as EventListener,
       );
     };
   }, [tab.id, onLoaded, onFailed, onNavigate, onProgress]);
+
+  // ★ [批 G19] 空白标签页 —— `tab.url` 为空 ⇒ **不挂 webview**,
+  //   渲染一个空白页占位 (用户输入网址之后才真的加载网页)。
+  //   ⚠️ 不能用 `src="about:blank"` 糊弄: 那样 webview 照样挂上、照样有 guest,
+  //     后面切 URL 时 guest 的状态 (历史 / 滚动位置) 是脏的。
+  if (!tab.url) {
+    return (
+      <div className="absolute inset-0 flex items-center justify-center bg-bg-base text-fg-subtle text-sm">
+        <div className="text-center space-y-2">
+          <p className="text-base">新标签页</p>
+          <p className="text-xs">在下面输入网址或搜索关键词</p>
+        </div>
+      </div>
+    );
+  }
 
   if (tab.failed) {
     return (

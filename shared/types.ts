@@ -128,6 +128,22 @@ export interface GacodeBridge {
     url?: string;
     filePath?: string;
   }) => Promise<{ ok: boolean; error?: string }>;
+
+  /**
+   * ★ [批 G19 · 2026-11-12] 清掉内嵌浏览器 (webview) 的缓存。
+   *
+   * ## 为什么必须走主进程
+   *
+   *   渲染层拿不到 `session` 对象 —— `<webview>` 标签**没有** clearCache 方法
+   *   (实测 `typeof wv.clearCache === "undefined"`, 调了直接 TypeError)。
+   *   缓存属于 Chromium 的 **session** ⇒ 只能主进程 `session.defaultSession.clearCache()`。
+   *
+   * ## 清什么 / 不清什么
+   *
+   *   · 清: HTTP 缓存 + DNS 主机解析缓存 (页面显示不正常 / 图片不更新时用)
+   *   · **不清**: cookie / localStorage —— 那些是各站点的登录态, 清了用户得重登。
+   */
+  clearBrowserCache: () => Promise<{ ok: boolean; error?: string }>;
 }
 
 /** 收藏夹条目 — 跟 Android 端 `BookmarkEntity` shape 对齐. */
