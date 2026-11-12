@@ -564,7 +564,18 @@ export async function runReconnectFlow(
           ports.log?.(
             `[sse-reconnect] attempt=${state.attempt}/${maxAttempts} ⇒ 退避 ${step.action.delayMs}ms`,
           );
-          await ports.sleep(step.action.delayMs);
+          // [批 G18 · 2026-11-12] 退避期间顺便等一个「恢复信号」(网络回来 / 回前台 / 手动重试)
+          //   —— 一有信号就立刻重试, 不干等满整个退避时长 (上限 30s).
+          //   真机 sid=916 (2026-11-12 锁屏复现, A063): 10:35:54 用户解锁 (DNS 恢复) 时,
+          //   下一个 attempt 的退避要到 10:36:03 才结束 ⇒ 白等 9 秒; 锁久一点就是白等 30s.
+          //   ⚠ 宿主层的 awaitSignal 监听 ["online", "visibilitychange"] 且只认「真的可见」
+          //     ⇒ 解锁回前台 = 立刻唤醒; 没人给信号时超时 = 等满退避 = 与改动前逐字等价.
+          const woken = await ports.awaitSignal(step.action.delayMs);
+          if (woken) {
+            ports.log?.(
+              `[sse-reconnect] 退避被恢复信号打断 ⇒ 立刻重试 (attempt=${state.attempt + 1})`,
+            );
+          }
           break;
         case "park":
           ports.log?.(

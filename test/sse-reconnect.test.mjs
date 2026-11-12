@@ -339,13 +339,46 @@ test("A7 ★ RC-W19 降级轮询: 间隔 3s、上限 60s、超时后停 (不许�
 // A' 段 · 执行器 (端到端跑一遍闭环; 端口全注入 ⇒ 不碰网络)
 // ===========================================================================
 
+test("A8' [G18] 退避改成等恢复信号: 不再干等 sleep, 有信号就立刻重试", async () => {
+  const attempts = [];
+  const sleeps = [];
+  const signalWaits = [];
+  await R.runReconnectFlow(
+    {
+      isOnline: () => true,
+      // 第一次退避给信号 (模拟「解锁 -> app 回前台」), 之后不给.
+      awaitSignal: async (timeoutMs) => {
+        signalWaits.push(timeoutMs);
+        return signalWaits.length === 1;
+      },
+      runOnce: async (attempt) => {
+        attempts.push(attempt);
+        return { kind: "connection_lost" };
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    },
+    { maxAttempts: 3, rand: () => 0.5, pollIntervalMs: null },
+  );
+  assert.deepEqual(attempts, [1, 2, 3], "重试次数不该因为退避改实现而变化");
+  assert.ok(signalWaits.length >= 2, "退避期间必须去问恢复信号 (否则就是干等)");
+  assert.ok(signalWaits.includes(1000), "第一次退避的等待上限必须是 1s");
+  assert.equal(sleeps.length, 0, "退避不再走 sleep (改成等信号)");
+});
+
 test("A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s (验收判据 1)", async () => {
   const attempts = [];
   const delays = [];
   const outcome = await R.runReconnectFlow(
     {
       isOnline: () => true,
-      awaitSignal: async () => false,
+      awaitSignal: async (timeoutMs) => {
+        // [G18] backoff no longer sleeps; it waits for a recovery signal with a timeout.
+        // Only record the backoff window (<=30s); the park window (5min) is not a backoff.
+        if (timeoutMs <= 30000) delays.push(timeoutMs);
+        return false;
+      },
       runOnce: async (attempt) => {
         attempts.push(attempt);
         // ⚠️ 安全阀: 「删掉预算上限」的变异 (M-RC-W16) 会让这里**死循环** ⇒
@@ -355,9 +388,7 @@ test("A8 流层: 网络抖动 ⇒ 自动重连 ≥ 1 次, 退避是 1s→2s (验
         }
         return { kind: "connection_lost", reason: "断了" };
       },
-      sleep: async (ms) => {
-        delays.push(ms);
-      },
+      sleep: async () => {},
     },
     // pollIntervalMs: null ⇒ 这一条只测重连阶段 (轮询阶段见 A10)。
     { maxAttempts: 3, rand: () => 0.5, pollIntervalMs: null },
