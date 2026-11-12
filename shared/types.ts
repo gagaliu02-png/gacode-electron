@@ -223,6 +223,8 @@ export interface ClientToolArtifact {
   fileCount?: number;
   totalSize?: number;
   entryFile?: string | null;
+  /** 上传到服务端之后的可下载地址（P5）—— 只有单文件才有。 */
+  url?: string;
 }
 
 /** 端侧执行结果。 */

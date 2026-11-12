@@ -62,6 +62,13 @@ export interface ClientToolArtifact {
   fileCount?: number;
   totalSize?: number;
   entryFile?: string | null;
+  /**
+   * 上传到服务端之后的**可下载地址**（P5）。
+   *
+   * ⚠️ 只有 `kind:'file'` 且**上传成功**才有 ⇒ 服务端据此把它落进**交付中心**。
+   * ⚠️ `kind:'workspace'` 永远没有（目录产物不进交付中心，L-24o）。
+   */
+  url?: string;
 }
 
 /** 端侧回传的结果（= D3 的请求体）。 */

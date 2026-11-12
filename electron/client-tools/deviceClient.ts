@@ -32,6 +32,7 @@ import * as os from 'os';
 import { randomUUID } from 'crypto';
 import { app } from 'electron';
 import type {
+  ClientToolArtifact,
   ClientToolRequest,
   ClientToolResult,
 } from './types';
@@ -319,7 +320,63 @@ class DeviceClient {
 
     const result = await this.runRequest(req);
     markDone(pendingId);
-    await this.uploadResult(pendingId, result);
+    // ★ [P5 · 2026-11-12] 端侧产物 → 服务端托管（好进**交付中心**）。
+    //   只有 `kind:'file'`（单文件）上传；`kind:'workspace'`（目录/项目）**不上传**
+    //   （L-24o：目录产物不进交付中心，只报本机路径）。
+    const withUrls = await this.uploadArtifacts(result);
+    await this.uploadResult(pendingId, withUrls);
+  }
+
+  /**
+   * 把端侧的**单文件**产物上传到服务端托管。
+   *
+   * ⚠️ 上传失败**不**让整次执行失败 —— 本机文件已经写好了（那是执行的结果），
+   *    上传只是「让它在手机上也能下载」这一层附加价值 ⇒ 失败就当没有 URL，
+   *    服务端不会把它登记成交付物（进了一个打不开的条目更糟）。
+   */
+  private async uploadArtifacts(result: ClientToolResult): Promise<ClientToolResult> {
+    const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+    if (!artifacts.length) return result;
+    const out: ClientToolArtifact[] = [];
+    for (const a of artifacts) {
+      if (!a || a.kind !== 'file') {
+        if (a) out.push(a);
+        continue;
+      }
+      try {
+        const buf = await fs.promises.readFile(a.path);
+        const fd = new FormData();
+        fd.append('file', new Blob([buf]), a.name);
+        fd.append('localPath', a.path);
+        fd.append('deviceId', this.deviceId);
+        fd.append('kind', a.kind);
+        const res = await fetch(`${apiBase()}/devices/artifacts`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${this.accessToken}` },
+          body: fd,
+        });
+        if (!res.ok) {
+          console.warn('[client-tools/device] 产物上传失败:', res.status);
+          out.push(a);
+          continue;
+        }
+        const body = (await res.json().catch(() => ({}))) as {
+          url?: string;
+          size?: number;
+          mimeType?: string;
+        };
+        out.push({
+          ...a,
+          url: body.url || a.url,
+          size: body.size ?? a.size,
+          mimeType: body.mimeType || a.mimeType,
+        });
+      } catch (e) {
+        console.warn('[client-tools/device] 产物上传异常:', e && (e as Error).message);
+        out.push(a);
+      }
+    }
+    return { ...result, artifacts: out };
   }
 
   /** 跑一次派单（闸门 → 执行 → 审计）。 */
