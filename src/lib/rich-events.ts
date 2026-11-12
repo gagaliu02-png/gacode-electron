@@ -42,11 +42,12 @@ export type ToolDoneSubtype =
   | "doc_summary";
 
 /**
- * 21 个**活**的独立 `type`。
+ * 22 个**活**的独立 `type`。
  *
  * ⚠️ 契约 §2.1 那张表有 20 行, 但 `image` 有 3 个产出点、`result` 有 2 个
  *   ⇒ 去重后 §2.1 是 **17 个**; 再加 §2.2 补的 3 个 ⇒ **20 个**;
- *   再加**契约订正 21** 补的 `compaction` ⇒ **21 个**。
+ *   再加**契约订正 21** 补的 `compaction` ⇒ **21 个**;
+ *   再加**契约附录 订正 24** 补的 `client_tool_request` ⇒ **22 个**。
  *
  * ⚠️ 末尾 3 个 (think / planify_start / planify_done) 按契约 **L-2** 只建模、
  *   **不渲染** —— 归一层当「未知事件」跳过。
@@ -80,6 +81,8 @@ export type LiveRichEventType =
   | "report"
   // 订正 21 —— 上下文压缩 (2026-11-02 新增 · 第 21 个活类型)
   | "compaction"
+  // 订正 24 —— 端侧执行派单 (2026-11-12 新增 · 第 22 个活类型)
+  | "client_tool_request"
   // §2.2 —— 草案漏掉的 3 个活类型 (L-2: 必须按「未知事件」处理)
   | "think"
   | "planify_start"
@@ -238,6 +241,32 @@ export interface RichApprovalDenied {
   reason: string | null;
 }
 
+/**
+ * 端侧执行派单 (契约附录 **订正 24** · 2026-11-12 · 第 22 个活类型)。
+ *
+ * gaclaw 判定模型要调 `pc_*` 工具时下发这张卡 —— 由**用户自己的电脑**执行,
+ * 结果按 `pending_id` 回传服务端 (设备通道 D3)。
+ *
+ * ⚠️ `id` 是 `tool_use_id` (给工具链对齐用), **不是**裁决身份 (契约 L-24a):
+ *    回传结果**必须**按 `pending_id` 寻址 —— 拿 `id` 回传会寻址不到。
+ */
+export interface RichClientToolRequest {
+  type: "client_tool_request";
+  /** tool_use_id —— ⚠️ **不是**裁决身份 (L-24a), 只用于跟 tool_start 对齐 */
+  id: string | null;
+  /** ★ 裁决身份 —— 回传结果按这个寻址 (L-24a) */
+  pending_id: string | null;
+  tool: string | null;
+  args: unknown;
+  cwd: string | null;
+  timeout_ms: number | null;
+  risk_level: string | null;
+  title: string | null;
+  device_id: string | null;
+  origin_client: string | null;
+  session_id: string | null;
+}
+
 export interface RichQrcode {
   type: "qrcode";
   id: string | null;
@@ -370,6 +399,64 @@ export function describeCompaction(
   return parts.join(" · ");
 }
 
+/**
+ * `pc_*` 工具的「关键参数」键名表 —— 只取一个能说明"要干什么"的参数。
+ *
+ * ⚠️ **不**整坨 JSON 倒出来 —— `pc_write_file` 的 args 里可能有整段文件内容,
+ *    倒出来会把卡片撑爆。
+ */
+const CLIENT_TOOL_ARG_KEYS: Readonly<Record<string, readonly string[]>> = {
+  pc_shell: ["command", "cmd", "script"],
+  pc_read_file: ["path", "file", "filePath"],
+  pc_write_file: ["path", "file", "filePath"],
+  pc_list_dir: ["path", "dir", "directory"],
+  pc_open_path: ["path", "target"],
+  pc_project: ["path", "action", "command"],
+  pc_screenshot: ["display", "region", "mode"],
+  pc_system_info: [],
+  pc_process_list: ["filter", "name", "pattern"],
+};
+
+/** 参数摘要的最长长度 (超出截断)。 */
+const CLIENT_TOOL_SUMMARY_MAX = 120;
+
+/**
+ * 端侧派单的**参数摘要** —— **三端同款** (契约附录 订正 24)。
+ *
+ * ⚠️ 字段缺失 (L-8: 键不存在 ≡ null) ⇒ 只拼**有值**的那几段, 不许出 "null"。
+ */
+export function describeClientToolArgs(
+  ev: Pick<RichClientToolRequest, "tool" | "args">,
+): string {
+  const args = ev.args;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const rec = args as Record<string, unknown>;
+  const keys = CLIENT_TOOL_ARG_KEYS[ev.tool ?? ""] ?? [];
+  for (const k of keys) {
+    const v = rec[k];
+    if (typeof v === "string" && v.trim()) {
+      const s = v.trim().replace(/\s+/g, " ");
+      return s.length > CLIENT_TOOL_SUMMARY_MAX
+        ? s.slice(0, CLIENT_TOOL_SUMMARY_MAX - 1) + "…"
+        : s;
+    }
+  }
+  return "";
+}
+
+/**
+ * 端侧派单的一行标题 —— **三端同款** (契约附录 订正 24)。
+ *
+ * 形态: `<title> · <参数摘要>` (摘要缺失就只留标题)。
+ */
+export function describeClientToolRequest(
+  ev: Pick<RichClientToolRequest, "tool" | "title" | "args">,
+): string {
+  const title = (ev.title && ev.title.trim()) || ev.tool || "端侧工具";
+  const detail = describeClientToolArgs(ev);
+  return detail ? `${title} · ${detail}` : title;
+}
+
 // --- 9 个死类型: 保留占位 (L-5), 但生产永不产出 ---
 export interface RichPlan {
   type: "plan";
@@ -433,6 +520,7 @@ export type RichEventBase =
   | RichStepFailed
   | RichReport
   | RichCompaction
+  | RichClientToolRequest
   | RichThink
   | RichPlanifyStart
   | RichPlanifyDone
@@ -474,7 +562,7 @@ export interface ChatPhase {
 // 类型名单 (运行时判据)
 // =========================================================================
 
-/** 21 个活 type 的集合. */
+/** 22 个活 type 的集合. */
 export const LIVE_RICH_EVENT_TYPES: readonly LiveRichEventType[] = [
   "tool_start",
   "tool_done",
@@ -494,6 +582,7 @@ export const LIVE_RICH_EVENT_TYPES: readonly LiveRichEventType[] = [
   "step_failed",
   "report",
   "compaction",
+  "client_tool_request",
   "think",
   "planify_start",
   "planify_done",
@@ -644,6 +733,19 @@ const FIELD_SPECS: Record<LiveRichEventType, readonly string[]> = {
     "before_tokens",
     "after_tokens",
     "ts",
+  ],
+  client_tool_request: [
+    "id",
+    "pending_id",
+    "tool",
+    "args",
+    "cwd",
+    "timeout_ms",
+    "risk_level",
+    "title",
+    "device_id",
+    "origin_client",
+    "session_id",
   ],
   think: ["id", "corr", "reasoning", "ts"],
   planify_start: ["id", "corr", "task", "maxSteps", "ts"],

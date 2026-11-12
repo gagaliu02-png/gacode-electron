@@ -58,7 +58,7 @@ import {
   WrenchIcon,
 } from "../ui/Glyphs";
 import { ToolTimingBadge } from "./ToolTimingBadge";
-import { describeCompaction } from "../../lib/rich-events";
+import { describeClientToolRequest, describeCompaction } from "../../lib/rich-events";
 import type {
   RichEventBase,
   RichToolDone,
@@ -117,6 +117,9 @@ export function RichEventBubble({ event }: Props) {
     // ── 上下文压缩 (契约 订正 21（第 21 个活类型） · 2026-11-02) ─────────
     case "compaction":
       return <CompactionCard event={event} />;
+    // ── 端侧执行派单 (契约附录 订正 24（第 22 个活类型） · 2026-11-12) ────
+    case "client_tool_request":
+      return <ClientToolRequestCard event={event} />;
     // ── P-9 · supervisor 链路树 (契约 §2.1) ──────────────────────────
     case "step_started":
     case "step_done":
@@ -550,6 +553,46 @@ function ApprovalDecisionCard({
           {event.approved_by}
         </span>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * client_tool_request —— 端侧执行派单卡 (契约附录 **订正 24** · 2026-11-12)。
+ *
+ * 这张卡表示: 「模型要在**你的电脑**上跑点什么」—— 由 PC 端自己执行,
+ * 结果按 `pending_id` 回传服务端 (设备通道 D3)。
+ *
+ * ⚠️ P1 阶段 PC 端**只渲染、不执行** —— 执行器 / 闸门在 P3 / P4。
+ * ⚠️ 卡片只展示**参数摘要** (不倒整坨 args) —— `pc_write_file` 的 args 里
+ *    可能有整段文件内容。
+ */
+function ClientToolRequestCard({
+  event,
+}: {
+  event: Extract<RichEvent, { type: "client_tool_request" }>;
+}) {
+  const tool = event.tool ?? "pc_tool";
+  const summary = describeClientToolRequest(event);
+  const risk = event.risk_level ?? "high";
+  const dot = riskColor(risk);
+  return (
+    <div className="my-1 border border-brand-cyan/40 bg-brand-cyan/10 rounded-md px-3 py-2 text-xs">
+      <div className="flex items-center gap-2">
+        <span
+          aria-hidden="true"
+          className={`inline-block w-2 h-2 rounded-full ${dot}`}
+        />
+        <WrenchIcon className="text-brand-cyan" size={14} strokeWidth={1.6} />
+        <span className="font-mono text-fg">{tool}</span>
+        <span className="text-fg-muted truncate">{summary}</span>
+      </div>
+      <div className="mt-1 flex items-center gap-2 text-[11px] text-fg-muted">
+        <span>等待电脑回传</span>
+        {event.cwd ? (
+          <span className="font-mono truncate">{event.cwd}</span>
+        ) : null}
+      </div>
     </div>
   );
 }
