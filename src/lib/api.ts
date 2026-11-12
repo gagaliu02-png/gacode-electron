@@ -1846,25 +1846,7 @@ export function autoTitleSession(id: string): Promise<AutoTitleResult> {
   });
 }
 
-// listAvailableModels — chat-id-31
-//   server 端目前**没有** /yinian/models 端点 (verifier 2026-10-19 grep 全局仅发现
-//   yinian.chat.routes.js 默认 'gawen' / yinian.service.js:751 'gawen'). 客户端硬编码
-//   一份可见列表: gawen (default) + 几个工程上预留但 server 还没接的占位 (disabled),
-//   让 ModelChips 在 ChatDetail 顶部展示, 用户即便选了 disabled 也只是 UI 反馈. 不阻断 send.
-//   后续 server 接 /yinian/models 时换成 GET 请求即可, 接口签名同.
-export interface AvailableModel {
-  key: string;
-  label: string;
-  /** server 实际接受 */
-  enabled: boolean;
-  /** 描述 (tooltip / subtitle) */
-  description?: string;
-}
-
-export function listAvailableModels(): AvailableModel[] {
-  return [
-    { key: "gawen", label: "Gawen", enabled: true, description: "默认模型" },
-    { key: "gawen-fast", label: "Gawen Fast", enabled: true, description: "更快但稍短" },
-    { key: "gaclaw-pro", label: "Gaclaw Pro", enabled: false, description: "即将开放" },
-  ];
-}
+// ★ [2026-11-12 · gaga 拍板] 原 `listAvailableModels` / `AvailableModel` **已删** ——
+//   PC 端只有 gawen 一种模型, 后端的模型切换**不需要**暴露到前端
+//   (原 chat-id-31 的 ModelChips 顶部切换条一并删掉)。
+//   ⇒ 后端真要接 /yinian/models 时, 按需再加回来 (接口签名不变)。

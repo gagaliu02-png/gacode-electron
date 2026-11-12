@@ -45,6 +45,8 @@
  *   - chat-id-30: 知识库挂载 chip + KnowledgeAttachSheet; ChatInputBar 内置 📚 按钮
  *     选中 → handleKnowledgePick 推送 item.id 到 pendingKnowledgeRefs
  *   - chat-id-31: ModelChips 顶部 model 切换
+ *     ★ [2026-11-12 · gaga 拍板] **已删** —— PC 端只有 gawen 一种模型,
+ *       后端的模型切换不需要暴露到前端。
  *   - chat-id-33: autoTitleSession 800ms delay 触发 server LLM 标题 (gagaOS §⑤)
  *
  * gagaOS 2026-10-19 反馈 (0.7.5 hotfix):
@@ -83,7 +85,6 @@ import {
   setSessionPin,
   autoTitleSession,
   createLibraryItem,
-  createChat,
   getStreamState,
   submitApprovalDecisionOutcome,
   type ApprovalAction,
@@ -232,7 +233,6 @@ import { MoreIcon, PlusIcon } from "../components/ui/Glyphs";
 
 // 0.7.5 ChatDetail P1 增量 — 新组件
 import { ChatTopBanner } from "../components/chat/ChatTopBanner";
-import { ModelChips } from "../components/chat/ModelChips";
 import type { CallTreeNode } from "../components/chat/CallTreeCard";
 import type { ExecutionPhase } from "../components/chat/ExecutionTimeline";
 import type { SlashCommand } from "../components/chat/SlashMenu";
@@ -646,9 +646,10 @@ export function ChatDetail() {
   // ★ [批 G8] 「等服务端落库完再刷一次会话列表」的定时器 (bug1) —— 换轮/卸载时要清。
   const chatsRefreshTimerRef = useRef<number | null>(null);
 
-  // 0.7.5 增量 — model 选择 (chat-id-31) / 知识库挂载 (chat-id-30) /
+  // 0.7.5 增量 — 知识库挂载 (chat-id-30) /
   //   流式起始时间戳 (chat-id-20) / call tree (chat-id-12) / phases 合并 (chat-id-35)
-  const [activeModel, setActiveModel] = useState<string>("gawen");
+  // ★ [2026-11-12 · gaga 拍板] model 选择 (原 chat-id-31 的 ModelChips) **已删** ——
+  //   PC 端只有 gawen 一种模型, 后端的模型切换**不需要**暴露到前端。
   /** 已挂载知识库条目 (id + 标题) — 对齐 web attachedKnowledgeRefs
       (web `src/app/(main)/chat/[id]/page.tsx:279-281`) */
   const [pendingKnowledgeRefs, setPendingKnowledgeRefs] = useState<
@@ -1996,7 +1997,8 @@ export function ChatDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["chats"] });
       toast({ message: "已删除对话", variant: "success" });
-      navigate("/chat");
+      // ★ [2026-11-12] 「对话列表页」(/chat) 已下线 ⇒ 删完回 HOME。
+      navigate("/");
     },
     onError: (err) => {
       toast({
@@ -2061,19 +2063,8 @@ export function ChatDetail() {
     [chatId, queryClient],
   );
 
-  // 0.7.5 chat-id-25: `/new` slash 命令派发用 — 跟 Home createChat mutation 同款.
-  const createChatMutation = useMutation({
-    mutationFn: () => createChat(),
-    onSuccess: (chat) => {
-      navigate(`/chat/${chat.id}`);
-    },
-    onError: (err) => {
-      toast({
-        message: `创建对话失败: ${err instanceof Error ? err.message : String(err)}`,
-        variant: "danger",
-      });
-    },
-  });
+  // ★ [2026-11-12 · gaga 拍板] 原 `/new` slash 命令用的 createChat mutation **已删** ——
+  //   「新建对话」统一走 HOME 页 (只有在那里发出第一条消息才建会话) ⇒ 这里不再建会话。
 
   // 组件卸载 → abort 但不 userStopped (跟 web 一致, 让流自然跑完落库)
   useEffect(() => {
@@ -2409,7 +2400,8 @@ export function ChatDetail() {
   //   - image / file / camera / knowledge → 0.7.5 hotfix 2: 路由到 handlePlusAction,
   //     跟 `+` 按钮流程同源 (触发 file input 或弹对应 sheet).
   //   - search / template / voice → 保留 no-op / SlashMenu 自带 supported=false 占位
-  //   - new → 触发 createChat + navigate 到新 chat
+  //   - new → 跳 HOME 页 (★ [2026-11-12] 不再直接 createChat ——
+//     「新建对话」只在 HOME 里发出第一条消息时才建会话)
   //   - save → 把最近一条 assistant 消息保存到知识库 (chat-id-15 fallback 路径)
   const handleSlashCommand = useCallback(
     (cmd: SlashCommand) => {
@@ -2431,8 +2423,10 @@ export function ChatDetail() {
           handlePlusAction("knowledge");
           break;
         case "new":
-          // 走 createChat mutation (跟 ChatList / Home 同款)
-          createChatMutation.mutate();
+          // ★ [2026-11-12] 「新建对话」统一跳 HOME ——
+          //   只有 HOME 里发出第一条消息时才真的建会话 (跟顶部「+ 新建聊天」同一口径)。
+          //   旧行为 = 直接 createChat ⇒ 会留下空会话, 而「对话列表页」已下线 ⇒ 没法清理。
+          navigate("/");
           break;
         case "save": {
           // 找最近一条 assistant 消息, 调 createLibraryItem (跟 MessageMenu.handleSaveToKnowledge
@@ -2473,7 +2467,7 @@ export function ChatDetail() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [messages, toast, createChatMutation, handlePlusAction],
+    [messages, toast, navigate, handlePlusAction],
   );
 
   // gagaOS §②④ hotfix 2 — `+` 按钮 + 弹层流程全部由 ChatDetail 自管 (PlusActionsSheet /
@@ -2483,25 +2477,24 @@ export function ChatDetail() {
 
   return (
     <div className="h-full flex flex-col bg-bg-base">
-      {/* 头部 — 阶段 8 chat-id-1: 重命名 + 完整 ⋮ 菜单 + 0.7.5 chat-id-31 ModelChips
-          对齐 web `Header.tsx:174` — h-14 sticky + border-b + bg-background */}
+      {/* 头部 — 阶段 8 chat-id-1: 重命名 + 完整 ⋮ 菜单
+          对齐 web `Header.tsx:174` — h-14 sticky + border-b + bg-background
+          ★ [2026-11-12] ModelChips (顶部 model 切换) **已删** ——
+            PC 端只有 gawen 一种模型, 后端模型切换不上前端。 */}
       <div className="shrink-0 h-14 px-4 bg-background border-b border-border flex items-center gap-2">
         <div className="flex-1 truncate font-medium min-w-0" title={title}>
           {title}
         </div>
-        {/* chat-id-31: 顶部 model 切换 chips */}
-        <ModelChips
-          active={activeModel}
-          onChange={setActiveModel}
-          disabled={isStreaming}
-        />
-        {/* 对齐 web Header.tsx:204-212 — 右侧「+ 新建聊天」圆形按钮 */}
+        {/* ★ [2026-11-12 · gaga 拍板] 「+ 新建聊天」**不再直接建会话** ——
+            改为跳 HOME 页; 只有在 HOME 里真的发出第一条消息时, 才建新会话
+            (Home.handleSubmit → createChat → /chat/:id)。
+            ⚠️ 旧行为 (直接 createChat) 会留下一堆空会话, 且「对话列表页」已下线
+              ⇒ 空会话在侧栏里没法清理。 */}
         <button
           type="button"
           aria-label="新建聊天"
-          disabled={createChatMutation.isPending}
-          onClick={() => createChatMutation.mutate()}
-          className="w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated transition-colors duration-150 inline-flex items-center justify-center disabled:opacity-50"
+          onClick={() => navigate("/")}
+          className="w-9 h-9 rounded-full text-fg-muted hover:bg-bg-elevated transition-colors duration-150 inline-flex items-center justify-center"
         >
           <PlusIcon className="w-5 h-5" />
         </button>

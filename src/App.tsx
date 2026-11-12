@@ -16,7 +16,6 @@ import { Login } from "./routes/Login";
 import { Register } from "./routes/Register";
 import { QrLogin } from "./routes/QrLogin";
 import { Home } from "./routes/Home";
-import { ChatList } from "./routes/ChatList";
 import { ChatDetail } from "./routes/ChatDetail";
 import { Library } from "./routes/Library";
 import { LibraryDetail } from "./routes/LibraryDetail";
@@ -119,14 +118,14 @@ export function App() {
                   </Protected>
                 }
               />
-              <Route
-                path="/chat"
-                element={
-                  <Protected>
-                    <ChatList />
-                  </Protected>
-                }
-              />
+              {/* ★ [2026-11-12 · gaga 拍板] 「对话列表页」(/chat) **已下线** ——
+                  侧栏 (置顶 / 最近) 已经承担会话列表的职责, 独立列表页是重复的。
+                  ⇒ 保留路由但**重定向到 HOME**, 不删路由 ——
+                    · deep link `gacode://chat` (electron/main.ts parseDeepLink) 落到这儿,
+                      删掉路由会变成 404 式空白; 重定向 = 老链接也能用;
+                    · `/chat/:id` (会话详情) **不受影响**, 照常。
+                  页面本体 routes/ChatList.tsx 一并删除。 */}
+              <Route path="/chat" element={<Navigate to="/" replace />} />
               <Route
                 path="/chat/:id"
                 element={

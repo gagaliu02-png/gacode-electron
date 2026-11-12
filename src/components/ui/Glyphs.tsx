@@ -16,8 +16,7 @@
  *
  * 同名不同形 → 分开导出 (path / 尺寸 / stroke 都不同, 合并会改视觉):
  *   - `PinIcon`      侧栏置顶 (16px / sw2, lucide 新版 path)
- *   - `PinRowIcon`   对话列表行内置顶 (14px / sw1.6, lucide 旧版 path)
- *   - `SearchIcon`   对话列表顶部搜索按钮 (22px / sw1.6, 直线手柄)
+ *   - `SearchIcon`   搜索按钮 (22px / sw1.6, 直线手柄)
  *   - `SearchFieldIcon` 输入框前缀放大镜 (16px / sw2, path 手柄)
  *   - `SearchBareIcon` 裸放大镜 (20px / sw2, className 原样透传)
  *   - `MoreVertIcon` 实心三点 (fill=currentColor)
@@ -278,7 +277,8 @@ export function ClockIcon({ className, size = 14, strokeWidth = 1.6 }: GlyphProp
  * ⚠️ `ChatBubbleIcon` 已删除 (2026-10-27) —— 侧栏对话条目的行首气泡图标是
  *   PC 独有、web 没有 (web ChatItem 第一列直接是标题) ⇒ 按「PC 有 web 没有的
  *   直接删」口径随 A4-D3-01 一起移除, 本导出随之成为死代码, 一并清掉。
- *   同形不同规格的 `MessageSquarePlusIcon` 仍在库里。
+ *   (同形不同规格的 `MessageSquarePlusIcon` 也已于 2026-11-12 随「对话列表页」
+ *    下线一并删除 —— 全仓无引用。)
  */
 
 /** lucide `log-out` — 14×14 / sw1.6 */
@@ -303,30 +303,9 @@ export function LogoutIcon({ className, size = 14, strokeWidth = 1.6 }: GlyphPro
   );
 }
 
-// ════════════════════════════════════════════════════════════
-// 对话列表页图标 (来源: routes/ChatList.tsx)
-// ════════════════════════════════════════════════════════════
-
-/** lucide `pin` (旧版 path, 圆头) — 14×14 / sw1.6 (与上面的 PinIcon 不同形) */
-export function PinRowIcon({ className, size = 14, strokeWidth = 1.6 }: GlyphProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={strokeWidth}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className={className}
-    >
-      <line x1="12" y1="17" x2="12" y2="22" />
-      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h0a3 3 0 0 0-3-3v0a3 3 0 0 0-3 3v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-    </svg>
-  );
-}
+// ★ [2026-11-12] 原「对话列表页图标」区 (来源: routes/ChatList.tsx) **整段删除** ——
+//   「对话列表页」已下线, `PinRowIcon` 随之成为死代码。
+//   (同段还有 `MessageSquarePlusIcon`, 也一并删掉 —— 全仓无引用。)
 
 /** 三点菜单 (实心点, fill=currentColor, **无 stroke**) — 14×14 */
 export function MoreVertIcon({ className, size = 14 }: GlyphProps) {
@@ -399,28 +378,6 @@ export function TrashIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps)
       <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
       <line x1="10" x2="10" y1="11" y2="17" />
       <line x1="14" x2="14" y1="11" y2="17" />
-    </svg>
-  );
-}
-
-/** lucide `message-square-plus` — 24×24 / sw2 */
-export function MessageSquarePlusIcon({ className, size = 24, strokeWidth = 2 }: GlyphProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={strokeWidth}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className={className}
-    >
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      <path d="M12 8v8" />
-      <path d="M8 12h8" />
     </svg>
   );
 }
@@ -2099,8 +2056,9 @@ export function RefreshCcwIcon({ className, size = 16, strokeWidth = 2 }: GlyphP
  * 2026-10-27 收编自 `components/deliveries/Icons.tsx` (交付详情页「跳到源对话」按钮)。
  * path 逐字取自 lucide-react v0.407.0 `dist/esm/icons/message-square.js`:
  *   单 path `M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z`。
- * ⚠️ 同形不同规格 (跟库里 `ChatBubbleIcon` 14px/sw1.6 / `MessageSquarePlusIcon`
- *    24px/sw2 同路径不同形) ⇒ 按本文件「同名不同形 → 分开导出」约定单独导出。
+ * ⚠️ 同形不同规格 (库里 `ChatBubbleIcon` 14px/sw1.6 已于 2026-10-27 删除,
+ *    `MessageSquarePlusIcon` 24px/sw2 已于 2026-11-12 删除) ⇒ 按本文件
+ *    「同名不同形 → 分开导出」约定单独导出。
  * ⚠️ 原像素 16 (调用点 `w-4 h-4`) ⇒ 本组件默认 size=16。
  */
 export function MessageSquareIcon({ className, size = 16, strokeWidth = 2 }: GlyphProps) {
