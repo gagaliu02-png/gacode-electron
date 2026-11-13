@@ -90,15 +90,22 @@
 #   - files 里显式带上 node_modules/node-pty (自定义 files 列表会覆盖默认项)
 #   - output 改 release-clienttools-v20/ 绕开 v19 目录 (每次换新目录)
 
+# 0.7.21 (gaga 2026-11-13 报的三个 PC 端问题):
+#   - 气泡缺执行时间 ⇒ 四要素真正接到气泡上 + 本地时钟起表/收表 + 按 turnKey 补回历史行
+#   - 急停点了就永久停摆 ⇒ 急停改成**开关**(能「恢复」) + 急停时真杀正在跑的命令
+#   - 新建会话不出 LLM 标题 ⇒ 去掉一次性 latch + 定时器存 ref + 发消息就武装
+#   - ⚠️ 端侧产物「只在 PC 上可见」是**服务端**的改动 (unified-api · 契约 订正 26) ⇒ 本包不用改
+#   - output 改 release-pcfix-v21/ 绕开 v20 目录 (每次换新目录)
+
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.20
+buildVersion: 0.7.21
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-clienttools-v20
+  output: release-pcfix-v21
 
 files:
   - dist/**/*
