@@ -207,6 +207,19 @@ export interface GacodeBridge {
     stopTask: (pendingId: string) => Promise<{ ok: boolean }>;
     /** 订阅「正在跑的任务」变化（主进程 → 渲染层）。 */
     onTasks: (callback: (tasks: RunningClientTask[]) => void) => () => void;
+
+    // ── [2026-11-13 · 订正 27 · B5/B6] 后台作业 ──────────────────────────
+    //
+    // 后台作业 = 派单即返回、进程 detached 的长活（Claude Code / 长命令）。
+    // ⚠️ 它**不在** runningTasks 里（那个是「正在这一轮里等着的同步任务」）
+    //    ⇒ 作业有自己的一份列表 + 自己的停止入口。
+
+    /** 本机的后台作业列表（含已结束的，按开始时间倒序）。 */
+    listJobs?: () => Promise<LocalJobInfo[]>;
+    /** 停一个后台作业（杀进程树）。 */
+    stopJob?: (jobId: string) => Promise<{ ok: boolean; error?: string | null }>;
+    /** 订阅「作业列表」变化（主进程 → 渲染层）。 */
+    onJobs?: (callback: (jobs: LocalJobInfo[]) => void) => () => void;
   };
 
   /**
@@ -241,6 +254,36 @@ export interface RunningClientTask {
   originClient: string | null;
   /** 开始跑的时刻（epoch ms）。 */
   startedAt: number;
+  /**
+   * ★ [2026-11-13 · 订正 27] 执行模式：`'sync'`（这一轮在等它）| `'background'`（派单即返回，作业在后台跑）。
+   */
+  mode?: 'sync' | 'background' | null;
+}
+
+/**
+ * ★ [2026-11-13 · 订正 27 · B5] 一条**本机后台作业**（给 UI 看）。
+ *
+ * ⚠️ 与 `RunningClientTask` 是**两回事**：
+ *   · `RunningClientTask` = 这一轮**正在等**的同步任务（模型被它挡着）；
+ *   · `LocalJobInfo`      = 派单即返回、**在后台自己跑**的长活（Claude Code / 长命令）。
+ */
+export interface LocalJobInfo {
+  /** 作业 id（= 服务端的 `pending_id`）。 */
+  id: string;
+  /** 用的哪个 CLI 服务（`claude` / `raw`）。 */
+  serviceId: string;
+  /** 人类可读名字（`Claude Code` / `普通命令`）。 */
+  title: string;
+  /** 三态：`running`（在跑）/ `reported`（已回传，完事）/ `cancelled`（被用户停了）/ `failed`。 */
+  status: 'queued' | 'running' | 'reported' | 'failed' | 'cancelled';
+  /** 开始跑的时刻（epoch ms）。 */
+  startedAt: number;
+  /** 结束时刻（没结束为 null）。 */
+  settledAt: number | null;
+  /** 进程 pid（没起来为 null）。 */
+  pid: number | null;
+  /** 最近一次摘要（给 UI 显示进展）。 */
+  summary: string | null;
 }
 
 /** 一条本机定时任务。 */
