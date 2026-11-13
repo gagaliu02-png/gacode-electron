@@ -30,6 +30,7 @@
  */
 
 import { pickShell } from './proc.ts';
+import { resolveCommand } from './shellSplit.ts';
 
 // ===========================================================================
 // 类型
@@ -57,6 +58,26 @@ export interface CliInvocation {
   cwd: string | null;
   /** 追加到子进程 env 的键值（**只加不减**）。 */
   env?: Record<string, string>;
+  /**
+   * ★ [2026-11-13] 走 **shell** 的命令本体（Windows `cmd /c …` / POSIX `sh -lc …`）。
+   *
+   *   给了它，作业执行器会**在命令里**加 `>> "<日志文件>" 2>&1`，
+   *   并由 shell 自己去做这个重定向。
+   *
+   *   ## 为什么不能靠「继承父进程的 fd」
+   *
+   *   实测（Windows）：`detached:true` + `cmd /c` + **外部 exe**
+   *   ⇒ 子进程的 stdout **整个丢掉**（日志文件 0 字节），而 cmd 的**内建命令**
+   *   （`echo`）却正常 ⇒ 也就是说外部程序被 cmd 丢给了另一个 console，
+   *   没有继承我们重定向的句柄。
+   *   ⇒ 那个组合正好是 `pc_job_start` 的形状 ⇒ 后台命令的输出**全丢**
+   *   （用户看到的汇报就只剩「成功，没有输出」）。
+   *
+   *   ⇒ 改成**由 shell 自己做重定向** ⇒ 输出一定落在文件里。
+   *   用 `>>`（追加）而不是 `>`（覆盖）：cmd 自己的报错（命令找不到等）
+   *   走的是继承来的 fd，两者写同一个文件 ⇒ 追加才不会互相覆盖。
+   */
+  shellCommand?: string | null;
 }
 
 /** 起一次调用的上下文。 */
@@ -129,11 +150,28 @@ export const rawService: CliService = {
   buildInvocation(ctx: CliServiceContext): CliInvocation | null {
     const command = ctx.args && typeof ctx.args.command === 'string' ? ctx.args.command.trim() : '';
     if (!command) return null;
+
+    // ★ [2026-11-13] 能**不走 shell**就走直连 exe。
+    //   原因（实测）：Windows 上 `detached` + `cmd /c` + 外部 exe ⇒ 子进程的 stdout
+    //   **全丢**（作业日志 0 字节）—— cmd 会给孙进程另开 console，不走我们重定向的句柄。
+    //   ⇒ 而直连 exe 的同样 spawn 参数**输出正常**。
+    //   ⚠️ 真的需要 shell 的命令（管道/&&/重定向/变量展开）仍走 cmd（见 shellSplit.ts）。
+    const direct = resolveCommand(command);
+    if (direct.direct) {
+      return {
+        command: direct.exe,
+        args: direct.args,
+        cwd: ctx.cwd || null,
+      };
+    }
+
     const shell = pickShell();
     return {
       command: shell.file,
-      args: shell.args(command),
+      // ⚠️ args 由作业执行器填（它才知道日志文件路径，要在命令里加 `>> file 2>&1`）
+      args: [],
       cwd: ctx.cwd || null,
+      shellCommand: command,
     };
   },
 

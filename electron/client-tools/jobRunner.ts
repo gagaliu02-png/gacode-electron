@@ -29,10 +29,11 @@
  */
 
 import * as fs from 'fs';
+import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { getCliService } from './cliService.ts';
 import type { CliEvent, CliService } from './cliService.ts';
-import { isProcessAlive, killTree } from './proc.ts';
+import { isProcessAlive, killTree, pickShell } from './proc.ts';
 import {
   appendJob,
   getJob,
@@ -76,19 +77,40 @@ export function startJob(
 
   // ⚠️ 同一个 fd 打开两次（stdout / stderr 各一个）⇒ 两个 fd 都是 **O_APPEND**
   //    ⇒ 两边都往文件末尾追加，不会互相覆盖。
+  // ⚠️ 走 shell 的那条路（`shellCommand`）：**父进程不要自己开日志文件**。
+  //   因为重定向是由 shell（cmd / sh）自己去做的 ⇒ 父进程再开着同一个文件，
+  //   Windows 上就是「另一个程序正在使用此文件」⇒ shell 打不开它 ⇒ 作业直接失败。
+  //   ⇒ 这种情况下 stdio 全部 ignore，**日志由 shell 独占写**。
+  //   ⚠️ 反过来：**直连 exe** 那条路必须由父进程开文件（重定向给子进程继承），
+  //   而那条路是 detached 下输出唯一能落地的形状。
+  const shellRedirects = !!invocation.shellCommand;
   let outFd: number | null = null;
   let errFd: number | null = null;
-  try {
-    outFd = fs.openSync(outputFile, 'a');
-    errFd = fs.openSync(outputFile, 'a');
-  } catch (e) {
-    if (outFd !== null) { try { fs.closeSync(outFd); } catch (_) {} }
-    throw new Error(`作业日志文件打不开: ${outputFile} (${(e as Error).message})`);
+  if (!shellRedirects) {
+    try {
+      outFd = fs.openSync(outputFile, 'a');
+      errFd = fs.openSync(outputFile, 'a');
+    } catch (e) {
+      if (outFd !== null) { try { fs.closeSync(outFd); } catch (_) {} }
+      throw new Error(`作业日志文件打不开: ${outputFile} (${(e as Error).message})`);
+    }
+  }
+
+  // ★ [2026-11-13] **走 shell 的命令**：由 shell 自己去做重定向。
+  //   ⚠️ 但**这条路在 Windows 上输出会丢**（`detached` ⇒ cmd 给孙进程另开 console，
+  //   不走我们重定向的句柄）⇒ 所以 `cliService` 那边**优先让简单命令直连 exe**，
+  //   只有真的需要 shell（管道/&&/重定向/变量展开）的命令才落到这里。
+  let spawnCommand = invocation.command;
+  let spawnArgs = invocation.args;
+  if (invocation.shellCommand) {
+    const shell = pickShell();
+    spawnCommand = shell.file;
+    spawnArgs = shell.args(`${invocation.shellCommand} >> "${outputFile}" 2>&1`);
   }
 
   let child: ChildProcess;
   try {
-    child = spawn(invocation.command, invocation.args, {
+    child = spawn(spawnCommand, spawnArgs, {
       cwd: invocation.cwd || undefined,
       env: {
         ...(process.env as Record<string, string>),
@@ -97,11 +119,11 @@ export function startJob(
       // ★ detached：作业**独立于 Gacode 存活**（Gacode 关了它还在跑）。
       windowsHide: true,
       detached: true,
-      stdio: ['ignore', outFd, errFd],
+      stdio: shellRedirects ? ['ignore', 'ignore', 'ignore'] : ['ignore', outFd, errFd],
     });
   } catch (e) {
-    try { fs.closeSync(outFd); } catch (_) {}
-    try { fs.closeSync(errFd); } catch (_) {}
+    if (outFd !== null) { try { fs.closeSync(outFd); } catch (_) {} }
+    if (errFd !== null) { try { fs.closeSync(errFd); } catch (_) {} }
     throw new Error(`作业起不来: ${(e as Error).message}`);
   }
   // ⚠️ fd 的所有权交给子进程了 ⇒ 父进程这边**必须**关掉（否则文件句柄泄漏）。
@@ -120,7 +142,7 @@ export function startJob(
   appendJob({
     id: jobId,
     serviceId: service.id,
-    argv: [invocation.command, ...invocation.args],
+    argv: [spawnCommand, ...spawnArgs],
     cwd: invocation.cwd,
     pid,
     outputFile,
