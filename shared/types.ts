@@ -215,11 +215,11 @@ export interface GacodeBridge {
     //    ⇒ 作业有自己的一份列表 + 自己的停止入口。
 
     /** 本机的后台作业列表（含已结束的，按开始时间倒序）。 */
-    listJobs?: () => Promise<LocalJobInfo[]>;
+    listJobs: () => Promise<LocalJobInfo[]>;
     /** 停一个后台作业（杀进程树）。 */
-    stopJob?: (jobId: string) => Promise<{ ok: boolean; error?: string | null }>;
+    stopJob: (jobId: string) => Promise<{ ok: boolean; error?: string | null }>;
     /** 订阅「作业列表」变化（主进程 → 渲染层）。 */
-    onJobs?: (callback: (jobs: LocalJobInfo[]) => void) => () => void;
+    onJobs: (callback: (jobs: LocalJobInfo[]) => void) => () => void;
   };
 
   /**

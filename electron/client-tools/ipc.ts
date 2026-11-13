@@ -24,6 +24,9 @@ import { executeClientTool } from './executor';
 import { deviceClient, getDeviceId, deviceCapabilities } from './deviceClient';
 // [P7 · 2026-11-12] 本机定时任务（gaga 拍板：只在 Gacode 打开时跑，不写 Windows 计划任务）。
 import { localTasks } from './localTasks';
+// ★ [2026-11-13 · 订正 27 · B6] 后台作业：巡检（跑完 ⇒ 回传服务端）+ 界面接线。
+import { jobReporter } from './jobReporter';
+import { listJobInfos, onJobsChanged } from './jobView';
 import {
   assertAllowed,
   appendAudit,
@@ -180,6 +183,37 @@ export function registerClientToolIpc(): void {
     if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
     try {
       mainWindowRef.webContents.send('gacode:client-tool-tasks', tasks);
+    } catch (_) { /* 窗口刚关 */ }
+  });
+
+  // ── [2026-11-13 · 订正 27 · B6] ★ 后台作业 ──────────────────────────
+  //
+  // 后台作业 = 派单即返回、进程 detached 的长活（Claude Code / 长命令）。
+  // ⚠️ 它**不在** `runningTasks` 里（那个是「正在这一轮里等着的同步任务」）
+  //    ⇒ 作业有自己的一份列表 + 自己的停止入口。
+  //
+  // 巡检（`jobReporter`）在**主进程**跑：定时看「作业跑完没」⇒ 回传服务端（D3）
+  // ⇒ 服务端另起一轮 agent 汇报，落回原会话（L-27c / L-27l）。
+  jobReporter.start((jobId, payload) => deviceClient.reportJobResult(jobId, payload));
+
+  // 本机后台作业列表（含已结束的，按开始时间倒序）。
+  ipcMain.handle('gacode:client-tool-list-jobs', async () => listJobInfos());
+
+  // 停一个后台作业（杀进程树）⇒ 跟「用户点了停止」是**同一条**路
+  //   （`deviceClient.stopTask` 会杀掉 detached 进程 + 把「已被停止」回传服务端）。
+  ipcMain.handle('gacode:client-tool-stop-job', async (_e, jobId: unknown) => {
+    const id = String(jobId || '');
+    if (!id) return { ok: false, error: '缺 job_id' };
+    const stopped = deviceClient.stopTask(id);
+    if (!stopped) return { ok: false, error: '作业不存在或已经结束' };
+    return { ok: true, error: null };
+  });
+
+  // 作业状态变了 ⇒ 推给渲染层。
+  onJobsChanged((jobs) => {
+    if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
+    try {
+      mainWindowRef.webContents.send('gacode:client-tool-jobs', jobs);
     } catch (_) { /* 窗口刚关 */ }
   });
 
