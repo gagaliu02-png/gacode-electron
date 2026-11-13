@@ -180,10 +180,20 @@ export async function request<T>(
   //      gaclaw/src/llm/client-tools.js 的 `PC_TOOL_SPECS` / `CAP_MASTER`。
   //   ⚠️ PC 端**只有真装了 node-pty** 才声明 `pty`（没装的话模型调 `pc_shell`
   //      会挂起等一个永远不回来的结果）⇒ 能力表是**按实际能力**报的。
+  // ★ [2026-11-13] 端标识**恒带** —— 身份是身份，能力是能力，**两件事不许绑在一起**。
+  //
+  //   ⚠️ 之前它跟 `caps` 绑在一起（`if (caps) { …; headers.set("X-Client-Id","pc") }`），
+  //      而 `caps` 来自**异步**的能力探测（`initClientCapabilities()` 走 IPC 问主进程
+  //      node-pty 在不在）⇒ 探测没跑完的那些请求**根本不带这个头**。
+  //      ⇒ 服务端 `readClientId` 回落 `'unknown'` ⇒ 在「端侧产物的可见性」那条新规则里
+  //         （契约 订正 26：**只有 PC 自己看得见**端侧产物）被当成**别的端** ⇒
+  //         历史回放里把端侧产物剥掉 ⇒ **PC 自己的交付气泡也没了**。
+  //
+  //   ⇒ 端标识无条件发；能力头才受探测结果影响。
+  headers.set("X-Client-Id", "pc");
   const caps = clientCapabilityHeader();
   if (caps) {
     headers.set("X-Client-Capabilities", caps);
-    headers.set("X-Client-Id", "pc");
   }
 
   let res = await fetch(`${API_BASE}${path}`, {
