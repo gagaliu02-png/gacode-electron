@@ -101,6 +101,15 @@ export function registerClientToolIpc(): void {
         typeof patch.masterEnabled === 'boolean' ? patch.masterEnabled : undefined,
       killSwitch: typeof patch.killSwitch === 'boolean' ? patch.killSwitch : undefined,
     });
+    // ★ [2026-11-13] **急停要真杀正在跑的命令** ——
+    //   `killSwitch` 只挡**新**派单（gate.ts 的 assertAllowed）⇒
+    //   光翻开关，已经在跑的那条还会跑完 ⇒ 跟界面承诺（「正在跑的命令会被终止」）不符。
+    if (state.killSwitch) {
+      const killed = deviceClient.stopAllTasks();
+      if (killed > 0) {
+        console.log('[client-tools/ipc] 急停：掐掉了', killed, '个正在跑的任务');
+      }
+    }
     return state;
   });
 

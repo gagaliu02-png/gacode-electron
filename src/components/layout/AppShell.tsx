@@ -120,7 +120,7 @@ function resolveTitle(pathname: string): string {
   if (pathname === "/settings/change-password") return "修改密码";
   if (pathname === "/browser") return "浏览器";
   // ★ [P4/P7 · 2026-11-12] 端侧执行页（抽屉「浏览器」下面那个）。
-  if (pathname === "/client-tools") return "端侧执行";
+  if (pathname === "/my-computer") return "我的电脑";
   return "Gacode";
 }
 
@@ -176,13 +176,13 @@ const NAV_ITEMS: NavItem[] = [
     icon: <GlobeIcon />,
   },
   {
-    // ★ [P4/P7 · 2026-11-12] 「端侧执行」—— gaga 拍板：PC 端这一整套工具
+    // ★ [P4/P7 · 2026-11-12] 「我的电脑」—— gaga 拍板：PC 端这一整套工具
     //   放在**「浏览器」下面**，点进去是一整页（我的电脑在线态 / 总开关 / 急停 /
     //   执行记录 / 本机定时）。
     //   ⚠️ 不是设置页的一项 —— 设置页是「隐私 / 关于」那种低频页；
     //     「这台电脑能不能被 AI 动手」是**要一眼看到、一键关掉**的开关 ⇒ 值得一个抽屉入口。
-    label: "端侧执行",
-    to: "/client-tools",
+    label: "我的电脑",
+    to: "/my-computer",
     icon: <WrenchIcon />,
   },
 ];

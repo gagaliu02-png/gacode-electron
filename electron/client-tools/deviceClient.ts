@@ -278,6 +278,26 @@ class DeviceClient {
     return true;
   }
 
+  /**
+   * ★ [2026-11-13] **一键急停** —— 把**所有**正在跑的任务都掐掉。
+   *
+   * 闸门文件 `client-gate.json` 里的 `killSwitch` 只挡**新**派单
+   * （`gate.ts` 的 `assertAllowed`）⇒ 光把它打开，**已经在跑**的命令
+   * 还会继续跑完 —— 而界面上写的是「正在跑的命令会被终止」⇒ 必须真杀。
+   *
+   * @returns 被掐掉的任务数
+   */
+  stopAllTasks(): number {
+    let n = 0;
+    for (const [, entry] of this.running) {
+      try {
+        entry.ac.abort();
+        n += 1;
+      } catch (_) { /* 杀不掉就算了 —— 闸门已经挡住后续派单 */ }
+    }
+    return n;
+  }
+
   /** 渲染层把 access token 推过来（内存持有，⛔ 不持久化 —— 跟渲染层同款口径）。 */
   setAccessToken(token: string | null): void {
     const changed = token !== this.accessToken;

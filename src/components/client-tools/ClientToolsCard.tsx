@@ -1,5 +1,5 @@
 /**
- * components/client-tools/ClientToolsCard.tsx — 设置页的「端侧执行」卡
+ * components/client-tools/ClientToolsCard.tsx — 「我的电脑」页的第一块（在线态 / 总开关 / 急停 / 执行记录）
  *
  * [2026-11-12 · P4] 契约依据: cross-platform-sse-event-contract-附录.md
  *   **订正 24 §5**（闸门）· **订正 25 §8**（三端展示义务 L-25u / L-25v）。
@@ -106,15 +106,27 @@ export function ClientToolsCard() {
         const g = await bridge.setGate(next);
         setGate(g);
         setStatus((prev) => (prev ? { ...prev, gate: g } : prev));
+        // ★ [2026-11-13] 急停是**开关**，不是**一次性动作** ——
+        //   「恢复」(killSwitch:false) 必须有自己的文案，不能落进下面那个
+        //   "闸门状态已更新" 的兜底分支（否则用户以为没生效）。
+        const resumed = next.killSwitch === false;
         toast({
-          title: next.killSwitch === true ? "已紧急停止" : "闸门状态已更新",
+          title:
+            next.killSwitch === true
+              ? "已紧急停止"
+              : resumed
+                ? "已恢复"
+                : "闸门状态已更新",
           description:
             next.killSwitch === true
-              ? "所有端侧执行已停摆，正在跑的命令也会被终止。"
-              : next.masterEnabled === false
-                ? "AI 看不到任何本机工具了。"
-                : "AI 又可以操作你的电脑了。",
-          variant: next.killSwitch === true || next.masterEnabled === false ? "danger" : "default",
+              ? "所有本机操作已停摆，正在跑的命令也会被终止。点「恢复」可以重新允许。"
+              : resumed
+                ? "AI 又可以操作你的电脑了。"
+                : next.masterEnabled === false
+                  ? "AI 看不到任何本机工具了。"
+                  : "AI 又可以操作你的电脑了。",
+          variant:
+            next.killSwitch === true || next.masterEnabled === false ? "danger" : "default",
         });
       } catch (e) {
         toast({
@@ -160,7 +172,6 @@ export function ClientToolsCard() {
 
   return (
     <section className="mb-6">
-      <h2 className="text-sm font-medium text-fg-muted mb-2 px-1">端侧执行</h2>
       <div className="rounded-md bg-bg-elevated overflow-hidden">
         {/* ── 我的电脑（在线态） ── */}
         <div className="p-4 flex items-center gap-3 border-b border-white/[0.06]">
@@ -269,23 +280,25 @@ export function ClientToolsCard() {
             </div>
             <div className="text-[11px] text-fg-muted mt-0.5">
               {killing
-                ? "已停止：所有端侧执行停摆，正在跑的命令会被终止。"
-                : "一键让所有端侧执行立刻停下（包括正在跑的命令）。"}
+                ? "已停止：所有本机操作停摆，正在跑的命令也被终止。点「恢复」重新允许。"
+                : "一键让所有本机操作立刻停下（包括正在跑的命令）。"}
             </div>
           </div>
           <button
             type="button"
-            disabled={busy || killing}
-            onClick={() => void setGateState({ killSwitch: true })}
+            disabled={busy}
+            onClick={() =>
+              void setGateState(killing ? { killSwitch: false } : { killSwitch: true })
+            }
             className={[
               "shrink-0 px-3 py-1.5 rounded-md text-xs font-medium transition-colors duration-150",
               "disabled:opacity-50",
               killing
-                ? "bg-danger-soft text-danger"
+                ? "bg-bg-sunken text-fg border border-border hover:bg-bg-elevated"
                 : "bg-danger text-white hover:opacity-90",
             ].join(" ")}
           >
-            {killing ? "已停止" : "立即停止"}
+            {killing ? "恢复" : "立即停止"}
           </button>
         </div>
 

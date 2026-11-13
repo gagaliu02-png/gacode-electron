@@ -87,6 +87,12 @@ export interface ChatMessageModel {
    */
   startedAt?: number | null;
   /**
+   * ★ [2026-11-13] 本轮**结束**时刻 (ms epoch) —— 本地时钟兜底用。
+   *
+   *   ⚠️ 没有它的话，一轮结束后秒表会跳回 0（web `MessageBubble.tsx:251` 同款口径）。
+   */
+  finishedAt?: number | null;
+  /**
    * ★ RC-5: 「**客户端放弃等一个不会来的结果**」—— 与安卓 `messages_local.stalled` 同款。
    *
    *   · `true` ⇒ 续传接不回来了 ⇒ 这一行的正文**只到中断前** ⇒ 气泡上标
@@ -193,6 +199,7 @@ export function MessageList({
               thinkingCount={m.thinkingCount}
               terminalReason={m.terminalReason}
               startedAt={m.startedAt}
+              finishedAt={m.finishedAt}
               // ★ RC-5: 「未收到服务端回复」标注 (安卓同款 `stalled`)。
               stalled={m.stalled}
               onAction={

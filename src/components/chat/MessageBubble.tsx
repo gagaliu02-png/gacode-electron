@@ -205,6 +205,16 @@ export interface MessageBubbleProps {
    */
   startedAt?: number | null;
   /**
+   * ★ [2026-11-13] 本轮**结束**时刻 (ms epoch) —— 本地时钟兜底用。
+   *
+   *   ⚠️ **必须有它**，否则一轮结束后秒表会**跳回 0**：
+   *     旧写法 `const end = isRunning ? nowMs : null` —— 一旦不是 running
+   *     （流已结束）就拿不到终点 ⇒ elapsed 归 0 ⇒ 气泡上「共执行 0 秒」。
+   *     web `MessageBubble.tsx:251` 用的是 `message.finishedAt ?? (isRunning ? nowMs : null)`
+   *     —— PC 这边补上同一份语义（跟 web 逐字同款）。
+   */
+  finishedAt?: number | null;
+  /**
    * ★ RC-5: 「**客户端放弃等一个不会来的结果**」—— 与安卓 `messages_local.stalled` 同款。
    *
    *   · `true` ⇒ 续传接不回来了 (服务端给了 `resumeFailed` 帧) ⇒ 这一轮的正文
@@ -427,6 +437,7 @@ function AssistantBubble({
   thinkingCount,
   terminalReason,
   startedAt,
+  finishedAt,
   stalled,
 }: Pick<
   MessageBubbleProps,
@@ -448,6 +459,7 @@ function AssistantBubble({
   | "thinkingCount"
   | "terminalReason"
   | "startedAt"
+  | "finishedAt"
   | "stalled"
 > & { messageId: string }) {
   const showCursor = !!isStreaming;
@@ -461,7 +473,7 @@ function AssistantBubble({
   // ★ R2-web (T-15): 耗时**优先**用服务端帧里的 `elapsedMs` (四要素之一, 权威值);
   //   本地时钟 (startedAt + now) 只作**兜底** —— 老服务端没有这个字段。
   // ⚠️ hook 必须挂在任何 early return 之前 (下面 recalled / 空内容会 return)。
-  const isRunning = !!isStreaming && startedAt != null;
+  const isRunning = !!isStreaming && startedAt != null && finishedAt == null;
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
     if (!isRunning) return;
@@ -475,9 +487,10 @@ function AssistantBubble({
     if (typeof elapsedMs === "number" && Number.isFinite(elapsedMs)) {
       return Math.max(0, Math.floor(elapsedMs / 1000));
     }
-    // 2) 本地时钟兜底 (老服务端)
+    // 2) 本地时钟兜底 (老服务端 / 直播帧没带 elapsedMs)
+    //    ⚠️ 终点优先用 `finishedAt` —— 没有它的话，一轮结束就归 0（web 同款口径）。
     if (startedAt == null) return 0;
-    const end = isRunning ? nowMs : null;
+    const end = finishedAt ?? (isRunning ? nowMs : null);
     if (end == null) return 0;
     return Math.max(0, Math.floor((end - startedAt) / 1000));
   })();

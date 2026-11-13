@@ -1,4 +1,4 @@
-// [2026-11-12 · P4] PC 设置页「端侧执行」卡的**接线**回归断言
+// [2026-11-12 · P4] PC「我的电脑」页（抽屉「浏览器」下面）的**接线**回归断言
 //
 // ---------------------------------------------------------------------------
 // gaga 2026-11-12 拍板的三件事, 必须在界面上**看得见**:
@@ -26,13 +26,13 @@ const repoSrc = (p) => readFileSync(join(REPO, p), "utf8");
 const repoCode = (p) => stripComments(repoSrc(p));
 
 const SETTINGS = "src/routes/Settings.tsx";
-const PAGE = "src/routes/ClientTools.tsx";
+const PAGE = "src/routes/MyComputer.tsx";
 const SHELL = "src/components/layout/AppShell.tsx";
 const APP = "src/App.tsx";
 const CARD = "src/components/client-tools/ClientToolsCard.tsx";
 const BRIDGE = "shared/types.ts";
 
-test("① 端侧执行卡挂在**独立页** /client-tools 上（gaga 拍板：从设置页挪到抽屉）", () => {
+test("① 「我的电脑」卡挂在**独立页** /my-computer 上（gaga 拍板：从设置页挪到抽屉）", () => {
   const page = repoSrc(PAGE);
   assert.ok(
     page.includes("ClientToolsCard"),
@@ -43,24 +43,24 @@ test("① 端侧执行卡挂在**独立页** /client-tools 上（gaga 拍板：�
     "独立页必须真的渲染 <ClientToolsCard />",
   );
   const app = repoSrc(APP);
-  assert.ok(app.includes("ClientTools"), "App.tsx 必须注册 /client-tools 路由");
-  assert.ok(app.includes('path="/client-tools"'), "必须有 /client-tools 这条路由");
+  assert.ok(app.includes("MyComputer"), "App.tsx 必须注册「我的电脑」页组件");
+  assert.ok(app.includes('path="/my-computer"'), "必须有 /my-computer 这条路由");
 });
 
-test("①b 抽屉里「端侧执行」排在「浏览器」**下面**", () => {
+test("①b 抽屉里「我的电脑」排在「浏览器」**下面**", () => {
   const shell = repoSrc(SHELL);
   const browserAt = shell.indexOf('label: "浏览器"');
-  const clientAt = shell.indexOf('label: "端侧执行"');
+  const clientAt = shell.indexOf('label: "我的电脑"');
   assert.ok(browserAt > 0, "抽屉里必须有「浏览器」");
-  assert.ok(clientAt > 0, "抽屉里必须有「端侧执行」");
+  assert.ok(clientAt > 0, "抽屉里必须有「我的电脑」");
   assert.ok(
     clientAt > browserAt,
-    "「端侧执行」必须排在「浏览器」下面（gaga 2026-11-12 拍板）",
+    "「我的电脑」必须排在「浏览器」下面（gaga 2026-11-12 拍板）",
   );
-  assert.ok(shell.includes('to: "/client-tools"'), "「端侧执行」必须指向 /client-tools");
+  assert.ok(shell.includes('to: "/my-computer"'), "「我的电脑」必须指向 /my-computer");
 });
 
-test("①c 设置页**不再**有端侧执行那两块（挪走了，别放两处）", () => {
+test("①c 设置页**不再**有那两块（挪走了，别放两处）", () => {
   const s = repoSrc(SETTINGS);
   assert.ok(!s.includes("ClientToolsCard"), "设置页不该再引入 ClientToolsCard");
   assert.ok(!s.includes("LocalTasksCard"), "设置页不该再引入 LocalTasksCard");
@@ -86,12 +86,42 @@ test("③ 卡里有一键急停（killSwitch），且和总开关是两个不同
   const code = repoCode(CARD);
   assert.ok(code.includes("killSwitch"), "必须有急停（killSwitch）");
   assert.ok(
-    code.includes("setGateState({ killSwitch: true })"),
+    code.includes("killSwitch: true"),
     "急停必须是**一键**置位（不是先去改总开关）",
   );
   assert.ok(
     code.includes("立即停止"),
     "急停按钮必须有中文文案（物理可见）",
+  );
+});
+
+test("③b 急停**必须能恢复**（gaga 2026-11-13：点了之后完全不能用了）", () => {
+  const code = repoCode(CARD);
+  // ① 急停是一个**开关** ⇒ 必须有「关掉它」的那条路。
+  assert.ok(
+    code.includes("killSwitch: false"),
+    "必须有 killSwitch: false 这条路（恢复）—— 否则急停是一次性的，点了就永久停摆",
+  );
+  assert.ok(
+    code.includes("恢复"),
+    "恢复路径必须有中文文案（用户看得见怎么回去）",
+  );
+  // ② 已经急停了的时候，按钮**不许**被永久 disable。
+  //    （旧写法 `disabled={busy || killing}` ⇒ 急停后再也点不动 ⇒ 死锁。）
+  assert.ok(
+    !/disabled=\{busy\s*\|\|\s*killing\}/.test(code),
+    "急停按钮不许被 `killing` 永久 disable —— 那就是「点了之后完全不能用了」的病根",
+  );
+  // ③ 急停要**真杀**正在跑的命令（界面上写着「正在跑的命令会被终止」）。
+  const ipc = repoCode("electron/client-tools/ipc.ts");
+  assert.ok(
+    ipc.includes("stopAllTasks"),
+    "主进程在急停时必须真的掐掉正在跑的任务（killSwitch 只挡新派单）",
+  );
+  const dev = repoCode("electron/client-tools/deviceClient.ts");
+  assert.ok(
+    dev.includes("stopAllTasks"),
+    "deviceClient 必须提供 stopAllTasks（中止所有在跑的任务）",
   );
 });
 

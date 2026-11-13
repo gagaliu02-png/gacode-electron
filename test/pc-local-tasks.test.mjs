@@ -22,7 +22,7 @@ const repoSrc = (p) => readFileSync(join(REPO, p), "utf8");
 const repoCode = (p) => stripComments(repoSrc(p));
 
 const SETTINGS = "src/routes/Settings.tsx";
-const PAGE = "src/routes/ClientTools.tsx";
+const PAGE = "src/routes/MyComputer.tsx";
 const SHELL = "src/components/layout/AppShell.tsx";
 const CARD = "src/components/client-tools/LocalTasksCard.tsx";
 const SCHED = "electron/client-tools/localTasks.ts";

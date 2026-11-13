@@ -40,8 +40,8 @@ import { IMBinding } from "./routes/IMBinding";
 import { Settings } from "./routes/Settings";
 import { SettingsChangePassword } from "./routes/SettingsChangePassword";
 import { Browser } from "./routes/Browser";
-// ★ [P4/P7 · 2026-11-12] 端侧执行页（抽屉「浏览器」下面那个入口）。
-import { ClientTools } from "./routes/ClientTools";
+// ★ [P4/P7 · 2026-11-12] 「我的电脑」页（抽屉「浏览器」下面那个入口）。
+import { MyComputer } from "./routes/MyComputer";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -320,13 +320,13 @@ export function App() {
                   </Protected>
                 }
               />
-              {/* ★ [P4/P7 · 2026-11-12] 端侧执行 —— 我的电脑 / 总开关 / 急停 /
+              {/* ★ [P4/P7 · 2026-11-12] 「我的电脑」—— 在线态 / 总开关 / 急停 /
                   执行记录 / 本机定时（gaga 拍板：抽屉「浏览器」下面，点进去一整页）。 */}
               <Route
-                path="/client-tools"
+                path="/my-computer"
                 element={
                   <Protected>
-                    <ClientTools />
+                    <MyComputer />
                   </Protected>
                 }
               />

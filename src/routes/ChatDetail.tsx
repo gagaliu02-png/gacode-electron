@@ -535,33 +535,85 @@ export function ChatDetail() {
     enabled: !!chatId,
   });
 
+  /**
+   * ★ [2026-11-13] 一轮的**计时**（本地时钟兜底口径）。
+   *
+   *   · `startedAt`  —— 本轮开始（本地时钟，ms epoch）
+   *   · `finishedAt` —— 本轮结束（ms epoch）；还在跑 ⇒ null
+   *   · `elapsedMs`  —— 服务端给的权威值（直播帧目前**不带** ⇒ 一般是 null）
+   *
+   *   ⚠️ 为什么端侧要自己记：服务端**直播帧**没有 `elapsedMs`
+   *     （unified-api `sseChunkFrames.js` 只发 content/reasoning/done/events），
+   *     历史接口也不带 ⇒ 「执行时间」这个四要素之一，端侧只能靠本地时钟兜底
+   *     （跟 web `page.tsx:1340` 的 `startedAt = Date.now()` 同款口径）。
+   */
+  interface TurnTiming {
+    startedAt: number;
+    finishedAt: number | null;
+    elapsedMs: number | null;
+  }
+
+  /** 已完成轮次的计时 —— 按 `turnKey` 认亲（跨轮次不串）。 */
+  const turnTimingRef = useRef<Map<string, TurnTiming>>(new Map());
+  /** 最近完成的一轮（兜底认亲用：老服务端没有 turnKey 时）。 */
+  const lastTurnTimingRef = useRef<{
+    chatId: string | null;
+    timing: TurnTiming;
+  } | null>(null);
+
   // 服务端 history → 本地模型, isStreaming 标志由 streamingAssistantId 控制
   const baseMessages: ChatMessageModel[] = useMemo(() => {
-    const list: ChatMessageModel[] = (historyQuery.data?.messages ?? []).map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      imageUrls: extractImageUrls(m),
-      attachedFileIds: extractFileIds(m),
-      attachedFileNames: extractFileNames(m),
-      // chat-id-9: 知识库引用 id — api.getHistory 已从 metadata.knowledge_refs
-      //   解析出来 (存的是 server 侧实际生效的 atom id).
-      knowledgeRefs: m.knowledgeRefs,
-      createdAt: m.createdAt,
-      recalled: m.recalled ?? false,
-      recalledAt: m.recalledAt ?? null,
-      // 历史消息的思考/工具时间线 (M5 批): api.getHistory 已把服务端 phases_json 解析成 ExecutionPhase[]
-      phases: m.phases,
-      // ★ 任务书 P-4 —— 历史消息的**富事件** (工具卡片 / 文件 / 图片 / 审批回执)
-      //   也得还原出来, 否则刷新后历史里的工具卡片全没了。
-      //   api.getHistory 已按 web 定稿版口径从 phases_json 里解析 (只认 type==="tool")。
-      richEvents: m.richEvents,
-      // ★ v2 (契约订正 16): 这一行的**轮次身份** (metadata.turnKey) ——
-      //   与流式行的 turnKey 同值 ⇒ 可精确判「是不是同一轮」。
-      turnKey: m.turnKey ?? null,
-    }));
+    const raw = historyQuery.data?.messages ?? [];
+    // ★ [2026-11-13] 给历史行**补上这一轮的计时**（本地时钟兜底口径）。
+    //   背景: 终态帧一到, `clearLocalRow()` 把**流式行**撤掉 ⇒ 屏幕上换成了
+    //   服务端历史行 ⇒ 而历史行没有 startedAt/elapsedMs ⇒ 秒表（「已执行 N 秒」）
+    //   **在轮次结束的瞬间消失**（web 靠 store 里那条消息一直带着 startedAt/finishedAt
+    //   ⇒ 不消失）。
+    //   ⇒ 端侧自己记一份「这一轮跑了多久」，按 turnKey 认亲后补回历史行。
+    //   认亲顺序: ① turnKey 精确命中 → ② 本会话最后一轮（兜底，老服务端没 turnKey 时用）。
+    const lastAssistantIdx = raw.reduce(
+      (acc, m, idx) => (m.role === "assistant" ? idx : acc),
+      -1,
+    );
+    const list: ChatMessageModel[] = raw.map((m, idx) => {
+      const timing =
+        (m.turnKey ? turnTimingRef.current.get(m.turnKey) : undefined) ??
+        (idx === lastAssistantIdx &&
+        lastTurnTimingRef.current &&
+        lastTurnTimingRef.current.chatId === chatId
+          ? lastTurnTimingRef.current.timing
+          : undefined);
+      return {
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        imageUrls: extractImageUrls(m),
+        attachedFileIds: extractFileIds(m),
+        attachedFileNames: extractFileNames(m),
+        // chat-id-9: 知识库引用 id — api.getHistory 已从 metadata.knowledge_refs
+        //   解析出来 (存的是 server 侧实际生效的 atom id).
+        knowledgeRefs: m.knowledgeRefs,
+        createdAt: m.createdAt,
+        recalled: m.recalled ?? false,
+        recalledAt: m.recalledAt ?? null,
+        // 历史消息的思考/工具时间线 (M5 批): api.getHistory 已把服务端 phases_json 解析成 ExecutionPhase[]
+        phases: m.phases,
+        // ★ 任务书 P-4 —— 历史消息的**富事件** (工具卡片 / 文件 / 图片 / 审批回执)
+        //   也得还原出来, 否则刷新后历史里的工具卡片全没了。
+        //   api.getHistory 已按 web 定稿版口径从 phases_json 里解析 (只认 type==="tool")。
+        richEvents: m.richEvents,
+        // ★ v2 (契约订正 16): 这一行的**轮次身份** (metadata.turnKey) ——
+        //   与流式行的 turnKey 同值 ⇒ 可精确判「是不是同一轮」。
+        turnKey: m.turnKey ?? null,
+        // ★ [2026-11-13] 这一轮的执行时间（本地时钟兜底）—— 气泡上的「共执行 N 秒」。
+        startedAt: timing?.startedAt ?? null,
+        finishedAt: timing?.finishedAt ?? null,
+        elapsedMs: timing?.elapsedMs ?? null,
+      };
+    });
     return list;
-  }, [historyQuery.data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyQuery.data, chatId]);
 
   // 流式期间累积 (content + events). MessageList 用 streamingContent 渲染最后一条.
   const [streamingAssistantId, setStreamingAssistantId] = useState<string | null>(null);
@@ -607,6 +659,14 @@ export function ChatDetail() {
   const streamingTurnMetaRef = useRef<StreamingTurnMeta>(
     EMPTY_STREAMING_TURN_META,
   );
+  // ★ [2026-11-13] 本轮的**计时**（本地时钟兜底）—— 气泡上的「已执行 N 秒 / 共执行 N 秒」。
+  //   流式行用它；轮次结束后把终值存进 `turnTimingRef` / `lastTurnTimingRef`，
+  //   补回服务端历史行（终态帧后流式行会被撤掉 ⇒ 不补的话秒表会消失）。
+  const [streamingTiming, setStreamingTiming] = useState<TurnTiming | null>(
+    null,
+  );
+  // 计时 state 的 ref 镜像（onChunk 闭包里拿到的是旧 state ⇒ 必须走 ref）。
+  const streamingTimingRef = useRef<TurnTiming | null>(null);
   // C4-08: 通知标题 = 会话标题 (取不到 → 「新对话」), 同样走 ref.
   const chatTitleRef = useRef<string>("新对话");
   useEffect(() => {
@@ -883,6 +943,16 @@ export function ChatDetail() {
       //   同值 ⇒ 「是不是同一轮」可以精确命中 (web 端同款: buildAttachRow 带 turnKey)。
       //   没有 ⇒ null ⇒ 回落老的启发式, 行为不变。
       turnKey: streamingTurnKey ?? null,
+      // ★ [2026-11-13] 四要素 + 计时 ⇒ 气泡上的「已执行 N 秒 / 共执行 N 秒」。
+      //   ⚠️ 旧写法这里**一个都没挂** ⇒ `streamingTurnMeta` 那个 state 收集了
+      //     服务端的四要素却**从不被读** ⇒ 秒表永远不出现（PC 端「气泡缺执行时间」
+      //     的根因）。现在这行把它们真正接到气泡上。
+      startedAt: streamingTiming?.startedAt ?? streamingTurnMeta.startedAt ?? null,
+      finishedAt: streamingTiming?.finishedAt ?? null,
+      elapsedMs: streamingTurnMeta.elapsedMs ?? streamingTiming?.elapsedMs ?? null,
+      toolCallCount: streamingTurnMeta.toolCallCount,
+      thinkingCount: streamingTurnMeta.thinkingCount,
+      terminalReason: streamingTurnMeta.terminalReason,
     };
     // ★ a4 契约 v1 · W-3 · 气泡收敛 —— **流式路径**也要滤掉「已被服务端删除的交付物」。
     //   ⛔ 判据在 `lib/deliverable-visibility.ts` (H-9) —— 这里**只接线**, 不 inline 判据。
@@ -940,6 +1010,10 @@ export function ChatDetail() {
     deletedDeliverableIds,
     // ★ [批 G8] 乐观上屏那一行
     pendingUserMsg,
+    // ★ [2026-11-13] 四要素 + 计时 —— 不进 deps 的话，气泡拿不到它们
+    //   （「PC 端气泡缺执行时间」的根因之一）。
+    streamingTurnMeta,
+    streamingTiming,
   ]);
 
   // ★ [2026-11-04 · gaga 拍板删除] 原 chat-id-19 的 `canRerun`:
@@ -1000,7 +1074,40 @@ export function ChatDetail() {
     // ★ 四要素跟着本行一起清 (下一轮重新累积)。
     streamingTurnMetaRef.current = EMPTY_STREAMING_TURN_META;
     setStreamingTurnMeta(EMPTY_STREAMING_TURN_META);
+    // ★ [2026-11-13] 计时的 ref 镜像清掉（下一轮重新起表）。
+    //   ⚠️ 终值已经存进 `turnTimingRef` / `lastTurnTimingRef`（认亲补历史行用）⇒ 不丢。
+    streamingTimingRef.current = null;
   }, []);
+
+  /**
+   * ★ [2026-11-13] 本轮**收表** —— 记下结束时刻，并把计时存进认亲用的表里。
+   *
+   *   ## 为什么必须存
+   *
+   *   终态帧一到，`clearLocalRow()` 把**流式行**撤掉 ⇒ 屏幕上换成服务端历史行
+   *   ⇒ 历史行没有 startedAt/elapsedMs ⇒ 气泡上的秒表**在轮次结束的瞬间消失**
+   *   （web 不会：它 store 里那条消息一直带着 startedAt/finishedAt）。
+   *
+   *   ⇒ 端侧自己记一份，按 `turnKey` 认亲（`turnTimingRef`），
+   *     老服务端没有 turnKey 时用「本会话最后一轮」兜底（`lastTurnTimingRef`）。
+   *
+   *   ⚠️ 必须在 `clearLocalRow()` **之前**调 —— 它会把 turnKey 清成 null。
+   */
+  const finishTurnTiming = useCallback(() => {
+    const cur = streamingTimingRef.current;
+    if (!cur) return;
+    const finishedAt = Date.now();
+    const timing: TurnTiming = {
+      startedAt: cur.startedAt,
+      finishedAt,
+      elapsedMs: cur.elapsedMs,
+    };
+    streamingTimingRef.current = timing;
+    setStreamingTiming(timing);
+    const tk = streamingTurnKeyRef.current;
+    if (tk) turnTimingRef.current.set(tk, timing);
+    lastTurnTimingRef.current = { chatId: chatId ?? null, timing };
+  }, [chatId]);
 
   /**
    * ★ [批 G13-4 · 2026-11-08] **切会话 ⇒ 本机的「流式行 id」必须复位**。
@@ -1155,6 +1262,18 @@ export function ChatDetail() {
         localRowIdRef.current =
           rowPrefix === "attach" ? `attach-${chatId}` : streamingId();
         setStreamingAssistantId(localRowIdRef.current);
+        // ★ [2026-11-13] **接回**（attach）路径也要起表 ——
+        //   否则「接回来的一轮」没有秒表（直播路径在 `startStream` 里起表了）。
+        //   服务端随后给 startedAt 的话，chunk 处理器会覆盖成服务端的值。
+        if (!streamingTimingRef.current) {
+          const t: TurnTiming = {
+            startedAt: Date.now(),
+            finishedAt: null,
+            elapsedMs: null,
+          };
+          streamingTimingRef.current = t;
+          setStreamingTiming(t);
+        }
       };
 
       if (chunk.content) {
@@ -1212,6 +1331,29 @@ export function ChatDetail() {
         };
         streamingTurnMetaRef.current = next;
         setStreamingTurnMeta(next);
+      }
+      // ★ [2026-11-13] 计时同步 —— 服务端给了 `startedAt` / `elapsedMs` 就用服务端的
+      //   （四要素以服务端为权威，契约 订正 12 / T-15）；没给 ⇒ 保持本地时钟兜底。
+      //   ⚠️ 只在**值真的变了**时才 setState ⇒ 不会每帧都重渲染。
+      {
+        const curT = streamingTimingRef.current;
+        const srvStartedAt =
+          typeof chunk.startedAt === "number" ? chunk.startedAt : null;
+        const srvElapsedMs =
+          typeof chunk.elapsedMs === "number" ? chunk.elapsedMs : null;
+        if (
+          curT &&
+          (srvStartedAt != null || srvElapsedMs != null) &&
+          (curT.startedAt !== srvStartedAt || curT.elapsedMs !== srvElapsedMs)
+        ) {
+          const nextT: TurnTiming = {
+            startedAt: srvStartedAt ?? curT.startedAt,
+            finishedAt: curT.finishedAt,
+            elapsedMs: srvElapsedMs ?? curT.elapsedMs,
+          };
+          streamingTimingRef.current = nextT;
+          setStreamingTiming(nextT);
+        }
       }
       // ★ 天眼 (T-13 / 订正 11): `error{code:'OUTPUT_FILTER_HIT'}` ⇒
       //   **撤掉已渲染的 partial 正文**, 换成天眼文案 (合规要求)。
@@ -1277,6 +1419,8 @@ export function ChatDetail() {
           content: chunk.fullContent ?? streamingContentRef.current,
           phases: streamingPhasesRef.current,
         });
+        // ★ [2026-11-13] 收表（**必须在 clearLocalRow 之前** —— 它会清 turnKey）。
+        finishTurnTiming();
         clearLocalRow();
         // 刷新 history + chats (server 落库后 title 改了)
         queryClient.invalidateQueries({ queryKey: ["history", chatId] });
@@ -1294,6 +1438,7 @@ export function ChatDetail() {
       }
       if (isCancelFrame(chunk)) {
         // 取消帧 — 直接关闭, 不调 ack (互斥路径 finally 会判)
+        finishTurnTiming();
         clearLocalRow();
         return;
       }
@@ -1305,6 +1450,7 @@ export function ChatDetail() {
             userAttachments: attachments,
           });
         }
+        finishTurnTiming();
         clearLocalRow();
       }
     },
@@ -1315,6 +1461,7 @@ export function ChatDetail() {
       removePendingApproval,
       markDeletedDeliverables,
       clearLocalRow,
+      finishTurnTiming,
       handleResumeFailed,
     ],
   );
@@ -1330,6 +1477,14 @@ export function ChatDetail() {
       setStreamingPhases([]);
       streamingContentRef.current = "";
       streamingPhasesRef.current = [];
+      // ★ [2026-11-13] 本轮计时**起表** —— 本地时钟（跟 web `page.tsx:1340` 同款）。
+      //   ⚠️ 必须在 `setStreamingAssistantId` **之前**落 —— 流式行是那一刻出现的，
+      //     气泡渲染时就要拿到 startedAt（否则秒表不出现）。
+      setStreamingTiming({
+        startedAt: Date.now(),
+        finishedAt: null,
+        elapsedMs: null,
+      });
       // ★ RC-5: 新的一轮 ⇒ 「没接回来」的标记作废 (下一轮重新累积)。
       setStreamingStalled(false);
       setStreamError(null);
@@ -1945,6 +2100,94 @@ export function ChatDetail() {
 
   // ────────────── 发送 / 停止 / 重试 / 重生 ──────────────
 
+  // ────────────── chat-id-33 autoTitleSession (LLM 800ms delay) — gagaOS §⑤ ──────────────
+  // 跟 web `chat/[id]/page.tsx:736-789` + 安卓 `ChatDetailViewModel.kt:1326` 同款。
+  // 触发条件 (跟 web shouldRequestAutoTitle 同款):
+  //   - title 为空 / 默认 '新对话' / 截断产物 '…' → 触发
+  //   - 其他 (用户手动改 / LLM 已定型) → skip
+  //
+  // ★ [2026-11-13] **重写** —— PC 新建会话**不出 LLM 标题**的根因。
+  //   旧写法是三个坑叠在一起 ⇒ auto-title 请求**根本发不出去**：
+  //     ① `autoTitleFiredRef` 一次性 latch —— 第一次满足条件后，同一个会话
+  //        **再也不会**重试（哪怕那次请求压根没发出去）。
+  //     ② 等 `historyQuery.data.messages` 里有 user 消息才武装定时器 ——
+  //        而 PC **发消息时不刷新 history**（history 只在终态帧之后 invalidate）
+  //        ⇒ 定时器要等到**整轮跑完**才武装得上。
+  //     ③ 武装之后 effect 重跑（deps 里的 `currentChat` 换对象 —— 终态帧后
+  //        `invalidateQueries(["chats"])` 会换）⇒ cleanup 把定时器 `clearTimeout` 打死
+  //        ⇒ ① 的 latch 又挡住重试 ⇒ 请求永远发不出去。
+  //
+  //   ⇒ 改成**跟安卓同款**：**发消息就武装**（服务端收到 stream 请求时
+  //     已经落了 user 行 ⇒ 800ms 后服务端有内容可总结）；
+  //     定时器存 ref ⇒ **不随 effect 重跑被清掉**；失败只 warn（下次发消息会再试）。
+  const autoTitleTimerRef = useRef<number | null>(null);
+
+  /**
+   * 武装一次 auto-title（800ms 后发一次请求）。
+   *
+   * ⚠️ 定时器**存 ref** 而不是局部变量 —— 存局部变量的话，effect 重跑时的
+   *    cleanup 会把它 `clearTimeout` 掉（这正是旧写法「请求发不出去」的根因）。
+   */
+  const armAutoTitle = useCallback(
+    (targetChatId: string) => {
+      if (autoTitleTimerRef.current != null) {
+        window.clearTimeout(autoTitleTimerRef.current);
+        autoTitleTimerRef.current = null;
+      }
+      autoTitleTimerRef.current = window.setTimeout(() => {
+        autoTitleTimerRef.current = null;
+        // 跟 web 同款: fetchQuery with staleTime: 0 拿 fresh title, 不被 stale chats cache 卡.
+        queryClient
+          .fetchQuery({ queryKey: ["chats"], queryFn: getChats, staleTime: 0 })
+          .then((latest) => {
+            const fresh = latest.chats.find((c) => c.id === targetChatId);
+            const liveTitle = fresh?.title ?? "新对话";
+            // 跟 web shouldRequestAutoTitle 同款守卫
+            const shouldRequest =
+              !liveTitle ||
+              liveTitle.trim() === "" ||
+              liveTitle === "新对话" ||
+              liveTitle.endsWith("…");
+            if (!shouldRequest) return;
+            return autoTitleSession(targetChatId)
+              .then(() => {
+                queryClient.invalidateQueries({ queryKey: ["chats"] });
+              })
+              .catch((err) => {
+                // eslint-disable-next-line no-console
+                console.warn("[autoTitle] failed:", err);
+              });
+          })
+          .catch((err) => {
+            // eslint-disable-next-line no-console
+            console.warn("[autoTitle] fetchQuery failed:", err);
+          });
+      }, 800);
+    },
+    [queryClient],
+  );
+
+  // 换会话 / 卸载 ⇒ 清掉待发的定时器（不许给别的会话发请求）。
+  useEffect(() => {
+    return () => {
+      if (autoTitleTimerRef.current != null) {
+        window.clearTimeout(autoTitleTimerRef.current);
+        autoTitleTimerRef.current = null;
+      }
+    };
+  }, [chatId]);
+
+  // 进页面时补一次：会话**已经有内容**（跨端建的 / 之前失败过的）⇒ 也该起标题。
+  useEffect(() => {
+    if (!chatId) return;
+    if (!historyQuery.data) return;
+    const hasUser = historyQuery.data.messages.some(
+      (m) => m.role === "user" && (m.content || "").trim().length > 0,
+    );
+    if (!hasUser) return;
+    armAutoTitle(chatId);
+  }, [chatId, historyQuery.data, armAutoTitle]);
+
   const handleSubmit = useCallback(
     (text: string, attachments: PendingAttachment[]): boolean => {
       if (!chatId) return false;
@@ -1955,9 +2198,21 @@ export function ChatDetail() {
       lastUserTextRef.current = text;
       lastUserAttachmentsRef.current = attachments;
       void startStream(text, attachments);
+      // ★ [2026-11-13] **发消息就武装 auto-title**（跟安卓 `ChatDetailViewModel.kt:1769` 同款）。
+      //   服务端收到 stream 请求时就已经落了 user 行 ⇒ 800ms 后服务端有内容可总结。
+      //   ⚠️ 旧写法等「客户端 history 里有 user 消息」才武装 ⇒ PC 发消息时不刷 history
+      //     ⇒ 定时器要等整轮跑完才武装得上 ⇒ 标题出不来（见上面 armAutoTitle 的注释）。
+      armAutoTitle(chatId);
       return true;
     },
-    [chatId, streamingAssistantId, streamingStalled, waitingFirstFrame, startStream],
+    [
+      chatId,
+      streamingAssistantId,
+      streamingStalled,
+      waitingFirstFrame,
+      startStream,
+      armAutoTitle,
+    ],
   );
 
   const handleStop = useCallback(() => {
@@ -2126,64 +2381,6 @@ export function ChatDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
-  // ────────────── chat-id-33 autoTitleSession (LLM 800ms delay) — gagaOS §⑤ ──────────────
-  // 跟 web page.tsx:341-396 同款: history load 完 + 800ms 后发一次 autoTitle.
-  // 触发条件 (跟 web shouldRequestAutoTitle 同款, 更宽松):
-  //   - title 为空 / 默认 '新对话' / 截断产物 '…' → 触发
-  //   - 其他 (用户手动改 / LLM 已定型) → skip
-  // 关键修复 (gagaOS §⑤):
-  //   1. 跨 chat 切换时重置 firedRef (上一个 chat 已 fired 后 ref 仍为 true 会卡死新 chat)
-  //   2. fetchQuery with staleTime: 0 拿 fresh title (避免被 stale chats cache 卡死)
-  //   3. server 拿到新 ChatSession 后 invalidate ["chats"] 让 header title 自动更新
-  //   4. 失败静默 (console.warn only) — 第一次会话体验差会被 toast 干扰
-  const autoTitleFiredRef = useRef(false);
-  const lastAutoTitleChatRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (lastAutoTitleChatRef.current !== chatId) {
-      autoTitleFiredRef.current = false;
-      lastAutoTitleChatRef.current = chatId ?? null;
-    }
-  }, [chatId]);
-
-  useEffect(() => {
-    if (!chatId) return;
-    if (autoTitleFiredRef.current) return;
-    if (!historyQuery.data || historyQuery.isLoading) return;
-    const msgs = historyQuery.data.messages;
-    if (msgs.length < 1) return; // 至少 1 条消息 (server 端 autoTitleChatSession 要求有 firstUserMsg)
-    const firstUser = msgs.find((m) => m.role === "user");
-    if (!firstUser || firstUser.content.trim().length === 0) return;
-    autoTitleFiredRef.current = true;
-    const t = window.setTimeout(() => {
-      // 跟 web 同款: fetchQuery with staleTime: 0 拿 fresh title, 不被 stale chats cache 卡.
-      queryClient
-        .fetchQuery({ queryKey: ["chats"], queryFn: getChats, staleTime: 0 })
-        .then((latest) => {
-          const fresh = latest.chats.find((c) => c.id === chatId);
-          const liveTitle = fresh?.title ?? currentChat?.title ?? "新对话";
-          // 跟 web shouldRequestAutoTitle 同款守卫
-          const shouldRequest =
-            !liveTitle ||
-            liveTitle.trim() === "" ||
-            liveTitle === "新对话" ||
-            liveTitle.endsWith("…");
-          if (!shouldRequest) return;
-          return autoTitleSession(chatId)
-            .then(() => {
-              queryClient.invalidateQueries({ queryKey: ["chats"] });
-            })
-            .catch((err) => {
-              // eslint-disable-next-line no-console
-              console.warn("[autoTitle] failed:", err);
-            });
-        })
-        .catch((err) => {
-          // eslint-disable-next-line no-console
-          console.warn("[autoTitle] fetchQuery failed:", err);
-        });
-    }, 800);
-    return () => window.clearTimeout(t);
-  }, [chatId, historyQuery.data, historyQuery.isLoading, currentChat, queryClient]);
 
   // ────────────── 渲染 ──────────────
 
