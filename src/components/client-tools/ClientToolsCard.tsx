@@ -1,8 +1,10 @@
 /**
- * components/client-tools/ClientToolsCard.tsx — 「我的电脑」页的第一块（在线态 / 总开关 / 急停 / 执行记录）
+ * components/client-tools/ClientToolsCard.tsx — 「我的电脑」页的第一块（在线态 / 后台作业 / 总开关 / 急停 / 执行记录）
  *
  * [2026-11-12 · P4] 契约依据: cross-platform-sse-event-contract-附录.md
  *   **订正 24 §5**（闸门）· **订正 25 §8**（三端展示义务 L-25u / L-25v）。
+ *
+ * [2026-11-13 · B7] **订正 27**（后台作业）· **订正 26**（端侧的东西只在那台 PC 上有意义）。
  *
  * ## 这一张卡承载 gaga 拍板的三件事
  *
@@ -11,6 +13,12 @@
  *   ② **一键急停** —— 「**现在**给我停下」。跟总开关的区别：
  *      总开关 = 「以后别动我的电脑」；急停 = 「**立刻**停下，现在正在跑的那个也停」。
  *   ③ **执行记录** —— 保留 **30 天** + **一键清空**（gaga 拍板）。
+ *
+ * ## 第四块：**后台作业**（`BackgroundJobsSection`）
+ *
+ * 派单即返回、进程 detached 的长活（Claude Code / 长命令）⇒ 模型那一轮不阻塞
+ * ⇒ 代价是**用户看不见它** ⇒ 这一块把它摆出来，并且能**单独停掉一条**。
+ * ⚠️ 停作业**只**走 `clientTools.stopJob` ⇒ ⛔ 绝不混进急停（急停是全机语义）。
  *
  * ## 为什么在线态也在这张卡里
  *
@@ -37,6 +45,7 @@ import {
   TrashIcon,
   WrenchIcon,
 } from "../ui/Glyphs";
+import { BackgroundJobsSection } from "./BackgroundJobsSection";
 
 /** 状态刷新间隔（毫秒）—— 在线态是活的，不能只取一次。 */
 const REFRESH_MS = 5000;
@@ -235,6 +244,9 @@ export function ClientToolsCard() {
             </div>
           </div>
         ) : null}
+
+        {/* ── 后台作业（订正 27 · B7：派单即返回、进程 detached 的长活） ── */}
+        <BackgroundJobsSection />
 
         {/* ── 总开关（物理可见，默认开） ── */}
         <div className="p-4 flex items-center justify-between gap-4 border-b border-white/[0.06]">
