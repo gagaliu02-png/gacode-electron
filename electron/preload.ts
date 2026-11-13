@@ -7,6 +7,7 @@ import type {
   ClientToolRequest,
   DeepLinkEvent,
   GacodeBridge,
+  LocalJobInfo,
   LocalTask,
   RunningClientTask,
 } from '../shared/types';
@@ -169,6 +170,17 @@ contextBridge.exposeInMainWorld('gacode', {
       ipcRenderer.invoke('gacode:client-tool-stop-task', pendingId),
     onTasks: (callback: (tasks: RunningClientTask[]) => void): (() => void) =>
       listenMain<RunningClientTask[]>('gacode:client-tool-tasks', (e) => callback(e)),
+    // ★ [2026-11-13 · 订正 27 · B6] 后台作业（派单即返回、进程 detached 的长活）。
+    //   ⚠️ 它**不在** runningTasks 里（那个是「这一轮正在等着的同步任务」）。
+    /** 本机的后台作业列表（含已结束的，按开始时间倒序）。 */
+    listJobs: (): Promise<LocalJobInfo[]> =>
+      ipcRenderer.invoke('gacode:client-tool-list-jobs'),
+    /** 停一个后台作业（杀进程树）。 */
+    stopJob: (jobId: string): Promise<{ ok: boolean; error?: string | null }> =>
+      ipcRenderer.invoke('gacode:client-tool-stop-job', jobId),
+    /** 订阅「作业列表」变化（主进程 → 渲染层）。 */
+    onJobs: (callback: (jobs: LocalJobInfo[]) => void): (() => void) =>
+      listenMain<LocalJobInfo[]>('gacode:client-tool-jobs', (e) => callback(e)),
   },
 
   // ★ [P7 · 2026-11-12] 本机定时任务（定时器在主进程）。

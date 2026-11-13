@@ -113,6 +113,9 @@ export function startJob(
   //    unref 之后 'exit' 事件仍然会来（只要主进程自己还活着）。
   try { child.unref(); } catch (_) {}
 
+  // ★ [2026-11-13 · 订正 27 · B6] 记下退出码（能拿到就记，拿不到不猜）。
+  watchJobExit(jobId, child);
+
   const pid = child.pid || 0;
   appendJob({
     id: jobId,
@@ -127,6 +130,38 @@ export function startJob(
   });
 
   return { jobId, pid, outputFile, serviceId: service.id };
+}
+
+/**
+ * ★ [2026-11-13 · 订正 27 · B6] **记下作业的退出码**。
+ *
+ * ## 为什么需要它
+ *
+ * 后台作业是 **detached 的独立进程** ⇒ 主进程**拿不到**它的退出码：
+ *   · `spawn` 的 `'exit'` 事件只在**父进程还活着**的时候来；
+ *   · Gacode 重启后，那个作业跟本进程**再无关系** ⇒ 退出码永远拿不到。
+ *
+ * ⇒ 「这条命令跑失败了」这件事，端侧**说不清** ⇒ 回传给服务端的只能是「ok + 一坨输出」。
+ *
+ * ⇒ 这里在 `startJob` 里挂一个 `'exit'` 监听：**能拿到就记，拿不到就算了（不猜）**。
+ *
+ * ⚠️ 这是**新增**，**不改变** `startJob` 的既有语义（照样「立即返回」）。
+ *
+ * @param jobId 作业 id
+ * @param child `spawn` 出来的子进程
+ */
+export function watchJobExit(jobId: string, child: ChildProcess): void {
+  if (!child || typeof child.on !== 'function') return;
+  child.on('exit', (code: number | null, signal: string | null) => {
+    try {
+      updateJob(jobId, {
+        exitCode: typeof code === 'number' ? code : null,
+        ...(signal ? { summary: `进程被信号 ${signal} 结束` } : {}),
+      });
+    } catch (e) {
+      console.error('[client-tools/jobs] 记退出码失败:', e && (e as Error).message);
+    }
+  });
 }
 
 /**

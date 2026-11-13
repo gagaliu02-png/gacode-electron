@@ -39,7 +39,16 @@ import type {
 import { assertAllowed, appendAudit, summarizeCommand } from './gate';
 import { executeClientTool } from './executor';
 import { stopAllJobs, stopJobById } from './jobRunner.ts';
-import { listUnreportedJobs } from './localJobs.ts';
+import { getJob, listUnreportedJobs, markJobReported, updateJob } from './localJobs.ts';
+import {
+  decideBackgroundDispatch,
+  getDispatchEntry,
+  markDispatch,
+  markDispatchReported,
+} from './dispatchLedger.ts';
+import { buildCapabilityString, probeJobExecutor } from './jobCapability.ts';
+import { emitJobsChanged } from './jobView.ts';
+import type { JobReportPayload } from './jobReporter.ts';
 
 // ===========================================================================
 // 配置
@@ -115,6 +124,19 @@ function logDevice(msg: string): void {
  *
  * ⚠️ **`pty` 是探测出来的，不是写死的** —— 声明了但实际没有 =
  *   模型会调一个**必然挂起**的工具（`pc_shell` 等一个永远不回来的结果）⇒ 整轮空转。
+ *
+ * ★ [2026-11-13 · 订正 27 · B6] 追加 **`job`** 子能力（L-27j）：
+ *   「显式声明**这台 PC 装了后台作业执行器**」⇒ 服务端才下发
+ *   `pc_claude` / `pc_job_start` / `pc_job_status` / `pc_job_stop`。
+ *
+ *   ⚠️ **判据 = 作业执行器在不在**，而它**是本 app 内建的** ⇒ 新版 PC **恒定**声明 `job=1`。
+ *   ⛔ **不许**把「有没有装 Claude Code」绑进这个判据 ——
+ *      服务端 `pc_claude` 与 `pc_job_start` **共用** `job` 这一个键
+ *      ⇒ 按 claude 决定的话，「没装 claude 但能跑普通命令」的电脑会连
+ *      `pc_job_start` 也一起被挡掉（白白少一个能力）。
+ *      「没装 claude」的正确语义是**作业如实失败并回报**
+ *      （服务端 spec 里写明：job fails with that error — report it to the user）。
+ *   ⇒ 下面的探针只当**诊断**用（这台机器能不能真的起进程），不参与能力判定。
  */
 let _capabilitiesCache: string | null = null;
 export function deviceCapabilities(): string {
@@ -127,9 +149,13 @@ export function deviceCapabilities(): string {
   } catch (_) {
     pty = false;
   }
-  _capabilitiesCache = pty
-    ? 'client-tools=1,pty=1,fs=1,screen=1,os=1'
-    : 'client-tools=1,fs=1,screen=1,os=1';
+  // ★ L-27j：执行器是 app 内建的 ⇒ 恒定声明 `job=1`。
+  //   探针只做**诊断**（万一这台机器连进程都起不了 ⇒ 记一条，别瞒着）。
+  const probe = probeJobExecutor();
+  if (!probe.executor) {
+    console.warn('[client-tools/device] 后台作业执行器探针没过（不影响能力声明）:', probe.reason);
+  }
+  _capabilitiesCache = buildCapabilityString({ pty, job: true });
   return _capabilitiesCache;
 }
 
@@ -212,6 +238,11 @@ export interface RunningClientTask {
   originClient: string | null;
   /** 开始跑的时刻（epoch ms）。 */
   startedAt: number;
+  /**
+   * ★ [2026-11-13 · 订正 27] 执行模式：
+   * `'sync'`（这一轮在等它）| `'background'`（派单即返回，作业在后台跑）。
+   */
+  mode?: 'sync' | 'background' | null;
 }
 
 type RequestListener = (req: ClientToolRequest) => void;
@@ -290,12 +321,25 @@ class DeviceClient {
     if (job.stopped) {
       stopped = true;
       // 打断的结果**要回传** —— 否则服务端要等 24h 超时才知道作业没了。
-      void this.uploadResult(pendingId, {
-        status: 'error',
-        error: '作业已被用户停止',
-      });
+      // ⚠️ 已经回传过的不许再回传（服务端会回 409 ⇒ 制造噪音）。
+      if (!job.job || !job.job.reportedAt) {
+        void this.reportJobStopped(pendingId, '作业已被用户停止');
+      }
     }
     return stopped;
+  }
+
+  /**
+   * 把「作业被用户停止」回传给服务端，并标「已回传过」。
+   *
+   * ⚠️ 标「已回传过」是为了**只回传一次**（巡检不会再报一遍）。
+   * ⚠️ 状态**保留** `cancelled`（UI 要显示「被用户停了」）⇒ 只补 `reportedAt`。
+   */
+  private async reportJobStopped(jobId: string, message: string): Promise<void> {
+    const ok = await this.uploadResult(jobId, { status: 'error', error: message });
+    if (!ok) return;
+    updateJob(jobId, { reportedAt: Date.now(), summary: message });
+    markDispatchReported(jobId, message);
   }
 
   /**
@@ -321,13 +365,12 @@ class DeviceClient {
     // ★ 后台作业（detached）—— 不在 this.running 里 ⇒ 单独杀。
     for (const job of listUnreportedJobs()) {
       if (!job.pid) continue;
+      // ⚠️ 已经回传过的（被用户停过）不许再报一遍（服务端会回 409 ⇒ 噪音）。
+      if (job.reportedAt) continue;
       const r = stopJobById(job.id);
       if (r.stopped) {
         n += 1;
-        void this.uploadResult(job.id, {
-          status: 'error',
-          error: '作业已被用户停止（急停）',
-        });
+        void this.reportJobStopped(job.id, '作业已被用户停止（急停）');
       }
     }
     return n;
@@ -525,6 +568,18 @@ class DeviceClient {
     const req = ev as unknown as ClientToolRequest;
     const pendingId = req.pending_id;
     if (!pendingId) return;
+
+    // ★ [2026-11-13 · 订正 27 · B6] **按 `mode` 分流**（L-27a / L-27k）。
+    //
+    //   · `background` ⇒ **派单即返回**：起完作业立刻收工（模型这一轮不被它挡住 ——
+    //     服务端 B3 已保证后台作业的轮次**不进** `awaiting_client`），
+    //     结果**另路送达**：作业跑完后由巡检（`jobReporter`）回传 D3。
+    //   · `sync`（默认 / 老端）⇒ 行为**逐字不变**：await 执行 ⇒ 折叠回原轮 ⇒ 回传。
+    if (req.mode === 'background') {
+      await this.handleBackgroundDispatch(req);
+      return;
+    }
+
     // ★ L-25l：按 pending_id 去重（跨重启也认 ⇒ 落盘）
     if (loadDone().includes(pendingId)) {
       console.log('[client-tools/device] 派单已结过，跳过:', pendingId);
@@ -543,6 +598,101 @@ class DeviceClient {
     //   （L-24o：目录产物不进交付中心，只报本机路径）。
     const withUrls = await this.uploadArtifacts(result);
     await this.uploadResult(pendingId, withUrls);
+  }
+
+  /**
+   * ★ [2026-11-13 · 订正 27 · B6] **后台派单**（`mode:'background'`）。
+   *
+   * ## 干什么
+   *
+   *   ① 查**派单账本**（三态）⇒ 决定这条单子要不要**再起一个**作业；
+   *   ② 起作业（**立即返回** —— detached 进程 + 输出落文件）；
+   *   ③ 作业跑完 ⇒ 由巡检（`jobReporter`）回传 D3 ⇒ 服务端另起一轮 agent 汇报。
+   *
+   * ## ⚠️ 为什么**不能**在这里就回传一次「已启动」
+   *
+   * 服务端那边（D3 → `gaclaw/src/llm/client-execution.js` 的 `settleClientResult`）：
+   * **第一条结果回传就会把这条派单结算掉**，并且（`mode==='background'`）
+   * **立刻触发「另起一轮 agent 汇报」** ⇒
+   *
+   *   · 现在回传「已启动」⇒ 用户会**立刻**收到一条「作业已经跑完」的汇报（内容其实是「已启动」）；
+   *   · 作业真跑完再回传 ⇒ 服务端已结 ⇒ **409** ⇒ **真正的结果永远送不到用户**。
+   *
+   * ⇒ **「已启动」不能走 D3** ⇒ 后台派单**只在「作业有结果了」才回一次**：
+   *   · 跑完（成功）⇒ D3 `status:'ok'`，stdout = 汇总；
+   *   · 跑完（失败）⇒ D3 `status:'error'`，error = 原因；
+   *   · **起不来**（比如找不到 claude）⇒ 这就是真结果 ⇒ **立刻**回 D3 `status:'error'`
+   *     （别让它挂到服务端的 24h 超时才发现）。
+   *
+   *   模型那一轮**本来就不等**端侧（服务端 `executeClientTool` 对 background
+   *   直接返回 `{job_id, status:'dispatched'}`）⇒ 「派单即返回」在端侧天然成立。
+   *
+   * ## ⚠️ 重连补推（L-25m）不许把长作业**再启一个**
+   *
+   * 服务端的派单账保留 7 天 ⇒ 通道重连时**会**把没结算的派单再推一遍
+   * ⇒ 端侧必须靠**三态账本**判断「这个 job_id 我已经起过了」⇒ 跳过（但**不**标已上报）。
+   */
+  private async handleBackgroundDispatch(req: ClientToolRequest): Promise<void> {
+    const pendingId = req.pending_id || '';
+    const tool = req.tool || '';
+
+    // ① 派单账本（queued / running / reported）。
+    const entry = getDispatchEntry(pendingId);
+    const decision = decideBackgroundDispatch(entry, !!getJob(pendingId));
+    if (decision === 'skip_reported') {
+      logDevice(`后台派单已上报过，跳过: ${pendingId}`);
+      return;
+    }
+    if (decision === 'skip_running') {
+      logDevice(`后台派单已在跑（${entry?.state}），跳过重复派单: ${pendingId}`);
+      return;
+    }
+
+    // ② 先记「queued」⇒ 万一进程崩了，重启后也知道这个 id 起过（不会重复起）。
+    markDispatch(pendingId, { state: 'queued', mode: 'background', tool, startedAt: Date.now() });
+
+    // ③ 通知渲染层（UI 显示「正在你的电脑上执行」）。
+    for (const cb of this.listeners) {
+      try { cb(req); } catch (_) {}
+    }
+
+    // ④ 起作业（**立即返回**：detached 进程，输出落文件）。
+    const result = await this.runRequest(req);
+    if (result.status === 'ok') {
+      markDispatch(pendingId, { state: 'running' });
+      emitJobsChanged();
+      return;
+    }
+
+    // ⑤ 起作业就失败（找不到 Claude Code / 闸门拒绝 …）⇒ **这就是真结果**
+    //   ⇒ **立刻**回传失败（别让它挂到服务端的 24h 超时才发现）。
+    //   ⚠️ 只有**回传成功**才标「已上报」⇒ 回传失败（网络抖）时，重连补推会再推这条
+    //   ⇒ 那时我们会再试一次（作业没起来 ⇒ 不会起第二个）。
+    await this.reportJobResult(pendingId, {
+      status: result.status === 'denied' ? 'denied' : 'error',
+      stdout: result.stdout,
+      error: result.error || '起作业失败',
+    });
+  }
+
+  /**
+   * ★ [2026-11-13 · 订正 27 · B6] 把一个后台作业的**结果**回传给服务端（D3）。
+   *
+   * @returns 服务端收下了吗（`false` = 还没收下 ⇒ 巡检下一拍再试）
+   */
+  async reportJobResult(jobId: string, payload: JobReportPayload): Promise<boolean> {
+    const ok = await this.uploadResult(jobId, {
+      status: payload.status,
+      stdout: payload.stdout,
+      error: payload.error,
+      exitCode: payload.exitCode,
+    });
+    if (!ok) return false;
+    // 「已上报」⇒ 这条派单彻底完事（重连补推不会再起一个）。
+    markJobReported(jobId, payload.stdout || payload.error || undefined);
+    markDispatchReported(jobId, payload.error || null);
+    logDevice(`后台作业结果已回传: ${jobId}（${payload.status}）`);
+    return true;
   }
 
   /**
@@ -634,13 +784,21 @@ class DeviceClient {
           sessionId: req.session_id,
           originClient: req.origin_client,
           startedAt: Date.now(),
+          // ★ [2026-11-13 · 订正 27] 执行模式（给 UI 看）。
+          mode: req.mode === 'background' ? 'background' : 'sync',
         },
         ac,
       });
       this.emitTasks();
       let result: ClientToolResult;
       try {
-        result = await executeClientTool(tool, args, req.cwd, req.timeout_ms, ac.signal);
+        // ★ [2026-11-13 · 订正 27 · B6] `opts.pendingId` = **后台作业的 job_id**
+        //   （服务端那边 job_id 就是 pending_id ⇒ 两边对得上账 ⇒ 结果能回传、
+        //   `pc_job_stop` / `stopTask` 能按同一个 id 找到它）。
+        result = await executeClientTool(tool, args, req.cwd, req.timeout_ms, ac.signal, {
+          pendingId: req.pending_id,
+          sessionId: req.session_id,
+        });
       } finally {
         this.running.delete(pendingId);
         this.emitTasks();
@@ -671,8 +829,15 @@ class DeviceClient {
     }
   }
 
-  /** D3 结果上行。 */
-  private async uploadResult(pendingId: string, result: ClientToolResult): Promise<void> {
+  /**
+   * D3 结果上行。
+   *
+   * @returns 服务端收下了吗
+   *   · `true`  = 200（已送达）
+   *   · `true`  = **409**（这条派单已经结过 ⇒ 幂等，不必再试）
+   *   · `false` = 其它错误（网络 / 5xx）⇒ **可以重试**
+   */
+  private async uploadResult(pendingId: string, result: ClientToolResult): Promise<boolean> {
     try {
       const res = await fetch(`${apiBase()}/devices/tasks/${encodeURIComponent(pendingId)}/result`, {
         method: 'POST',
@@ -683,16 +848,21 @@ class DeviceClient {
         },
         body: JSON.stringify({ deviceId: this.deviceId, ...result }),
       });
-      if (!res.ok) {
-        // 409 = 别人已经结过了（L-25n）⇒ 收工，不重试。
-        // 其它错误 ⇒ 记一条，靠去重表防止重复执行（但结果没回去 —— 下次重连会补推）。
-        const text = await res.text().catch(() => '');
-        this.lastError = `结果上行失败 ${res.status}: ${text.slice(0, 200)}`;
-        console.warn('[client-tools/device] 结果上行失败:', this.lastError);
+      if (res.ok) return true;
+      // 409 = 别人已经结过了（L-25n）⇒ 收工，不重试。
+      if (res.status === 409) {
+        logDevice(`结果已结过（409），收工: ${pendingId}`);
+        return true;
       }
+      // 其它错误 ⇒ 记一条，靠去重表防止重复执行（但结果没回去 —— 下次重连会补推）。
+      const text = await res.text().catch(() => '');
+      this.lastError = `结果上行失败 ${res.status}: ${text.slice(0, 200)}`;
+      console.warn('[client-tools/device] 结果上行失败:', this.lastError);
+      return false;
     } catch (e) {
       this.lastError = (e as Error).message;
       console.warn('[client-tools/device] 结果上行异常:', this.lastError);
+      return false;
     }
   }
 }
