@@ -97,15 +97,26 @@
 #   - ⚠️ 端侧产物「只在 PC 上可见」是**服务端**的改动 (unified-api · 契约 订正 26) ⇒ 本包不用改
 #   - output 改 release-pcfix-v21/ 绕开 v20 目录 (每次换新目录)
 
+# 0.7.22 (订正 27 · 后台作业框架 B5/B6/B7 —— 2026-11-13):
+#   - B5 地基: CLI 服务注册表(cliService/cliServices) · Claude Code 服务(claudeService/claudeOutput)
+#     · 本机作业表(localJobs, append-only jsonl + 三态) · detached 作业(jobRunner)
+#     · executor 四个后台分支(backgroundJobs) · 闸门按「命令参数名」抽表
+#   - B6 主进程接线: deviceClient 按 mode 分流 + 派单侧三态账本(dispatchLedger)
+#     + 巡检回传(jobReporter) + 能力表 job=1 + 作业退出码记录
+#   - B7 PC 界面: 「我的电脑」卡里的后台作业区(在跑/已结束 + 停止)
+#   - ★ 打断语义: 聊天窗口点「停止」⇒ 服务端推 client_tool_cancel ⇒ PC 按 pid 杀进程树
+#     (直连的同步任务与后台作业**一视同仁**)
+#   - output 改 release-bgjob-v22/ 绕开 v21 目录 (每次换新目录, 绕 Search Indexer)
+
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.21
+buildVersion: 0.7.22
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-pcfix-v21
+  output: release-bgjob-v22
 
 files:
   - dist/**/*
