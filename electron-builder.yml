@@ -108,15 +108,21 @@
 #     (直连的同步任务与后台作业**一视同仁**)
 #   - output 改 release-bgjob-v22/ 绕开 v21 目录 (每次换新目录, 绕 Search Indexer)
 
+# 0.7.23 (订正27 · B5/B6/B7 修完三个现场问题):
+#   - B5/B6/B7 基线(B7 的 PC 作业列表 UI 等) + 0.7.22 的交付轮语义修订
+#   - ★ 后台普通命令(pc_job_start)的输出**全丢**: detached + cmd 夹层 ⇒ cmd 给孙进程另开
+#     console ⇒ 输出不经过重定向句柄 ⇒ 改成「简单命令直连 exe」
+#   - output 改 release-bgjob-v23/ 绕开 v22 目录 (每次换新目录)
+
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.22
+buildVersion: 0.7.23
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-bgjob-v22
+  output: release-bgjob-v23
 
 files:
   - dist/**/*
