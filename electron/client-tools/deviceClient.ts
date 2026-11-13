@@ -84,6 +84,23 @@ function deviceName(): string {
 }
 
 /**
+ * 设备通道的本地日志（落 `%APPDATA%/Gacode/client-tools.log`）。
+ *
+ * ## 为什么落文件而不是只 console.log
+ *
+ * dev 模式下 electron 的 stdout **不一定**回到启动它的终端（electron-vite dev
+ * 会另起进程接管）⇒ 出问题时「控制台里啥也没有」＝没法定位。
+ * ⇒ 落一个文件，用户/我都能直接看。
+ */
+function logDevice(msg: string): void {
+  try {
+    const file = path.join(app.getPath('userData'), 'client-tools.log');
+    fs.appendFileSync(file, `[${new Date().toISOString()}] ${msg}\n`, 'utf8');
+  } catch (_) { /* 日志失败不许影响主流程 */ }
+  console.log('[client-tools/device]', msg);
+}
+
+/**
  * ★ 这台设备**自己**具备哪些端侧能力（注册时上报给服务端）。
  *
  * ## 为什么由**设备**声明，而不是由「发起那一轮的端」声明
@@ -265,10 +282,18 @@ class DeviceClient {
   setAccessToken(token: string | null): void {
     const changed = token !== this.accessToken;
     this.accessToken = token;
-    if (changed) {
-      this.retryDelay = 3000;
-      void this.ensureConnected();
+    logDevice(`setAccessToken ${token ? '有 token' : 'token 为空'}（changed=${changed}）`);
+    if (!changed) return;
+    this.retryDelay = 3000;
+    // ★ access token 只有 **15 分钟**有效期（服务端 TTL）⇒ 旧连接拿着的 token 一定会过期。
+    //   ⇒ 换 token 时**必须掐掉**正在跑的那次连接（它拿着的是旧 token），
+    //     否则重连会一直用旧 token ⇒ 401 ⇒ 设备通道**永久离线**。
+    if (this.abort) {
+      try { this.abort.abort(); } catch (_) {}
+      this.abort = null;
+      this.connected = false;
     }
+    void this.ensureConnected();
   }
 
   /**
@@ -283,14 +308,28 @@ class DeviceClient {
 
   /** 连上（注册 + SSE）。没 token 就什么都不做。 */
   async ensureConnected(): Promise<void> {
-    if (!this.accessToken) return;
-    if (this.abort) return;         // 已经在连了
-    this.abort = new AbortController();
+    if (!this.accessToken) {
+      logDevice('ensureConnected: 没有 token ⇒ 不连');
+      return;
+    }
+    if (this.abort) {
+      logDevice('ensureConnected: 已经在连了 ⇒ 跳过');
+      return;
+    }
+    const ac = new AbortController();
+    this.abort = ac;
     try {
-      await this.register();
-      await this.openStream();
+      await this.register(ac);
+      await this.openStream(ac);
     } catch (e) {
+      // ⛔ 被人掐掉（换 token / 退出）⇒ **不算失败**，别去排重试。
+      if (ac.signal.aborted) {
+        logDevice('连接被中止（换 token / 退出）');
+        return;
+      }
       this.lastError = (e as Error).message;
+      logDevice(`连接失败: ${this.lastError}`);
+      if (this.abort === ac) this.abort = null;
       this.scheduleRetry();
     }
   }
@@ -313,7 +352,7 @@ class DeviceClient {
   }
 
   /** D1 注册 / 绑定。 */
-  private async register(): Promise<void> {
+  private async register(ac: AbortController): Promise<void> {
     const deviceId = getDeviceId();
     this.deviceId = deviceId;
     const res = await fetch(`${apiBase()}/devices/register`, {
@@ -329,7 +368,7 @@ class DeviceClient {
         // ★ 这台设备自己的能力 ⇒ 服务端按**账号的设备能力**决定这一轮能不能派端侧工具。
         capabilities: deviceCapabilities(),
       }),
-      signal: this.abort ? this.abort.signal : undefined,
+      signal: ac.signal,
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -338,10 +377,11 @@ class DeviceClient {
     const body = (await res.json().catch(() => ({}))) as { replacedDeviceId?: string | null };
     this.registered = true;
     this.replacedDeviceId = body && body.replacedDeviceId ? String(body.replacedDeviceId) : null;
+    logDevice(`注册成功 deviceId=${deviceId}（顶掉了：${this.replacedDeviceId || '无'}）`);
   }
 
   /** D2 SSE 长连。 */
-  private async openStream(): Promise<void> {
+  private async openStream(ac: AbortController): Promise<void> {
     const res = await fetch(
       `${apiBase()}/devices/events?deviceId=${encodeURIComponent(this.deviceId)}`,
       {
@@ -350,7 +390,7 @@ class DeviceClient {
           'X-Device-Id': this.deviceId,
           Accept: 'text/event-stream',
         },
-        signal: this.abort ? this.abort.signal : undefined,
+        signal: ac.signal,
       },
     );
     if (!res.ok || !res.body) {
@@ -358,6 +398,7 @@ class DeviceClient {
       throw new Error(`设备通道连接失败 ${res.status}: ${text.slice(0, 200)}`);
     }
     this.connected = true;
+    logDevice('设备通道已连接（SSE 建立）');
     this.retryDelay = 3000;
 
     let dataLines: string[] = [];
@@ -379,8 +420,13 @@ class DeviceClient {
     }
     // 流结束（服务端重启 / 网络断）⇒ 掉线 ⇒ 重连
     this.connected = false;
-    this.abort = null;
-    this.scheduleRetry();
+    // ⚠️ 只有「这次尝试还是当前那一次」才排重连 ——
+    //    换 token 时我们已经把 this.abort 换掉了 ⇒ 别把新连接掐了。
+    if (this.abort === ac) {
+      this.abort = null;
+      logDevice('设备通道断开 ⇒ 准备重连');
+      this.scheduleRetry();
+    }
   }
 
   /** 处理一帧。 */
@@ -395,6 +441,7 @@ class DeviceClient {
     if (type === 'device_ready') {
       this.connected = true;
       this.lastError = null;
+      logDevice('收到 device_ready ⇒ 通道就绪');
       return;
     }
     if (type === 'device_replaced') {

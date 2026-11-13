@@ -158,6 +158,34 @@ async function clearPersistedRefreshToken(): Promise<void> {
   }
 }
 
+/**
+ * 同一个 refreshToken 的 refresh 请求**共享同一个 Promise**。
+ *
+ * ## 为什么需要它（2026-11-13 真机发现的坑）
+ *
+ *   `React.StrictMode` 在 dev 下会把 effect **跑两遍**（第一遍跑完立刻 cleanup，再跑第二遍）
+ *   ⇒ hydrate 那条路会**同时发出两个 `/auth/refresh`**，用的是**同一个** refreshToken。
+ *   而服务端是 **rotation**（旧 token 立刻失效）⇒ **第二个请求必然失败**
+ *   ⇒ 走「refresh 失败 ⇒ 清 token + 清盘」那条路 ⇒
+ *     · accessToken 被清空几秒（设备通道正好在这几秒里连不上 ⇒ 「我的电脑：离线」）；
+ *     · 运气不好还会把**持久化的 refreshToken 一起删掉** ⇒ 用户被踢回登录页。
+ *   ⇒ 两次 refresh 必须**共用一次请求**。
+ *
+ *   ⚠️ 共享只在「同一个 token 且请求还没结束」期间有效 ⇒ 请求一落定就出缓存
+ *      （后面真要再 refresh 时会重新发请求）。
+ */
+const _refreshInFlight = new Map<string, Promise<{ accessToken: string; refreshToken?: string }>>();
+
+function refreshOnce(rt: string): Promise<{ accessToken: string; refreshToken?: string }> {
+  const hit = _refreshInFlight.get(rt);
+  if (hit) return hit;
+  const p = authApi.refresh(rt).finally(() => {
+    _refreshInFlight.delete(rt);
+  });
+  _refreshInFlight.set(rt, p);
+  return p;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [accessToken, setAccessTokenState] = useState<string | null>(null);
@@ -283,7 +311,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 有持久化 refreshToken → 先 refresh 拿新 accessToken + 新 refreshToken
       // (server 走 rotation, 旧 token 立刻失效).
       try {
-        const r = await authApi.refresh(persisted);
+        // ⚠️ 用 refreshOnce 而不是 authApi.refresh ——
+        //   StrictMode 双跑会发**两个** refresh（rotation ⇒ 第二个必死 ⇒ 清 token）。
+        const r = await refreshOnce(persisted);
         if (cancelled) return;
         setAccessTokenState(r.accessToken);
         if (r.refreshToken) {
