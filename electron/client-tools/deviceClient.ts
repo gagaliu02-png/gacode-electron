@@ -83,6 +83,37 @@ function deviceName(): string {
   return os.hostname() || 'Windows 电脑';
 }
 
+/**
+ * ★ 这台设备**自己**具备哪些端侧能力（注册时上报给服务端）。
+ *
+ * ## 为什么由**设备**声明，而不是由「发起那一轮的端」声明
+ *
+ * 「手机远程指挥 PC」这条路径里，**发起端是手机、执行端是 PC**：
+ *   · 手机自己执行不了 `pc_shell` ⇒ 手机**不该**声明 `pty`；
+ *   · 但这一轮**必须**能派单到 PC ⇒ 服务端得知道「这个账号有一台能干活的电脑」。
+ * ⇒ 设备在 D1 注册时上报自己的能力 ⇒ 服务端按**账号的设备能力**决定
+ *   这一轮要不要下发 `pc_*`（没设备的账号 ⇒ 不下发 ⇒ 老行为逐字不变）。
+ *
+ * ⚠️ **`pty` 是探测出来的，不是写死的** —— 声明了但实际没有 =
+ *   模型会调一个**必然挂起**的工具（`pc_shell` 等一个永远不回来的结果）⇒ 整轮空转。
+ */
+let _capabilitiesCache: string | null = null;
+export function deviceCapabilities(): string {
+  if (_capabilitiesCache) return _capabilitiesCache;
+  let pty = false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('node-pty');
+    pty = typeof mod.spawn === 'function';
+  } catch (_) {
+    pty = false;
+  }
+  _capabilitiesCache = pty
+    ? 'client-tools=1,pty=1,fs=1,screen=1,os=1'
+    : 'client-tools=1,fs=1,screen=1,os=1';
+  return _capabilitiesCache;
+}
+
 // ===========================================================================
 // 去重表（L-25l）
 // ===========================================================================
@@ -291,7 +322,13 @@ class DeviceClient {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.accessToken}`,
       },
-      body: JSON.stringify({ deviceId, deviceName: deviceName(), platform: os.platform() }),
+      body: JSON.stringify({
+        deviceId,
+        deviceName: deviceName(),
+        platform: os.platform(),
+        // ★ 这台设备自己的能力 ⇒ 服务端按**账号的设备能力**决定这一轮能不能派端侧工具。
+        capabilities: deviceCapabilities(),
+      }),
       signal: this.abort ? this.abort.signal : undefined,
     });
     if (!res.ok) {

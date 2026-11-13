@@ -21,7 +21,7 @@
 
 import { ipcMain, BrowserWindow } from 'electron';
 import { executeClientTool } from './executor';
-import { deviceClient, getDeviceId } from './deviceClient';
+import { deviceClient, getDeviceId, deviceCapabilities } from './deviceClient';
 // [P7 · 2026-11-12] 本机定时任务（gaga 拍板：只在 Gacode 打开时跑，不写 Windows 计划任务）。
 import { localTasks } from './localTasks';
 import {
@@ -74,14 +74,9 @@ export function registerClientToolIpc(): void {
   // —— node-pty 能不能用（决定要不要声明 `pty` 子能力）——
   //   ⚠️ 没装好 node-pty（原生模块 ABI 不对 / DLL 缺失）⇒ `pc_shell` 会挂起
   //      等一个**永远不回来的**结果 ⇒ 这时**不能**声明 `pty` 能力。
+  //   ⚠️ 判据与注册时上报的那份**同一处**（deviceClient.deviceCapabilities）。
   ipcMain.handle('gacode:client-tool-pty-available', async () => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const pty = require('node-pty');
-      return typeof pty.spawn === 'function';
-    } catch (_) {
-      return false;
-    }
+    return deviceCapabilities().includes('pty=1');
   });
 
   // —— 状态（设备通道 + 闸门）——
