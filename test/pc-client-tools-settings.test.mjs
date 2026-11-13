@@ -26,19 +26,44 @@ const repoSrc = (p) => readFileSync(join(REPO, p), "utf8");
 const repoCode = (p) => stripComments(repoSrc(p));
 
 const SETTINGS = "src/routes/Settings.tsx";
+const PAGE = "src/routes/ClientTools.tsx";
+const SHELL = "src/components/layout/AppShell.tsx";
+const APP = "src/App.tsx";
 const CARD = "src/components/client-tools/ClientToolsCard.tsx";
 const BRIDGE = "shared/types.ts";
 
-test("① 设置页挂了「端侧执行」卡（被删掉 ⇒ 转红）", () => {
-  const settings = repoSrc(SETTINGS);
+test("① 端侧执行卡挂在**独立页** /client-tools 上（gaga 拍板：从设置页挪到抽屉）", () => {
+  const page = repoSrc(PAGE);
   assert.ok(
-    settings.includes("ClientToolsCard"),
-    "设置页必须引入 ClientToolsCard（gaga 要求总开关物理可见）",
+    page.includes("ClientToolsCard"),
+    "独立页必须渲染 ClientToolsCard（gaga 要求总开关物理可见）",
   );
   assert.ok(
-    /<ClientToolsCard\s*\/>/.test(settings),
-    "设置页必须真的渲染 <ClientToolsCard />",
+    /<ClientToolsCard\s*\/>/.test(page),
+    "独立页必须真的渲染 <ClientToolsCard />",
   );
+  const app = repoSrc(APP);
+  assert.ok(app.includes("ClientTools"), "App.tsx 必须注册 /client-tools 路由");
+  assert.ok(app.includes('path="/client-tools"'), "必须有 /client-tools 这条路由");
+});
+
+test("①b 抽屉里「端侧执行」排在「浏览器」**下面**", () => {
+  const shell = repoSrc(SHELL);
+  const browserAt = shell.indexOf('label: "浏览器"');
+  const clientAt = shell.indexOf('label: "端侧执行"');
+  assert.ok(browserAt > 0, "抽屉里必须有「浏览器」");
+  assert.ok(clientAt > 0, "抽屉里必须有「端侧执行」");
+  assert.ok(
+    clientAt > browserAt,
+    "「端侧执行」必须排在「浏览器」下面（gaga 2026-11-12 拍板）",
+  );
+  assert.ok(shell.includes('to: "/client-tools"'), "「端侧执行」必须指向 /client-tools");
+});
+
+test("①c 设置页**不再**有端侧执行那两块（挪走了，别放两处）", () => {
+  const s = repoSrc(SETTINGS);
+  assert.ok(!s.includes("ClientToolsCard"), "设置页不该再引入 ClientToolsCard");
+  assert.ok(!s.includes("LocalTasksCard"), "设置页不该再引入 LocalTasksCard");
 });
 
 test("② 卡里有总开关（role=switch）且默认读闸门状态", () => {
@@ -100,12 +125,11 @@ test("⑥ 桥契约里必须有端侧执行那几件套", () => {
   }
 });
 
-test("⑦ 设置页的端侧执行段落在「关于」之前（用户先看到闸门）", () => {
-  // ⚠️ 用**去注释后**的源码比位置 —— 文件头注释里也提到「关于组」。
-  const s = repoCode(SETTINGS);
-  const cardAt = s.indexOf("<ClientToolsCard");
-  const aboutAt = s.indexOf("关于");
-  assert.ok(cardAt > 0, "设置页必须有 <ClientToolsCard");
-  assert.ok(aboutAt > 0, "设置页必须有「关于」段");
-  assert.ok(cardAt < aboutAt, "端侧执行卡要排在「关于」**之前**（闸门比版本号重要）");
+test("⑦ 端侧执行页里，闸门排在「本机定时」**前面**（用户先看到闸门）", () => {
+  const page = repoSrc(PAGE);
+  const cardAt = page.indexOf("<ClientToolsCard");
+  const tasksAt = page.indexOf("<LocalTasksCard");
+  assert.ok(cardAt > 0, "独立页必须有 <ClientToolsCard");
+  assert.ok(tasksAt > 0, "独立页必须有 <LocalTasksCard");
+  assert.ok(cardAt < tasksAt, "端侧执行（闸门）要排在「本机定时」前面");
 });

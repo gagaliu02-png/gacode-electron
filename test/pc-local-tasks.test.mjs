@@ -22,15 +22,19 @@ const repoSrc = (p) => readFileSync(join(REPO, p), "utf8");
 const repoCode = (p) => stripComments(repoSrc(p));
 
 const SETTINGS = "src/routes/Settings.tsx";
+const PAGE = "src/routes/ClientTools.tsx";
+const SHELL = "src/components/layout/AppShell.tsx";
 const CARD = "src/components/client-tools/LocalTasksCard.tsx";
 const SCHED = "electron/client-tools/localTasks.ts";
 const CHAT = "electron/client-tools/localChat.ts";
 const BRIDGE = "shared/types.ts";
 
-test("① 设置页挂了「本机定时」卡", () => {
-  const s = repoSrc(SETTINGS);
-  assert.ok(s.includes("LocalTasksCard"), "设置页必须引入 LocalTasksCard");
-  assert.ok(/<LocalTasksCard\s*\/>/.test(s), "设置页必须真的渲染 <LocalTasksCard />");
+test("① 「本机定时」卡挂在**独立页** /client-tools 上（抽屉「浏览器」下面那个入口）", () => {
+  const page = repoSrc(PAGE);
+  assert.ok(page.includes("LocalTasksCard"), "独立页必须渲染 LocalTasksCard");
+  assert.ok(/<LocalTasksCard\s*\/>/.test(page), "独立页必须真的渲染 <LocalTasksCard />");
+  // 设置页**不再**有它（gaga 拍板：整套工具从设置页挪到抽屉）。
+  assert.ok(!repoSrc(SETTINGS).includes("LocalTasksCard"), "设置页不该再引入 LocalTasksCard");
 });
 
 test("② 定时器在**主进程**（渲染层刷新不该让定时任务停）", () => {

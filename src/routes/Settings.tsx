@@ -27,10 +27,8 @@ import { useAuth } from "../lib/auth";
 import { useToast } from "../components/ui/Toast";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { ProfileMenuItem } from "../components/profile/ProfileMenuItem";
-// ★ [P4 · 2026-11-12] 端侧执行卡（总开关 / 急停 / 执行记录 / 我的电脑在线态）。
-import { ClientToolsCard } from "../components/client-tools/ClientToolsCard";
-// ★ [P7 · 2026-11-12] 本机定时任务卡。
-import { LocalTasksCard } from "../components/client-tools/LocalTasksCard";
+// ★ [P4/P7 · 2026-11-12] 端侧执行卡 + 本机定时卡**已挪到 /client-tools 页**
+//   （gaga 拍板：抽屉「浏览器」下面，点进去一整页）⇒ 设置页不再引入。
 import { LockIcon, TrashIcon } from "../components/ui/Glyphs";
 
 /**
@@ -104,11 +102,9 @@ export function Settings() {
           </div>
         </section>
 
-        {/* 端侧执行 —— 总开关 / 急停 / 执行记录 / 我的电脑在线态 */}
-        <ClientToolsCard />
-
-        {/* 本机定时 —— 只在 Gacode 开着时跑（不写 Windows 计划任务） */}
-        <LocalTasksCard />
+        {/* ★ [P4/P7 · 2026-11-12] 端侧执行那套**挪走了** ——
+            gaga 拍板：放到**抽屉「浏览器」下面**，点进去是独立一页（/client-tools）。
+            这里（设置页）只留 隐私 / 关于 两组。 */}
 
         {/* 关于 — 只显示版本号 (gaga: 不需要检查更新功能) */}
         <section>
