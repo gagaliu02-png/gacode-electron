@@ -21,7 +21,12 @@
  */
 
 import * as pty from 'node-pty';
-import { execFile } from 'child_process';
+import { killTree as killTreeImpl, pickShell as pickShellImpl } from './proc.ts';
+
+/** 杀整棵进程树（后台作业与真终端共用这一份口径）。 */
+export { killTreeImpl as killTree };
+/** 选 shell（后台作业与真终端共用这一份口径）。 */
+export { pickShellImpl as pickShell };
 
 export interface PtyRunOptions {
   command: string;
@@ -50,36 +55,19 @@ export interface PtyRunResult {
 /** 单条命令的输出上限（防止一条命令刷爆内存 + 刷爆模型上下文）。 */
 export const MAX_OUTPUT_CHARS = 200000;
 
-/** 选一个能用的 shell。 */
+/**
+ * 选一个能用的 shell。
+ *
+ * ⚠️ 实现搬到了 `proc.ts`（后台作业也要用，且**不能**被 node-pty 绑住）
+ *    —— 这里保留一个薄壳，免得改动 `runCommand` 的调用点。
+ */
 function pickShell(): { file: string; args: (command: string) => string[] } {
-  if (process.platform === 'win32') {
-    const comspec = process.env.ComSpec || 'cmd.exe';
-    return {
-      file: comspec,
-      // ⚠️ `/d` 关 AutoRun（用户的 profile 脚本可能干扰输出），
-      //    `/s /c` 让整条命令作为一个整体交给 cmd。
-      args: (command: string) => ['/d', '/s', '/c', command],
-    };
-  }
-  const shell = process.env.SHELL || '/bin/bash';
-  return {
-    file: shell,
-    args: (command: string) => ['-lc', command],
-  };
+  return pickShellImpl();
 }
 
 /** 杀掉整棵进程树（Windows 上 `taskkill /T`；其它平台杀进程组）。 */
 function killTree(pid: number): void {
-  if (!pid) return;
-  if (process.platform === 'win32') {
-    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => { /* 杀不掉就算了 */ });
-  } else {
-    try {
-      process.kill(-pid, 'SIGKILL');
-    } catch (_) {
-      try { process.kill(pid, 'SIGKILL'); } catch (__) { /* 已经死了 */ }
-    }
-  }
+  killTreeImpl(pid);
 }
 
 /**

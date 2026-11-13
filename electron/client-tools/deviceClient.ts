@@ -38,6 +38,8 @@ import type {
 } from './types';
 import { assertAllowed, appendAudit, summarizeCommand } from './gate';
 import { executeClientTool } from './executor';
+import { stopAllJobs, stopJobById } from './jobRunner.ts';
+import { listUnreportedJobs } from './localJobs.ts';
 
 // ===========================================================================
 // 配置
@@ -270,12 +272,30 @@ class DeviceClient {
    *
    * ⇒ 中止它的执行（杀整棵进程树）⇒ 回一个「已被用户停止」的结果给服务端
    *   ⇒ 模型能转告用户「你让我停的那条已经停了」。
+   *
+   * ★ [2026-11-13 · 订正 27] **后台作业也必须能被这样打断** ——
+   *   后台作业是 **detached 的独立进程**（派单即返回就出队了 ⇒ 不在 `this.running` 里）
+   *   ⇒ 光 abort 那个 AbortController **杀不到它** ⇒ 用户点了「停」而作业还在跑
+   *   ⇒ 那是最糟的一种不一致（界面说停了，Claude Code 还在改用户的代码）。
    */
   stopTask(pendingId: string): boolean {
+    let stopped = false;
     const entry = this.running.get(pendingId);
-    if (!entry) return false;
-    try { entry.ac.abort(); } catch (_) {}
-    return true;
+    if (entry) {
+      try { entry.ac.abort(); } catch (_) {}
+      stopped = true;
+    }
+    // ★ 后台作业：按 pid 杀进程树。
+    const job = stopJobById(pendingId);
+    if (job.stopped) {
+      stopped = true;
+      // 打断的结果**要回传** —— 否则服务端要等 24h 超时才知道作业没了。
+      void this.uploadResult(pendingId, {
+        status: 'error',
+        error: '作业已被用户停止',
+      });
+    }
+    return stopped;
   }
 
   /**
@@ -285,7 +305,10 @@ class DeviceClient {
    * （`gate.ts` 的 `assertAllowed`）⇒ 光把它打开，**已经在跑**的命令
    * 还会继续跑完 —— 而界面上写的是「正在跑的命令会被终止」⇒ 必须真杀。
    *
-   * @returns 被掐掉的任务数
+   * ⚠️ **后台作业（detached 进程）也必须被杀** —— 否则急停之后
+   *    Claude Code 还在用户的电脑上继续改代码（承诺与事实不符）。
+   *
+   * @returns 被掐掉的任务数（同步任务 + 后台作业）
    */
   stopAllTasks(): number {
     let n = 0;
@@ -294,6 +317,18 @@ class DeviceClient {
         entry.ac.abort();
         n += 1;
       } catch (_) { /* 杀不掉就算了 —— 闸门已经挡住后续派单 */ }
+    }
+    // ★ 后台作业（detached）—— 不在 this.running 里 ⇒ 单独杀。
+    for (const job of listUnreportedJobs()) {
+      if (!job.pid) continue;
+      const r = stopJobById(job.id);
+      if (r.stopped) {
+        n += 1;
+        void this.uploadResult(job.id, {
+          status: 'error',
+          error: '作业已被用户停止（急停）',
+        });
+      }
     }
     return n;
   }
@@ -470,6 +505,19 @@ class DeviceClient {
       this.disconnect();
       this.lastError = '这台电脑已被同一账号在另一台电脑上顶掉，本机已失去执行能力。';
       console.warn('[client-tools/device] device_replaced —— 停止端侧执行');
+      return;
+    }
+    if (type === 'client_tool_cancel') {
+      // ★ [2026-11-13 · 订正 27] **用户点了聊天窗口的「停止」** ——
+      //   服务端取消了那一轮 ⇒ 这一轮在**这台电脑上**跑的活必须真的停掉。
+      //   ⇒ 直连的同步任务：abort（杀进程树）；后台作业：按 pid 杀 detached 进程。
+      //   ⚠️ 不处理的话 = 「点了停止」而电脑还在跑 ⇒ 用户最不信任这种不一致。
+      const pid = ev && ev.pending_id ? String(ev.pending_id) : '';
+      if (!pid) return;
+      const stopped = this.stopTask(pid);
+      logDevice(`收到 client_tool_cancel（pending_id=${pid}）⇒ ${stopped ? '已停' : '没找到在跑的活'}`);
+      // ⚠️ 不用「伪造一个 client_tool_request」去通知渲染层 ——
+      //   渲染层的「正在跑」列表靠 `onTasks` 订阅更新（同步任务 abort 后会从 running 里摘掉）。
       return;
     }
     if (type !== 'client_tool_request') return;

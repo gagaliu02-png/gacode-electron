@@ -196,6 +196,30 @@ export function findBlacklistHit(command: string): string | null {
 // ===========================================================================
 
 /**
+ * ★ [2026-11-13 · 订正 27] **工具 → 命令参数名**的映射表。
+ *
+ * ## 为什么不能硬编码工具名
+ *
+ * 原来只有 `tool === 'pc_shell'` 才查黑名单（查它的 `command` 参数）。
+ * 而后台作业工具 `pc_job_start` **也是跑一条命令** ⇒ 不查的话
+ * 「通用后台命令」就成了一条**绕过黑名单**的路（`pc_job_start format C:` 能过闸）。
+ *
+ * ⇒ 改成**按参数名**抽表：谁带命令参数，谁就过黑名单。
+ *
+ * ## ⚠️ `pc_claude` **故意不在表里**
+ *
+ * `pc_claude` 的参数是 `task`（**自然语言**），不是命令 ⇒ 没有黑名单可比。
+ * ⇒ 它走的是「**完全开放**」（gaga 拍板）。
+ * ⚠️ **后果要说清**：`pc_claude` 能让 Claude Code 去跑黑名单命令
+ *    ⇒ **黑名单对 Claude Code 无效**（只对直接下的命令有效）。
+ * ⇒ 保留的兜底：`client-tools` 总闸 + 急停（急停会连后台作业一起杀）+ 审计。
+ */
+export const COMMAND_ARG_BY_TOOL: Record<string, string> = {
+  pc_shell: 'command',
+  pc_job_start: 'command',
+};
+
+/**
  * 放行前的判定。
  *
  * @throws {ClientToolGateError} 被拒时抛（code 供端侧/服务端区分）
@@ -209,8 +233,9 @@ export function assertAllowed(tool: string, args: Record<string, unknown> | null
   if (!state.masterEnabled) {
     throw new ClientToolGateError('master_off', '端侧执行总开关已关闭。');
   }
-  if (tool === 'pc_shell') {
-    const cmd = args && typeof args.command === 'string' ? args.command : '';
+  const cmdArgName = COMMAND_ARG_BY_TOOL[tool];
+  if (cmdArgName) {
+    const cmd = args && typeof args[cmdArgName] === 'string' ? args[cmdArgName] : '';
     const hit = findBlacklistHit(cmd);
     if (hit) {
       // ⛔ 硬拒：不可逆操作**恒**不许做，没有任何「放行」路径。

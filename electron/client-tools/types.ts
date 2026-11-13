@@ -42,6 +42,12 @@ export interface ClientToolRequest {
   origin_client: string | null;
   /** 来源会话。 */
   session_id: string | null;
+  /**
+   * ★ [2026-11-13 · 订正 27] 执行模式：`'sync'`（默认，等端侧回传）| `'background'`（派单即返回）。
+   *
+   * ⚠️ 老端不认这个键 ⇒ 按 `sync` 归一（安全降级）。
+   */
+  mode?: 'sync' | 'background' | null;
 }
 
 /**
@@ -96,7 +102,14 @@ export interface ClientToolAuditEntry {
   originClient?: string | null;
   /** 放行 / 拒绝 / 失败。 */
   outcome: 'allowed' | 'denied' | 'error';
-  /** 拒绝原因（`gate` / `blacklist` / `master_off` / `kill_switch` / `error`）。 */
+  /**
+   * 原因。
+   *
+   * · `gate` / `blacklist` / `master_off` / `kill_switch` —— 闸门拒的；
+   * · `tool_error` —— 工具自己失败；
+   * · `exception` —— 抛异常了；
+   * · `user_stopped` —— ★ **用户手动打断**（直连的同步任务 / 后台作业 alike）。
+   */
   reason?: string;
   /** 命令摘要（**只记摘要**，不把整段文件内容写进审计）。 */
   summary?: string;

@@ -15,6 +15,12 @@
     "declaration": false,
     "sourceMap": true,
     "allowSyntheticDefaultImports": true,
+    // [2026-11-13 · 订正 27 · B5] 允许 import 路径带 `.ts` 后缀。
+    //   为什么需要: Node 的类型剥离(ESM)解析相对 import 时**不补扩展名**
+    //   ⇒ 主进程模块之间的相对 import 必须写全 `.ts`，否则 `node --test` 直接
+    //   ERR_MODULE_NOT_FOUND ⇒ 单测就跑不了这些模块（只能改源码文本断言）。
+    //   `moduleResolution: Bundler` + `noEmit` 是这个标志的合法组合。
+    "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": {
       "@shared/*": ["shared/*"],

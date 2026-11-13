@@ -34,7 +34,16 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { desktopCapturer, nativeImage, shell } from 'electron';
 import { runCommand } from './pty';
-import type { ClientToolArtifact, ClientToolResult } from './types';
+import {
+  isBackgroundStartTool,
+  isJobControlTool,
+} from './cliService.ts';
+import {
+  jobStatus,
+  jobStop,
+  startBackgroundJob,
+} from './backgroundJobs.ts';
+import type { ClientToolArtifact, ClientToolResult } from './types.ts';
 
 // ===========================================================================
 // 小工具
@@ -463,10 +472,26 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_open_path: 60000,
   pc_system_info: 60000,
   pc_process_list: 60000,
+  // [2026-11-13 · 订正 27] 后台作业四个工具
+  pc_claude: 60000,        // 起作业 = **立即返回**（不是等它跑完）
+  pc_job_start: 60000,
+  pc_job_status: 60000,    // 查状态 / 停作业 都是同步短超时
+  pc_job_stop: 60000,
 };
 
 /** 端侧支持的工具名。 */
 export const CLIENT_TOOL_NAMES = Object.keys(DEFAULT_TIMEOUT_MS);
+
+/** 执行一次端侧工具时**额外**要带的东西。 */
+export interface ExecuteClientToolOptions {
+  /**
+   * 派单的 `pending_id` —— ★ **后台作业用它当 job_id**
+   * （服务端那边 job_id 就是 pending_id ⇒ 两边对得上账）。
+   */
+  pendingId?: string | null;
+  /** 发起会话。 */
+  sessionId?: string | null;
+}
 
 /**
  * 执行一个端侧工具。
@@ -480,8 +505,25 @@ export async function executeClientTool(
   cwd: string | null,
   timeoutMs: number | null,
   signal?: AbortSignal,
+  opts?: ExecuteClientToolOptions,
 ): Promise<ClientToolResult> {
   const t = timeoutMs || DEFAULT_TIMEOUT_MS[tool] || 120000;
+
+  // ★ [2026-11-13 · 订正 27] 后台作业四个分支（L-27a）。
+  //   「起作业」**立即返回**（不 await 端侧回传）⇒ 模型这一轮不被堵住。
+  if (isBackgroundStartTool(tool)) {
+    return startBackgroundJob({
+      tool,
+      args,
+      cwd,
+      jobId: opts?.pendingId ?? null,
+      sessionId: opts?.sessionId ?? null,
+    });
+  }
+  if (isJobControlTool(tool)) {
+    return tool === 'pc_job_stop' ? jobStop({ args }) : jobStatus({ args });
+  }
+
   switch (tool) {
     case 'pc_shell': return pcShell(args, cwd, t, signal);
     case 'pc_read_file': return pcReadFile(args, cwd);
