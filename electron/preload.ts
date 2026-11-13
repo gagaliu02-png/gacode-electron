@@ -7,6 +7,8 @@ import type {
   ClientToolRequest,
   DeepLinkEvent,
   GacodeBridge,
+  LocalTask,
+  RunningClientTask,
 } from '../shared/types';
 
 // 把 app.getVersion() 在 preload 阶段读出来,渲染层读不到 process
@@ -160,6 +162,30 @@ contextBridge.exposeInMainWorld('gacode', {
     }) => ipcRenderer.invoke('gacode:client-tool-execute', input),
     onRequest: (callback: (req: ClientToolRequest) => void): (() => void) =>
       listenMain<ClientToolRequest>('gacode:client-tool-request', (e) => callback(e)),
+    // ★ [P6] 正在跑的任务（多会话并行 ⇒ 看得见、管得住）
+    runningTasks: (): Promise<RunningClientTask[]> =>
+      ipcRenderer.invoke('gacode:client-tool-running-tasks'),
+    stopTask: (pendingId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('gacode:client-tool-stop-task', pendingId),
+    onTasks: (callback: (tasks: RunningClientTask[]) => void): (() => void) =>
+      listenMain<RunningClientTask[]>('gacode:client-tool-tasks', (e) => callback(e)),
+  },
+
+  // ★ [P7 · 2026-11-12] 本机定时任务（定时器在主进程）。
+  localTasks: {
+    list: (): Promise<LocalTask[]> => ipcRenderer.invoke('gacode:local-tasks-list'),
+    upsert: (task: {
+      id?: string;
+      name?: string;
+      cron: string;
+      prompt: string;
+      enabled?: boolean;
+    }): Promise<{ ok: boolean; task?: LocalTask; error?: string }> =>
+      ipcRenderer.invoke('gacode:local-tasks-upsert', task),
+    remove: (id: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('gacode:local-tasks-remove', id),
+    runNow: (id: string): Promise<{ ok: boolean; error?: string | null }> =>
+      ipcRenderer.invoke('gacode:local-tasks-run-now', id),
   },
 } satisfies GacodeBridge);
 

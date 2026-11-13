@@ -145,7 +145,27 @@ export interface DeviceClientStatus {
   replacedDeviceId: string | null;
 }
 
+/**
+ * ★ [P6] 一条**正在本机跑**的端侧任务。
+ *
+ * 多个会话的任务可以**同时**在这台电脑上跑（每个 pending 有自己的等待者）⇒
+ * 用户得能看见「现在有几件在跑、是哪几件、能不能停掉其中一件」。
+ */
+export interface RunningClientTask {
+  /** 派单的 `pending_id`（裁决身份）。 */
+  pendingId: string;
+  tool: string;
+  title: string | null;
+  /** 发起这个任务的会话（手机发起的 ⇒ 这里就是手机那个会话）。 */
+  sessionId: string | null;
+  /** 发起端（web / pc / android）。 */
+  originClient: string | null;
+  /** 开始跑的时刻（epoch ms）。 */
+  startedAt: number;
+}
+
 type RequestListener = (req: ClientToolRequest) => void;
+type TasksListener = (tasks: RunningClientTask[]) => void;
 
 class DeviceClient {
   private accessToken: string | null = null;
@@ -158,6 +178,9 @@ class DeviceClient {
   private lastError: string | null = null;
   private replacedDeviceId: string | null = null;
   private listeners = new Set<RequestListener>();
+  /** ★ P6：正在跑的任务（pendingId → 任务 + 它的中止句柄）。 */
+  private running = new Map<string, { task: RunningClientTask; ac: AbortController }>();
+  private taskListeners = new Set<TasksListener>();
 
   status(): DeviceClientStatus {
     return {
@@ -174,6 +197,39 @@ class DeviceClient {
     return () => this.listeners.delete(cb);
   }
 
+  // ── P6 · 正在跑的任务 ──────────────────────────────────────────────────
+
+  /** 当前正在跑的任务列表（给 UI 显示「你的电脑上现在在跑什么」）。 */
+  runningTasks(): RunningClientTask[] {
+    return Array.from(this.running.values()).map((v) => ({ ...v.task }));
+  }
+
+  /** 订阅「正在跑的任务」变化。 */
+  onTasks(cb: TasksListener): () => void {
+    this.taskListeners.add(cb);
+    return () => this.taskListeners.delete(cb);
+  }
+
+  private emitTasks(): void {
+    const list = this.runningTasks();
+    for (const cb of this.taskListeners) {
+      try { cb(list); } catch (_) {}
+    }
+  }
+
+  /**
+   * ★ P6 · 停掉一个正在跑的任务。
+   *
+   * ⇒ 中止它的执行（杀整棵进程树）⇒ 回一个「已被用户停止」的结果给服务端
+   *   ⇒ 模型能转告用户「你让我停的那条已经停了」。
+   */
+  stopTask(pendingId: string): boolean {
+    const entry = this.running.get(pendingId);
+    if (!entry) return false;
+    try { entry.ac.abort(); } catch (_) {}
+    return true;
+  }
+
   /** 渲染层把 access token 推过来（内存持有，⛔ 不持久化 —— 跟渲染层同款口径）。 */
   setAccessToken(token: string | null): void {
     const changed = token !== this.accessToken;
@@ -182,6 +238,16 @@ class DeviceClient {
       this.retryDelay = 3000;
       void this.ensureConnected();
     }
+  }
+
+  /**
+   * 当前的 access token（内存里那份）。
+   *
+   * ⚠️ 给**本机定时任务**用（它也要发一轮对话 ⇒ 要 Bearer）。
+   * ⛔ 绝不落盘（access token 不持久化，跟渲染层同款口径）。
+   */
+  getAccessToken(): string | null {
+    return this.accessToken;
   }
 
   /** 连上（注册 + SSE）。没 token 就什么都不做。 */
@@ -405,7 +471,28 @@ class DeviceClient {
     }
 
     try {
-      const result = await executeClientTool(tool, args, req.cwd, req.timeout_ms);
+      // ★ P6：登记「正在跑」+ 给它一个中止句柄（用户可以停掉其中一条）。
+      const ac = new AbortController();
+      const pendingId = req.pending_id || '';
+      this.running.set(pendingId, {
+        task: {
+          pendingId,
+          tool,
+          title: req.title,
+          sessionId: req.session_id,
+          originClient: req.origin_client,
+          startedAt: Date.now(),
+        },
+        ac,
+      });
+      this.emitTasks();
+      let result: ClientToolResult;
+      try {
+        result = await executeClientTool(tool, args, req.cwd, req.timeout_ms, ac.signal);
+      } finally {
+        this.running.delete(pendingId);
+        this.emitTasks();
+      }
       appendAudit({
         ts: Date.now(),
         tool,

@@ -31,6 +31,11 @@ export interface PtyRunOptions {
   timeoutMs?: number;
   cols?: number;
   rows?: number;
+  /**
+   * 外部中止信号（P6：用户在一堆并发任务里停掉其中一个）。
+   * ⛔ **绝不**复用服务端那个 `scheduled` 语义（L-24k）—— 那是审批旁路，不是中止。
+   */
+  signal?: AbortSignal;
 }
 
 export interface PtyRunResult {
@@ -38,6 +43,8 @@ export interface PtyRunResult {
   stderr: string;
   exitCode: number;
   timedOut: boolean;
+  /** 被外部中止（P6：用户停掉了这个并发任务）。 */
+  aborted: boolean;
 }
 
 /** 单条命令的输出上限（防止一条命令刷爆内存 + 刷爆模型上下文）。 */
@@ -89,6 +96,7 @@ export function runCommand(opts: PtyRunOptions): Promise<PtyRunResult> {
   return new Promise<PtyRunResult>((resolve, reject) => {
     let out = '';
     let timedOut = false;
+    let aborted = false;
     let settled = false;
 
     let child: pty.IPty;
@@ -115,12 +123,23 @@ export function runCommand(opts: PtyRunOptions): Promise<PtyRunResult> {
       killTree(child.pid);
     }, Math.max(1000, timeoutMs || 600000));
 
+    // ★ P6：外部中止（用户停掉某一个并发任务）⇒ 同样杀整棵进程树。
+    const onAbort = () => {
+      aborted = true;
+      killTree(child.pid);
+    };
+    if (opts.signal) {
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     const finish = (exitCode: number) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
       try { child.kill(); } catch (_) { /* 已经退了 */ }
-      resolve({ stdout: out, stderr: '', exitCode, timedOut });
+      resolve({ stdout: out, stderr: '', exitCode, timedOut, aborted });
     };
 
     child.onData((d) => {

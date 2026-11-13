@@ -197,7 +197,68 @@ export interface GacodeBridge {
 
     /** 收到派单时通知（UI 显示「正在你的电脑上执行」）。 */
     onRequest: (callback: (req: ClientToolRequest) => void) => () => void;
+
+    /**
+     * ★ [P6] 正在本机跑的任务（**多个会话的任务可以同时跑**）。
+     * 用户得能看见「现在有几件在跑、是哪几件、能不能停掉其中一件」。
+     */
+    runningTasks: () => Promise<RunningClientTask[]>;
+    /** 停掉一个正在跑的任务。 */
+    stopTask: (pendingId: string) => Promise<{ ok: boolean }>;
+    /** 订阅「正在跑的任务」变化（主进程 → 渲染层）。 */
+    onTasks: (callback: (tasks: RunningClientTask[]) => void) => () => void;
   };
+
+  /**
+   * ★ [P7 · 2026-11-12] **本机定时任务**。
+   *
+   * gaga 拍板：定时任务**只在 Gacode 打开时跑**（不写 Windows 计划任务）。
+   * ⇒ 定时器在主进程；这一组接口只是「增删查 + 立刻跑一次」。
+   */
+  localTasks: {
+    list: () => Promise<LocalTask[]>;
+    upsert: (task: {
+      id?: string;
+      name?: string;
+      cron: string;
+      prompt: string;
+      enabled?: boolean;
+    }) => Promise<{ ok: boolean; task?: LocalTask; error?: string }>;
+    remove: (id: string) => Promise<{ ok: boolean }>;
+    runNow: (id: string) => Promise<{ ok: boolean; error?: string | null }>;
+  };
+}
+
+/** ★ [P6] 一条**正在本机跑**的端侧任务（多个会话的任务可以同时跑）。 */
+export interface RunningClientTask {
+  /** 派单的 `pending_id`（裁决身份）。 */
+  pendingId: string;
+  tool: string;
+  title: string | null;
+  /** 发起这个任务的会话（手机发起的 ⇒ 这里就是手机那个会话）。 */
+  sessionId: string | null;
+  /** 发起端（web / pc / android）。 */
+  originClient: string | null;
+  /** 开始跑的时刻（epoch ms）。 */
+  startedAt: number;
+}
+
+/** 一条本机定时任务。 */
+export interface LocalTask {
+  id: string;
+  /** 任务名（会话标题也用它）。 */
+  name: string;
+  /** 5 段 cron 表达式（分 时 日 月 周）。 */
+  cron: string;
+  /** 到点时发的那条 user 消息。 */
+  prompt: string;
+  enabled: boolean;
+  /** 专用会话 id（第一次跑时创建，之后复用）。 */
+  sessionId: string | null;
+  lastRunAt: number | null;
+  nextRunAt: number | null;
+  /** 上次跑失败的原因。 */
+  lastError: string | null;
 }
 
 // ===========================================================================

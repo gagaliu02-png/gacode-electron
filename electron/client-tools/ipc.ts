@@ -22,6 +22,8 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { executeClientTool } from './executor';
 import { deviceClient, getDeviceId } from './deviceClient';
+// [P7 · 2026-11-12] 本机定时任务（gaga 拍板：只在 Gacode 打开时跑，不写 Windows 计划任务）。
+import { localTasks } from './localTasks';
 import {
   assertAllowed,
   appendAudit,
@@ -163,4 +165,52 @@ export function registerClientToolIpc(): void {
 
   // 设备通道收到派单 ⇒ 通知渲染层
   deviceClient.onRequest((req) => notifyClientToolRequest(req));
+
+  // ── [P6] 正在跑的任务（多会话并行 ⇒ 用户要看得见、管得住）────────────
+  ipcMain.handle('gacode:client-tool-running-tasks', async () => deviceClient.runningTasks());
+  ipcMain.handle('gacode:client-tool-stop-task', async (_e, pendingId: unknown) => {
+    const stopped = deviceClient.stopTask(String(pendingId || ''));
+    return { ok: stopped };
+  });
+  deviceClient.onTasks((tasks) => {
+    if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
+    try {
+      mainWindowRef.webContents.send('gacode:client-tool-tasks', tasks);
+    } catch (_) { /* 窗口刚关 */ }
+  });
+
+  // ── [P7 · 2026-11-12] 本机定时任务 ──────────────────────────────────
+  //   定时器在**主进程**（渲染层刷新不该让定时任务停）。
+  //   ⚠️ token 从 deviceClient 那儿拿（渲染层推过来的那份，内存持有）。
+  localTasks.start(() => deviceClient.getAccessToken());
+
+  ipcMain.handle('gacode:local-tasks-list', async () => localTasks.list());
+
+  ipcMain.handle(
+    'gacode:local-tasks-upsert',
+    async (_e, input: { id?: string; name?: string; cron?: string; prompt?: string; enabled?: boolean }) => {
+      try {
+        const task = localTasks.upsert({
+          id: input && typeof input.id === 'string' && input.id ? input.id : undefined,
+          name: input && typeof input.name === 'string' ? input.name : undefined,
+          cron: String((input && input.cron) || '').trim(),
+          prompt: String((input && input.prompt) || ''),
+          enabled: input && typeof input.enabled === 'boolean' ? input.enabled : undefined,
+        });
+        return { ok: true, task };
+      } catch (e) {
+        return { ok: false, error: (e as Error).message };
+      }
+    },
+  );
+
+  ipcMain.handle('gacode:local-tasks-remove', async (_e, id: unknown) => {
+    const removed = localTasks.remove(String(id || ''));
+    return { ok: removed };
+  });
+
+  ipcMain.handle('gacode:local-tasks-run-now', async (_e, id: unknown) => {
+    const r = await localTasks.runNow(String(id || ''));
+    return { ok: r.ok, error: r.error };
+  });
 }

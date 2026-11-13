@@ -78,6 +78,7 @@ async function pcShell(
   args: Record<string, unknown> | null,
   cwd: string | null,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<ClientToolResult> {
   const command = str(args, 'command');
   if (!command) return fail('pc_shell 缺 command');
@@ -85,7 +86,14 @@ async function pcShell(
     command,
     cwd: cwd || str(args, 'cwd'),
     timeoutMs,
+    signal,
   });
+  if (r.aborted) {
+    return fail('命令已被用户停止', {
+      stdout: r.stdout,
+      exitCode: r.exitCode,
+    });
+  }
   if (r.timedOut) {
     return fail(`命令超时（${Math.round(timeoutMs / 1000)}s）并已被终止`, {
       stdout: r.stdout,
@@ -471,10 +479,11 @@ export async function executeClientTool(
   args: Record<string, unknown> | null,
   cwd: string | null,
   timeoutMs: number | null,
+  signal?: AbortSignal,
 ): Promise<ClientToolResult> {
   const t = timeoutMs || DEFAULT_TIMEOUT_MS[tool] || 120000;
   switch (tool) {
-    case 'pc_shell': return pcShell(args, cwd, t);
+    case 'pc_shell': return pcShell(args, cwd, t, signal);
     case 'pc_read_file': return pcReadFile(args, cwd);
     case 'pc_write_file': return pcWriteFile(args, cwd);
     case 'pc_list_dir': return pcListDir(args, cwd);

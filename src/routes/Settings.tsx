@@ -29,6 +29,8 @@ import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { ProfileMenuItem } from "../components/profile/ProfileMenuItem";
 // ★ [P4 · 2026-11-12] 端侧执行卡（总开关 / 急停 / 执行记录 / 我的电脑在线态）。
 import { ClientToolsCard } from "../components/client-tools/ClientToolsCard";
+// ★ [P7 · 2026-11-12] 本机定时任务卡。
+import { LocalTasksCard } from "../components/client-tools/LocalTasksCard";
 import { LockIcon, TrashIcon } from "../components/ui/Glyphs";
 
 /**
@@ -104,6 +106,9 @@ export function Settings() {
 
         {/* 端侧执行 —— 总开关 / 急停 / 执行记录 / 我的电脑在线态 */}
         <ClientToolsCard />
+
+        {/* 本机定时 —— 只在 Gacode 开着时跑（不写 Windows 计划任务） */}
+        <LocalTasksCard />
 
         {/* 关于 — 只显示版本号 (gaga: 不需要检查更新功能) */}
         <section>

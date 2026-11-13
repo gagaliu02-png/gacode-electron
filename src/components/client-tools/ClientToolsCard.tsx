@@ -27,9 +27,16 @@ import type {
   ClientGateState,
   ClientToolAuditEntry,
   ClientToolStatus,
+  RunningClientTask,
 } from "../../../shared/types";
 import { useToast } from "../ui/Toast";
-import { AlertTriangleIcon, ConstructionIcon, TrashIcon, WrenchIcon } from "../ui/Glyphs";
+import {
+  AlertTriangleIcon,
+  ConstructionIcon,
+  StopSquareIcon,
+  TrashIcon,
+  WrenchIcon,
+} from "../ui/Glyphs";
 
 /** 状态刷新间隔（毫秒）—— 在线态是活的，不能只取一次。 */
 const REFRESH_MS = 5000;
@@ -55,6 +62,8 @@ export function ClientToolsCard() {
   const [status, setStatus] = useState<ClientToolStatus | null>(null);
   const [gate, setGate] = useState<ClientGateState | null>(null);
   const [audit, setAudit] = useState<ClientToolAuditEntry[]>([]);
+  // ★ P6：正在跑的任务（多个会话的任务可以同时跑 ⇒ 用户要看得见、管得住）
+  const [running, setRunning] = useState<RunningClientTask[]>([]);
   const [busy, setBusy] = useState(false);
 
   const bridge = typeof window !== "undefined" ? window.gacode?.clientTools : undefined;
@@ -81,6 +90,13 @@ export function ClientToolsCard() {
     }, REFRESH_MS);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  // ★ P6：订阅「正在跑的任务」变化（主进程推过来）⇒ 不用等轮询。
+  useEffect(() => {
+    if (!bridge) return;
+    void bridge.runningTasks().then((t) => setRunning(t || [])).catch(() => {});
+    return bridge.onTasks((t) => setRunning(t || []));
+  }, [bridge]);
 
   const setGateState = useCallback(
     async (next: { masterEnabled?: boolean; killSwitch?: boolean }) => {
@@ -176,6 +192,38 @@ export function ClientToolsCard() {
             {replaced ? "已失效" : online ? "在线" : "离线"}
           </span>
         </div>
+
+        {/* ── 正在跑的任务（P6：多会话并行 ⇒ 看得见、管得住） ── */}
+        {running.length > 0 ? (
+          <div className="p-4 border-b border-white/[0.06]">
+            <div className="text-sm font-medium text-fg mb-2">
+              正在你的电脑上执行（{running.length}）
+            </div>
+            <div className="space-y-1.5">
+              {running.map((t) => (
+                <div key={t.pendingId} className="flex items-center gap-2 text-[11px]">
+                  <span className="font-mono text-fg shrink-0">{t.tool}</span>
+                  <span className="text-fg-muted truncate">
+                    {t.title || t.sessionId || ''}
+                    {t.originClient ? ` · 来自${t.originClient}` : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void bridge?.stopTask(t.pendingId);
+                    }}
+                    className="ml-auto shrink-0 inline-flex items-center gap-1 text-fg-muted hover:text-danger transition-colors duration-150"
+                    aria-label="停止这个任务"
+                    title="停止这个任务"
+                  >
+                    <StopSquareIcon className="w-3 h-3" />
+                    停止
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {/* ── 总开关（物理可见，默认开） ── */}
         <div className="p-4 flex items-center justify-between gap-4 border-b border-white/[0.06]">
