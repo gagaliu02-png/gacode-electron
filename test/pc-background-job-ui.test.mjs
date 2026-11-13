@@ -36,23 +36,28 @@ const PEER_REPO = process.env.RC_PEER_REPO
   : join(REPO, "..", "gacode-web");
 
 // ===========================================================================
-// ① 桥契约：三个方法是**可选**的（所以 UI 必须容错）
+// ① 桥契约：三个方法**必填**（B6 已实现 ⇒ 契约现在是硬的）
 // ===========================================================================
 
-test("① 桥契约里 listJobs / stopJob / onJobs 都是**可选**的（UI 必须容错）", () => {
+test("① 桥契约里 listJobs / stopJob / onJobs 都是**必填**的（B6 已实现）", () => {
   const code = repoCode(BRIDGE);
   assert.ok(
-    /listJobs\?:\s*\(\)\s*=>\s*Promise<LocalJobInfo\[\]>/.test(code),
-    "listJobs 必须是可选方法（主进程侧还没实现时 UI 要能容错）",
+    /listJobs:\s*\(\)\s*=>\s*Promise<LocalJobInfo\[\]>/.test(code)
+      && !/listJobs\?:\s*\(\)/.test(code),
+    "★ listJobs 必须**必填**（主进程侧已实现 ⇒ 契约是硬的）",
   );
   assert.ok(
-    /stopJob\?:\s*\(jobId:\s*string\)\s*=>\s*Promise<\{ ok: boolean; error\?: string \| null \}>/.test(code),
-    "stopJob 必须是可选方法",
+    /stopJob:\s*\(jobId:\s*string\)\s*=>\s*Promise<\{ ok: boolean; error\?: string \| null \}>/.test(code)
+      && !/stopJob\?:\s*\(jobId/.test(code),
+    "★ stopJob 必须必填",
   );
   assert.ok(
-    /onJobs\?:\s*\(callback:\s*\(jobs:\s*LocalJobInfo\[\]\)\s*=>\s*void\)\s*=>\s*\(\)\s*=>\s*void/.test(code),
-    "onJobs 必须是可选方法",
+    /onJobs:\s*\(callback:\s*\(jobs:\s*LocalJobInfo\[\]\)\s*=>\s*void\)\s*=>\s*\(\)\s*=>\s*void/.test(code)
+      && !/onJobs\?:\s*\(callback/.test(code),
+    "★ onJobs 必须必填",
   );
+  // ⚠️ **类型必填 ≠ 运行期不许判存在** —— 老 preload / dev 态下桥上可能还没这三个方法
+  //    ⇒ UI 仍然必须容错（那是 ③ 断言的事）。这里只钉「类型上不许再写成可选」。
 });
 
 // ===========================================================================

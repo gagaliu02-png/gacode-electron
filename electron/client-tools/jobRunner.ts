@@ -231,10 +231,27 @@ export function pollJob(job: LocalJob): {
     ? service.summarize(events)
     : null;
 
+  // ⚠️ **别把「跑完但还没回传」记成 failed**（2026-11-13 修）——
+  //   旧写法是 `status: reported ? 'reported' : 'failed'` ⇒ 一个**成功**的作业在
+  //   「跑完 → 回传成功」那几秒里会被标成 failed ⇒ PC 界面上显示「失败」
+  //   （用户明明看到 Claude Code 干完了，界面说失败）⇒ 最不该出现的那种不一致。
+  // ⇒ 只有**真的失败**（退出码非 0 / 服务判出错）才标 failed；
+  //   成功的那条在回传成功前保持 running，回传后由巡检标 reported。
+  // ⇒ 已终态的（reported / cancelled / failed）**不再被改写**。
+  const resultEvent = events.find((e) => e && e.type === 'result');
+  const failed =
+    (job.exitCode != null && job.exitCode !== 0)
+    || !!(resultEvent && resultEvent.isError === true);
+  const stillOpen = job.status === 'running' || job.status === 'queued';
+
   const next = updateJob(job.id, {
     outputOffset: offset,
-    ...(done ? { settledAt: job.settledAt ?? Date.now(), status: job.status === 'reported' ? 'reported' : 'failed' } : {}),
-    ...(summary ? { summary } : {}),
+    ...(done
+      ? {
+        settledAt: job.settledAt ?? Date.now(),
+        ...(stillOpen && failed ? { status: 'failed' as const } : {}),
+      }
+      : {}),    ...(summary ? { summary } : {}),
   });
 
   return {

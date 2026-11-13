@@ -421,3 +421,70 @@ test('GC-P27-26d · IPC 三个口都接上了（listJobs / stopJob / onJobs）',
   assert.ok(shared.includes('onJobs: (callback: (jobs: LocalJobInfo[]) => void)'), 'onJobs 必填');
   assert.ok(!shared.includes('listJobs?:'), '★ 不许再是可选方法');
 });
+
+// ===========================================================================
+// GC-P27-27 · 作业状态的**语义**（2026-11-13 修）
+//
+// 旧写法: pollJob 里 `status: reported ? 'reported' : 'failed'`
+// ⇒ 一个**成功**的作业在「跑完 → 回传成功」那几秒里被标成 failed
+// ⇒ PC 界面显示「失败」（用户明明看到 Claude Code 干完了）⇒ 最不该出现的那种不一致。
+// ⇒ 修: 只有**真的失败**（退出码非 0 / 服务判出错）才标 failed；
+//    成功的那条在回传成功前保持 running；已终态的（reported/cancelled/failed）不被改写。
+// ===========================================================================
+
+test('GC-P27-27 · 跑完但还没回传的**成功**作业 ⇒ 不许被标成 failed', async () => {
+  const { pollJob } = await import('../electron/client-tools/jobRunner.ts');
+  const { appendJob, getJob, updateJob } = await import('../electron/client-tools/localJobs.ts');
+
+  const id = 'ok-' + Date.now();
+  // 进程已经不在了（alive=false ⇒ done=true），退出码 0（成功）
+  appendJob({
+    id, serviceId: 'raw', status: 'running',
+    pid: 999999, outputFile: null, outputOffset: 0, exitCode: 0,
+  });
+  const polled = pollJob(getJob(id));
+  assert.notEqual(
+    polled.job.status, 'failed',
+    '★ 成功的作业在回传前显示「失败」= 用户看到「Claude Code 干完了但界面说失败」',
+  );
+  assert.equal(polled.job.status, 'running', '成功但还没回传 ⇒ 保持 running（回传后由巡检标 reported）');
+});
+
+test('GC-P27-27b · 真的失败（退出码非 0）⇒ 该标 failed', async () => {
+  const { pollJob } = await import('../electron/client-tools/jobRunner.ts');
+  const { appendJob, getJob } = await import('../electron/client-tools/localJobs.ts');
+
+  const id = 'bad-' + Date.now();
+  appendJob({
+    id, serviceId: 'raw', status: 'running',
+    pid: 999999, outputFile: null, outputOffset: 0, exitCode: 2,
+  });
+  const polled = pollJob(getJob(id));
+  assert.equal(polled.job.status, 'failed', '退出码非 0 ⇒ 该标 failed');
+});
+
+test('GC-P27-27c · 已被用户停掉的作业 ⇒ 不许被 poll 改成 failed', async () => {
+  const { pollJob } = await import('../electron/client-tools/jobRunner.ts');
+  const { appendJob, getJob } = await import('../electron/client-tools/localJobs.ts');
+
+  const id = 'cancelled-' + Date.now();
+  appendJob({
+    id, serviceId: 'raw', status: 'cancelled',
+    pid: 999999, outputFile: null, outputOffset: 0, exitCode: null,
+  });
+  const polled = pollJob(getJob(id));
+  assert.equal(polled.job.status, 'cancelled', '★ 已终态（cancelled）不许被改写成 failed');
+});
+
+test('GC-P27-27d · 已回传的作业 ⇒ 不许被 poll 改回去', async () => {
+  const { pollJob } = await import('../electron/client-tools/jobRunner.ts');
+  const { appendJob, getJob } = await import('../electron/client-tools/localJobs.ts');
+
+  const id = 'reported-' + Date.now();
+  appendJob({
+    id, serviceId: 'raw', status: 'reported',
+    pid: 999999, outputFile: null, outputOffset: 0, exitCode: 0,
+  });
+  const polled = pollJob(getJob(id));
+  assert.equal(polled.job.status, 'reported', '★ 已回传（完事）不许被改写');
+});
