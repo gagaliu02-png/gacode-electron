@@ -56,9 +56,13 @@ export function mergeHistoryRows<
 >(serverRows: S[], localRows: L[]): (S | L)[] {
   const serverIds = new Set(serverRows.map((m) => m.id));
   // 服务端那一行的 `metadata.turnKey` ⇒ 索引。
+  // ★ [订正 29 · 补充区隔] 一轮可能被切成**多行** assistant, 这些行**共享 turnKey**:
+  //   索引只记该轮的**第一行** —— 本地在飞行行代表的是「这一轮的开头那部分」,
+  //   只能跟第一行配 (其余行是补充之后的续答, 不是它的副本)。
+  //   ⚠️ 一轮只有一行时, 索引结果跟改动前**逐字一致** (老语义不变)。
   const serverByTurnKey = new Map<string, S>();
   for (const m of serverRows) {
-    if (m.turnKey) serverByTurnKey.set(m.turnKey, m);
+    if (m.turnKey && !serverByTurnKey.has(m.turnKey)) serverByTurnKey.set(m.turnKey, m);
   }
   const mergedTurnKeys = new Set<string>();
   const inflight: L[] = [];
@@ -100,8 +104,11 @@ export function mergeHistoryRows<
       stalled: undefined,
     } as unknown as L);
   }
+  // ★ [订正 29 · 补充区隔] 只摘掉「真被合成掉的那一 (第一) 行」:
+  //   一轮只有一行 ⇒ 跟老判据 `mergedTurnKeys.has(turnKey)` 等价 (行为逐字不变);
+  //   一轮多行 ⇒ 其余同 turnKey 的服务端行照常留在结果里 (第 1 段不被挤掉)。
   const finalServer = serverRows.filter(
-    (m) => !(m.turnKey && mergedTurnKeys.has(m.turnKey))
+    (m) => !(m.turnKey && mergedTurnKeys.has(m.turnKey) && serverByTurnKey.get(m.turnKey) === m)
   );
   return [...finalServer, ...inflight];
 }
