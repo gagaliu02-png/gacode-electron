@@ -30,6 +30,7 @@
  */
 
 import { ChevronDownIcon } from "../ui/Glyphs";
+import type { InboxAttachments } from "../../lib/session-inbox";
 
 /** 队列里的一条（服务端行 + 端侧的乐观行，统一成这个形状）。 */
 export interface QueueEntry {
@@ -51,6 +52,21 @@ export interface QueueEntry {
    * · `unconfirmed` ⇒ 服务端一直没确认（多半是没排上）⇒ 标灰 + 允许删掉。
    */
   local?: "sending" | "unconfirmed" | null;
+  /**
+   * ★ 附件（★ 2026-11-14 服务端 `bb46bd4`：排队消息的附件**不丢**）
+   *   ⇒ 显示「📎 N 个附件」。
+   */
+  attachments?: InboxAttachments | null;
+}
+
+/** 附件个数（图片 + 文件）。 */
+function attachmentCount(att: InboxAttachments | null | undefined): number {
+  if (!att) return 0;
+  const imgs = Array.isArray(att.image_urls) ? att.image_urls.length : 0;
+  const files = Array.isArray(att.attached_file_ids)
+    ? att.attached_file_ids.length
+    : 0;
+  return imgs + files;
 }
 
 export interface QueueBarProps {
@@ -181,6 +197,15 @@ export function QueueBar({
               >
                 {preview(it.content, 200)}
               </span>
+              {/* ★ 附件个数（排队消息的附件**不丢** ⇒ 让用户看得见有几张图/几个文件） */}
+              {attachmentCount(it.attachments) > 0 ? (
+                <span
+                  className="shrink-0 text-[10px] text-fg-subtle"
+                  data-testid="queue-item-attachments"
+                >
+                  📎 {attachmentCount(it.attachments)} 个附件
+                </span>
+              ) : null}
               {it.local && onRemove ? (
                 <button
                   type="button"

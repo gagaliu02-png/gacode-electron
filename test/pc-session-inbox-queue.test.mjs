@@ -320,7 +320,7 @@ test("GC-P28-10 轮次自然结束 ⇒ 把队首那条当**普通消息**发出�
   const detail = repoCode(DETAIL);
   // ① 泵队列：走**现有的发消息链路**（startStream）⇒ 正常建轮 + 服务端写 user 行。
   assert.ok(
-    /void startStream\(head\.content, \[\]\)/.test(detail),
+    /void startStream\(head\.content, pendingAttachmentsOf\(head\)\)/.test(detail),
     "★ 泵队列必须走普通发消息链路（startStream）—— 不是自己造 user 行",
   );
   assert.ok(
@@ -384,4 +384,99 @@ test("GC-P28-10d consume 端点路径对齐服务端", () => {
     "★ consume 端点路径要对齐服务端（POST /yinian/sessions/:id/inbox/:messageId/consume）",
   );
   assert.ok(/method:\s*"POST"/.test(lib), "consume 必须是 POST");
+});
+
+// ===========================================================================
+// GC-P28-11 ~ 14 · 排队消息的**附件**（★ 2026-11-14 服务端 bb46bd4）
+// ===========================================================================
+
+test("GC-P28-11 入队时把附件**一起带上**（跟正常发消息同款字段名）", () => {
+  const detail = repoCode(DETAIL);
+  const enq = detail.slice(
+    detail.indexOf("const enqueueIntoQueue = useCallback"),
+    detail.indexOf("const flushQueueItem = useCallback"),
+  );
+  assert.ok(
+    /image_urls: imageUrls/.test(enq),
+    "★ 入队 body 要带 image_urls（跟正常发消息同款字段名）",
+  );
+  assert.ok(
+    /attached_file_ids: fileIds/.test(enq),
+    "★ 入队 body 要带 attached_file_ids",
+  );
+  // DTO 里这两个字段也要有（服务端原样存、原样回传）
+  const lib = repoCode(INBOX_LIB);
+  assert.ok(
+    /image_urls\?: string\[\]/.test(lib) && /attached_file_ids\?: string\[\]/.test(lib),
+    "★ 收件箱项的 attachments DTO 要有这两个字段",
+  );
+  assert.ok(
+    /attachments\?: InboxAttachments \| null/.test(lib),
+    "★ 收件箱项要带 attachments（可能为 null）",
+  );
+});
+
+test("GC-P28-12 泵队列时把附件**一起重发**（原样取 url / id）", () => {
+  const detail = repoCode(DETAIL);
+  assert.ok(
+    /void startStream\(head\.content, pendingAttachmentsOf\(head\)\)/.test(detail),
+    "★ 泵队列要把该项的附件一起发出去（形态跟正常那条消息一致）",
+  );
+  assert.ok(
+    /function pendingAttachmentsOf\(item: InboxItem\): PendingAttachment\[\]/.test(detail),
+    "要有 pendingAttachmentsOf（收件箱项 ⇒ 正常发消息的附件）",
+  );
+  const fn = detail.slice(
+    detail.indexOf("function pendingAttachmentsOf"),
+    detail.indexOf("export function ChatDetail"),
+  );
+  assert.ok(
+    /att\.image_urls/.test(fn) && /att\.attached_file_ids/.test(fn),
+    "★ 只取原样的 image_urls / attached_file_ids",
+  );
+});
+
+test("GC-P28-13 ⛔ 端侧**不**解析/拼签名 URL（服务端在投递那一刻才解析）", () => {
+  const detail = repoCode(DETAIL);
+  const lib = repoCode(INBOX_LIB);
+  const bar = repoCode(INPUT_BAR);
+  for (const [name, code] of [
+    ["ChatDetail", detail],
+    ["session-inbox", lib],
+    ["ChatInputBar", bar],
+  ]) {
+    assert.ok(
+      !/signUploadUrl|secure_link|signUpload|signUrl/.test(code),
+      `⛔ ${name} 不许解析/拼签名 URL（签名串不该在端侧长期躺）`,
+    );
+  }
+});
+
+test("GC-P28-14 队列条能看出每条带几个附件（📎 N）", () => {
+  const bar = repoCode(QUEUE_BAR);
+  assert.ok(
+    /attachmentCount\(/.test(bar),
+    "★ 队列条要算附件个数",
+  );
+  assert.ok(
+    /📎/.test(bar) && /个附件/.test(bar),
+    "★ 显示「📎 N 个附件」",
+  );
+  assert.ok(
+    /att\.image_urls/.test(bar) && /att\.attached_file_ids/.test(bar),
+    "★ 个数 = 图片 + 文件",
+  );
+});
+
+test("GC-P28-15 轮次在跑时附件**照常能带**（排队消息的附件不丢）", () => {
+  const bar = repoCode(INPUT_BAR);
+  assert.ok(
+    !/排队里的消息只能带文字/.test(bar),
+    "★ 不许再拦「排队消息只能带文字」（服务端 bb46bd4 已经把附件存进收件箱了）",
+  );
+  const drop = bar.slice(bar.indexOf("const onDrop ="));
+  assert.ok(
+    !/isStreaming\) \{[\s\S]{0,200}onAttachmentError/.test(drop),
+    "★ 拖拽附件在轮次在跑时**不许**被拦",
+  );
 });

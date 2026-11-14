@@ -121,6 +121,7 @@ import {
   consumeInboxMessage,
   listPendingWork,
   enqueueUserMessage,
+  type InboxAttachments,
   type InboxItem,
   type PendingWorkItem,
 } from "../lib/session-inbox";
@@ -537,6 +538,8 @@ interface LocalQueueEntry {
   state: "sending" | "unconfirmed";
   /** 发出去的时刻（epoch ms）—— 用来判「多久没确认」。 */
   sentAt: number;
+  /** ★ 附件（排队消息的附件**不丢**）—— 显示「📎 N 个附件」。 */
+  attachments?: InboxAttachments | null;
 }
 
 /** 队列轮询间隔（毫秒）。 */
@@ -545,6 +548,44 @@ const QUEUE_POLL_MS = 4000;
 const LOCAL_JOBS_POLL_MS = 5000;
 /** 乐观队列项多久没被服务端确认 ⇒ 标「未送达」（毫秒）。 */
 const QUEUE_UNCONFIRMED_MS = 8000;
+
+/**
+ * ★ [2026-11-14 · 订正 28] 队列项的**附件** ⇒ 正常发消息用的 `PendingAttachment[]`。
+ *
+ * ## 为什么是「原样取」
+ *
+ *   服务端（`bb46bd4`）把入队时的 `image_urls` / `attached_file_ids` **原样**存进收件箱行
+ *   ⇒ 泵队列时**原样重发**即可（形态跟正常那条消息逐字一致）。
+ *
+ * ## ⛔ 端侧**不**解析签名 URL
+ *
+ *   签名 URL 有有效期 ⇒ 服务端在「这条消息真要发出去」那一刻才解析
+ *   （⏫ 插队 / 泵队列）⇒ 签名串**不该**在端侧或库里长期躺。
+ */
+function pendingAttachmentsOf(item: InboxItem): PendingAttachment[] {
+  const att = item?.attachments;
+  if (!att) return [];
+  const out: PendingAttachment[] = [];
+  // 文件名（服务端存了描述 ⇒ 气泡上能显示真名）。
+  const names = new Map<string, string>();
+  for (const f of att.files || []) {
+    if (f && f.file_id) names.set(String(f.file_id), f.name || "");
+  }
+  for (const url of att.image_urls || []) {
+    if (typeof url !== "string" || !url) continue;
+    out.push({ url, name: "图片", mode: "image" });
+  }
+  for (const id of att.attached_file_ids || []) {
+    if (!id) continue;
+    const key = String(id);
+    out.push({
+      fileId: key,
+      name: names.get(key) || "附件",
+      mode: "document",
+    });
+  }
+  return out;
+}
 
 export function ChatDetail() {
   const { id: chatId } = useParams<{ id: string }>();
@@ -2474,6 +2515,7 @@ export function ChatDetail() {
       createdAt: it.createdAt,
       injectable: !!it.injectable,
       local: null,
+      attachments: it.attachments ?? null,
     }));
     const local: QueueEntry[] = localQueue.map((l) => ({
       id: l.id,
@@ -2481,6 +2523,7 @@ export function ChatDetail() {
       createdAt: l.createdAt,
       injectable: false,
       local: l.state,
+      attachments: l.attachments ?? null,
     }));
     return [...server, ...local];
   }, [inboxItems, localQueue]);
@@ -2531,8 +2574,10 @@ export function ChatDetail() {
       const head = items.find((it) => !it.injectable);
       if (!head) return;
       // ④ 当**普通消息**发出去（正常建轮 ⇒ 服务端写 user 行 ⇒ 气泡出现）。
+      //    ★ **附件一起重发**（服务端 `bb46bd4` 把它们原样存进了收件箱行）
+      //      ⇒ 排队中的消息附件**不丢**（端侧只取原样的 url / id，不解析签名 URL）。
       pumpedItemIdRef.current = head.id;
-      void startStream(head.content, []);
+      void startStream(head.content, pendingAttachmentsOf(head));
     } finally {
       pumpBusyRef.current = false;
     }
@@ -2556,7 +2601,18 @@ export function ChatDetail() {
       const content = (text || "").trim();
       if (!content) return;
       const localId = `local:${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      // ① 乐观上屏（用户马上看得见「排进队列了」）。
+      // ① 附件（服务端会按 url / fileId **原样**收 ⇒ 排队消息附件不丢）。
+      const imageUrls = attachments
+        .filter((a) => !!a.url && !a.fileId)
+        .map((a) => a.url as string);
+      const fileIds = attachments
+        .filter((a) => !!a.fileId)
+        .map((a) => a.fileId as string);
+      const localAttachments: InboxAttachments = {
+        image_urls: imageUrls,
+        attached_file_ids: fileIds,
+      };
+      // ② 乐观上屏（用户马上看得见「排进队列了」）。
       setLocalQueue((prev) => [
         ...prev,
         {
@@ -2565,15 +2621,10 @@ export function ChatDetail() {
           createdAt: new Date().toISOString(),
           state: "sending",
           sentAt: Date.now(),
+          attachments:
+            imageUrls.length || fileIds.length ? localAttachments : null,
         },
       ]);
-      // ② 附件（服务端会按 url / fileId 收）。
-      const imageUrls = attachments
-        .filter((a) => !!a.url && !a.fileId)
-        .map((a) => a.url as string);
-      const fileIds = attachments
-        .filter((a) => !!a.fileId)
-        .map((a) => a.fileId as string);
       // ③ 发给服务端（它负责排队）。
       const res = await enqueueUserMessage(chatId, {
         message: content,
@@ -2590,7 +2641,14 @@ export function ChatDetail() {
         inputBarRef.current?.insertText(content);
         return;
       }
-      // ④ 排上了 ⇒ 立刻刷一次队列（别等下一拍轮询）。
+      // ④ 排上了 ⇒ 用服务端回传的附件（**原样**）补齐本地项 + 立刻刷一次队列。
+      if (res.attachments) {
+        setLocalQueue((prev) =>
+          prev.map((l) =>
+            l.id === localId ? { ...l, attachments: res.attachments } : l,
+          ),
+        );
+      }
       void refreshInbox();
     },
     [chatId, refreshInbox, toast],

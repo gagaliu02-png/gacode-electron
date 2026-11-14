@@ -366,14 +366,8 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
         e.preventDefault();
         dragCounterRef.current = 0;
         setDragActive(false);
-        if (isStreaming) {
-          // ★ [2026-11-14 · 订正 28] 轮次在跑时**文字可以排队**，但**附件带不过去**
-          //   （服务端的收件箱行只存正文 ⇒ 附件会丢）⇒ 如实说清楚，别让用户以为发出去了。
-          onAttachmentError?.(
-            "这一轮还在跑, 排队里的消息只能带文字(附件请等这一轮结束再发)",
-          );
-          return;
-        }
+        // ★ [2026-11-14 · 订正 28] 轮次在跑时**附件照常能带**（服务端 `bb46bd4`
+        //   把附件存进收件箱行 ⇒ 排队中的消息附件不丢）⇒ 这里**不再**拦。
         const files = e.dataTransfer?.files;
         if (!files || files.length === 0) return;
         // 接收多文件, 一个一个上传 (并行, progress 累加)
@@ -493,17 +487,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
     };
 
     const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      // ★ [2026-11-14 · 订正 28] 轮次在跑时附件带不过去（见 onDrop 的同一处说明）。
-      if (isStreaming) {
-        const file = extractSingleImage(e);
-        if (file) {
-          e.preventDefault();
-          onAttachmentError?.(
-            "这一轮还在跑, 排队里的消息只能带文字(附件请等这一轮结束再发)",
-          );
-        }
-        return;
-      }
+      // ★ [2026-11-14 · 订正 28] 轮次在跑时附件**照常能带**（排队消息的附件不丢）。
       const file = extractSingleImage(e);
       if (file) {
         e.preventDefault();

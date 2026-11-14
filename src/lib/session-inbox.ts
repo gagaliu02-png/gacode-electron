@@ -39,6 +39,35 @@ const ENQUEUE_TIMEOUT_MS = 20000;
 // 形状
 // ===========================================================================
 
+/**
+ * 一个**文件附件**的描述（排队消息的附件）。
+ *
+ * ⚠️ **这里没有签名 URL** —— 签名 URL 有有效期，躺在库里会过期、也不该长期存签名串
+ *   ⇒ 服务端在「这条消息真要发出去」那一刻才解析（flush / 泵队列）。
+ */
+export interface InboxFile {
+  type?: string;
+  file_id?: string;
+  name?: string;
+  mime?: string;
+  size?: number;
+  url?: string;
+}
+
+/**
+ * 排队消息的**附件**（★ 2026-11-14 服务端 `bb46bd4` 加的列）。
+ *
+ * 形状跟**正常那条消息**逐字同形（⇒ 泵队列时原样重发即可）：
+ *   · `image_urls`        —— 原样（URL 数组）
+ *   · `attached_file_ids` —— 原样（id 数组）
+ *   · `files`             —— 文件附件的**描述**（id / 名字 / mime / 大小）
+ */
+export interface InboxAttachments {
+  image_urls?: string[];
+  attached_file_ids?: string[];
+  files?: InboxFile[];
+}
+
 /** 队列里的一条（「一封信」）。 */
 export interface InboxItem {
   /** 收件箱行的 id（字符串形式的 BigInt）。 */
@@ -55,6 +84,11 @@ export interface InboxItem {
   content: string;
   /** 附带的产物（文件 / 文本 …）。 */
   artifacts: unknown | null;
+  /**
+   * ★ **附件**（2026-11-14 服务端 `bb46bd4`）—— 排队消息的附件**不丢**。
+   *   ⇒ 泵队列时原样取 `image_urls` / `attached_file_ids` 重发（端侧**不**解析签名 URL）。
+   */
+  attachments?: InboxAttachments | null;
   /** 优先级（越大越先 —— 「立即发送」的那条会被顶到最大）。 */
   priority: number;
   /**
@@ -100,6 +134,8 @@ export interface EnqueueMessageBody {
   error?: string;
   /** 服务端给了队列行 id（老服务端不给 ⇒ 端侧靠 inbox 轮询认领）。 */
   messageId?: string;
+  /** 服务端回传的**附件**（原样）—— 端侧乐观队列项显示「📎 N 个附件」用。 */
+  attachments?: InboxAttachments | null;
 }
 
 // ===========================================================================
@@ -176,10 +212,18 @@ export function listPendingWork(sessionId: string): Promise<PendingWorkItem[]> {
  *
  * ## 服务端的回执形状（★ 2026-11-14 服务端已就绪）
  *
- *   202 ⇒ `{ ok: true, queued: true, inboxId: "<行 id>", seq: N, content: "…" }`
+ *   202 ⇒ `{ ok: true, queued: true, inboxId: "<行 id>", seq: N, content: "…",
+ *           attachments: { image_urls, attached_file_ids, files } }`
  *
  *   ⚠️ 排队**不写 user 行**（服务端口径：「排队 ≠ 用户已经说过这句话」）
  *     ⇒ 气泡等它**真发出去**时才有（⏫ 插队时服务端补写；泵队列时正常建轮自然写）。
+ *
+ * ## 附件（★ 2026-11-14 服务端 `bb46bd4`）
+ *
+ *   · **入队**时 body 里带上 `image_urls` / `attached_file_ids`（跟正常发消息同款字段名）
+ *     ⇒ 服务端**原样**存进收件箱行 ⇒ 排队中的消息**附件不丢**。
+ *   · **端侧不解析签名 URL** —— 服务端在「这条消息真要发出去」那一刻才解析
+ *     （⏫ 插队 / 泵队列）⇒ 签名串不该在端侧或库里长期躺。
  *
  * ## 为什么**不消费**响应体
  *
@@ -258,7 +302,8 @@ export async function enqueueUserMessage(
     }
 
     // 2xx ⇒ 服务端收下了。
-    //   · 回的是 JSON ⇒ 服务端的入队回执：`{ok, queued, inboxId, seq, content}`；
+    //   · 回的是 JSON ⇒ 服务端的入队回执：
+    //     `{ok, queued, inboxId, seq, content, attachments}`；
     //   · 回的是 SSE ⇒ 排队消息**没有**属于本端的内容 ⇒ 直接断开。
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
     if (contentType.includes("application/json")) {
@@ -271,7 +316,17 @@ export async function enqueueUserMessage(
         const id = String(
           data.inboxId ?? raw.inboxId ?? data.id ?? raw.id ?? "",
         );
-        return { ok: true, confirmed: queued, ...(id ? { messageId: id } : {}) };
+        // ★ 附件（★ 2026-11-14 服务端 `bb46bd4`）—— **原样**回传。
+        const attachments =
+          (data.attachments as InboxAttachments | null | undefined) ??
+          (raw.attachments as InboxAttachments | null | undefined) ??
+          null;
+        return {
+          ok: true,
+          confirmed: queued,
+          ...(id ? { messageId: id } : {}),
+          ...(attachments ? { attachments } : {}),
+        };
       } catch {
         // 读不出来也算「收下了」—— 靠 inbox 轮询确认。
       }
