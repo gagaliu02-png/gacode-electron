@@ -66,11 +66,25 @@ export interface StartedJob {
  * @param jobId 作业 id（= 服务端的 `pending_id`）
  * @param service CLI 服务（`raw` / `claude` …）
  * @param invocation 怎么起（由服务自己算）
+ * @param sessionId 发起这个作业的**业务会话**（订正 28 · W5）
+ *   ⇒ 「停止」的作用域 = **本会话的一切** ⇒ 端侧得知道「这条作业属于哪个会话」。
  */
 export function startJob(
   jobId: string,
   service: CliService,
-  invocation: { command: string; args: string[]; cwd: string | null; env?: Record<string, string> },
+  // ⚠️ `shellCommand` 是 b75b83b（2026-11-14「后台普通命令输出全丢」）加的字段：
+  //   「这条命令得走 shell」时由 **shell 自己**做重定向（`>> log 2>&1`）。
+  //   ⛔ 之前这个类型里**没有**它 ⇒ `invocation.shellCommand` 编译不过
+  //      （node 侧 typecheck 一直是红的 ⇒ 2026-11-14 一并修好）。
+  invocation: {
+    command: string;
+    args: string[];
+    cwd: string | null;
+    env?: Record<string, string>;
+    /** 要交给 shell 执行的整条命令（走 shell 时由服务自己给）。 */
+    shellCommand?: string | null;
+  },
+  sessionId: string | null = null,
 ): StartedJob {
   fs.mkdirSync(jobsDir(), { recursive: true });
   const outputFile = jobLogFile(jobId);
@@ -127,8 +141,10 @@ export function startJob(
     throw new Error(`作业起不来: ${(e as Error).message}`);
   }
   // ⚠️ fd 的所有权交给子进程了 ⇒ 父进程这边**必须**关掉（否则文件句柄泄漏）。
-  try { fs.closeSync(outFd); } catch (_) {}
-  try { fs.closeSync(errFd); } catch (_) {}
+  //   ⚠️ `outFd` / `errFd` 可能是 null（走 shell 那条路时父进程不开日志文件）
+  //      ⇒ 关之前先判一下（node 侧 typecheck 2026-11-14 一并修好）。
+  if (outFd !== null) { try { fs.closeSync(outFd); } catch (_) {} }
+  if (errFd !== null) { try { fs.closeSync(errFd); } catch (_) {} }
 
   // ⚠️ unref：作业**不该**把 Electron 主进程的事件循环吊住
   //    （它是 24 小时量级的后台活，不是「等它结束」的前台调用）。
@@ -149,6 +165,8 @@ export function startJob(
     status: 'running',
     startedAt: Date.now(),
     outputOffset: 0,
+    // ★ [2026-11-14 · 订正 28 · W5] 记下**业务会话** ⇒ 「停止本会话的一切」找得到它。
+    sessionId: sessionId ? String(sessionId) : null,
   });
 
   return { jobId, pid, outputFile, serviceId: service.id };

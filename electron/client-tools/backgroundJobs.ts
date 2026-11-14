@@ -93,7 +93,9 @@ export function startBackgroundJob(input: BackgroundStartInput): ClientToolResul
 
   let started;
   try {
-    started = startJob(jobId, service, invocation);
+    // ★ [2026-11-14 · 订正 28 · W5] 把**业务会话**带进作业表
+    //   ⇒ 「停止本会话的一切」在本机这一侧也认得出来。
+    started = startJob(jobId, service, invocation, input.sessionId ?? null);
   } catch (e) {
     return { status: 'error', error: `后台作业起不来: ${(e as Error).message}` };
   }

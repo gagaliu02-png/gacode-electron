@@ -85,18 +85,22 @@ test("GC-G10-2 ChatDetail 不再算 canRerun, 也不再传 onRerun", () => {
 });
 
 // ── GC-G10-3 · 右侧按钮回到两态 (stop / send), 没有第三个分支 ────────────
+//
+// ★ [2026-11-14 · 订正 28 · W5] 判据从「isStreaming」扩成**会话级状态机**
+//   (`resolveChatAction`: 主 agent 轮次 **或** 后台活在跑 ⇒ 停止; 输入框有字 ⇒ 发送)。
+//   ⇒ 本条断言跟着改: **两态**这件事不变（不许再冒出第三个态），
+//   变的是「什么时候是 stop」—— 现在由状态机说了算。
 test("GC-G10-3 输入框右侧按钮只有 stop / send 两态", () => {
   const { src, sf } = makeSource(INPUT_BAR);
 
-  // 找到「isStreaming ? (stop) : (...)」那个条件表达式 —— 取 then 里含「停止生成」的那个
+  // 找到按钮那个条件表达式 —— then 里含「停止生成」的那个
   const cond = findNode(
     { sf },
     (n) =>
       ts.isConditionalExpression(n) &&
-      n.condition.getText(sf).replace(/\s+/g, " ") === "isStreaming" &&
       n.whenTrue.getText(sf).includes("停止生成"),
   );
-  assert.ok(cond, `${INPUT_BAR}: 找不到 isStreaming ? (stop) : (...) 的按钮三元`);
+  assert.ok(cond, `${INPUT_BAR}: 找不到 (stop) : (send) 的按钮三元`);
 
   const thenText = cond.whenTrue.getText(sf);
   const elseText = cond.whenFalse.getText(sf);
@@ -111,6 +115,56 @@ test("GC-G10-3 输入框右侧按钮只有 stop / send 两态", () => {
   const whole = src.slice(cond.getStart(sf), cond.end);
   assert.equal(whole.includes("RotateCcwIcon"), false, "按钮三元里不该再引 rerun 图标");
   assert.equal(whole.includes("重新生成"), false, "按钮三元里不该再有「重新生成」文案");
+  // ★ 判据来自**状态机**（订正 28）—— 不许又退回「只看 isStreaming」。
+  assert.match(
+    cond.condition.getText(sf).replace(/\s+/g, " "),
+    /action\.action\s*===\s*"stop"/,
+    "按钮的判据必须是 resolveChatAction 的结果 (action.action === 'stop')",
+  );
+});
+
+// ── GC-G10-3b · 状态机本身 (订正 28 · W5) 的**可执行**断言 ──────────────
+//   §3.7 那张表是产品契约 ⇒ 必须是纯函数 + 可单测 (不许塞进组件里靠人肉读)。
+test("GC-G10-3b 按钮状态机按 §3.7 那张表判 (纯函数)", async () => {
+  const { resolveChatAction } = await import("../src/lib/chat-action.ts");
+
+  // 在跑 + 空 ⇒ 停止（停本会话的一切）
+  let d = resolveChatAction({ turnRunning: true, pendingWork: false, hasText: false });
+  assert.equal(d.action, "stop");
+  assert.equal(d.effect, "stop-everything");
+
+  // 在跑 + 有字 ⇒ 发送（进队列，不打断）
+  d = resolveChatAction({ turnRunning: true, pendingWork: true, hasText: true });
+  assert.equal(d.action, "send");
+  assert.equal(d.effect, "queue");
+
+  // 不在跑 + 后台活还在跑 + 空 ⇒ 停止（只停后台活）
+  d = resolveChatAction({ turnRunning: false, pendingWork: true, hasText: false });
+  assert.equal(d.action, "stop");
+  assert.equal(d.effect, "stop-everything");
+
+  // 不在跑 + 后台活还在跑 + 有字 ⇒ 发送（进队列）
+  d = resolveChatAction({ turnRunning: false, pendingWork: true, hasText: true });
+  assert.equal(d.action, "send");
+  assert.equal(d.effect, "queue");
+
+  // 不在跑 + 全停 + 有字 ⇒ 发送（直接发，起新轮）
+  d = resolveChatAction({ turnRunning: false, pendingWork: false, hasText: true });
+  assert.equal(d.action, "send");
+  assert.equal(d.effect, "send-now");
+
+  // ⛔ 只有两态：任何输入组合下 action 都只能是 stop / send
+  for (const turnRunning of [true, false]) {
+    for (const pendingWork of [true, false]) {
+      for (const hasText of [true, false]) {
+        const r = resolveChatAction({ turnRunning, pendingWork, hasText });
+        assert.ok(
+          r.action === "stop" || r.action === "send",
+          `出现了第三态: ${r.action}`,
+        );
+      }
+    }
+  }
 });
 
 // ── GC-G10-4 · 真·错误重试链路必须还在 (StreamingErrorBanner 的「重试」） ──

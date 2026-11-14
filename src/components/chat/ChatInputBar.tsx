@@ -48,6 +48,9 @@ import {
   type UploadMode,
 } from "../../lib/upload";
 import { extractSingleImage } from "../../lib/clipboard";
+// ★ [2026-11-14 · 订正 28 · W5] 按钮状态机 —— 纯函数（可单测）。
+//   判据 = ① 主 agent 轮次在不在跑 ② 本会话有没有未完成的后台活 ③ 输入框有没有字。
+import { resolveChatAction } from "../../lib/chat-action";
 import {
   ArrowUpIcon,
   PaperclipIcon,
@@ -143,6 +146,13 @@ export interface ChatInputBarHandle {
 export interface ChatInputBarProps {
   /** Whether currently streaming — drives send vs stop button */
   isStreaming: boolean;
+  /**
+   * ★ [2026-11-14 · 订正 28 · W5] 本会话**还有没有在跑的后台活**（PC 作业 / 云端子 agent）。
+   *
+   *   判据来源：**服务端给**（`GET /yinian/sessions/:id/pending-work`）+ 本机作业表
+   *   ⇒ 主 agent 轮次结束、后台活还在跑时，按钮**仍然是「停止」**（§3.7 第三行）。
+   */
+  hasPendingWork?: boolean;
   /** Stop button callback */
   onStop: () => void;
   /**
@@ -215,6 +225,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
   function ChatInputBar(
     {
       isStreaming,
+      hasPendingWork = false,
       onStop,
       onSubmit,
       onAttachmentError,
@@ -356,7 +367,11 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
         dragCounterRef.current = 0;
         setDragActive(false);
         if (isStreaming) {
-          onAttachmentError?.("流式生成中,无法接收新附件,请等上一轮结束");
+          // ★ [2026-11-14 · 订正 28] 轮次在跑时**文字可以排队**，但**附件带不过去**
+          //   （服务端的收件箱行只存正文 ⇒ 附件会丢）⇒ 如实说清楚，别让用户以为发出去了。
+          onAttachmentError?.(
+            "这一轮还在跑, 排队里的消息只能带文字(附件请等这一轮结束再发)",
+          );
           return;
         }
         const files = e.dataTransfer?.files;
@@ -478,7 +493,17 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
     };
 
     const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      if (isStreaming) return;
+      // ★ [2026-11-14 · 订正 28] 轮次在跑时附件带不过去（见 onDrop 的同一处说明）。
+      if (isStreaming) {
+        const file = extractSingleImage(e);
+        if (file) {
+          e.preventDefault();
+          onAttachmentError?.(
+            "这一轮还在跑, 排队里的消息只能带文字(附件请等这一轮结束再发)",
+          );
+        }
+        return;
+      }
       const file = extractSingleImage(e);
       if (file) {
         e.preventDefault();
@@ -550,6 +575,29 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
       }
       // chat-id-25: SlashMenu 内部用 ArrowUp/Down/Enter, 这里不重复
     };
+
+    // ─────────────────────────────────────────────────────────────────
+    // ★ [2026-11-14 · 订正 28 · W5] 右侧按钮的**状态机**
+    //
+    //   判据 = ① 主 agent 轮次在不在跑（客户端已知）
+    //        + ② 本会话有没有未完成的后台活（服务端 pending-work + 本机作业表）
+    //        + ③ 输入框有没有字
+    //
+    //   | 在跑   | 任意     | 空   | 停止 | 停本会话的一切 |
+    //   | 在跑   | 任意     | 有字 | 发送 | 进队列         |
+    //   | 不在跑 | 有在跑的 | 空   | 停止 | 只停后台活     |
+    //   | 不在跑 | 有在跑的 | 有字 | 发送 | 进队列         |
+    //   | 不在跑 | 全停     | 有字 | 发送 | 直接发（起新轮）|
+    //
+    //   ⚠️ 只有两态 —— 「重新生成」态已于 2026-11-04 删除（它会把发送键顶掉）。
+    // ─────────────────────────────────────────────────────────────────
+    const hasDoneAttachment = attachments.some((x) => x.kind === "done");
+    const hasContent = !!text.trim() || hasDoneAttachment;
+    const action = resolveChatAction({
+      turnRunning: isStreaming,
+      pendingWork: hasPendingWork,
+      hasText: hasContent,
+    });
 
     // chat-id-25: 检测 "/" 开头 → 开 slash 菜单; 检测 "/cmd " → 自动触发.
     // 注意 setText 是 React state 同步, 但触发回调要按状态派生, 不能直接调.
@@ -736,10 +784,10 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
                 placeholder={
                   placeholder ??
                   (isStreaming
-                    ? "AI 正在回复..."
+                    ? "补充信息会排进队列（Enter 发送）…"
                     : "说点什么… (Enter 发送，Shift+Enter 换行)")
                 }
-                disabled={isStreaming || disabled}
+                disabled={disabled}
                 className="w-full bg-transparent text-fg placeholder:text-fg-subtle outline-none text-base leading-6 resize-none max-h-32 py-2 disabled:opacity-60 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               />
               {slashOpen && onSlashCommand ? (
@@ -770,12 +818,14 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
             </div>
 
             {/* send / stop — 两态按钮 (2026-11-04 删除「重新生成」态, 对齐 web / 安卓)
-                - 流式中 → stop (red)
-                - 非流式 → send (brand, 默认) */}
-            {isStreaming ? (
+                ★ [2026-11-14 · 订正 28] 判据从「流式中」扩成**会话级状态机**
+                  （`resolveChatAction`）: 主 agent 轮次 **或** 后台活在跑 ⇒ 「停止」;
+                  输入框有字 ⇒ 「发送」（进队列）; 都没在跑 ⇒ 「发送」（起新轮）。 */}
+            {action.action === "stop" ? (
               <button
                 type="button"
                 aria-label="停止生成"
+                title="停止本会话的一切（轮次 + 后台活）"
                 onClick={onStop}
                 className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-danger text-white hover:bg-danger/90 transition-colors duration-150"
               >
@@ -785,6 +835,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
               <button
                 type="button"
                 aria-label="发送"
+                title={action.effect === "queue" ? "发送（排进队列）" : "发送"}
                 onClick={handleSend}
                 disabled={
                   disabled ||
@@ -797,7 +848,9 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
             )}
           </div>
 
-          {/* 底部 caption — 对齐 web ChatInputBar.tsx:165-177 */}
+          {/* 底部 caption — 对齐 web ChatInputBar.tsx:165-177
+              ★ [2026-11-14 · 订正 28] 文案跟着**按钮形态**走:
+                有字时按钮是「发送」⇒ 「点击停止按钮中断」是骗人的 ⇒ 改成「会排进队列」。 */}
           <p
             className={[
               "mt-2 text-xs text-center flex items-center justify-center gap-1.5",
@@ -811,7 +864,11 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
               />
             ) : null}
             <span>
-              {isStreaming ? "生成中 · 点击停止按钮中断" : caption}
+              {action.effect === "queue"
+                ? `${isStreaming ? "生成中" : "后台任务进行中"} · 消息会排进队列（清空输入框可停止）`
+                : action.effect === "stop-everything"
+                ? `${isStreaming ? "生成中" : "后台任务进行中"} · 点击停止按钮中断`
+                : caption}
             </span>
           </p>
         </div>

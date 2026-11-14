@@ -114,6 +114,19 @@ import {
   type ChatInputBarHandle,
   type PendingAttachment,
 } from "../components/chat/ChatInputBar";
+// ★ [2026-11-14 · 订正 28 · W5] 会话收件箱（队列）+ 按钮状态机。
+import {
+  listInbox,
+  flushInboxMessage,
+  consumeInboxMessage,
+  listPendingWork,
+  enqueueUserMessage,
+  type InboxItem,
+  type PendingWorkItem,
+} from "../lib/session-inbox";
+import { QueueBar, type QueueEntry } from "../components/chat/QueueBar";
+import { BackgroundWorkBanner } from "../components/chat/BackgroundWorkBanner";
+import type { LocalJobInfo } from "../../shared/types";
 import {
   PlusActionsSheet,
   type PlusActionKind,
@@ -506,6 +519,33 @@ function reconstructLastUserSubmission(messages: ChatMessageModel[]): {
   return null;
 }
 
+/**
+ * ★ [2026-11-14 · 订正 28 · W5] 端侧**乐观**队列项。
+ *
+ *   服务端确认后（`inbox` 里出现同样内容）它就消失 ⇒ 用户只看见一条。
+ *   服务端一直没确认 ⇒ 标 `unconfirmed`（灰）⇒ 用户能看见「这条可能没排上」，
+ *   也能自己删掉（⛔ 不悄悄吞掉用户写的话）。
+ */
+interface LocalQueueEntry {
+  /** 本地 id（`local:<时间戳>-<随机>`）；服务端 id 到位后由内容匹配换掉。 */
+  id: string;
+  /** 正文。 */
+  content: string;
+  /** 入列时刻（ISO）。 */
+  createdAt: string;
+  /** 状态：送达中 / 服务端没确认。 */
+  state: "sending" | "unconfirmed";
+  /** 发出去的时刻（epoch ms）—— 用来判「多久没确认」。 */
+  sentAt: number;
+}
+
+/** 队列轮询间隔（毫秒）。 */
+const QUEUE_POLL_MS = 4000;
+/** 本机作业轮询间隔（毫秒）。 */
+const LOCAL_JOBS_POLL_MS = 5000;
+/** 乐观队列项多久没被服务端确认 ⇒ 标「未送达」（毫秒）。 */
+const QUEUE_UNCONFIRMED_MS = 8000;
+
 export function ChatDetail() {
   const { id: chatId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -517,6 +557,41 @@ export function ChatDetail() {
   const userId = user?.id ?? null;
 
   const stream = useChatStream();
+
+  // ══════════════════════════════════════════════════════════════════
+  // ★ [2026-11-14 · 订正 28 · W5] **会话收件箱（队列）** + **按钮状态机**
+  //
+  //   契约：docs/design/async-work-unit-architecture-2026-11.md §3.6 / §3.7 / §3.8
+  //
+  //   · 队列条（「N 条排队中 ⌄」+「⏫」）—— 数据源 = 服务端 `GET .../inbox`
+  //   · 「⏫ 立即发送」= 插队 = `POST .../inbox/:id/flush`（**不打断**当前轮）
+  //   · 按钮形态 = ① 主 agent 轮次在不在跑（客户端已知）
+  //             + ② 本会话有没有未完成的后台活（**服务端给** = `pending-work`
+  //               + 本机作业表）
+  //   · 「停止」的作用域 = **本会话的一切**（轮次 + 所有后台活）⇒ 彻底丢弃产出
+  // ══════════════════════════════════════════════════════════════════
+
+  /** 服务端队列（`state=held` 的行）。 */
+  const [inboxItems, setInboxItems] = useState<InboxItem[]>([]);
+  /**
+   * 端侧**乐观**队列项 —— 刚发出去、服务端还没确认的那几条。
+   *
+   * ⚠️ 为什么要有它：服务端把「轮次在跑时用户发消息 ⇒ 进队列」的那一步（W3-①）
+   *   是**服务端**的事 ⇒ 端侧在拿到服务端的回执之前，只能**先摆出来**，
+   *   否则用户点了「发送」什么反馈都没有（消息像是丢了）。
+   * ⚠️ 服务端确认后（inbox 里出现同样内容）本项**自动消失** ⇒ 不重复显示。
+   */
+  const [localQueue, setLocalQueue] = useState<LocalQueueEntry[]>([]);
+  /** 队列条是不是展开着（父组件持有 ⇒ 收起时不丢）。 */
+  const [queueExpanded, setQueueExpanded] = useState(false);
+  /** 服务端说的「本会话还有没跑完的后台活」。 */
+  const [pendingWork, setPendingWork] = useState<PendingWorkItem[]>([]);
+  /** 本机的后台作业（老端没有这张表 ⇒ 空数组，不影响别的）。 */
+  const [localJobs, setLocalJobs] = useState<LocalJobInfo[]>([]);
+  /** 正在插队的那一条（防重复点）。 */
+  const [flushingId, setFlushingId] = useState<string | null>(null);
+  /** 正在停后台活（防重复点）。 */
+  const [stoppingBackground, setStoppingBackground] = useState(false);
 
   // ────────────── 派生数据 ──────────────
   const chatsQuery = useQuery({
@@ -647,6 +722,28 @@ export function ChatDetail() {
   // ★ RC-12: 「进场接回」的**重跑令牌** —— bump 一次 ⇒ 那条路径 (契约 L-57 / L-58)
   //   重跑一遍 (先问 stream-state, 在跑才接) ⇒ 跨端并发提问时转成「旁观者」。
   const [attachEpoch, setAttachEpoch] = useState(0);
+
+  // ══════════════════════════════════════════════════════════════════
+  // ★ [2026-11-14 · 订正 28 · W5] **出队（泵队列）** 的几个信号灯
+  //
+  //   规则（PM 拍板）：轮次自然结束 ⇒ 把队首那条当**普通消息**发出去
+  //   ⇒ 发完调 `consume` 收掉 ⇒ 再看下一条。
+  //   ⛔ 只有**发起那一轮**的客户端负责泵（别的设备只看得到队列 + 点 ⏫ 插队）。
+  // ══════════════════════════════════════════════════════════════════
+  /** 这一轮是**本端发起**的吗？（旁观别人的轮次 ⇒ 不许泵队列） */
+  const myTurnRef = useRef(false);
+  /** 本机的聊天流现在**占着**吗？（终态帧之后服务端还要等 ACK 才关流 ⇒ 有窗口） */
+  const streamBusyRef = useRef(false);
+  /** 泵队列正在跑（防重入）。 */
+  const pumpBusyRef = useRef(false);
+  /** 已经「当普通消息发出去」的队列项 id（⇒ 那一轮结束后调 consume 收掉）。 */
+  const pumpedItemIdRef = useRef<string | null>(null);
+  /** 服务端队列的 ref 镜像（泵队列的回调里要读最新的一份 ⇒ 闭包会过期）。 */
+  const inboxItemsRef = useRef<InboxItem[]>([]);
+  /** 泵队列函数本身的 ref（终态帧的处理函数定义在它前面 ⇒ 用 ref 绕开定义顺序）。 */
+  const pumpQueueRef = useRef<(() => void) | null>(null);
+  /** 刷队列的函数 ref（终态帧里要用来刷新队列条）。 */
+  const refreshInboxRef = useRef<(() => Promise<void>) | null>(null);
   // ★ 四要素 (服务端权威值) —— 见模块顶部 `StreamingTurnMeta` 的说明。
   //   端侧**只渲染不推算** (T-15 / T-16 / T-17)。
   const [streamingTurnMeta, setStreamingTurnMeta] =
@@ -1432,6 +1529,27 @@ export function ChatDetail() {
         chatsRefreshTimerRef.current = window.setTimeout(() => {
           queryClient.invalidateQueries({ queryKey: ["chats"] });
         }, 2000);
+        // ══════════════════════════════════════════════════════════════
+        // ★ [2026-11-14 · 订正 28 · W5] **出队（泵队列）· 收掉已发出去的那条**
+        //
+        //   规则（PM 拍板）：轮次自然结束 ⇒ 把队首那条当**普通消息**发出去
+        //   ⇒ 发完调 `consume` 收掉 ⇒ 再看下一条。
+        //
+        //   这里只做「收」：**证明它真的发出去了**（服务端落了 user 行、有回复）
+        //   ⇒ 这时候收才安全（⛔ 早了 = 用户的话被吞掉）。
+        //   「泵下一条」在**流彻底收掉**之后做（见 startStream 的 finally）。
+        // ══════════════════════════════════════════════════════════════
+        const pumpedId = pumpedItemIdRef.current;
+        if (pumpedId) {
+          pumpedItemIdRef.current = null;
+          void consumeInboxMessage(chatId, pumpedId)
+            .then(() => {
+              void refreshInboxRef.current?.();
+            })
+            .catch(() => {
+              /* 收不掉 ⇒ 留着（下一轮结束还会再收一次） */
+            });
+        }
         // small UX touch: fullContent / emptyReply 由父组件消费, 此处不强求
         void serverId;
         return;
@@ -1469,6 +1587,10 @@ export function ChatDetail() {
   const startStream = useCallback(
     async (text: string, attachments: PendingAttachment[]) => {
       if (!chatId) return;
+      // ★ [2026-11-14 · 订正 28] 这一轮是**本端发起**的 ⇒ 轮次结束后由本端**泵队列**。
+      myTurnRef.current = true;
+      // 本机的聊天流**占着**（泵队列要等它彻底收掉才能起下一轮）。
+      streamBusyRef.current = true;
       // 重置流式态
       localRowIdRef.current = streamingId();
       setStreamingAssistantId(localRowIdRef.current);
@@ -1769,6 +1891,15 @@ export function ChatDetail() {
         }
         // user abort → 静默关闭, 不弹错误
         if (isUserAbortError(err) || err instanceof UserAbortError) {
+          // ★ [2026-11-14 · 订正 28] 用户喊停 ⇒ 这一轮的消息**已经发出去了**
+          //   （服务端已经落了 user 行）⇒ 队列项要**收掉**（不然会被再发一遍）。
+          const pumpedId = pumpedItemIdRef.current;
+          if (pumpedId) {
+            pumpedItemIdRef.current = null;
+            void consumeInboxMessage(chatId, pumpedId).catch(() => {
+              /* 收不掉就留着（下次轮次结束还会再收一次） */
+            });
+          }
           clearLocalRow();
           setWaitingFirstFrame(false);
           return;
@@ -1783,6 +1914,9 @@ export function ChatDetail() {
           console.warn(
             "[sse] 命中 TURN_ALREADY_RUNNING ⇒ 这一轮正在另一台设备上跑 ⇒ 转跨端 attach (旁观)",
           );
+          // ★ [2026-11-14 · 订正 28] 这一轮**不是本端发起的** ⇒ 不许替它泵队列
+          //   （会跟那台设备重复发同一条消息）。
+          myTurnRef.current = false;
           clearLocalRow();
           // 转跨端 attach —— **复用**「进场接回」那条路径 (契约 L-57 / L-58):
           //   「该不该接」的判据**永远**是服务端的 stream-state ⇒ bump 一次进场令牌
@@ -1802,8 +1936,24 @@ export function ChatDetail() {
           message: msg,
           userAttachments: attachments,
         });
+        // ★ [2026-11-14 · 订正 28] 这一轮**没发出去** ⇒ 队列项**不许收**
+        //   （⛔ 收了 = 用户写的话被吞掉）⇒ 留着，下一轮结束时再泵一次。
+        pumpedItemIdRef.current = null;
         clearLocalRow();
         setWaitingFirstFrame(false);
+      } finally {
+        // ★ [2026-11-14 · 订正 28] 本机的流**彻底收掉**了（终态帧 + ACK + 服务端关流）
+        //   ⇒ 泵队列可以起下一轮了。
+        streamBusyRef.current = false;
+        // ── 出队（泵队列）──
+        //   「轮次**自然结束**」⇒ 队列里还有 ⇒ 把队首那条当普通消息发出去。
+        //   ⛔ 用户喊停（turnAc.aborted）⇒ **不泵**（用户明确放弃了当前方向）。
+        //   ⛔ 旁观别人的轮次（myTurnRef 为 false）⇒ **不泵**（会跟对方重复发）。
+        //   ⛔ 没见到终态帧（断链降级）⇒ **不泵**（这一轮到底成没成不知道 ⇒ 别猜）。
+        if (!turnAc.signal.aborted && sawTerminal && myTurnRef.current) {
+          myTurnRef.current = false;
+          void pumpQueueRef.current?.();
+        }
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2188,12 +2338,343 @@ export function ChatDetail() {
     armAutoTitle(chatId);
   }, [chatId, historyQuery.data, armAutoTitle]);
 
+  // ══════════════════════════════════════════════════════════════════
+  // ★ [2026-11-14 · 订正 28 · W5] 队列 + 后台活：轮询 / 派生 / 动作
+  // ══════════════════════════════════════════════════════════════════
+
+  /** 刷一次服务端队列 + pending-work（静默失败 —— 读不到不影响聊天）。 */
+  const refreshInbox = useCallback(async () => {
+    if (!chatId) return;
+    try {
+      const [inbox, pending] = await Promise.all([
+        listInbox(chatId),
+        listPendingWork(chatId),
+      ]);
+      setInboxItems(Array.isArray(inbox) ? inbox : []);
+      setPendingWork(Array.isArray(pending) ? pending : []);
+      // 服务端确认了的 ⇒ 本地那条乐观项**收掉**（同内容匹配，先到先认）。
+      setLocalQueue((prev) =>
+        prev.length
+          ? prev.filter(
+              (l) =>
+                !inbox.some(
+                  (it) => (it.content || "").trim() === (l.content || "").trim(),
+                ),
+            )
+          : prev,
+      );
+    } catch (e) {
+      // 队列读不到（老服务端没这个端点 / 网络抖）⇒ 静默降级：
+      // 队列条空着，但**聊天照常用**。
+      console.warn("[inbox] 读队列失败:", e);
+    }
+  }, [chatId]);
+
+  /** 终态帧的处理函数在**上面**定义 ⇒ 用 ref 把「刷队列」递过去。 */
+  useEffect(() => {
+    refreshInboxRef.current = refreshInbox;
+  }, [refreshInbox]);
+
+  /** 轮询服务端队列 + pending-work（窗口不可见时跳过 —— 别在后台空转）。 */
+  useEffect(() => {
+    if (!chatId) return;
+    let alive = true;
+    const tick = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (!alive) return;
+      await refreshInbox();
+      // 超过 8 秒还没被服务端认领 ⇒ 标「未送达」（用户看得见、也能删）。
+      setLocalQueue((prev) =>
+        prev.map((l) =>
+          l.state === "sending" && Date.now() - l.sentAt > QUEUE_UNCONFIRMED_MS
+            ? { ...l, state: "unconfirmed" }
+            : l,
+        ),
+      );
+    };
+    void tick();
+    const timer = setInterval(() => {
+      void tick();
+    }, QUEUE_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [chatId, refreshInbox]);
+
+  /** 本机的后台作业（老端桥上没有这些方法 ⇒ 静默跳过，不影响别的）。 */
+  useEffect(() => {
+    const bridge =
+      typeof window !== "undefined" ? window.gacode?.clientTools : undefined;
+    if (!bridge || typeof bridge.listJobs !== "function") return;
+    let unsub: (() => void) | null = null;
+    const refresh = async () => {
+      try {
+        const list = await bridge.listJobs();
+        setLocalJobs(Array.isArray(list) ? list : []);
+      } catch (_) {
+        /* 读不到就留着上一份 */
+      }
+    };
+    void refresh();
+    if (typeof bridge.onJobs === "function") {
+      try {
+        unsub = bridge.onJobs((list) =>
+          setLocalJobs(Array.isArray(list) ? list : []),
+        );
+      } catch (_) {
+        /* 订阅失败就靠轮询 */
+      }
+    }
+    const timer = setInterval(() => {
+      void refresh();
+    }, LOCAL_JOBS_POLL_MS);
+    return () => {
+      clearInterval(timer);
+      try {
+        unsub?.();
+      } catch (_) {
+        /* 退订失败不影响界面 */
+      }
+    };
+  }, []);
+
+  /**
+   * ★ **本会话还在跑的后台活** —— 按钮状态机的判据之二（§3.7）。
+   *
+   * 两个来源取并集：
+   *   ① 服务端 `pending-work`（**服务端给的** —— 手机/web 也能看见 PC 上的活）；
+   *   ② 本机作业表里 `sessionId` = 本会话、还在跑的那些（服务端账本可能还没同步）。
+   */
+  const sessionBackgroundWork = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Array<{ id: string; tool: string | null; source: "server" | "local" }> = [];
+    for (const p of pendingWork) {
+      if (!p || !p.id || seen.has(p.id)) continue;
+      seen.add(p.id);
+      out.push({ id: p.id, tool: p.tool ?? null, source: "server" });
+    }
+    for (const j of localJobs) {
+      if (!j || !j.id) continue;
+      if (j.status !== "running" && j.status !== "queued") continue;
+      // ⚠️ 只算**本会话**的（老作业没有 sessionId ⇒ 不算）。
+      if (!j.sessionId || j.sessionId !== chatId) continue;
+      if (seen.has(j.id)) continue;
+      seen.add(j.id);
+      out.push({ id: j.id, tool: null, source: "local" });
+    }
+    return out;
+  }, [pendingWork, localJobs, chatId]);
+
+  /** 队列条要显示的条目（服务端行 + 端侧乐观行）。 */
+  const queueEntries: QueueEntry[] = useMemo(() => {
+    const server: QueueEntry[] = inboxItems.map((it) => ({
+      id: it.id,
+      content: it.content || "",
+      createdAt: it.createdAt,
+      injectable: !!it.injectable,
+      local: null,
+    }));
+    const local: QueueEntry[] = localQueue.map((l) => ({
+      id: l.id,
+      content: l.content,
+      createdAt: l.createdAt,
+      injectable: false,
+      local: l.state,
+    }));
+    return [...server, ...local];
+  }, [inboxItems, localQueue]);
+
+  // ref 镜像（泵队列的回调里要读最新的一份 ⇒ 闭包会过期）。
+  inboxItemsRef.current = inboxItems;
+
+  /**
+   * ★ [2026-11-14 · 订正 28 · W5] **泵队列（出队）**。
+   *
+   * ## 规则（PM 拍板）
+   *
+   *   **轮次自然结束** ⇒ 若队列非空 ⇒ 把**第一条**当**普通消息**发出去
+   *   （走现有的发消息链路 ⇒ 正常建轮 + 正常订阅新流 ⇒ 服务端写 user 行）
+   *   ⇒ 发完调 `consume` 把这条从队列里收掉 ⇒ 再看队列还有没有下一条。
+   *
+   * ## 三条纪律
+   *
+   *   ① **只有发起那一轮的本端负责泵**（别的设备只看得到队列 + 点 ⏫ 插队）
+   *      ⇒ 旁观别人的轮次（跨端 attach）时**不许**泵（会跟对方重复发）。
+   *   ② **⏫ 插队的那条不由本端发** —— 服务端标了 `injectable` ⇒ 正在跑的那一轮
+   *      会在下一个工具边界自己把它并进去 ⇒ 本端**跳过**它（否则一条消息发两遍）。
+   *   ③ **不许自己造 user 行** —— 正常发消息链路会写。
+   */
+  const pumpQueue = useCallback(async () => {
+    if (!chatId) return;
+    if (pumpBusyRef.current) return; // 已经在泵了
+    pumpBusyRef.current = true;
+    try {
+      // ① 等上一条流**彻底收掉**（终态帧之后服务端还要等 ACK 才关流 ⇒ 有窗口）。
+      for (let i = 0; i < 40 && streamBusyRef.current; i += 1) {
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      if (streamBusyRef.current) return; // 还是占着 ⇒ 下一轮结束时再泵
+      // ② **重读一次**队列（本地那份可能过期了 —— 别的设备可能刚把某条插队/消费掉）
+      //    ⇒ 别把一条已经被别人处理的队列项再发一遍（⛔ 一条消息发两遍）。
+      let items = inboxItemsRef.current;
+      try {
+        const fresh = await listInbox(chatId);
+        if (Array.isArray(fresh)) {
+          setInboxItems(fresh);
+          items = fresh;
+        }
+      } catch (_) {
+        /* 读不到就用本地那份 */
+      }
+      // ③ 队首那条**没被插队**的（插队的那条由正在跑的那一轮自己并入）。
+      const head = items.find((it) => !it.injectable);
+      if (!head) return;
+      // ④ 当**普通消息**发出去（正常建轮 ⇒ 服务端写 user 行 ⇒ 气泡出现）。
+      pumpedItemIdRef.current = head.id;
+      void startStream(head.content, []);
+    } finally {
+      pumpBusyRef.current = false;
+    }
+  }, [chatId, startStream]);
+
+  // 终态帧在**上面**定义 ⇒ 用 ref 把泵函数递过去（绕开定义顺序）。
+  pumpQueueRef.current = () => {
+    void pumpQueue();
+  };
+
+  /**
+   * ★ 「发送」进队列 —— 轮次在跑时，消息**不打断**、**不立即发**（§3.6）。
+   *
+   * ⚠️ 入队**没有**独立的用户端点 ⇒ 走**同一个** `POST /chat/stream`，
+   *   由服务端判断「排队还是起新轮」（W3-①）⇒ 端侧**不消费**它的响应体。
+   * ⚠️ 服务端没排上（409）⇒ **把文字退回输入框**（⛔ 不许吞掉用户写的话）。
+   */
+  const enqueueIntoQueue = useCallback(
+    async (text: string, attachments: PendingAttachment[]) => {
+      if (!chatId) return;
+      const content = (text || "").trim();
+      if (!content) return;
+      const localId = `local:${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      // ① 乐观上屏（用户马上看得见「排进队列了」）。
+      setLocalQueue((prev) => [
+        ...prev,
+        {
+          id: localId,
+          content,
+          createdAt: new Date().toISOString(),
+          state: "sending",
+          sentAt: Date.now(),
+        },
+      ]);
+      // ② 附件（服务端会按 url / fileId 收）。
+      const imageUrls = attachments
+        .filter((a) => !!a.url && !a.fileId)
+        .map((a) => a.url as string);
+      const fileIds = attachments
+        .filter((a) => !!a.fileId)
+        .map((a) => a.fileId as string);
+      // ③ 发给服务端（它负责排队）。
+      const res = await enqueueUserMessage(chatId, {
+        message: content,
+        ...(imageUrls.length ? { image_urls: imageUrls } : {}),
+        ...(fileIds.length ? { attached_file_ids: fileIds } : {}),
+      });
+      if (!res.ok) {
+        // 没排上 ⇒ 收掉乐观项 + **把文字退回输入框** + 如实说。
+        setLocalQueue((prev) => prev.filter((l) => l.id !== localId));
+        toast({
+          message: res.error || "没排进队列",
+          variant: "danger",
+        });
+        inputBarRef.current?.insertText(content);
+        return;
+      }
+      // ④ 排上了 ⇒ 立刻刷一次队列（别等下一拍轮询）。
+      void refreshInbox();
+    },
+    [chatId, refreshInbox, toast],
+  );
+
+  /**
+   * ★ 「⏫ 立即发送」= **插队**（§3.6）—— 服务端标 `injectable` ⇒
+   *   agent 在**下一个工具调用边界**就并入当前这一轮 ⇒ **不打断**当前轮。
+   */
+  const flushQueueItem = useCallback(
+    async (id: string) => {
+      if (!chatId) return;
+      // 本地乐观项还没有服务端 id ⇒ 插不了队（等它被认领）。
+      if (id.startsWith("local:")) return;
+      setFlushingId(id);
+      try {
+        await flushInboxMessage(chatId, id);
+        toast({
+          message: "已插队：agent 会在下一个工具边界就并入当前这一轮",
+          variant: "default",
+        });
+        void refreshInbox();
+      } catch (e) {
+        toast({
+          message: `插队失败: ${e instanceof Error ? e.message : String(e)}`,
+          variant: "danger",
+        });
+      } finally {
+        setFlushingId(null);
+      }
+    },
+    [chatId, refreshInbox, toast],
+  );
+
+  /**
+   * ★ [2026-11-14 · 订正 28] **「停止」的作用域 = 本会话的一切**（§3.8）。
+   *
+   *   停**所有**后台工作单元（PC 作业 / 云端子 agent）—— 一视同仁。
+   *   ⚠️ 范围由**会话**限定 ⇒ 不碰别的会话 / 别的账号。
+   *   ⚠️ 本机那边走 `stopJob`（杀进程树 + 回传「已被用户停止」）。
+   */
+  const stopBackgroundWork = useCallback(async () => {
+    // ⚠️ 先看「有没有活要停」—— 没有就**静默**返回（⛔ 别每次按停止都弹一句「停不掉」）。
+    if (sessionBackgroundWork.length === 0) return;
+    const bridge =
+      typeof window !== "undefined" ? window.gacode?.clientTools : undefined;
+    if (!bridge || typeof bridge.stopJob !== "function") {
+      toast({
+        message: "停不掉",
+        description: "这个版本还不支持停后台任务。",
+        variant: "warning",
+      });
+      return;
+    }
+    setStoppingBackground(true);
+    try {
+      for (const w of sessionBackgroundWork) {
+        try {
+          await bridge.stopJob(w.id);
+        } catch (e) {
+          console.warn("[inbox] 停后台活失败:", w.id, e);
+        }
+      }
+      toast({
+        message: "已停止本会话的后台任务",
+        variant: "default",
+      });
+      void refreshInbox();
+    } finally {
+      setStoppingBackground(false);
+    }
+  }, [sessionBackgroundWork, refreshInbox, toast]);
+
   const handleSubmit = useCallback(
     (text: string, attachments: PendingAttachment[]): boolean => {
       if (!chatId) return false;
       // ★ RC-5: `stalled` 的那一轮**已经不等了** ⇒ 允许用户发下一条
       //   (否则输入框永久锁死, 用户以为应用卡死)。
-      if (streamingAssistantId && !streamingStalled) return false; // 已经在流式, 拒绝并发
+      // ★ [2026-11-14 · 订正 28] 轮次**还在跑** ⇒ 消息**进队列**
+      //   （不打断、不立即发；§3.6）⇒ 输入框照常清空（消息没丢，在队列里）。
+      if (streamingAssistantId && !streamingStalled) {
+        void enqueueIntoQueue(text, attachments);
+        return true;
+      }
       if (waitingFirstFrame) return false; // 正在等首帧 / 正在接回, 拒绝并发
       lastUserTextRef.current = text;
       lastUserAttachmentsRef.current = attachments;
@@ -2212,14 +2693,21 @@ export function ChatDetail() {
       waitingFirstFrame,
       startStream,
       armAutoTitle,
+      enqueueIntoQueue,
     ],
   );
 
   const handleStop = useCallback(() => {
     // ★ RC-7: 用户按了停止 ⇒ 这一轮的叫停开关也要断 (否则重连状态机会接着跑)。
     turnAcRef.current?.abort();
+    // ★ [2026-11-14 · 订正 28 · W5] 「停止」的作用域 = **本会话的一切**（§3.8）：
+    //   ① 主 agent 轮次（abort + USER_STOP ⇒ **彻底丢弃**产出，铁律不变）；
+    //   ② **所有**后台工作单元（本机的作业 + 服务端 pending-work 报的）—— 一视同仁。
+    //   ⚠️ 主 agent 已经结束（按钮还在是因为后台活没停）⇒ ① 那路什么也不做，
+    //      真正干活的是 ②。
     stream.abort("user");
-  }, [stream]);
+    void stopBackgroundWork();
+  }, [stream, stopBackgroundWork]);
 
   const handleRetry = useCallback(() => {
     if (!streamError) return;
@@ -2763,6 +3251,35 @@ export function ChatDetail() {
         }}
       />
 
+      {/* ★ [2026-11-14 · 订正 28 · W5] 「等待后台任务完成…」横幅（**会话级**）
+          ⚠️ §3.10：这是**会话级**的（依据 = 会话有未完成工作单元），**不是**轮次相位
+             ⇒ 轮次该结束就结束（不锁会话 ⇒ 沿用 L-27k）。
+          ⚠️ §3.7 的交互缺口：输入框有字时按钮变「发送」⇒ 没有「停止」入口
+             ⇒ 这里给**单独一个「停止后台任务」**入口（另一条路是清空输入框）。 */}
+      <BackgroundWorkBanner
+        count={sessionBackgroundWork.length}
+        onStop={() => {
+          void stopBackgroundWork();
+        }}
+        stopping={stoppingBackground}
+      />
+
+      {/* ★ [2026-11-14 · 订正 28 · W5] **队列条**（输入框上方）
+          左「N 条排队中 ⌄」（可展开看每条正文）+ 右「⏫」（立即发送 = 插队）。
+          ⚠️ 数据源 = **服务端**（跨端共享：手机上排的队 PC 看得见）。 */}
+      <QueueBar
+        items={queueEntries}
+        expanded={queueExpanded}
+        onToggle={() => setQueueExpanded((v) => !v)}
+        onFlush={(id) => {
+          void flushQueueItem(id);
+        }}
+        onRemove={(id) =>
+          setLocalQueue((prev) => prev.filter((l) => l.id !== id))
+        }
+        flushingId={flushingId}
+      />
+
       {/* gagaOS §② — 知识库挂载 chip — 对齐 web chat/[id]/page.tsx:1311-1331:
           brand-cyan 描边 chip + 逐条可移除 */}
       {pendingKnowledgeRefs.length > 0 ? (
@@ -2805,6 +3322,10 @@ export function ChatDetail() {
           <ChatInputBar
             ref={inputBarRef}
             isStreaming={isStreaming}
+            // ★ [2026-11-14 · 订正 28] 判据之二：本会话还有没有在跑的后台活
+            //   （服务端 pending-work + 本机作业表）⇒ 主 agent 停了但后台活还在跑时，
+            //   按钮**仍然是「停止」**（§3.7 第三行）。
+            hasPendingWork={sessionBackgroundWork.length > 0}
             onStop={handleStop}
             onSubmit={handleSubmit}
             onPlusClick={() => setPlusOpen(true)}

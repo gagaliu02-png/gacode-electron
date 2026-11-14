@@ -18,15 +18,24 @@
  *
  * 所以 PC 不需要事件总线 —— 终态帧到达时**就地**调本模块即可。
  *
- * ## 触发条件（4 条全中才弹）
+ * ## 触发条件（★ [2026-11-14 · PM 拍板] 更新过）
  *
  *   1. 收到轮次终态帧（`isTerminalDone`）—— 不是取消帧、不是 error 帧
  *      （用户按停止 ⇒ 产出丢弃 ⇒ 不通知，见 gaga「打断 = 彻底丢弃产出」口径）
  *   2. 本轮是 **AI 回复**（assistant 轮次）
- *   3. **窗口不在前台** —— 主进程算 `!isMinimized() && isFocused()`
- *      （`electron/main.ts` 的 `gacode:is-focused`），**不用** renderer 的
- *      `document.hidden`（Electron 窗口最小化时 visibilityState 仍可能是 visible）
- *   4. preload 桥存在（`window.gacode`）
+ *   3. **桌面通知开关是开的**（`prefs.enabled` + `prefs.desktopEnabled`）
+ *      —— 跟站内信那条路径**同一个**偏好源 ⇒ 用户关了就不弹
+ *   4. **窗口不在前台**（主进程算 `!isMinimized() && isFocused()`，
+ *      `electron/main.ts` 的 `gacode:is-focused`；**不用** renderer 的
+ *      `document.hidden` —— Electron 窗口最小化时 visibilityState 仍可能是 visible）
+ *      **或者**用户**不在这个会话**里（PM：「或用户不在这个会话」）
+ *   5. preload 桥存在（`window.gacode`）
+ *
+ * ## 为什么这条路径重要
+ *
+ *   服务端**普通聊天回复今天不发 CustomNotification（站内信）**
+ *   ⇒ PC 的系统通知不能只靠站内信 SSE ⇒ **聊天 SSE 的终态帧**是它的来源。
+ *   ⇒ 弹出来的通知点一下 ⇒ 主进程推落点 ⇒ 渲染层跳回**那个会话**。
  *
  * ## 通知正文（跟 web 同口径）
  *
@@ -55,6 +64,7 @@
  */
 
 import { notificationSummary, type NotificationItem } from "./notifications";
+import { loadNotificationPrefs } from "./api";
 
 /** 会话标题兜底（跟 web `chatTitle || "新对话"` 同款）。 */
 export const CHAT_NOTIFICATION_TITLE_FALLBACK = "新对话";
@@ -128,9 +138,36 @@ export function buildChatNotificationBody(info: ChatTerminalInfo): string {
 }
 
 /**
- * 「AI 回复到达」→ 弹系统通知（**仅窗口不在前台时**）。
+ * 用户现在**是不是就在这个会话里**？
  *
- * 返回 true = 已把通知推给主进程；false = 没弹（在前台 / 桥不存在 / 拿不到前台状态）。
+ * ⚠️ PC 用的是 **HashRouter**（`App.tsx`）⇒ 路由在 `location.hash` 里
+ *   （`#/chat/123`）⇒ 不用 `location.pathname`（file:// 下那是打包器的路径）。
+ *
+ * ★ 这条判据让「窗口在前台、但用户在看**别的**会话」也能弹通知
+ *   （PM 2026-11-14：「若窗口不在前台（**或用户不在这个会话**）⇒ 弹系统通知」）。
+ */
+export function isViewingSession(chatId: string): boolean {
+  if (typeof window === "undefined") return false;
+  const hash = window.location?.hash || "";
+  const path = hash.startsWith("#") ? hash.slice(1) : hash;
+  const target = `/chat/${encodeURIComponent(chatId)}`;
+  return path === target || path.startsWith(`${target}/`) || path.startsWith(`${target}?`);
+}
+
+/**
+ * 「AI 回复到达」→ 弹**系统通知**（通知栏，不是站内信）。
+ *
+ * ★ [2026-11-14 · PM 拍板] 普通聊天回复也要有系统级通知 ——
+ *   服务端**普通聊天回复今天不发 CustomNotification（站内信）**
+ *   ⇒ PC 的系统通知不能只靠站内信 SSE ⇒ 这条路径（聊天 SSE 的终态帧）是它的来源。
+ *
+ * ## 弹的条件（全中才弹）
+ *
+ *   ① **桌面通知开关是开的**（`prefs.enabled` + `prefs.desktopEnabled`）
+ *      —— 跟站内信那条路径**同一个**偏好源（`loadNotificationPrefs`），
+ *      ⛔ 不另造一套（用户关了桌面通知就不该被系统弹窗打扰）。
+ *   ② 窗口**不在前台**，**或者**用户**不在这个会话**里。
+ *   ③ preload 桥存在。
  *
  * ⚠️ 拿不到前台状态时**保守不弹** —— 宁可少弹，不要在用户正看着窗口时弹一条。
  */
@@ -140,6 +177,10 @@ export async function notifyAiReplyArrived(
   if (typeof window === "undefined") return false;
   const bridge = window.gacode;
   if (!bridge) return false;
+
+  // ① 桌面通知的开关（沿用站内信那条路径的同一个偏好源）。
+  const prefs = loadNotificationPrefs();
+  if (!prefs.enabled || !prefs.desktopEnabled) return false;
 
   let focused = true;
   try {
@@ -151,14 +192,15 @@ export async function notifyAiReplyArrived(
     );
     return false;
   }
-  if (focused) return false;
+  // ② 窗口在前台 **且** 用户正看着这个会话 ⇒ 不用打扰。
+  if (focused && isViewingSession(info.chatId)) return false;
 
   const title = info.chatTitle || CHAT_NOTIFICATION_TITLE_FALLBACK;
   const body = buildChatNotificationBody(info);
   const target = `/chat/${encodeURIComponent(info.chatId)}`;
 
   try {
-    // 复用既有通道（renderer → 主进程弹 Windows Toast + 点击跳落点）
+    // 复用既有通道（renderer → 主进程弹 Windows Toast + 点击跳落点 ⇒ 切到该会话）
     bridge.notificationSSESend({ title, body, target });
   } catch (err) {
     console.warn("[gacode-chat-notify] notificationSSESend failed:", err);

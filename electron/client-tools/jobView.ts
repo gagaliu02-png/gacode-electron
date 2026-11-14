@@ -35,6 +35,9 @@ export function toJobInfo(job: LocalJob): LocalJobInfo {
     settledAt: job.settledAt ?? null,
     pid: job.pid ?? null,
     summary: job.summary ?? null,
+    // ★ [2026-11-14 · 订正 28 · W5] 业务会话 id ——
+    //   「停止」的作用域 = **本会话的一切** ⇒ 渲染层要能按会话筛出「本会话的活」。
+    sessionId: job.sessionId ?? null,
   };
 }
 
