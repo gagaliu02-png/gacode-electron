@@ -398,6 +398,18 @@ export interface ChatMessage {
    *   老服务端 / 老数据没有 ⇒ undefined ⇒ 端侧回落老的启发式, 行为不变。
    */
   turnKey?: string | null;
+  /**
+   * ★ [订正 28 · L-28r] **收件箱行 id** —— 服务端在「补充」落库时写的
+   *   `metadata.inbox_id`。
+   *
+   *   · 补充那条（用户补的那句话 / 后台任务回报）在服务端是**一条 user 行**；
+   *   · 直播时端侧会**自己插**一条气泡（id = `supplement:<inbox_id>`）；
+   *   · 刷新回来时这一行带 `metadata.inbox_id` ⇒ 端侧算**同一个** id
+   *     ⇒ 同一条补充**只显示一遍**（不重复）。
+   *
+   *   非补充行 ⇒ undefined（不是 null —— 键不存在 ≡ null 的口径）。
+   */
+  inboxId?: string | null;
   phasesJson?: string | null;
   /**
    * A2-D4-02 · 思考 / 工具时间线 —— server 落库的 `phases_json` 解析结果.
@@ -684,6 +696,10 @@ export async function getHistory(chatId: string): Promise<{
     // ★ v2 (契约订正 16): 这一行的**轮次身份** (`metadata.turnKey`)。
     //   与流式帧顶层的 turnKey 是**同一个值** ⇒ 两边可精确认亲 (空气泡根治)。
     let turnKey: string | null | undefined;
+    // ★ [订正 28 · L-28r] **收件箱行 id** (`metadata.inbox_id`) ——
+    //   「补充」那条 (服务端 flush 时写的 user 行) ⇒ 端侧算合成 id
+    //   `supplement:<inbox_id>` ⇒ 跟直播时插的那条**是同一条** (不重复显示)。
+    let inboxId: string | null | undefined;
     if (m.metadata) {
       try {
         const meta = typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata;
@@ -693,6 +709,9 @@ export async function getHistory(chatId: string): Promise<{
         // 知识库引用 id — 跟 web api.ts:552 同一口径 (只认数组, 元素原样透传).
         if (Array.isArray(meta?.knowledge_refs)) knowledgeRefs = meta.knowledge_refs as string[];
         if (typeof meta?.turnKey === "string" && meta.turnKey) turnKey = meta.turnKey;
+        if (meta?.inbox_id != null && meta.inbox_id !== "") {
+          inboxId = String(meta.inbox_id);
+        }
         if (Array.isArray(meta?.attached_files)) {
           attachedFileNames = (
             meta.attached_files as Array<{ file_id?: unknown; filename?: unknown }>
@@ -720,6 +739,8 @@ export async function getHistory(chatId: string): Promise<{
       knowledgeRefs,
       // ★ v2 (契约订正 16): 这一行的**轮次身份** —— 与流式帧顶层 turnKey 同值。
       turnKey,
+      // ★ [订正 28 · L-28r] 这一行是「补充」(会话收件箱) ⇒ 端侧按它算合成 id。
+      inboxId,
       // 阶段 8: 撤回态 — server listChatMessages 已过滤 deletedAt,
       //   recalled 这条可选字段透传到 client, 用于 MessageBubble 占位 + 关闭菜单.
       recalled: m.recalled ?? false,

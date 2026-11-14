@@ -164,6 +164,17 @@ import {
 //   ⛔ 不写第三份 SSE 帧解析器 —— 复用共享零件 `lib/chat-sse.ts` 的
 //     `parseDeletedDeliverables` (只认顶层字段, 不碰游标)。
 import { parseDeletedDeliverables } from "../lib/chat-sse";
+// ★ [2026-11-14 · 订正 28 · L-28r] **补充边界** —— 「这里插进来一条补充」。
+//   ⛔ 判据与切法都在零依赖的 `lib/supplement-boundary.ts`（可被断言脚本直接跑）。
+import {
+  parseSupplementBoundary,
+  planSupplementCut,
+  supplementRowId,
+  SUPPLEMENT_ROW_ID_PREFIX,
+  type SupplementBoundary,
+  type ClosedSegmentRow,
+  type SupplementRow,
+} from "../lib/supplement-boundary";
 // =========================================================================
 // ★ 重构轮 R2-web · 「端侧续传中枢」(src/lib/sse/) —— 唯一的一套轮次状态机
 // ---------------------------------------------------------------------------
@@ -501,6 +512,9 @@ function reconstructLastUserSubmission(messages: ChatMessageModel[]): {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role !== "user") continue;
+    // ★ [订正 28 · L-28r] 「补充」那条（合成 id `supplement:<inbox_id>`）**不是**
+    //   一条独立的提问 ⇒ 重试不许拿它当「上一条用户消息」⇒ 跳过。
+    if (m.id.startsWith(SUPPLEMENT_ROW_ID_PREFIX)) continue;
     const text = m.content || "";
     const attachments: PendingAttachment[] = [];
     if (m.imageUrls) {
@@ -731,7 +745,14 @@ export function ChatDetail() {
           ? lastTurnTimingRef.current.timing
           : undefined);
       return {
-        id: m.id,
+        // ★ [订正 28 · L-28r] **补充那条** ⇒ 用合成 id `supplement:<inbox_id>`。
+        //   · 服务端 flush 时写的那条 user 行带 `metadata.inbox_id`（api.getHistory
+        //     已解析成 `m.inboxId`）⇒ 端侧算**同一个** id
+        //   ⇒ 跟直播时插的那条**是同一条** ⇒ 刷新前后都只显示一遍（不重复）。
+        id: m.inboxId ? supplementRowId(m.inboxId) : m.id,
+        // ★ [订正 28 · L-28r] 服务端那一行的**真 id**（撤回 / 删除要用它 ——
+        //   上面那个 id 可能是合成 id `supplement:<inbox_id>`）。
+        serverId: m.id,
         role: m.role,
         content: m.content,
         imageUrls: extractImageUrls(m),
@@ -773,6 +794,28 @@ export function ChatDetail() {
   //   相邻 thinking chunk **就地拼接** (不是每 chunk 一条) —— 否则时间线会显示
   //   "思考 20 次" 的短句列表, 而不是 1 条完整思考链.
   const [streamingPhases, setStreamingPhases] = useState<ExecutionPhase[]>([]);
+  // ★ [2026-11-14 · 订正 28 · L-28r] **补充边界** —— 本轮被「补充」切开的气泡。
+  //
+  //   ## 为什么要有它
+  //   「用户在 agent 跑的时候补了一句话（插队）」⇒ 后端**不另起一轮**（同一 turn、
+  //   同一把 SSE 流）⇒ agent 读到了补充并接着回答 ⇒ **功能是通的**，但**排版不对**：
+  //   两段回答被并成**同一条** assistant 气泡，用户的补充排在它**下面**
+  //   ⇒ 看起来像「补充是在补充后内容下面」（PM 2026-11-14 真机报障）。
+  //
+  //   ⇒ 收到 `supplementBoundary` 帧（顶层字段）⇒ ① 当前流式气泡**收尾**
+  //     （正文/事件/阶段搬进这里）② 补充那条**按自己的角色**插进来
+  //     ③ 续答进**新**的气泡 ⇒ 顺序 = [A1][补充][A2]。
+  //
+  //   ⚠️ 只放**本轮**的气泡；下一轮开始（`startStream`）/ 切会话 ⇒ 整组清掉。
+  const [cutRows, setCutRows] = useState<(ClosedSegmentRow | SupplementRow)[]>(
+    [],
+  );
+  /** 这一轮**被补充切开过**吗？（⇒ 终态帧要把最后一段也收尾成独立气泡） */
+  const turnWasSplitRef = useRef(false);
+  /** 已经处理过的补充（收件箱行 id）⇒ 同一帧重放（重连 / 接回）不重复插。 */
+  const handledSupplementIdsRef = useRef<Set<string>>(new Set());
+  /** `streamingEvents` 的 ref 镜像（切气泡时要把当前事件搬进「已收尾」那一条）。 */
+  const streamingEventsRef = useRef<RichEventBase[]>([]);
   // ★ v2 (契约订正 16): 本轮流式行的**轮次身份** (`tk_xxx`)。
   //   帧顶层的 `turnKey` (第一帧就有) ⇒ 与历史行的 `metadata.turnKey` 同值
   //   ⇒ 「本行 ↔ 服务端那一行」可**精确**判成同一轮 (空气泡根治点)。
@@ -1077,15 +1120,46 @@ export function ChatDetail() {
       if (keptEvents === deduped && keptPhases === m.phases) return m;
       return { ...m, richEvents: keptEvents, phases: keptPhases };
     });
+    // ★ [订正 28 · L-28r] **补充边界** —— 本轮被补充切开了 ⇒ 服务端那几行
+    //   （assistant 行被切成两段 + flush 时写的那条 user 行）**不重复渲染**。
+    //
+    //   ## 为什么服务端那几行要滤掉
+    //   · 服务端把这一轮切成**两行** assistant（`metadata.turnKey` 同值）+
+    //     一条 user 行（`metadata.inbox_id`）⇒ 跟本机「切开」出来的三条**同内容**；
+    //   · 不滤 ⇒ 同一条补充显示两遍、回答 A1 显示两遍（PM 报障的原始形态）。
+    //
+    //   ## 判据
+    //   · assistant 行：轮次身份（`metadata.turnKey`）跟本机切开的段同值 ⇒ 滤掉；
+    //   · 补充那条：合成 id（`supplement:<inbox_id>`）跟本机插的那条同 id ⇒ 滤掉。
+    const cutSupplementIds = new Set(
+      cutRows
+        .filter((r): r is SupplementRow => r.kind === "supplement")
+        .map((r) => r.id),
+    );
+    const cutTurnKeys = new Set(
+      cutRows
+        .filter((r): r is ClosedSegmentRow => r.kind === "assistant")
+        .map((r) => r.turnKey)
+        .filter((k): k is string => !!k),
+    );
+    const baseWithoutSplitTurn = dedupedBase.filter((m) => {
+      if (cutTurnKeys.size > 0 && m.turnKey && cutTurnKeys.has(m.turnKey)) {
+        return false;
+      }
+      if (cutSupplementIds.size > 0 && cutSupplementIds.has(m.id)) return false;
+      return true;
+    });
     // ★ [批 G8] 乐观上屏的用户行 —— 服务端那一行到了就自动撤掉临时行 (同内容判据)。
     //   ⛔ 判据用**内容**而不是 id: 服务端的 user 行 id 客户端还不知道 (认亲靠 history 重拉)。
     const historyHasSameUser =
       !!pendingUserMsg &&
-      dedupedBase.some((m) => m.role === "user" && m.content === pendingUserMsg.content);
+      baseWithoutSplitTurn.some(
+        (m) => m.role === "user" && m.content === pendingUserMsg.content,
+      );
     const withPendingUser: ChatMessageModel[] =
       pendingUserMsg && !historyHasSameUser
         ? [
-            ...dedupedBase,
+            ...baseWithoutSplitTurn,
             {
               id: pendingUserMsg.id,
               role: "user",
@@ -1096,8 +1170,34 @@ export function ChatDetail() {
               createdAt: pendingUserMsg.createdAt,
             },
           ]
-        : dedupedBase;
-    if (!streamingAssistantId) return withPendingUser;
+        : baseWithoutSplitTurn;
+    // ★ [订正 28 · L-28r] 本机「切开」出来的气泡 ⇒ 插在**流式行之前**
+    //   ⇒ 顺序 = [A1][补充][A2]（A2 = 还在流式的那条）。
+    const withCutRows: ChatMessageModel[] = [
+      ...withPendingUser,
+      ...cutRows.map((r) =>
+        r.kind === "supplement"
+          ? {
+              id: r.id,
+              role: r.role,
+              content: r.content,
+              createdAt: r.createdAt,
+            }
+          : {
+              id: r.id,
+              role: "assistant" as const,
+              content: r.content,
+              richEvents: r.richEvents,
+              phases: r.phases,
+              startedAt: r.startedAt,
+              finishedAt: r.finishedAt,
+              elapsedMs: r.elapsedMs,
+              turnKey: r.turnKey,
+              createdAt: r.createdAt,
+            },
+      ),
+    ];
+    if (!streamingAssistantId) return withCutRows;
     const streamingMsg: ChatMessageModel = {
       id: streamingAssistantId,
       role: "assistant",
@@ -1147,8 +1247,11 @@ export function ChatDetail() {
     //   ⇒ 一轮一行, 且内容永远不倒退。
     //
     //   没有 turnKey (老服务端 / 老数据) ⇒ 回落老行为, 不变。
+    //
+    //   ⚠️ [订正 28 · L-28r] 判据查的是**滤过补充行之后**那份 (baseWithoutSplitTurn)
+    //   —— 这一轮被补充切开时, 服务端那几行已经由「切开的气泡」接管了 ⇒ 不能再合成。
     if (streamingTurnKey) {
-      const sameTurn = dedupedBase.find(
+      const sameTurn = baseWithoutSplitTurn.find(
         (m) => m.turnKey != null && m.turnKey === streamingTurnKey,
       );
       if (sameTurn) {
@@ -1164,10 +1267,13 @@ export function ChatDetail() {
           (sameTurn.phases?.length ?? 0) > (streamingMsg.phases?.length ?? 0)
             ? sameTurn.phases
             : streamingMsg.phases;
-        return [...withPendingUser.filter((m) => m !== sameTurn), streamingMsg];
+        return [
+          ...withCutRows.filter((m) => m !== sameTurn),
+          streamingMsg,
+        ];
       }
     }
-    return [...withPendingUser, streamingMsg];
+    return [...withCutRows, streamingMsg];
   }, [
     baseMessages,
     streamingAssistantId,
@@ -1179,6 +1285,8 @@ export function ChatDetail() {
     deletedDeliverableIds,
     // ★ [批 G8] 乐观上屏那一行
     pendingUserMsg,
+    // ★ [订正 28 · L-28r] 本轮被补充切开的那些气泡
+    cutRows,
     // ★ [2026-11-13] 四要素 + 计时 —— 不进 deps 的话，气泡拿不到它们
     //   （「PC 端气泡缺执行时间」的根因之一）。
     streamingTurnMeta,
@@ -1235,6 +1343,8 @@ export function ChatDetail() {
     setStreamingContent("");
     setStreamingEvents([]);
     setStreamingPhases([]);
+    // ★ [订正 28 · L-28r] 事件累加器的 ref 镜像也跟着清（切气泡时要搬它）。
+    streamingEventsRef.current = [];
     // ★ RC-5: 「没接回来」的标记跟着本行一起清 (下一轮重新累积)。
     setStreamingStalled(false);
     // ★ v2 (契约订正 16): 轮次身份跟着本行一起清 (下一轮重新累积)。
@@ -1308,6 +1418,12 @@ export function ChatDetail() {
     // ⚠️ 这两个 ref 同样跨会话存活 ⇒ 新会话的正文会**接在旧会话的正文后面**。
     streamingContentRef.current = "";
     streamingPhasesRef.current = [];
+    // ★ [订正 28 · L-28r] 切会话 ⇒ 「切开的气泡」也复位（否则上一会话的气泡
+    //   会挂在新会话下面）。新会话的内容由历史重拉给出。
+    setCutRows([]);
+    turnWasSplitRef.current = false;
+    handledSupplementIdsRef.current = new Set();
+    streamingEventsRef.current = [];
   }, [chatId]);
 
   /**
@@ -1382,6 +1498,119 @@ export function ChatDetail() {
     [chatId, queryClient],
   );
 
+  // =========================================================================
+  // ★ [2026-11-14 · 订正 28 · L-28r] **补充边界** —— 把这一轮切开
+  // ---------------------------------------------------------------------------
+  //   「用户在 agent 跑的时候补了一句话（插队）」⇒ 后端**不另起一轮**
+  //   （同一 turn、同一把 SSE 流）⇒ agent 读到了补充并接着回答 ⇒ **功能是通的**，
+  //   但**排版不对**：两段回答并成同一条 assistant 气泡，用户的补充排在它**下面**
+  //   ⇒ 看起来像「补充是在补充后内容下面」（PM 2026-11-14 真机报障）。
+  //
+  //   ⇒ 后端在补充并进去那一刻发一个**无内容帧**（顶层字段 `supplementBoundary`）
+  //   ⇒ 端侧据此：① 当前流式气泡**收尾** ② 补充那条**按自己的角色**插进去
+  //     ③ 续答进**新**的气泡 ⇒ 顺序 = [A1][补充][A2]。
+  // =========================================================================
+
+  /**
+   * 流式累积归零（正文 / 事件 / 阶段）—— 切气泡时用。
+   *   ⇒ 归零之后 arriving 的正文就是**新**气泡的内容（续答）。
+   */
+  const resetStreamingAccumulation = useCallback(() => {
+    streamingContentRef.current = "";
+    setStreamingContent("");
+    streamingEventsRef.current = [];
+    setStreamingEvents([]);
+    streamingPhasesRef.current = [];
+    setStreamingPhases([]);
+  }, []);
+
+  /**
+   * ★ [订正 28 · L-28r] 收到「补充边界」帧 ⇒ 把这一轮切开。
+   *
+   *   ⛔ 端侧**零推算**：正文 / 事件 / 阶段 / 计时都是**搬过去**的（判据在
+   *     `lib/supplement-boundary.ts` 的 `planSupplementCut`，纯函数、可断言）。
+   *   ⛔ **幂等**：同一帧可能重放（重连 / 接回）⇒ 同一条补充只插一次。
+   */
+  const applySupplementBoundary = useCallback(
+    (sb: SupplementBoundary) => {
+      // ⚠️ 既没有收件箱行 id、又没有正文 ⇒ 这一帧什么都不是 ⇒ 不插空气泡。
+      if (!sb.id && !sb.content) return;
+      const rowId = supplementRowId(sb.id);
+      if (handledSupplementIdsRef.current.has(rowId)) return;
+      handledSupplementIdsRef.current.add(rowId);
+
+      const now = Date.now();
+      const timing = streamingTimingRef.current;
+      const plan = planSupplementCut({
+        boundary: sb,
+        now,
+        segment: {
+          content: streamingContentRef.current,
+          richEvents: dedupeRichEvents(streamingEventsRef.current),
+          phases: streamingPhasesRef.current,
+          startedAt: timing?.startedAt ?? null,
+          finishedAt: null,
+          elapsedMs: timing?.elapsedMs ?? null,
+          turnKey: streamingTurnKeyRef.current,
+        },
+      });
+      // ① 收尾的那一段 + ② 插进来的补充（按出现顺序 ⇒ [A1][补充]）
+      //   ⚠️ 补充来得太早（agent 还没吐出任何东西）⇒ 前半截是**空的**
+      //   ⇒ 不生成空气泡，只插补充那条。
+      const hasContentBeforeCut =
+        plan.closedSegment.content.trim() !== "" ||
+        plan.closedSegment.richEvents.length > 0 ||
+        plan.closedSegment.phases.length > 0;
+      setCutRows((prev) =>
+        hasContentBeforeCut
+          ? [...prev, plan.closedSegment, plan.supplementRow]
+          : [...prev, plan.supplementRow],
+      );
+      turnWasSplitRef.current = true;
+      // ③ 续答进**新**的气泡
+      resetStreamingAccumulation();
+    },
+    [resetStreamingAccumulation],
+  );
+
+  /**
+   * ★ [订正 28 · L-28r] 这一轮的**最后一段**也要收尾成独立气泡。
+   *
+   *   什么时候用：终态帧一到，流式行会被撤掉（`clearLocalRow`）⇒ 那一段
+   *   （续答 A2）会跟着**一起消失** ⇒ 用户看不到后半截回答。
+   *   ⇒ 这一轮被补充切开过 ⇒ 先把它收尾进 `cutRows` 再撤流式行。
+   *
+   *   ⚠️ **只在这一轮被切开过时才做** —— 没切开的老路径行为**逐字不变**。
+   */
+  const closeTailSegment = useCallback(() => {
+    const timing = streamingTimingRef.current;
+    const now = Date.now();
+    const content = streamingContentRef.current;
+    const richEvents = dedupeRichEvents(streamingEventsRef.current);
+    const phases = streamingPhasesRef.current;
+    // ⚠️ 这一段啥都没有（模型零产出）⇒ 不生成空气泡。
+    if (content.trim() === "" && richEvents.length === 0 && phases.length === 0) {
+      resetStreamingAccumulation();
+      return;
+    }
+    const closed: ClosedSegmentRow = {
+      kind: "assistant",
+      id: `cut:tail:${localRowIdRef.current ?? now}`,
+      content,
+      richEvents,
+      phases,
+      startedAt: timing?.startedAt ?? null,
+      finishedAt: now,
+      elapsedMs:
+        timing?.elapsedMs ??
+        (timing ? Math.max(0, now - timing.startedAt) : null),
+      turnKey: streamingTurnKeyRef.current,
+      createdAt: new Date(now).toISOString(),
+    };
+    setCutRows((prev) => [...prev, closed]);
+    resetStreamingAccumulation();
+  }, [resetStreamingAccumulation]);
+
   /**
    * ★ 流帧处理 —— **发起流与只读接入流共用这一条** (契约 L-57)。
    *
@@ -1422,6 +1651,22 @@ export function ChatDetail() {
       const deletedIds = parseDeletedDeliverables(chunk);
       if (deletedIds && deletedIds.length > 0) {
         markDeletedDeliverables(deletedIds);
+      }
+
+      // ★ [2026-11-14 · 订正 28 · L-28r] —— 认「顶层字段 `supplementBoundary`」这一帧。
+      //   「用户在 agent 跑的时候补了一句话（插队）」⇒ 后端**不另起一轮**
+      //   （同一 turn、同一把 SSE 流）⇒ agent 读到了补充并接着回答 ⇒ **功能是通的**，
+      //   但**排版不对**（两段回答并成一条、补充排在它下面 ⇒ PM 2026-11-14 报障）。
+      //
+      //   ⇒ 这一帧是「**这里**插进来一条补充」⇒ ① 当前流式气泡**收尾**
+      //     ② 补充那条**按自己的角色**插进去 ③ 续答进**新**的气泡。
+      //
+      //   ⚠️ 这一帧是**无内容帧**（没有 content / reasoning / done…）⇒ 认完就收工
+      //     （不许把 `supplementBoundary.content` 当正文累积!).
+      const supplement = parseSupplementBoundary(chunk);
+      if (supplement) {
+        applySupplementBoundary(supplement);
+        return;
       }
 
       // 本机那一行: **第一次有内容才建** —— 控制帧 (attach_ok) 不带内容,
@@ -1559,6 +1804,7 @@ export function ChatDetail() {
           return;
         }
         ensureRow();
+        streamingEventsRef.current = [...streamingEventsRef.current, ev];
         setStreamingEvents((prev) => [...prev, ev]);
         // A2-D4-02 · tool 事件同时进 phases 时间线 (跟 web page.tsx:648-655 同款)
         streamingPhasesRef.current = [
@@ -1588,6 +1834,12 @@ export function ChatDetail() {
           content: chunk.fullContent ?? streamingContentRef.current,
           phases: streamingPhasesRef.current,
         });
+        // ★ [订正 28 · L-28r] 这一轮被补充切开过 ⇒ **最后一段**（续答 A2）先收尾成
+        //   独立气泡 —— 不然下面 `clearLocalRow()` 撤掉流式行时, 后半截回答会**跟着消失**。
+        //   ⚠️ 没切开过 ⇒ 什么都不做（老路径逐字不变）。
+        if (turnWasSplitRef.current) {
+          closeTailSegment();
+        }
         // ★ [2026-11-13] 收表（**必须在 clearLocalRow 之前** —— 它会清 turnKey）。
         finishTurnTiming();
         clearLocalRow();
@@ -1653,6 +1905,9 @@ export function ChatDetail() {
       clearLocalRow,
       finishTurnTiming,
       handleResumeFailed,
+      // ★ [订正 28 · L-28r] 补充边界（切气泡）
+      applySupplementBoundary,
+      closeTailSegment,
     ],
   );
 
@@ -1679,6 +1934,11 @@ export function ChatDetail() {
       setStreamingPhases([]);
       streamingContentRef.current = "";
       streamingPhasesRef.current = [];
+      streamingEventsRef.current = [];
+      // ★ [订正 28 · L-28r] 新的一轮 ⇒ 「切开的气泡」整组清掉（那是**上一轮**的）。
+      setCutRows([]);
+      turnWasSplitRef.current = false;
+      handledSupplementIdsRef.current = new Set();
       // ★ [2026-11-13] 本轮计时**起表** —— 本地时钟（跟 web `page.tsx:1340` 同款）。
       //   ⚠️ 必须在 `setStreamingAssistantId` **之前**落 —— 流式行是那一刻出现的，
       //     气泡渲染时就要拿到 startedAt（否则秒表不出现）。
@@ -1808,6 +2068,24 @@ export function ChatDetail() {
             snapshot: readServerSnapshot(chunk),
           });
           // 宿主层侧: 渲染快照 + 标 stalled + 关流式态 + 回落历史 (不弹错)。
+          handleStreamChunk(chunk, "streaming", attachments);
+          return;
+        }
+        // ★ [订正 28 · L-28r] **补充边界帧** —— 同样**必须在状态机之前认**。
+        //
+        //   ⛔ 这一帧**没有内容**（正文在 `supplementBoundary.content` 里）⇒
+        //     它的幂等判据对「内容」没有意义；而老服务端下这一帧**不带 `id:` 行**
+        //     ⇒ 读帧层给回的游标是**上一帧**的 ⇒ 状态机会把它判成「重复帧」丢掉
+        //     ⇒ 补充就永远插不进来（PM 2026-11-14 报障）。
+        //   ⇒ 端侧**先认**它（幂等由 `handledSupplementIdsRef` 兜），
+        //     再照样交给状态机**记一笔账**（游标/seq 该推进还是要推进）。
+        const supplement = parseSupplementBoundary(chunk);
+        if (supplement) {
+          ctrl.dispatch({
+            type: "frame",
+            frame: toTurnFrame(chunk),
+            cursor: cursor ?? lastCursor,
+          });
           handleStreamChunk(chunk, "streaming", attachments);
           return;
         }
@@ -2166,6 +2444,14 @@ export function ChatDetail() {
                 });
               },
               onChunk: (chunk, cur) => {
+                // ★ [订正 28 · L-28r] **补充边界帧** —— 接入流（旁观别人那一轮）
+                //   也可能收到 ⇒ 同样**先认**它（不依赖状态机的幂等判据：
+                //   这一帧没有内容，老服务端下还不带 `id:` 行 ⇒ 会被判成「重复帧」）。
+                //   ⚠️ 幂等由 `handledSupplementIdsRef` 兜（重放不会插两遍）。
+                const supplement = parseSupplementBoundary(chunk);
+                if (supplement) {
+                  applySupplementBoundary(supplement);
+                }
                 args.onData?.(toTurnFrame(chunk), cur);
               },
               onCursor: (c) => {

@@ -425,5 +425,15 @@ export function normalizeChatChunk(chunk: ChatChunk): ChatChunk {
     }
     out = { ...out, events: norm.events };
   }
+  // ★ [订正 28 · L-28r] **补充边界**（顶层字段）必须**原样透传**。
+  //   ⚠️ 这一帧是**无内容帧**（没有 content / reasoning / done…）⇒ 归一层若把它
+  //     当「不认识的帧」整帧丢掉 ⇒ 补充就永远不会出现在界面上（PM 2026-11-14 报障）。
+  //   ⛔ 本文件**不许**为此加运行时 import（判据模块 `lib/supplement-boundary.ts`
+  //     是零依赖的，但本文件被别的测试按「固定依赖链」加载 ⇒ 多一个运行时依赖
+  //     就多一处 ERR_MODULE_NOT_FOUND）⇒ 这里只做「键在就原样带走」。
+  //   判据（怎么认这一帧）在 `lib/supplement-boundary.ts`。
+  if (chunk.supplementBoundary && typeof chunk.supplementBoundary === "object") {
+    out = { ...out, supplementBoundary: chunk.supplementBoundary };
+  }
   return out;
 }

@@ -38,6 +38,9 @@ import { isTerminalFrame } from "./sse/terminal";
 import type { RichEventBase } from "./rich-events";
 // ★ RC-5: 失败帧里的快照形状 (契约订正 20: 键恒在, 值可为 null)。
 import type { AttachSnapshot } from "./chat-sse";
+// ★ [订正 28 · L-28r] 补充边界帧的形状 (顶层字段 `supplementBoundary`)。
+//   ⛔ 只引**类型** (编译期擦除) ⇒ 本文件的运行时依赖一个字都不多。
+import type { SupplementBoundary } from "./supplement-boundary";
 
 const API_BASE = "https://www.gaga.sale/api/v1";
 
@@ -158,6 +161,24 @@ export interface ChatChunk {
    *     「有快照可用」与「连快照都没有 (⇒ 去拉历史)」。
    */
   snapshot?: AttachSnapshot | null;
+
+  // ==========================================================================
+  // ★ [订正 28 · L-28r] **补充边界**（顶层字段）
+  // --------------------------------------------------------------------------
+  // 帧形态（**顶层字段**、不带 `type` —— 跟 a4 的 `deletedDeliverables` 一个套路）:
+  //
+  //   data: {"supplementBoundary":{"id":"<收件箱行 id>","kind":"user_supplement",
+  //          "fromKind":"user","content":"<补充正文>"}}
+  //
+  //   · 这是**无内容帧**（没有 content / reasoning / done…）⇒ 端侧认**顶层字段**；
+  //   · 语义：「**这里**插进来一条补充」⇒ ① 正在流式的气泡**收尾**
+  //     + ② **另起一个新气泡**给后面的续答 + ③ 补充那条**按自己的角色**渲染
+  //     成一个气泡（正文用 `content`）。
+  //
+  //   ⚠️ 老服务端没有这个字段 ⇒ undefined ⇒ 端侧行为与改动前逐字一致。
+  // ==========================================================================
+  /** ★ 订正 28 · L-28r: 「这里插进来一条补充」。 */
+  supplementBoundary?: SupplementBoundary | null;
 }
 
 /**

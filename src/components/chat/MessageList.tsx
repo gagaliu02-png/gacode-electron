@@ -20,6 +20,14 @@ import type { ExecutionPhase } from "./ExecutionTimeline";
 
 export interface ChatMessageModel {
   id: string;
+  /**
+   * ★ [订正 28 · L-28r] **服务端那一行的真 id**（没有 ⇒ 用 `id`）。
+   *
+   *   「补充」那条（会话收件箱）渲染时用的是**合成 id** `supplement:<inbox_id>`
+   *   （跟直播时插的那条**同一条** ⇒ 不重复显示）⇒ 而「撤回 / 删除」这类
+   *   **要打服务端**的动作必须用**真 id** ⇒ 两者分开。
+   */
+  serverId?: string | null;
   role: "user" | "assistant";
   content: string;
   /** 服务端落库 metadata 字段 (image_urls / attached_file_ids / attached_files) */
@@ -169,7 +177,9 @@ export function MessageList({
           {messages.map((m) => (
             <MessageBubble
               key={m.id}
-              messageId={m.id}
+              // ★ [订正 28 · L-28r] 「撤回 / 删除」要打服务端 ⇒ 用**真 id**
+              //   （`id` 可能是合成 id `supplement:<inbox_id>`）。
+              messageId={m.serverId ?? m.id}
               role={m.role}
               content={m.content}
               richEvents={m.richEvents}
