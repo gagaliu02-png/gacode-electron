@@ -587,6 +587,34 @@ function pendingAttachmentsOf(item: InboxItem): PendingAttachment[] {
   return out;
 }
 
+/**
+ * ★ [2026-11-14 · 订正 28] 这一条消息挂的**知识库条目 id**（跟正常发消息同款口径）。
+ *
+ * ## 三个来源（合并去重）
+ *
+ *   ① 用户本轮通过 KnowledgeAttachSheet 挂的（`pendingKnowledgeRefs`）
+ *   ② 用户在输入框里直接粘的 markdown marker `@[library:id] title`（兜底）
+ *   ③ **队列项带来的**（★ 服务端 `1bb8cd3`：排队期间挂的引用，出队那一刻要跟着发）
+ *
+ * ⚠️ 端侧**只传 id** —— atom 原文是服务端建轮时解析的（⛔ 端侧不解析、不存原文）。
+ */
+function collectKnowledgeRefs(
+  text: string,
+  mountedIds: string[],
+  extraIds?: string[] | null,
+): string[] | undefined {
+  const markerIds = extractKnowledgeRefIdsFromMessage(text);
+  const explicitIds = mountedIds;
+  const queuedIds = Array.isArray(extraIds) ? extraIds : [];
+  const seen = new Set<string>();
+  const uniq = [...explicitIds, ...markerIds, ...queuedIds].filter((id) => {
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return uniq.length > 0 ? uniq : undefined;
+}
+
 export function ChatDetail() {
   const { id: chatId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -1626,7 +1654,15 @@ export function ChatDetail() {
   );
 
   const startStream = useCallback(
-    async (text: string, attachments: PendingAttachment[]) => {
+    async (
+      text: string,
+      attachments: PendingAttachment[],
+      /**
+       * ★ [2026-11-14 · 订正 28] **额外**要带的知识库条目 id
+       *   （泵队列时 = 排队期间挂的引用 ⇒ 出队那一刻要跟着发，服务端 `1bb8cd3`）。
+       */
+      extraKnowledgeRefs?: string[] | null,
+    ) => {
       if (!chatId) return;
       // ★ [2026-11-14 · 订正 28] 这一轮是**本端发起**的 ⇒ 轮次结束后由本端**泵队列**。
       myTurnRef.current = true;
@@ -1692,21 +1728,16 @@ export function ChatDetail() {
         createdAt: new Date().toISOString(),
       });
 
-      // M3 3B: 知识库引用 id 列表 — 合并两条来源 (跟 web chat/[id]/page.tsx:759-774 同款):
+      // M3 3B: 知识库引用 id 列表 — 合并来源 (跟 web chat/[id]/page.tsx:759-774 同款):
       //   ① 用户本轮通过 KnowledgeAttachSheet 挂的 (pendingKnowledgeRefs)
       //   ② 用户在输入框里直接粘的 markdown marker `@[library:id] title` (兜底)
-      //   两条合并去重 (id 形式天然唯一); 空 ⇒ undefined (server 走原路径).
-      const knowledgeRefs = (() => {
-        const markerIds = extractKnowledgeRefIdsFromMessage(text);
-        const explicitIds = pendingKnowledgeRefs.map((r) => r.id);
-        const seen = new Set<string>();
-        const uniq = [...explicitIds, ...markerIds].filter((id) => {
-          if (seen.has(id)) return false;
-          seen.add(id);
-          return true;
-        });
-        return uniq.length > 0 ? uniq : undefined;
-      })();
+      //   ③ ★ 排队项带来的 (泵队列时) —— 见 collectKnowledgeRefs
+      //   合并去重 (id 形式天然唯一); 空 ⇒ undefined (server 走原路径).
+      const knowledgeRefs = collectKnowledgeRefs(
+        text,
+        pendingKnowledgeRefs.map((r) => r.id),
+        extraKnowledgeRefs,
+      );
 
       // =========================================================================
       // ★ 重构轮 R2-web · 发送流**也走状态机** (G-3 一处真值)
@@ -2576,8 +2607,14 @@ export function ChatDetail() {
       // ④ 当**普通消息**发出去（正常建轮 ⇒ 服务端写 user 行 ⇒ 气泡出现）。
       //    ★ **附件一起重发**（服务端 `bb46bd4` 把它们原样存进了收件箱行）
       //      ⇒ 排队中的消息附件**不丢**（端侧只取原样的 url / id，不解析签名 URL）。
+      //    ★ **知识库引用一起重发**（服务端 `1bb8cd3`）⇒ 排队期间挂的引用不丢
+      //      （端侧只传 id —— atom 原文由服务端建轮时解析）。
       pumpedItemIdRef.current = head.id;
-      void startStream(head.content, pendingAttachmentsOf(head));
+      void startStream(
+        head.content,
+        pendingAttachmentsOf(head),
+        head.knowledgeRefs,
+      );
     } finally {
       pumpBusyRef.current = false;
     }
@@ -2612,6 +2649,13 @@ export function ChatDetail() {
         image_urls: imageUrls,
         attached_file_ids: fileIds,
       };
+      // ★ 知识库条目 id（服务端 `1bb8cd3`）—— 跟正常发消息**同款口径**：
+      //   ① 输入栏挂的 chip ② 正文里的 marker `@[library:id] title`
+      //   （端侧**只传 id** —— atom 原文由服务端建轮时解析）。
+      const knowledgeRefs = collectKnowledgeRefs(
+        text,
+        pendingKnowledgeRefs.map((r) => r.id),
+      );
       // ② 乐观上屏（用户马上看得见「排进队列了」）。
       setLocalQueue((prev) => [
         ...prev,
@@ -2630,6 +2674,9 @@ export function ChatDetail() {
         message: content,
         ...(imageUrls.length ? { image_urls: imageUrls } : {}),
         ...(fileIds.length ? { attached_file_ids: fileIds } : {}),
+        ...(knowledgeRefs && knowledgeRefs.length
+          ? { knowledge_refs: knowledgeRefs }
+          : {}),
       });
       if (!res.ok) {
         // 没排上 ⇒ 收掉乐观项 + **把文字退回输入框** + 如实说。
@@ -2651,7 +2698,9 @@ export function ChatDetail() {
       }
       void refreshInbox();
     },
-    [chatId, refreshInbox, toast],
+    // ⚠️ `pendingKnowledgeRefs` 在 deps 里 —— 入队要带上这一轮挂的知识库条目
+    //   （服务端 `1bb8cd3`：排队期间挂的引用不丢）。
+    [chatId, refreshInbox, toast, pendingKnowledgeRefs],
   );
 
   /**

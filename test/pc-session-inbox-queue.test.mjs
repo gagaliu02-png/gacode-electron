@@ -320,7 +320,7 @@ test("GC-P28-10 轮次自然结束 ⇒ 把队首那条当**普通消息**发出�
   const detail = repoCode(DETAIL);
   // ① 泵队列：走**现有的发消息链路**（startStream）⇒ 正常建轮 + 服务端写 user 行。
   assert.ok(
-    /void startStream\(head\.content, pendingAttachmentsOf\(head\)\)/.test(detail),
+    /void startStream\(\s*head\.content,\s*pendingAttachmentsOf\(head\)/.test(detail),
     "★ 泵队列必须走普通发消息链路（startStream）—— 不是自己造 user 行",
   );
   assert.ok(
@@ -419,7 +419,7 @@ test("GC-P28-11 入队时把附件**一起带上**（跟正常发消息同款字
 test("GC-P28-12 泵队列时把附件**一起重发**（原样取 url / id）", () => {
   const detail = repoCode(DETAIL);
   assert.ok(
-    /void startStream\(head\.content, pendingAttachmentsOf\(head\)\)/.test(detail),
+    /void startStream\(\s*head\.content,\s*pendingAttachmentsOf\(head\)/.test(detail),
     "★ 泵队列要把该项的附件一起发出去（形态跟正常那条消息一致）",
   );
   assert.ok(
@@ -479,4 +479,69 @@ test("GC-P28-15 轮次在跑时附件**照常能带**（排队消息的附件不
     !/isStreaming\) \{[\s\S]{0,200}onAttachmentError/.test(drop),
     "★ 拖拽附件在轮次在跑时**不许**被拦",
   );
+});
+
+// ===========================================================================
+// GC-P28-16 ~ 18 · 排队消息挂的**知识库条目 id**（★ 2026-11-14 服务端 1bb8cd3）
+// ===========================================================================
+
+test("GC-P28-16 入队时把 knowledge_refs 一起带上（同款字段名）", () => {
+  const detail = repoCode(DETAIL);
+  const enq = detail.slice(
+    detail.indexOf("const enqueueIntoQueue = useCallback"),
+    detail.indexOf("const flushQueueItem = useCallback"),
+  );
+  assert.ok(
+    /knowledge_refs: knowledgeRefs/.test(enq),
+    "★ 入队 body 要带 knowledge_refs（跟正常发消息同款字段名，蛇形）",
+  );
+  assert.ok(
+    /collectKnowledgeRefs\(/.test(enq),
+    "★ 入队时的引用要走**同一个**收集口径（挂的 chip + 正文 marker）",
+  );
+  const lib = repoCode(INBOX_LIB);
+  assert.ok(
+    /knowledge_refs\?: string\[\]/.test(lib),
+    "★ 入队请求体的 DTO 要有 knowledge_refs（蛇形）",
+  );
+  assert.ok(
+    /knowledgeRefs\?: string\[\] \| null/.test(lib),
+    "★ 收件箱项的 DTO 要有 knowledgeRefs（驼峰 —— 服务端 GET inbox 的出参）",
+  );
+});
+
+test("GC-P28-17 泵队列时把 knowledgeRefs **一起重发**", () => {
+  const detail = repoCode(DETAIL);
+  assert.ok(
+    /void startStream\(\s*head\.content,\s*pendingAttachmentsOf\(head\),\s*head\.knowledgeRefs,?\s*\)/.test(
+      detail,
+    ),
+    "★ 泵队列要把该项的知识库引用一起发出去",
+  );
+  assert.ok(
+    /function collectKnowledgeRefs\(/.test(detail),
+    "要有 collectKnowledgeRefs（挂载的 + marker + 队列带来的，三路合并去重）",
+  );
+  const fn = detail.slice(
+    detail.indexOf("function collectKnowledgeRefs"),
+    detail.indexOf("export function ChatDetail"),
+  );
+  assert.ok(
+    /queuedIds/.test(fn) && /extraIds/.test(fn),
+    "★ 队列带来的那部分引用要并进去",
+  );
+});
+
+test("GC-P28-18 ⛔ 端侧**不**解析/存 atom 原文（那是服务端建轮时做的）", () => {
+  const detail = repoCode(DETAIL);
+  const lib = repoCode(INBOX_LIB);
+  for (const [name, code] of [
+    ["ChatDetail", detail],
+    ["session-inbox", lib],
+  ]) {
+    assert.ok(
+      !/getMemoryAtom|resolveKnowledge|atomContent|fetchAtom/.test(code),
+      `⛔ ${name} 不许解析知识库原文（端侧只传 id）`,
+    );
+  }
 });

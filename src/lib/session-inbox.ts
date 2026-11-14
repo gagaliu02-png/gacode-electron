@@ -89,6 +89,15 @@ export interface InboxItem {
    *   ⇒ 泵队列时原样取 `image_urls` / `attached_file_ids` 重发（端侧**不**解析签名 URL）。
    */
   attachments?: InboxAttachments | null;
+  /**
+   * ★ **知识库条目 id**（2026-11-14 服务端 `1bb8cd3`）—— 排队消息的引用**不丢**。
+   *
+   *   ⚠️ 字段名是**驼峰** `knowledgeRefs`（服务端 `GET inbox` 的出参）——
+   *      而**发消息**时用的是蛇形 `knowledge_refs`（chat 路由的 body schema）⇒ 两边别搞混。
+   *
+   *   ⇒ 泵队列时原样取这些 id 重发（端侧**不**解析 atom 原文 —— 那是服务端建轮时做的）。
+   */
+  knowledgeRefs?: string[] | null;
   /** 优先级（越大越先 —— 「立即发送」的那条会被顶到最大）。 */
   priority: number;
   /**
@@ -118,6 +127,12 @@ export interface EnqueueMessageBody {
   message: string;
   image_urls?: string[];
   attached_file_ids?: string[];
+  /**
+   * ★ 知识库条目 id（★ 2026-11-14 服务端 `1bb8cd3`）
+   *   —— **原样**存进收件箱行 ⇒ 排队中的消息引用不丢。
+   *   ⚠️ 字段名是**蛇形**（chat 路由的 body schema）—— 跟 inbox 出参的驼峰
+   *      `knowledgeRefs` **不是**同一个字段名。
+   */
   knowledge_refs?: string[];
 }
 
