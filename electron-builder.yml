@@ -114,15 +114,19 @@
 #     console ⇒ 输出不经过重定向句柄 ⇒ 改成「简单命令直连 exe」
 #   - output 改 release-bgjob-v23/ 绕开 v22 目录 (每次换新目录)
 
+# 0.7.24 (订正28 · W5): 队列条 +「⏫ 立即发送」+ 按钮状态机(停止=停本会话一切)
+#   + 客户端泵队列 + 普通聊天回复的系统级通知 + 排队消息的附件/知识库引用不丢
+#   - output 改 release-bgjob-v24/ 绕开 v23 目录 (每次换新目录, 绕 Search Indexer)
+
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.23
+buildVersion: 0.7.24
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-bgjob-v23
+  output: release-bgjob-v24
 
 files:
   - dist/**/*
