@@ -22,14 +22,16 @@
  *   · 右边「**⏫**」= **立即发送** = 插队投递（服务端标 `injectable` ⇒
  *     agent 在**下一个工具边界**就并入当前这一轮 ⇒ **不打断**当前轮）；
  *   · 每条排队消息**自己也带一个 ⏫**（「把**那条**插队」）—— 队列条上的 ⏫
- *     默认作用于**队首**那条（服务端排序 = priority desc, seq asc）。
+ *     默认作用于**队首**那条（服务端排序 = priority desc, seq asc）；
+ *   · ★ 每条排队消息**还带一个 🗑**（「删掉**那条**」）—— 队列项**还没发出去**
+ *     ⇒ 删掉它 ⇒ 它**再也不会被发出去**（泵队列跳过它、「⏫」也插不了它）。
  *
- * ⚠️ 本组件**只渲染 + 把点击抛给父组件** —— 队列数据、插队请求都在 ChatDetail。
+ * ⚠️ 本组件**只渲染 + 把点击抛给父组件** —— 队列数据、插队/删除请求都在 ChatDetail。
  * ⚠️ 队列是**服务端**的东西（跨端共享：手机上排的队 PC 看得见）⇒ 本组件
  *   不做任何本地缓存意义上的「真相」。
  */
 
-import { ChevronDownIcon } from "../ui/Glyphs";
+import { ChevronDownIcon, RotateCwIcon, TrashIcon } from "../ui/Glyphs";
 import type { InboxAttachments } from "../../lib/session-inbox";
 
 /** 队列里的一条（服务端行 + 端侧的乐观行，统一成这个形状）。 */
@@ -82,6 +84,19 @@ export interface QueueBarProps {
   onRemove?: (id: string) => void;
   /** 正在插队的那一条（防重复点）。 */
   flushingId?: string | null;
+  /**
+   * ★ **删掉一条排队消息**（★ 2026-11-14 · 队列删除）。
+   *
+   *   · 服务端行（有服务端 id）⇒ 父组件调 `DELETE /yinian/sessions/:id/inbox/:messageId`
+   *     ⇒ 删完它**再也不会被发出去**（泵队列跳过它、「⏫」也插不了它）；
+   *   · 端侧乐观行（`local:` 前缀，服务端还没认领）⇒ 父组件**端侧**直接删
+   *     （它没有服务端 id ⇒ 没有端点可调）。
+   *
+   *   ⛔ **不动已经发出去的消息**（那是历史里的 user 行 ⇒ 走撤回/删除那条路）。
+   */
+  onDelete?: (id: string) => void;
+  /** 正在删除的那一条（防连点 —— 按钮转「处理中」）。 */
+  deletingId?: string | null;
 }
 
 /** 正文预览 —— 单行 + 超长截断（完整内容在展开区里给）。 */
@@ -124,6 +139,48 @@ function FlushButton({
   );
 }
 
+/**
+ * 「🗑」按钮 —— 删掉这一条排队消息（**还没发出去**的那条）。
+ *
+ * ⚠️ 删的是**队列项** ⇒ 它**再也不会被发出去**；⛔ 不动已经发出去的消息。
+ */
+function DeleteButton({
+  id,
+  label,
+  disabled,
+  busy,
+  onDelete,
+}: {
+  id: string;
+  label: string;
+  disabled?: boolean;
+  /** 正在处理（删除请求在飞）⇒ 转圈 + 禁掉（防连点）。 */
+  busy?: boolean;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-testid={`queue-delete-${id}`}
+      disabled={disabled}
+      onClick={() => onDelete(id)}
+      className={[
+        "shrink-0 w-7 h-7 inline-flex items-center justify-center rounded-full",
+        "bg-fg/10 text-fg hover:bg-fg/25 transition-colors duration-150",
+        "disabled:opacity-40 disabled:cursor-not-allowed",
+      ].join(" ")}
+    >
+      {busy ? (
+        <RotateCwIcon className="w-3 h-3 animate-spin" />
+      ) : (
+        <TrashIcon className="w-3.5 h-3.5" />
+      )}
+    </button>
+  );
+}
+
 export function QueueBar({
   items,
   expanded,
@@ -131,6 +188,8 @@ export function QueueBar({
   onFlush,
   onRemove,
   flushingId,
+  onDelete,
+  deletingId,
 }: QueueBarProps) {
   if (!items || items.length === 0) return null;
 
@@ -206,7 +265,7 @@ export function QueueBar({
                   📎 {attachmentCount(it.attachments)} 个附件
                 </span>
               ) : null}
-              {it.local && onRemove ? (
+              {it.local && onRemove && !onDelete ? (
                 <button
                   type="button"
                   aria-label="删掉这条没送达的消息"
@@ -223,6 +282,16 @@ export function QueueBar({
                 disabled={!!it.local || flushingId === it.id}
                 onFlush={onFlush}
               />
+              {/* ★ 删掉这一条（还没发出去的那条）⇒ 它再也不会被发出去。 */}
+              {onDelete ? (
+                <DeleteButton
+                  id={it.id}
+                  label="删除这条排队消息"
+                  disabled={deletingId === it.id}
+                  busy={deletingId === it.id}
+                  onDelete={onDelete}
+                />
+              ) : null}
             </div>
           ))}
         </div>

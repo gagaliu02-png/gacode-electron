@@ -16,6 +16,7 @@
  *
  *   GET  /yinian/sessions/:sessionId/inbox              —— 队列（「N 条排队中」的数据源）
  *   POST /yinian/sessions/:sessionId/inbox/:id/flush     —— 「立即发送」= 插队
+ *   DELETE /yinian/sessions/:sessionId/inbox/:id         —— **删掉**队列里的一条（★ 队列删除）
  *   GET  /yinian/sessions/:sessionId/pending-work        —— 本会话还有没有在跑的后台活
  *                                                        （按钮状态机的判据之二）
  *
@@ -200,6 +201,36 @@ export function consumeInboxMessage(
   return request<{ count: number }>(
     `/yinian/sessions/${sessionId}/inbox/${encodeURIComponent(messageId)}/consume`,
     { method: "POST" },
+  );
+}
+
+/**
+ * ★ **删掉队列里的一条**（★ 2026-11-14 服务端 `ded3da2` · PM「队列的内容是要允许删除的」）。
+ *
+ * ## 语义（跟 web 端 / 服务端口径**同形**）
+ *
+ *   删的是**队列项**（**还没发出去**的那条）⇒ 删完它：
+ *     · 泵队列（轮次自然结束的自动出队）**跳过**它；
+ *     · 「⏫ 立即发送」也**插不了**它（服务端 flush 要求 `state=held`）。
+ *   ⛔ **不动已经发出去的消息**（那是历史里的 user 行 ⇒ 走撤回/删除那条路）。
+ *   ⛔ 删除**不**补写气泡（它没发出去过 ⇒ 不该冒出 user 行）。
+ *
+ * ## 响应（服务端 `200 {ok:true, data:{id, state:"deleted"}}`）
+ *
+ *   `request()` 会把 v2 信封 `{ok, data}` **解包成 `data`** ⇒ 这里拿到的是
+ *   `{ id, state }`（`state` 恒为 `"deleted"`）。
+ *
+ *   · `404` ⇒ 队列项不存在（或者不属于该会话）⇒ `request()` 抛错（消息 = 服务端的 `error.message`）。
+ *   · `400` ⇒ 这条**已经不在队列里**（已经发出 / 已被消费 / 已删）⇒ 同样抛错。
+ *   ⇒ 端侧**如实**把错误报给用户（⛔ 不许假装删掉了）。
+ */
+export function deleteInboxMessage(
+  sessionId: string,
+  messageId: string,
+): Promise<{ id: string; state: string }> {
+  return request<{ id: string; state: string }>(
+    `/yinian/sessions/${sessionId}/inbox/${encodeURIComponent(messageId)}`,
+    { method: "DELETE" },
   );
 }
 

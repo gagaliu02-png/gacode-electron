@@ -119,6 +119,7 @@ import {
   listInbox,
   flushInboxMessage,
   consumeInboxMessage,
+  deleteInboxMessage,
   listPendingWork,
   enqueueUserMessage,
   type InboxAttachments,
@@ -659,6 +660,8 @@ export function ChatDetail() {
   const [localJobs, setLocalJobs] = useState<LocalJobInfo[]>([]);
   /** 正在插队的那一条（防重复点）。 */
   const [flushingId, setFlushingId] = useState<string | null>(null);
+  /** 正在删除的那一条（防重复点 —— 删除请求在飞时按钮转「处理中」）。 */
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   /** 正在停后台活（防重复点）。 */
   const [stoppingBackground, setStoppingBackground] = useState(false);
 
@@ -2733,6 +2736,59 @@ export function ChatDetail() {
   );
 
   /**
+   * ★ **删掉一条排队消息**（★ 2026-11-14 · 队列删除 · 服务端 `ded3da2`）。
+   *
+   *   服务端行 ⇒ `DELETE /yinian/sessions/:sessionId/inbox/:messageId`
+   *     ⇒ 那条队列项标成 `deleted` ⇒ 它**再也不会被发出去**
+   *        （泵队列跳过它、「⏫ 立即发送」也插不了它）。
+   *   ⛔ **不动已经发出去的消息**（那是历史里的 user 行 ⇒ 走撤回/删除那条路）。
+   *
+   *   ⚠️ 端侧乐观行（`local:` 前缀）⇒ 服务端还没认领 ⇒ **没有 id 可删** ⇒ 端侧直接收掉。
+   *   ⚠️ **不乐观删** —— 先等服务端说删成功了，再刷队列
+   *     （失败 ⇒ **如实**报错，队列原样不动；⛔ 不许假装删掉了）。
+   */
+  const deleteQueueItem = useCallback(
+    async (id: string) => {
+      if (!chatId) return;
+      // ① 端侧乐观行（还没被服务端认领）⇒ 端侧直接收掉（没有服务端 id 可删）。
+      if (id.startsWith("local:")) {
+        setLocalQueue((prev) => prev.filter((l) => l.id !== id));
+        return;
+      }
+      // ② 服务端行 ⇒ 走 DELETE 端点（防连点：请求在飞时按钮转「处理中」）。
+      setDeletingId(id);
+      try {
+        await deleteInboxMessage(chatId, id);
+        // 服务端那一条没了 ⇒ 本地那一份也收掉。
+        //   ⚠️ 按 **id 或 正文** 收（正文相同的那条乐观项 = 同一条消息的乐观副本）
+        //     ⇒ 不许「删了又冒出来」（泵队列会把冒出来的那条发出去）。
+        const target = inboxItemsRef.current.find((it) => it.id === id);
+        const targetContent = (target?.content || "").trim();
+        setLocalQueue((prev) =>
+          prev.filter(
+            (l) =>
+              l.id !== id &&
+              !(targetContent && (l.content || "").trim() === targetContent),
+          ),
+        );
+        toast({
+          message: "已从队列里删掉（它不会再被发出去）",
+          variant: "default",
+        });
+        void refreshInbox();
+      } catch (e) {
+        toast({
+          message: `删不掉: ${e instanceof Error ? e.message : String(e)}`,
+          variant: "danger",
+        });
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [chatId, refreshInbox, toast],
+  );
+
+  /**
    * ★ [2026-11-14 · 订正 28] **「停止」的作用域 = 本会话的一切**（§3.8）。
    *
    *   停**所有**后台工作单元（PC 作业 / 云端子 agent）—— 一视同仁。
@@ -3372,7 +3428,8 @@ export function ChatDetail() {
       />
 
       {/* ★ [2026-11-14 · 订正 28 · W5] **队列条**（输入框上方）
-          左「N 条排队中 ⌄」（可展开看每条正文）+ 右「⏫」（立即发送 = 插队）。
+          左「N 条排队中 ⌄」（可展开看每条正文）+ 右「⏫」（立即发送 = 插队）
+          + 每条一个「🗑」（删掉这条 ⇒ 它再也不会被发出去）。
           ⚠️ 数据源 = **服务端**（跨端共享：手机上排的队 PC 看得见）。 */}
       <QueueBar
         items={queueEntries}
@@ -3385,6 +3442,11 @@ export function ChatDetail() {
           setLocalQueue((prev) => prev.filter((l) => l.id !== id))
         }
         flushingId={flushingId}
+        // ★ 队列删除：服务端行 ⇒ DELETE 端点；`local:` 乐观行 ⇒ 端侧直接收掉。
+        onDelete={(id) => {
+          void deleteQueueItem(id);
+        }}
+        deletingId={deletingId}
       />
 
       {/* gagaOS §② — 知识库挂载 chip — 对齐 web chat/[id]/page.tsx:1311-1331:
