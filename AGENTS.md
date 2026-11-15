@@ -117,3 +117,51 @@ data: {"type":"turn_started","turnStarted":{
       挂 click ⇒ 点了恢复窗口 + 跳落点路由）。
   - 断言：`test/pc-turn-started-hint.test.mjs`（别的会话 ⇒ 有提示 / 当前会话 ⇒ **不**有提示 /
     提示可跳转 / ⛔ 不许起轮·不许本地造气泡）。
+
+## 订正 31 · PC 浏览器端侧工具 `pc_browser_*`（2026-11-15 · M0 · PC 端）
+
+> 设计依据：根目录 `docs/design/pc-browser-agent-2026-11.md`
+> （**根目录 `docs/` 不是 git 仓** ⇒ 条款只能复述在本文件 + commit message 里）。
+> 服务端契约（gaclaw `src/llm/client-tools.js` 的 `PC_TOOL_SPECS`）**M0.5 才加**，
+> 本次只落 PC 仓，不碰 gaclaw / unified-api。
+
+### 三条铁律
+
+1. ⛔ **不新建浏览器** —— PC 端本来就有 Electron `<webview>` + 主进程 BrowserView tab 池
+   （`electron/main.ts` 的 `browserTabs`）。新文件 `electron/client-tools/browser.ts`
+   只是把**已有池**接成 `pc_*` 工具能调的一层薄控制。
+2. ★ **用户和 agent 共用一个 tab 池**（PM 2026-11-15 拍板）——
+   `main.ts` 把同一个 `browserTabs` Map 注给 `setBrowserTabPool()`；
+   渲染层 `gacode:open-browser-tab` 与 `pc_browser_open` **调同一个** `openBrowserTab()`。
+   - tab 被用户关掉 ⇒ `destroyed` 监听把它从 Map 删掉 ⇒ agent 按 url 找不到活 tab
+     ⇒ **自己再开一个**（不报错、不要求用户手动恢复）。⛔ 不另起独立窗口、不另建池。
+3. ⛔ **端侧不拼模型上下文**（L-24n / L-25q）—— `stdout` 只回一行紧凑 JSON
+   （`tool` / `url` / `tabId` / `title` / `reused`，≤ 1 KB）；
+   ⛔ 不返回整页 HTML、不返回 cookie / token 明文。折叠由 gaclaw `foldClientResult` 做。
+
+### 端侧落点（PC 仓，M0）
+
+| 文件 | 改动 |
+|---|---|
+| `electron/client-tools/browser.ts`（新建） | `normalizeBrowserUrl`（只放 http/https，⛔ file:/javascript:/data:）/ `findLiveTabId` / `pcBrowserOpen` / `setBrowserTabPool` |
+| `electron/client-tools/executor.ts` | `DEFAULT_TIMEOUT_MS` 加 `pc_browser_open: 30000`；switch 加 1 个 case |
+| `electron/main.ts` | 把 open-tab 主体抽成 `openBrowserTab(url)`（IPC 与 agent 共用）；`registerBrowserTabIpc()` 里 `setBrowserTabPool({open, entries})` |
+| `electron/preload.ts` / `shared/types.ts` | `openBrowserTab` 返回类型加 `title: string`（**向后兼容**：渲染层只读 `tabId`） |
+| `test/pc-browser-open-m0.test.mjs`（新建） | 9 条断言：URL 校验 / 活 tab 判定 / **共用不新开** / **关了自己重建** / 未接线明确 error / stdout ≤1KB / 失败如实回报 |
+
+### 安全与边界
+
+- ⛔ `file:` / `javascript:` / `data:` / `ftp:` 一律硬拒（本地文件 / XSS 面）。
+- M0 **不截图、不点击、不读 DOM**；`pc_browser_snapshot` / `act` / `shot` 在 M1~M2。
+- M0 **不声明 `browser=1` 能力键** —— gaclaw 侧还没加 spec，先声明只会白透传一个没人用的键；
+  M0.5 跟 `PC_TOOL_SPECS` 一起加（⚠️ 能力头**不得用于鉴权**，L-24e）。
+- 危险动作分级（L0 读 / L1 低风险交互 / L2 提交类 PC 端确认 / L3 高危 gaclaw 硬拒）在 M4。
+- 本地调试入口：`gacode:client-tool-execute`（`electron/client-tools/ipc.ts`）同样过闸门、
+  同样走 `executeClientTool` ⇒ **不碰 gaclaw** 就能端到端验 M0。
+
+### 验证（已跑）
+
+- `node --test test/pc-browser-open-m0.test.mjs` ⇒ 9/9
+- `npm test` ⇒ 422/422
+- `npx tsc --noEmit -p tsconfig.node.json` / `tsconfig.web.json` ⇒ 干净
+- `npm run build` ⇒ electron-vite 三段（main / preload / renderer）全通过

@@ -86,7 +86,7 @@ contextBridge.exposeInMainWorld('gacode', {
   },
 
   // 阶段 4: BrowserView 集合 (主进程持有 tab 池)
-  openBrowserTab: (url: string): Promise<{ tabId: string }> =>
+  openBrowserTab: (url: string): Promise<{ tabId: string; title: string }> =>
     ipcRenderer.invoke('gacode:open-browser-tab', { url }),
   closeBrowserTab: (tabId: string): void => {
     ipcRenderer.send('gacode:close-browser-tab', { tabId });

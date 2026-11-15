@@ -69,11 +69,12 @@ export interface GacodeBridge {
 
   /**
    * 申请主进程开一个 BrowserView tab (顶层嵌入 mainWindow contentView)。
-   * 主进程管理 tab 池, 返 { tabId } 句柄, 后续 close / focus 都用这个 id。
+   * 主进程管理 tab 池, 返 { tabId, title } 句柄, 后续 close / focus 都用这个 id。
    * 渲染层 Browser.tsx 主要用 `<webview>` 渲染多个 tab, 这条 IPC 给"外层链接
    * (如 chat 里的 '在浏览器打开')" 留入口, 现阶段由 webview-bridge.ts 暴露。
+   * ★ 2026-11-15: `title` 是给端侧工具 `pc_browser_open` 用的（渲染层可不读）。
    */
-  openBrowserTab: (url: string) => Promise<{ tabId: string }>;
+  openBrowserTab: (url: string) => Promise<{ tabId: string; title: string }>;
 
   /** 关掉一个 BrowserView tab; 未知 id 静默忽略。 */
   closeBrowserTab: (tabId: string) => void;

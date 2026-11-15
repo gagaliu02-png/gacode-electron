@@ -16,6 +16,9 @@ import { createAppMenu } from './menu';
 import { registerNotificationIpc } from './notifications';
 // [P3/P4 · 2026-11-12] 端侧执行（`pc_*`）—— 主进程那半：执行器 + 闸门 + 设备通道。
 import { registerClientToolIpc, setClientToolWindow } from './client-tools/ipc';
+// [2026-11-15 · 订正 31 · M0] 浏览器端侧工具 —— 把**现有** tab 池注给执行器
+//   （用户和 agent 共用同一个池；不另起窗口、不另建池）。
+import { setBrowserTabPool } from './client-tools/browser';
 import { getAppIcon, logIconStatus } from './icon';
 
 // CommonJS 下 __dirname 已有,这里只是为了类型注释
@@ -365,56 +368,75 @@ function registerBrowserCacheIpc(): void {
   console.log('[gacode-electron] Browser cache IPC handler registered');
 }
 
+/**
+ * ★ [2026-11-15 · 订正 31 · M0] 开 tab 的**唯一实现**。
+ *
+ * 渲染层 `gacode:open-browser-tab` 与端侧工具 `pc_browser_open` 都调它
+ * ⇒ 用户和 agent **共用同一个 BrowserView 池**（PM 拍板）。
+ *
+ * 返回值多加一个 `title` —— ⚠️ **向后兼容**：渲染层 / preload 只读 `tabId`，
+ * 多一个字段不影响任何现有调用方。agent 侧需要 title 回报给模型。
+ */
+async function openBrowserTab(target: string): Promise<{ tabId: string; title: string }> {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error('mainWindow not ready');
+  }
+  const tabId = `tab-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const view = new BrowserView({
+    webPreferences: {
+      // BrowserView 内嵌页沙箱化
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      // 不让内嵌 page 自己开 webviewTag, 避免无限递归
+      webviewTag: false,
+    },
+  });
+  try {
+    await view.webContents.loadURL(target);
+  } catch (err) {
+    console.warn(`[gacode-electron] BrowserView loadURL failed: ${target}`, err);
+  }
+  const rect = mainWindow.getContentBounds();
+  view.setBounds({ x: 0, y: 0, width: rect.width, height: rect.height });
+  mainWindow.addBrowserView(view);
+  mainWindow.setTopBrowserView(view);
+  browserTabs.set(tabId, { view, url: target, createdAt: Date.now() });
+  console.log(
+    `[gacode-electron] BrowserView opened: tabId=${tabId} url=${target}`,
+  );
+  // tab 内 content 销毁时反向通知渲染层 (窗口关闭 / 外链 replace 等)
+  // ★ 从 Map 删掉这一条 ⇒ agent 下次按 url 找不到活 tab ⇒ 自己再开一个
+  //   （PM 2026-11-15：「他发现关闭了，他自己再起来就行了」）。
+  view.webContents.on('destroyed', () => {
+    const entry = browserTabs.get(tabId);
+    if (entry) {
+      try {
+        mainWindow?.removeBrowserView(entry.view);
+      } catch {
+        /* ignore */
+      }
+      browserTabs.delete(tabId);
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('gacode:browser-tab-closed', { tabId });
+    }
+  });
+  let title = '';
+  try {
+    title = view.webContents.getTitle() || '';
+  } catch {
+    /* webContents 刚好销毁 ⇒ 空标题，不让它把整次 open 弄失败 */
+  }
+  return { tabId, title };
+}
+
 function registerBrowserTabIpc(): void {
-  // 开一个新 tab → 返 { tabId }
+  // 开一个新 tab → 返 { tabId, title }
   ipcMain.handle(
     'gacode:open-browser-tab',
-    async (_event, args: { url: string }): Promise<{ tabId: string }> => {
-      if (!mainWindow || mainWindow.isDestroyed()) {
-        throw new Error('mainWindow not ready');
-      }
-      const target = args?.url || 'about:blank';
-      const tabId = `tab-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-      const view = new BrowserView({
-        webPreferences: {
-          // BrowserView 内嵌页沙箱化
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true,
-          // 不让内嵌 page 自己开 webviewTag, 避免无限递归
-          webviewTag: false,
-        },
-      });
-      try {
-        await view.webContents.loadURL(target);
-      } catch (err) {
-        console.warn(`[gacode-electron] BrowserView loadURL failed: ${target}`, err);
-      }
-      const rect = mainWindow.getContentBounds();
-      view.setBounds({ x: 0, y: 0, width: rect.width, height: rect.height });
-      mainWindow.addBrowserView(view);
-      mainWindow.setTopBrowserView(view);
-      browserTabs.set(tabId, { view, url: target, createdAt: Date.now() });
-      console.log(
-        `[gacode-electron] BrowserView opened: tabId=${tabId} url=${target}`,
-      );
-      // tab 内 content 销毁时反向通知渲染层 (窗口关闭 / 外链 replace 等)
-      view.webContents.on('destroyed', () => {
-        const entry = browserTabs.get(tabId);
-        if (entry) {
-          try {
-            mainWindow?.removeBrowserView(entry.view);
-          } catch {
-            /* ignore */
-          }
-          browserTabs.delete(tabId);
-        }
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('gacode:browser-tab-closed', { tabId });
-        }
-      });
-      return { tabId };
-    },
+    async (_event, args: { url: string }): Promise<{ tabId: string; title: string }> =>
+      openBrowserTab(args?.url || 'about:blank'),
   );
 
   ipcMain.on(
@@ -450,6 +472,14 @@ function registerBrowserTabIpc(): void {
       focusExistingTab(mainWindow, args?.tabId);
     },
   );
+
+  // ★ [2026-11-15 · 订正 31 · M0] 把**同一个** tab 池注给端侧执行器。
+  //   entries() 直接给 Map（不是快照）⇒ 用户关 tab 后 Map 自动少一条，
+  //   agent 按 url 找不到 ⇒ 自己重建（共用、可接管、不另起窗口）。
+  setBrowserTabPool({
+    open: openBrowserTab,
+    entries: () => browserTabs,
+  });
 
   console.log('[gacode-electron] Browser tab IPC handlers registered');
 }
