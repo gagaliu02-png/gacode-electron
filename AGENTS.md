@@ -70,3 +70,50 @@
   带 `metadata.inbox_id`）用**同一个** id ⇒ 直播插的那条与刷新回来的那条**是同一条**（不重复显示）。
   - ⛔ 撤回 / 删除要打服务端 ⇒ 真 id 另存 `ChatMessageModel.serverId`（`MessageList` 传 `serverId ?? id`）。
 - 断言：`test/session-supplement-split.test.mjs`（归一保留 / 切法 / 合成 id / 历史映射 / 端侧接线）。
+
+## 订正 30 · 「服务端起轮，端侧当观众」（2026-11-15 · PC 端）
+
+> 契约来源：根目录 `docs/design/async-work-unit-30-client-contract.md` §1 / §2 / §4
+> （根目录 docs/ **不是 git 仓** ⇒ 条款只能复述在本文件 + commit message 里）。
+
+### 帧格式（走通知 SSE 流 `GET /api/v1/notifications/stream`，**不带 `id:` 行**）
+
+```
+data: {"type":"turn_started","turnStarted":{
+        "sessionId":"<会话id>",              // 必填 —— 这一轮在哪个会话里
+        "inboxId":"<收件箱那封信的id>",
+        "jobId":"<后台作业id，可为空字符串>",   // 未知时是空字符串（不是 null）
+        "reason":"work_unit_result"}}
+```
+
+### 三条铁律
+
+1. ⛔ **必须用新 type `turn_started`**；⛔ **不得复用 `work_unit_result`** ——
+   旧端已经把它理解成「起轮指令」⇒ 复用 ⇒ **旧端会起轮 ⇒ 双份**。
+   新 type 旧端不认 ⇒ 走 `unknown` 兜底 ⇒ **老端不崩、不双份**。
+2. ⛔ **端侧收到这个帧不许起轮** —— 服务端已经起好了；端侧再发一次 chat/stream
+   = 两个轮次 = 双份（⛔ 不许用 `work_unit_ref` 发起 chat/stream）。
+3. ⛔ **端侧不碰报告正文** —— 正文只存在服务端的收件箱里，端侧从头到尾只传 id；
+   ⛔ **不本地插「（后台任务XXX已完成）」气泡**（服务端已经写了 user 行 ⇒ 本地再插
+   ⇒ 刷新后重复 ⇒ 安卓已因此闪退过）。
+
+### PC 端落点
+
+- `src/lib/notifications-sse.ts` —— 帧解析侧（**与 web 端 `gacode-web/src/lib/notification-stream.ts` 逐字对齐**）：
+  `TurnStartedInfo` / `normalizeTurnStarted`（形状不对 ⇒ null，**不抛异常**；`jobId` 未知 ⇒ **空字符串**）
+  / `parseNotificationEvent` 的 `turn_started` 分支 / `unknown` 兜底分支（末尾那行**不许改**）
+  / `if (frame.id) lastEventId = frame.id;`（**不许改** —— 信号帧不带 `id:` 行 ⇒ 游标自然不推进）。
+- `src/lib/turn-started.ts` —— 端内广播通道（按 `sessionId` 派单；沿用本仓既有的 `window` 自定义事件惯例）。
+- `src/routes/ChatDetail.tsx` —— 收到信号且 `sessionId == 当前会话` ⇒ **自动 attach**
+  （复用现成的「进场接回」那条路径：bump `attachEpoch`）。
+- ★ **「别的会话」的用户可见提示**（本批补齐，与 web 端对齐）：
+  - `src/lib/turn-started-hint.ts` —— **纯逻辑**（零运行时 import ⇒ 可单测）：
+    `buildTurnStartedHint()`（**当前正看着的会话 ⇒ 返回 null ⇒ 不提示**）+
+    `turnStartedHintTarget()`（落点 `/chat/<id>` ⇒ **点得动**）。
+  - `src/components/layout/AppShell.tsx` —— 提示的两层（**都是仓里既有的机制，不新造 UI**）：
+    ① **侧栏红点** —— 复用 `ChatItem` **既有的** `hasNewMessage` 标记（与服务端那个**取或**）；
+    ② **系统托盘通知（Windows Toast）** —— 复用既有的
+      `window.gacode.notificationSSESend({title, body, target})`（C4-11：主进程弹 Toast +
+      挂 click ⇒ 点了恢复窗口 + 跳落点路由）。
+  - 断言：`test/pc-turn-started-hint.test.mjs`（别的会话 ⇒ 有提示 / 当前会话 ⇒ **不**有提示 /
+    提示可跳转 / ⛔ 不许起轮·不许本地造气泡）。

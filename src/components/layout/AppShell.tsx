@@ -51,9 +51,15 @@ import { ChatItem } from "../chat/ChatItem";
 import {
   getChats,
   listNotifications,
+  loadNotificationPrefs,
   setSessionPin,
   type ChatSession,
 } from "../../lib/api";
+// ★ [订正 30 · 2026-11-15] 「别的会话有后台任务回报」⇒ 给用户一个提示（观众侧）。
+//   `subscribeTurnStarted` = 端内广播通道（按 sessionId 派单）；
+//   `buildTurnStartedHint` = 纯逻辑（算提示文案 + 落点；不该提示时返回 null）。
+import { subscribeTurnStarted } from "../../lib/turn-started";
+import { buildTurnStartedHint } from "../../lib/turn-started-hint";
 import {
   formatUnreadBadge,
   NOTIFICATION_POLL_MS,
@@ -279,11 +285,116 @@ export function AppShell({ children }: { children: ReactNode }) {
   const unreadCount = notifData?.unreadCount ?? 0;
 
   // 找出当前 chat id (pathname `/chat/:id`)
-  const currentChatId =
-    location.pathname.startsWith("/chat/") &&
-    location.pathname.length > "/chat/".length
-      ? location.pathname.slice("/chat/".length).split("/")[0]
-      : null;
+  //
+  // ⚠️ **要 decode** —— URL 里的那一段是**编码过的**（会话 id 含特殊字符时），
+  //   而会话表里的 `c.id` 是**原始 id** ⇒ 不 decode 两边对不上：
+  //     · 侧栏高亮（`isActive`）会挑不出来；
+  //     · ★「当前正看着的会话」判不出来 ⇒ 会**误弹**一条本不该弹的提示。
+  const currentChatId = useMemo(() => {
+    if (!location.pathname.startsWith("/chat/")) return null;
+    const raw = location.pathname.slice("/chat/".length).split("/")[0];
+    if (!raw) return null;
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      // 畸形百分号编码 ⇒ 用原样（宁可对不上，也不要整页崩）。
+      return raw;
+    }
+  }, [location.pathname]);
+
+  // ══════════════════════════════════════════════════════════════════
+  // ★ [订正 30 · 2026-11-15] 「别的会话有后台任务回报」⇒ 给用户一个提示
+  //
+  //   背景任务回报到达时**服务端自己起一轮**（主 agent 读到报告后继续推进）
+  //   ⇒ 端侧**只当观众**（端侧不再起轮）。
+  //   ⇒ 端侧收到 `turn_started` 帧时必须让用户**知道**（否则石沉大海）：
+  //
+  //     · **当前正看着的那个会话** ⇒ **不提示**
+  //       （那儿已经自动 attach 去看实时了 ⇒ 再弹一条是噪音）；
+  //     · **别的会话** ⇒ 两层提示（跟 web 端同款，机制换成 PC 的）：
+  //         ① 侧栏条目上的**红点** —— 复用 `ChatItem` **既有的** `hasNewMessage`
+  //            标记（⛔ 不新造组件 / 不新造样式）；
+  //         ② **系统托盘通知（Windows Toast）** —— 复用仓里**既有的**通知通道
+  //            `window.gacode.notificationSSESend({title,body,target})`
+  //            （C4-11 已落地：主进程弹 Toast + 挂 click ⇒ 点了恢复窗口 + 跳落点）。
+  //
+  //   ⛔ 只提示、**不起轮**（不许用 work_unit_ref 发起 chat/stream ⇒ 双份）。
+  //   ⛔ 不插本地气泡（服务端已经写了 user 行 ⇒ 本地再插 ⇒ 刷新后重复）。
+  //   ⛔ 不碰报告正文（端侧从头到尾只传 id）。
+  // ══════════════════════════════════════════════════════════════════
+  /** 收到过「别的会话起轮」信号的会话 id 集合 ⇒ 侧栏红点。 */
+  const [hintedSessionIds, setHintedSessionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  // 事件到达那一刻的「当前会话 / 会话表」—— 用 ref 拿**最新**值
+  // （⇒ 订阅回调不用每次渲染重建 ⇒ 不会漏事件、也不会反复退订重订）。
+  const viewingChatIdRef = useRef<string | null>(currentChatId);
+  viewingChatIdRef.current = currentChatId;
+  const chatsRef = useRef<ChatSession[]>(allChats);
+  chatsRef.current = allChats;
+  // 已经提示过的信号（`sessionId|inboxId`）——
+  //   ⚠️ 通知流重连时，**不带 `id:` 行的信号帧可能被重发**（游标不推进 ⇒ 服务端
+  //     从上一个 id'd 帧重放）⇒ 不去重的话同一条后台任务回报会弹两次 Toast。
+  const hintedSignalKeysRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const off = subscribeTurnStarted((info) => {
+      const sessionTitle =
+        chatsRef.current.find((c) => c.id === info.sessionId)?.title ?? null;
+      const hint = buildTurnStartedHint(info, {
+        viewingSessionId: viewingChatIdRef.current,
+        sessionTitle,
+      });
+      // ⛔ 当前正看着的会话 ⇒ **不提示**（那儿已经自动 attach ⇒ 弹了是噪音）；
+      //    载荷不完整（没有 sessionId）⇒ 也没法提示。
+      if (!hint) return;
+
+      // ① 侧栏红点（复用 ChatItem 既有的 hasNewMessage 标记）。
+      setHintedSessionIds((prev) => {
+        if (prev.has(hint.sessionId)) return prev;
+        const next = new Set(prev);
+        next.add(hint.sessionId);
+        return next;
+      });
+
+      // ② 系统通知（Windows Toast）—— 复用**既有的**通知通道，不新造 IPC。
+      //    开关跟站内信 / AI 回复通知**同一个偏好源**（用户关了桌面通知就不弹）。
+      const prefs = loadNotificationPrefs();
+      if (!prefs.enabled || !prefs.desktopEnabled) return;
+      // 同一条信号被重发（通知流重连）⇒ 不重复弹。
+      const signalKey = `${hint.sessionId}|${info.inboxId ?? ""}`;
+      if (hintedSignalKeysRef.current.has(signalKey)) return;
+      hintedSignalKeysRef.current.add(signalKey);
+      if (hintedSignalKeysRef.current.size > 100) {
+        // 只留最近的一批（防无限增长）。
+        hintedSignalKeysRef.current = new Set(
+          [...hintedSignalKeysRef.current].slice(-50),
+        );
+      }
+      try {
+        window.gacode?.notificationSSESend?.({
+          title: hint.title,
+          body: hint.body,
+          // 点得动 ⇒ 点了跳到那个会话（主进程把它当站内 path 推回渲染层）。
+          target: hint.target,
+        });
+      } catch (err) {
+        console.warn("[turn-started-hint] notificationSSESend failed:", err);
+      }
+    });
+    return off;
+  }, []);
+
+  // 用户进到那个会话 ⇒ 红点撤掉（跟「看过就不再标未读」同款）。
+  useEffect(() => {
+    if (!currentChatId) return;
+    setHintedSessionIds((prev) => {
+      if (!prev.has(currentChatId)) return prev;
+      const next = new Set(prev);
+      next.delete(currentChatId);
+      return next;
+    });
+  }, [currentChatId]);
 
   const handleBack = () => {
     if (window.history.length > 1) {
@@ -430,6 +541,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             currentChatId={currentChatId}
             loading={chatsLoading}
             onPin={togglePin}
+            hintedSessionIds={hintedSessionIds}
           />
         </section>
 
@@ -515,6 +627,7 @@ function ChatListPanel({
   currentChatId,
   loading,
   onPin,
+  hintedSessionIds,
 }: {
   pinned: ChatSession[];
   recent: ChatSession[];
@@ -522,6 +635,11 @@ function ChatListPanel({
   loading: boolean;
   /** 置顶回调 (传入时条目右侧渲染置顶按钮) */
   onPin?: (chatId: string) => void;
+  /**
+   * ★ [订正 30] 「别的会话有后台任务回报」的会话 id 集合 ⇒ 条目上挂红点。
+   *   与服务端给的 `hasNewMessage` **取或**（红点只有一颗 ⇒ 不重复画）。
+   */
+  hintedSessionIds?: Set<string>;
 }) {
   const navigate = useNavigate();
   const [pinnedOpen, setPinnedOpen] = useState(true);
@@ -555,7 +673,9 @@ function ChatListPanel({
                     title={c.title}
                     updatedAt={c.updatedAt}
                     isActive={c.id === currentChatId}
-                    hasNewMessage={c.hasNewMessage}
+                    hasNewMessage={
+                      c.hasNewMessage || hintedSessionIds?.has(c.id) === true
+                    }
                     onPin={onPin}
                     pinned={true}
                     onClick={() => navigate(`/chat/${c.id}`)}
@@ -581,7 +701,9 @@ function ChatListPanel({
                       title={c.title}
                       updatedAt={c.updatedAt}
                       isActive={c.id === currentChatId}
-                      hasNewMessage={c.hasNewMessage}
+                      hasNewMessage={
+                        c.hasNewMessage || hintedSessionIds?.has(c.id) === true
+                      }
                       onPin={onPin}
                       pinned={false}
                       onClick={() => navigate(`/chat/${c.id}`)}
