@@ -41,9 +41,9 @@ const server = http.createServer((_req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`<!doctype html><html><head><title>${TITLE}</title></head>
     <body>
-      <p>M0 OK 正文</p>
+      <p id="status">M0 OK 正文</p>
       <a href="https://example.com/">示例链接</a>
-      <button>提交按钮</button>
+      <button id="trigger" onclick="document.getElementById('status').textContent='BUTTON_CLICKED'">提交按钮</button>
       <input placeholder="搜索框">
     </body></html>`);
 });
@@ -135,8 +135,7 @@ async function main() {
 
   // ⑤ ★ M1 真机 snapshot：executeJavaScript 真抽到正文 + 元素编号表
   const snapLine = out.split(/\r?\n/).find((l) => l.includes('[e2e:pc_browser_snapshot] '));
-  if (!snapLine) problems.push('没拿到 snapshot 结果行');
-  else {
+  if (!snapLine) problems.push('没拿到 snapshot 结果行');  else {
     const marker = '[e2e:pc_browser_snapshot] ';
     let r3, d3;
     try {
@@ -158,6 +157,32 @@ async function main() {
         // ⛔ 不把 href 带出来（example.com/?token 不能泄露）
         if (JSON.stringify(d3).includes('example.com/')) problems.push('元素表把 href 带出来了');
       }
+    }
+  }
+
+  // ⑥ ★ M2 真机 act：点「提交按钮」→ 页面文字变 BUTTON_CLICKED → snapshot 读到变化
+  const actLine = out.split(/\r?\n/).find((l) => l.includes('[e2e:pc_browser_act] '));
+  const snap2Line = out.split(/\r?\n/).find((l) => l.includes('[e2e:pc_browser_snapshot:after] '));
+  if (!actLine) problems.push('没拿到 act 结果行');
+  else {
+    const m = '[e2e:pc_browser_act] ';
+    let ra;
+    try { ra = JSON.parse(actLine.slice(actLine.indexOf(m) + m.length)); } catch { problems.push('act 结果不是 JSON'); }
+    if (ra && ra.status !== 'ok') problems.push(`act status != ok: ${ra.status} ${ra.error || ''}`);
+  }
+  if (!snap2Line) problems.push('没拿到点击后 snapshot 行');
+  else {
+    const m = '[e2e:pc_browser_snapshot:after] ';
+    let r4, d4;
+    try {
+      r4 = JSON.parse(snap2Line.slice(snap2Line.indexOf(m) + m.length));
+      d4 = JSON.parse(r4.stdout);
+    } catch { problems.push('点击后 snapshot 不是 JSON'); }
+    if (d4) {
+      // ★ 关键：点击真的生效了（onclick 改了 <p> 内容）
+      if (!(d4.text.includes('BUTTON_CLICKED')))
+        problems.push(`★ 点击没生效：正文仍是 ${JSON.stringify(d4.text)}` +
+          (d4.text.includes('M0 OK') ? '（按钮 onclick 跑了吗？isTrusted 事件没触发合成 click？）' : ''));
     }
   }
 

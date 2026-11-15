@@ -497,6 +497,24 @@ function registerBrowserTabIpc(): void {
       }
       return entry.view.webContents.executeJavaScript(script);
     },
+    // ★ M2：注入真实输入事件（trusted —— `sendInputEvent`，跟真人操作同级）
+    //   ⚠️ `BrowserInputEvent` 是白名单形状；`sendInputEvent` 接受 Electron 的
+    //      InputEvent 联合 —— TS 判别不了自定义 union ⇒ 断言（字段已在 browser.ts 校验过）。
+    //   ⚠️ 必须先把它 setTopBrowserView + focus —— 否则 click 事件被发给后台的 view，丢不掉。
+    input: (tabId, ev) => {
+      const entry = browserTabs.get(tabId);
+      if (!entry || entry.view.webContents.isDestroyed()) return;
+      try {
+        // 点击前确保这个 view 是顶层可交互的（setTopBrowserView 不够 —— 还要 focus）
+        if (ev.type === 'mouseMove' || ev.type === 'mouseDown') {
+          mainWindow?.setTopBrowserView(entry.view);
+          entry.view.webContents.focus();
+        }
+        entry.view.webContents.sendInputEvent(ev as Parameters<typeof entry.view.webContents.sendInputEvent>[0]);
+      } catch (e) {
+        console.warn('[gacode-electron] sendInputEvent failed:', e && (e as Error).message);
+      }
+    },
   });
 
   console.log('[gacode-electron] Browser tab IPC handlers registered');
@@ -1005,6 +1023,14 @@ app.whenReady().then(() => {
         // ★ M1：页面加载完，紧跟 snapshot ⇒ 真机验 executeJavaScript 抽 DOM
         const snap = await executeClientTool('pc_browser_snapshot', {}, null, 30000);
         console.log('[e2e:pc_browser_snapshot] ' + JSON.stringify(snap));
+        // ★ M2：点击按钮（trusted）= 页面文字从 "M0 OK" 变 "BUTTON_CLICKED"
+        //   再用 snapshot 验证文字变了 ⇒ 证明 sendInputEvent 真的点到了
+        const act = await executeClientTool('pc_browser_act', { action: 'click', target: 'e2' }, null, 30000);
+        // wait a tick for the click handler to run
+        await new Promise((r) => setTimeout(r, 300));
+        const snapAfter = await executeClientTool('pc_browser_snapshot', {}, null, 30000);
+        console.log('[e2e:pc_browser_act] ' + JSON.stringify(act));
+        console.log('[e2e:pc_browser_snapshot:after] ' + JSON.stringify(snapAfter));
       } catch (e) {
         console.error('[e2e:pc_browser_open] THREW ' + (e as Error).message);
       } finally {

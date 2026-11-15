@@ -68,6 +68,31 @@ export interface BrowserTabPool {
    * 落在 `main.ts` 里就是 `view.webContents.executeJavaScript(src)`。
    */
   evalInTab?(tabId: string, script: string): Promise<unknown>;
+  /**
+   * ★ M2：给活 tab 注入**真实输入事件**（`webContents.sendInputEvent`）。
+   *
+   * ⚠️ 必须走这条口子而不是 `executeJavaScript(el.click())` ——
+   *    JS 派发的事件 `isTrusted=false`，反爬 SDK 直接采这个字段；
+   *    `sendInputEvent` 的事件是 **trusted**（跟真人操作同级）。
+   * ⚠️ 参数只认白名单里的形状（见 `BrowserInputEvent`），模型传不了任意字段。
+   */
+  input?(tabId: string, event: BrowserInputEvent): void;
+}
+
+/** 主进程 `sendInputEvent` 的白名单形状（⛔ 只出这几种，模型不能自造事件）。 */
+export interface BrowserInputEvent {
+  type: 'mouseDown' | 'mouseUp' | 'mouseMove' | 'mouseWheel' | 'keyDown' | 'char' | 'keyUp';
+  /** 鼠标事件的窗口坐标（相对 webContents 客户区）。 */
+  x?: number;
+  y?: number;
+  button?: 'left' | 'middle' | 'right';
+  clickCount?: number;
+  /** 键盘事件的字符 / 扫码。 */
+  keyCode?: string;
+  key?: string;
+  code?: string;
+  /** 滚轮增量。 */
+  deltaY?: number;
 }
 
 let pool: BrowserTabPool | null = null;
@@ -466,5 +491,185 @@ export async function pcBrowserSnapshot(
     return { status: 'ok', exitCode: 0, stdout };
   } catch (e) {
     return { status: 'error', error: `读取页面失败: ${(e as Error).message}` };
+  }
+}
+
+// ===========================================================================
+// M2 · pc_browser_act —— 信任输入注入（click / type） + 危险动作闸门
+// ===========================================================================
+
+/** 危险动作元素文本（L3 硬拒）。命中 ⇒ 端侧直接拒，绝不注入。 */
+export const DANGEROUS_ACTION_RE =
+  /(发布|发送|提交|点赞|收藏|评论|回复|下单|支付|付款|删除|移除|注销|退出登录|绑定|解绑)/;
+
+/**
+ * 判定一次点击/输入是否算「危险动作」（L3）。
+ *
+ * ⛔ 这是**端侧最后一道兜底**（真闸门在端侧 `gate.ts` + 服务端 `browser-guard`）。
+ * 端侧判不出来的（元素文本拿不到的），由服务端按动作名/域名判。
+ *
+ * @returns 命中原因；没命中返回 null。
+ */
+export function isDangerousAction(targetText: string | null, action: string): string | null {
+  if (action === 'type') return null;                 // 输入文本本身不危险（危险在那次「点击提交」）
+  if (!targetText) return null;                       // 拿不到元素文本 ⇒ 端侧判不了，交给服务端按动作/域名判
+  if (DANGEROUS_ACTION_RE.test(targetText)) {
+    return '元素文本命中危险词（发布/提交/点赞/删除…）';
+  }
+  return null;
+}
+
+/**
+ * 用 `e12` 编号（snapshot 生成的）找元素坐标。
+ * ⛔ 编号只来自 `elementIndex` Map（browser.ts 内存态），不是模型自己编的。
+ */
+
+/**
+ * M2 主函数：在活 tab 上做一次点击（trusted）或输入（trusted）。
+ *
+ * `target` 支持：
+ *   · `e12`  → snapshot 生成的元素编号（优先，模型几乎总用它）
+ *   · CSS    → `[data-x]` / `button.login` 等，直接 querySelector
+ *
+ * ⚠️ 点击**绝对**走 `pool.input`（`webContents.sendInputEvent`）⇒ trusted 事件。
+ * ⚠️ 危险动作（命中 `isDangerousAction`）⇒ 端侧直接拒（L3 兜底）。
+ */
+export async function pcBrowserAct(
+  rawArgs: Record<string, unknown> | null,
+): Promise<ClientToolResult> {
+  if (!pool) {
+    return { status: 'error', error: '浏览器池还没接线（主进程未就绪）—— 请稍后重试' };
+  }
+  if (!pool.evalInTab || !pool.input) {
+    return { status: 'error', error: '这个 PC 版本的浏览器不支持操作页面（input 未接线）' };
+  }
+
+  const args = rawArgs || {};
+  const action = typeof args.action === 'string' ? args.action : '';
+  const tabId = resolveLiveTab(pool.entries(), {
+    tabId: typeof args.tabId === 'string' ? args.tabId : null,
+    url: typeof args.url === 'string' ? args.url : null,
+  });
+  if (!tabId) {
+    return {
+      status: 'error',
+      error: '没有可操作的浏览器页面（tab 可能已被关掉）—— 请先 pc_browser_open 打开一个页面',
+    };
+  }
+
+  // 只支持 click / type 两个动作（M2）；press / scroll / wait 后续批次。
+  if (action !== 'click' && action !== 'type') {
+    return {
+      status: 'error',
+      error: `pc_browser_act 目前只支持 action=click / type，收到 "${action}"`,
+    };
+  }
+
+  // ── 危险动作：L3 端侧兜底 ──────────────────────────────────────────────
+  if (action === 'click') {
+    const targetText = typeof args.text === 'string' ? args.text : null;
+    const danger = isDangerousAction(targetText, action);
+    if (danger) {
+      return {
+        status: 'error',
+        error: `危险动作被端侧闸门拦截：${danger}。这类操作（发布/提交/删除等）需要你在电脑上手动确认后操作，agent 不能代点。`,
+      };
+    }
+  }
+
+  try {
+    // ── 定位元素坐标 ────────────────────────────────────────────────────
+    const target = args.target;
+    let sel: string;
+    if (typeof target === 'string') {
+      sel = target.startsWith('e') ? `ELEM_IDX:${Number(target.slice(1)) - 1}` : target;
+    } else {
+      return { status: 'error', error: 'pc_browser_act 缺 target（元素编号 e12 或 CSS 选择器）' };
+    }
+
+    // 解析：要么 ELEM_IDX:n（snapshot 编号），要么 CSS selector。
+    let pos: { found: boolean; x?: number; y?: number; reason?: string; tag?: string; text?: string };
+    if (sel.startsWith('ELEM_IDX:')) {
+      const idx = Number(sel.slice('ELEM_IDX:'.length));
+      // 用固定脚本按「第 N 个可交互元素」取坐标（⚠️ 不用 querySelector 编 selector —— 编号不是 DOM id）
+      const script = `(() => {
+        const SEL = 'a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]';
+        const els = [...(document.body||document.documentElement).querySelectorAll(SEL)];
+        const el = els[${idx}];
+        if (!el) return { found: false, reason: '编号越界' };
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) return { found: false, reason: '元素不可见' };
+        return { found: true, x: r.left + r.width/2, y: r.top + r.height/2, tag: el.tagName.toLowerCase(), text: (el.innerText || '').slice(0,40) };
+      })()`;
+      pos = (await pool.evalInTab(tabId, script)) as typeof pos;
+    } else {
+      // CSS selector —— ⛔ 校验：只放行简单的 class/id/attr 选择器，拦复杂表达式防止注入
+      //   ⚠️ 用独立字面量字符类（`[`/`]` 是普通字符），允许引号包裹的 attr 值；
+      //     但**禁止** `(` `)` `;` `<` `>` 等会拼成函数/表达式/标签的字符。
+      if (!/^[#.\[\]a-zA-Z0-9_\-=: "']+$/.test(sel)) {
+        return { status: 'error', error: `选择器含非法字符，只支持简单 CSS（class/id/attr）: ${sel}` };
+      }
+      const script = `(() => {
+        try {
+          const el = document.querySelector(JSON.stringify(${JSON.stringify(sel)}));
+          if (!el) return { found: false, reason: '找不到选择器' };
+          const r = el.getBoundingClientRect();
+          if (!r.width || !r.height) return { found: false, reason: '元素不可见' };
+          return { found: true, x: r.left + r.width/2, y: r.top + r.height/2, tag: el.tagName.toLowerCase(), text: (el.innerText || '').slice(0,40) };
+        } catch (e) { return { found: false, reason: 'querySelector 异常' }; }
+      })()`;
+      pos = (await pool.evalInTab(tabId, script)) as typeof pos;
+    }
+
+    if (!pos || !pos.found) {
+      return {
+        status: 'error',
+        error: `找不到可操作的元素：${pos && pos.reason ? pos.reason : '目标不存在'}。页面可能已变化，请重新 pc_browser_snapshot`,
+      };
+    }
+    const x = Math.round(pos.x ?? 0);
+    const y = Math.round(pos.y ?? 0);
+
+    // ── 注入 trusted 事件 ────────────────────────────────────────────────
+    if (action === 'click') {
+      pool.input(tabId, { type: 'mouseMove', x, y });
+      pool.input(tabId, { type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      pool.input(tabId, { type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+      return {
+        status: 'ok',
+        exitCode: 0,
+        stdout: JSON.stringify({
+          tool: 'pc_browser_act',
+          action: 'click',
+          tabId,
+          target: { type: 'element', x, y, tag: pos.tag, text: pos.text },
+          message: `已点击 ${pos.tag}（${x},${y}）`,
+        }),
+      };
+    }
+
+    // type：聚焦后按键。先点击聚焦，再发 keyDown/keyUp。
+    const text = typeof args.text === 'string' ? args.text : '';
+    pool.input(tabId, { type: 'mouseMove', x, y });
+    pool.input(tabId, { type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+    pool.input(tabId, { type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    // 逐个字符注入（trusted 字符事件）—— 中文/符号按 char 事件
+    for (const ch of text) {
+      pool.input(tabId, { type: 'char', keyCode: ch, key: ch });
+    }
+    return {
+      status: 'ok',
+      exitCode: 0,
+      stdout: JSON.stringify({
+        tool: 'pc_browser_act',
+        action: 'type',
+        tabId,
+        chars: text.length,
+        target: { type: 'element', x, y, tag: pos.tag },
+        message: `已输入 ${text.length} 个字符`,
+      }),
+    };
+  } catch (e) {
+    return { status: 'error', error: `操作页面失败: ${(e as Error).message}` };
   }
 }
