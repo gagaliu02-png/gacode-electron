@@ -253,6 +253,21 @@ export interface ChatStreamHandle {
    */
   attach: (opts: AttachChatStreamOptions) => Promise<void>;
   /**
+   * ★ [订正 32] **建轮不建流** —— `X-Stream-Mode: none`。
+   *
+   *   在「一条流」常驻订阅模式下发消息用：POST /chat/stream 带
+   *   `X-Stream-Mode: none` ⇒ 服务端建轮跑轮，但**不返回 SSE 流**，
+   *   只返回 JSON `200 { ok, sessionId, turnKey, terminalReason }`。
+   *   ⇒ 帧由**常驻订阅流**（lib/chat-subscribe.ts 的 usePersistentSubscribe）
+   *     广播回来 ⇒ 本方法**不建本地连接、不收尾 ACK**（常驻流收终态帧）。
+   *
+   *   ⚠️ 与 `start` 的区别：start = 一轮一连接（自己读流 + 收尾 ACK）；
+   *     sendNoStream = 只发不接（帧从常驻流来）。
+   *
+   *   @returns 服务端应答（含 turnKey）。失败抛错。
+   */
+  sendNoStream: (opts: UseChatStreamOptions) => Promise<{ ok: boolean; turnKey: string | null }>;
+  /**
    * 中止当前流. reason:
    *   - "user"     用户主动按停止 → 走 USER_STOP
    *   - "navigate" 组件卸载 / 切对话 → 仅 abort fetch, 不发 USER_STOP
@@ -872,9 +887,68 @@ export function useChatStream(): ChatStreamHandle {
     [],
   );
 
+  /**
+   * ★ [订正 32] **建轮不建流** —— `X-Stream-Mode: none`。
+   *
+   *   在「一条流」常驻订阅模式下发消息用。POST /chat/stream 带
+   *   `X-Stream-Mode: none` ⇒ 服务端建轮跑轮但**不返回 SSE 流**，只回
+   *   JSON `200 { ok, sessionId, turnKey, terminalReason }`。
+   *   帧由**常驻订阅流**（lib/chat-subscribe.ts）广播回来 ⇒ 本方法不建本地
+   *   连接、不收尾 ACK、不重连。
+   *
+   *   ⚠️ 只接受 `message` / `image_urls` / `attached_file_ids` /
+   *      `knowledge_refs` —— 与 `start` 的 body 构造一致。
+   */
+  const sendNoStream = useCallback(
+    async (opts: UseChatStreamOptions): Promise<any> => {
+      const body: Record<string, unknown> = { message: opts.message };
+      if (opts.imageUrls && opts.imageUrls.length > 0) {
+        body.image_urls = opts.imageUrls;
+      }
+      if (opts.attachedFileIds && opts.attachedFileIds.length > 0) {
+        body.attached_file_ids = opts.attachedFileIds;
+      }
+      if (opts.knowledgeRefs && opts.knowledgeRefs.length > 0) {
+        body.knowledge_refs = opts.knowledgeRefs;
+      }
+
+      const doFetch = async (token: string | null): Promise<Response> => {
+        const headers = buildChatStreamHeaders({
+          path: "start",
+          clientId: CLIENT_ID_PC,
+          authorization: token,
+          accept: "application/json",
+          clientCapabilities: clientCapabilityHeader(),
+        });
+        // ⛔ 建轮不建流：告诉服务端「这一轮只跑，不另开 SSE 响应（帧走常驻订阅）」
+        headers["X-Stream-Mode"] = "none";
+        return fetch(`${API_BASE}${STREAM_PATH(opts.sessionId)}`, {
+          method: "POST",
+          headers,
+          credentials: "include",
+          cache: "no-store",
+          referrerPolicy: "no-referrer",
+          body: JSON.stringify(body),
+        });
+      };
+
+      let res = await doFetch(null);
+      if (res.status === 401) {
+        const newToken = await tryRefreshAccessToken();
+        if (newToken) res = await doFetch(newToken);
+      }
+      if (!res.ok) {
+        throw new SseHttpError(res.status, `chat/stream none HTTP ${res.status}`);
+      }
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; turnKey?: string | null };
+      return { ok: !!data.ok, turnKey: data.turnKey ?? null };
+    },
+    [],
+  );
+
   return useMemo<ChatStreamHandle>(
-    () => ({ start, attach, abort }),
-    [start, attach, abort],
+    () => ({ start, attach, sendNoStream, abort }),
+    [start, attach, sendNoStream, abort],
   );
 }
 

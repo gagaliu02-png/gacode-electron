@@ -94,6 +94,9 @@ import {
 } from "../lib/api";
 import { useToast } from "../components/ui/Toast";
 import { useChatStream } from "../lib/chat-stream";
+// ★ [订正 32 · 2026-11-15] 会话级「一条流」常驻订阅（GET /chat/subscribe）。
+//   ⛔ 纯增量：开关默认关 ⇒ 老路径（start / attach / turn_started）逐字不变。
+import { usePersistentSubscribe } from "../lib/chat-subscribe";
 import { notifyAiReplyArrived } from "../lib/chat-notifications";
 // ★ [订正 30 · 2026-11-15] 「服务端起轮了」的端内广播（观众侧）。
 import { subscribeTurnStarted } from "../lib/turn-started";
@@ -445,6 +448,27 @@ const EMPTY_STREAMING_TURN_META: StreamingTurnMeta = {
 // uploadAttachment 的 size 校验是**同步 throw**, 不在 promise 链里, 所以调用点必须前置拦截.
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
+/**
+ * ★ [订正 32] 「一条流」常驻订阅开关 —— **默认关**（灰度）。
+ *
+ *   · 开：会话页建一条 GET /chat/subscribe 常驻 SSE（跨轮存活收帧）；
+ *          发消息走 `X-Stream-Mode: none`（建轮不建流，帧回常驻流）；
+ *          后台回报轮（服务端起轮）的帧也直接到常驻流 ⇒ 不再依赖通知流信号。
+ *   · 关：老路径逐字不变（start 一轮一连接 + attach 接回 + turn_started 自动 attach）。
+ *
+ * ⚠️ 服务端回滚 / subscribe 返回 404/409 ⇒ 运行时**自动关**（见常驻 effect 的 onError）
+ *    ⇒ 端侧退回老流程，无需发版。
+ * 打开方式：localStorage `gacode:persistentStream=1`（真机验收用）；将来改默认即可全量。
+ */
+function persistentStreamEnabled(): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    return window.localStorage?.getItem("gacode:persistentStream") === "1";
+  } catch {
+    return false;
+  }
+}
+
 // utils ─────────────────────────────────────────────────────
 function extractImageUrls(msg: ChatMessage): string[] {
   return msg.imageUrls ?? [];
@@ -643,6 +667,21 @@ export function ChatDetail() {
   const userId = user?.id ?? null;
 
   const stream = useChatStream();
+  // ★ [订正 32] 常驻订阅流（开关开才 start）。
+  const persistentSub = usePersistentSubscribe();
+  /** 常驻模式此刻是否真的生效（开关开 + 服务端支持；404/409 ⇒ 自动回落老路径）。 */
+  const [persistentOn, setPersistentOn] = useState(false);
+  /** 常驻流最后一次游标（重连/离开再回来补帧用）。 */
+  const persistentCursorRef = useRef<string | null>(null);
+  /** 常驻流帧交给渲染层的稳定引用（effect 里不重建，避免闭包过期）。 */
+  const handleStreamChunkRef = useRef<
+    | ((
+        chunk: ChatChunk,
+        rowPrefix: "streaming" | "attach",
+        attachments: PendingAttachment[] | null,
+      ) => void)
+    | null
+  >(null);
 
   // ══════════════════════════════════════════════════════════════════
   // ★ [2026-11-14 · 订正 28 · W5] **会话收件箱（队列）** + **按钮状态机**
@@ -1919,6 +1958,8 @@ export function ChatDetail() {
       closeTailSegment,
     ],
   );
+  // ★ [订正 32] 常驻流 effect 通过 ref 拿最新的帧处理器（effect 只挂一次，不随回调重建）。
+  handleStreamChunkRef.current = handleStreamChunk;
 
   const startStream = useCallback(
     async (
@@ -2012,6 +2053,45 @@ export function ChatDetail() {
         pendingKnowledgeRefs.map((r) => r.id),
         extraKnowledgeRefs,
       );
+
+      // =========================================================================
+      // ★ [订正 32] 常驻订阅模式 ⇒ **建轮不建流**（一条流）
+      //
+      //   发消息只 POST /chat/stream + `X-Stream-Mode: none` ⇒ 服务端建轮跑轮，
+      //   **不另开 SSE 响应**；所有帧（用户轮 + 后台回报轮）经内核广播到会话页那条
+      //   常驻 subscribe 流 ⇒ 这里不再建本地连接、不收尾 ACK、不重连。
+      //
+      //   ⛔ 流式态已在上面起表 / 乐观上屏（跟老路径同一份）⇒ 常驻流收到终态帧时
+      //     `handleStreamChunk` 照常 clearLocalRow + 拉历史，收口一致。
+      //   ⚠️ 失败（网络 / 服务端 4xx）⇒ 如实报错 + 复位流式态，别把用户的话吞掉。
+      // =========================================================================
+      if (persistentOn) {
+        try {
+          await stream.sendNoStream({
+            message: text,
+            sessionId: chatId,
+            imageUrls,
+            attachedFileIds: fileIds,
+            knowledgeRefs,
+            onChunk: () => {}, // 帧走常驻流，这里不收
+          });
+          // 发成功 ⇒ 等常驻流的帧。本轮「占着」的标记交给终态帧路径收口：
+          //   handleStreamChunk 的 isTerminalDone 会 clearLocalRow；这里只把
+          //   streamBusyRef 复位（泵队列不必等一条不存在的本地流）。
+          streamBusyRef.current = false;
+        } catch (err) {
+          streamBusyRef.current = false;
+          ownTurnSessionIdRef.current = null;
+          setStreamError({
+            kind: "server",
+            message: err instanceof Error ? err.message : String(err),
+            userAttachments: attachments,
+          });
+          clearLocalRow();
+          setWaitingFirstFrame(false);
+        }
+        return;
+      }
 
       // =========================================================================
       // ★ 重构轮 R2-web · 发送流**也走状态机** (G-3 一处真值)
@@ -2328,6 +2408,63 @@ export function ChatDetail() {
   );
 
   // =========================================================================
+  // ★ [订正 32 · 2026-11-15] **会话级常驻订阅流**（一条流）
+  //
+  //   开关开 ⇒ 进会话页建一条 GET /chat/subscribe 常驻 SSE：
+  //     · 跨轮存活：用户自己发的轮 + 服务端起的后台回报轮，帧都从这条流到；
+  //     · 轮次终态（done/cancelled）收到**不下线**，继续等下一轮；
+  //     · 断线自动重连带 Last-Event-ID 补帧；离开页面 abort 回收。
+  //
+  //   ⛔ 与老路径互斥：常驻生效时「进场接回 effect」与「turn_started 自动 attach
+  //      effect」各自 return（否则同一帧两条流 ⇒ 重复渲染）。
+  //   ⛔ 服务端老版本（404/409）⇒ onError 自动关开关 ⇒ 老路径照常接管（无需发版）。
+  // =========================================================================
+  useEffect(() => {
+    if (!chatId) return;
+    if (!persistentStreamEnabled()) {
+      setPersistentOn(false);
+      return;
+    }
+    setPersistentOn(true);
+    const ac = new AbortController();
+    void persistentSub.start({
+      sessionId: chatId,
+      cursor: persistentCursorRef.current,
+      signal: ac.signal,
+      onOpen: () => {
+        // 常驻流已接管 ⇒ 不再需要「正在接回」的占位。
+        setWaitingFirstFrame(false);
+      },
+      onCursor: (c) => {
+        persistentCursorRef.current = c;
+      },
+      onChunk: (chunk, _cur) => {
+        // ⛔ 常驻观众不拥有轮次 ⇒ 用 "attach" 渲染语义（不建发起方本地行）。
+        handleStreamChunkRef.current?.(chunk, "attach", null);
+      },
+      onError: (err) => {
+        // 服务端不支持 / 多次断线 ⇒ 回落老路径（静默，不弹错）。
+        console.warn("[订正32] 常驻订阅不可用 ⇒ 回落老路径:", err.message);
+        setPersistentOn(false);
+        persistentSub.abort("navigate");
+        try {
+          window.localStorage?.removeItem("gacode:persistentStream");
+        } catch {
+          /* storage 不可用就算了 */
+        }
+        // 老路径的进场接回重新跑一遍（拿当前轮次真值）。
+        setAttachEpoch((e) => e + 1);
+      },
+    });
+    return () => {
+      ac.abort();
+      persistentSub.abort("navigate");
+    };
+    // ⚠️ 只随 chatId 变化：effect 重跑 ⇒ 旧常驻流收回、新会话重建。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
+
+  // =========================================================================
   // ★ 进场接回 (契约 L-41 ~ L-46 / L-49 / L-50 / L-57 / L-60 / 任务书 P-9)
   //
   // 三端**统一**进场序列, 不得各自发明:
@@ -2350,6 +2487,8 @@ export function ChatDetail() {
   // =========================================================================
   useEffect(() => {
     if (!chatId) return;
+    // ★ [订正 32] 常驻订阅已接管所有轮次 ⇒ 不再走「进场接回 attach」(避免双流)。
+    if (persistentOn) return;
     let cancelled = false;
     const ac = new AbortController();
     // ★ INV-2 / INV-3 —— 「能不能渲染」的判据在 `src/lib/sse/degrade.ts` 的
@@ -2586,6 +2725,9 @@ export function ChatDetail() {
   // =========================================================================
   useEffect(() => {
     if (!chatId) return;
+    // ★ [订正 32] 常驻订阅流在收所有轮次的帧 ⇒ 后台回报轮也直接到 ⇒
+    //    不再需要「turn_started 信号 ⇒ 自动 attach」（再接一次 = 双流重复渲染）。
+    if (persistentOn) return;
     return subscribeTurnStarted((info) => {
       // 广播是**全局**的 ⇒ 这里按 sessionId **认领**（不是我的会话 ⇒ 不管）。
       if (!info.sessionId || info.sessionId !== chatId) return;
