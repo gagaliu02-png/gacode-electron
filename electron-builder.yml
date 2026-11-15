@@ -118,15 +118,20 @@
 #   + 客户端泵队列 + 普通聊天回复的系统级通知 + 排队消息的附件/知识库引用不丢
 #   - output 改 release-bgjob-v24/ 绕开 v23 目录 (每次换新目录, 绕 Search Indexer)
 
+# 0.7.25 (订正 31 · PC 浏览器端侧工具): pc_browser_open / pc_browser_snapshot
+#   共用 BrowserView 池(用户+agent) · 只读 DOM 快照 + 元素编号表 + 12KB 硬限长
+#   · 能力表声明 browser=1(gaclaw bddaccc 已上线认 spec)
+#   - output 改 release-browser-v25/ 绕 Search Indexer (每次换新目录)
+
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.24
+buildVersion: 0.7.25
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-bgjob-v24
+  output: release-browser-v25
 
 files:
   - dist/**/*
