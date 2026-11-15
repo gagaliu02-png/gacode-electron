@@ -19,6 +19,7 @@ import { registerClientToolIpc, setClientToolWindow } from './client-tools/ipc';
 // [2026-11-15 · 订正 31 · M0] 浏览器端侧工具 —— 把**现有** tab 池注给执行器
 //   （用户和 agent 共用同一个池；不另起窗口、不另建池）。
 import { setBrowserTabPool } from './client-tools/browser';
+import { executeClientTool } from './client-tools/executor';
 import { getAppIcon, logIconStatus } from './icon';
 
 // CommonJS 下 __dirname 已有,这里只是为了类型注释
@@ -479,6 +480,11 @@ function registerBrowserTabIpc(): void {
   setBrowserTabPool({
     open: openBrowserTab,
     entries: () => browserTabs,
+    titleOf: (tabId) => {
+      const entry = browserTabs.get(tabId);
+      if (!entry || entry.view.webContents.isDestroyed()) return '';
+      try { return entry.view.webContents.getTitle() || ''; } catch { return ''; }
+    },
   });
 
   console.log('[gacode-electron] Browser tab IPC handlers registered');
@@ -965,6 +971,31 @@ app.whenReady().then(() => {
   } catch (err) {
     // electron-updater 没装 / 加载失败 — build 仍能跑, 只是不查更新
     console.warn('[gacode-electron] autoUpdater init failed (build still OK):', err);
+  }
+
+  // ★ [2026-11-15 · 订正 31 · M0] 真机 E2E 钩子（只用于本地验收，生产不设这个环境变量）。
+  //
+  //   ⚠️ 走**端侧执行器的真实路径** `executeClientTool('pc_browser_open', ...)`
+  //      （不是直接调 openBrowserTab）⇒ 验的是 spec → executor → browser.ts → tab 池
+  //      这一整条，跟设备通道派单下来时走的是同一个函数。
+  //   ⚠️ 用本地 URL（file 协议会被 browser.ts 硬拒）⇒ 起一个最小 data server 见
+  //      test/e2e-browser-open.mjs；结果打 stdout，然后 app.quit()。
+  const e2eBrowserUrl = process.env.GACODE_E2E_BROWSER_OPEN || null;
+  if (e2eBrowserUrl && mainWindow) {
+    mainWindow.webContents.once('did-finish-load', async () => {
+      try {
+        const r = await executeClientTool('pc_browser_open', { url: e2eBrowserUrl }, null, 30000);
+        console.log('[e2e:pc_browser_open] ' + JSON.stringify(r));
+        // ★ 同一个 url 再开一次 ⇒ 应该**复用**用户/agent 已开的那个 tab
+        //   （PM 拍板「用户和 agent 共用」；真机验「不另起一个」）。
+        const r2 = await executeClientTool('pc_browser_open', { url: e2eBrowserUrl }, null, 30000);
+        console.log('[e2e:pc_browser_open:reuse] ' + JSON.stringify(r2));
+      } catch (e) {
+        console.error('[e2e:pc_browser_open] THREW ' + (e as Error).message);
+      } finally {
+        app.quit();
+      }
+    });
   }
 
   // 阶段 4: webContents 就绪后补发一次 argv deep link

@@ -96,13 +96,16 @@ function installFakePool(existingEntries, openImpl) {
   const pool = {
     entries: () => existingEntries,
     open: openImpl,
+    titleOf: (tabId) => existingEntries.get(tabId)?.title || '',
   };
   setBrowserTabPool(pool);
   return pool;
 }
 
 test('GC-P31-03 共用：已有同 url 活 tab ⇒ 不新开，返回 reused=true', async () => {
-  const entries = new Map([['tab-user', fakeEntry('https://example.com/', false)]]);
+  const live = fakeEntry('https://example.com/', false);
+  live.title = 'Example Domain';
+  const entries = new Map([['tab-user', live]]);
   let openCalls = 0;
   installFakePool(entries, async () => { openCalls += 1; return { tabId: 'unused', title: '' }; });
   assert.equal(hasBrowserTabPool(), true);
@@ -114,6 +117,7 @@ test('GC-P31-03 共用：已有同 url 活 tab ⇒ 不新开，返回 reused=tru
   assert.equal(out.tabId, 'tab-user');
   assert.equal(out.reused, true);
   assert.equal(out.url, 'https://example.com/');
+  assert.equal(out.title, 'Example Domain', '复用也要如实回标题，不回空串');
   setBrowserTabPool(null);
 });
 

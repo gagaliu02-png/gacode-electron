@@ -155,9 +155,14 @@ data: {"type":"turn_started","turnStarted":{
 - M0 **不截图、不点击、不读 DOM**；`pc_browser_snapshot` / `act` / `shot` 在 M1~M2。
 - M0 **不声明 `browser=1` 能力键** —— gaclaw 侧还没加 spec，先声明只会白透传一个没人用的键；
   M0.5 跟 `PC_TOOL_SPECS` 一起加（⚠️ 能力头**不得用于鉴权**，L-24e）。
-- 危险动作分级（L0 读 / L1 低风险交互 / L2 提交类 PC 端确认 / L3 高危 gaclaw 硬拒）在 M4。
-- 本地调试入口：`gacode:client-tool-execute`（`electron/client-tools/ipc.ts`）同样过闸门、
-  同样走 `executeClientTool` ⇒ **不碰 gaclaw** 就能端到端验 M0。
+- **真机 E2E 钩子**（`GACODE_E2E_BROWSER_OPEN=<url>`，只用于本地验收，生产不设）：
+  `main.ts` 在 `did-finish-load` 后调**真实的** `executeClientTool('pc_browser_open', ...)`
+  （不是直接调 `openBrowserTab`）⇒ 验的是 spec → executor → browser.ts → tab 池整条；
+  连开两次同 url ⇒ 第二次 `reused:true` 且只开 1 个 tab（**共用**）。
+  - `test/e2e-browser-open.mjs` 起本地 HTTP server + 拉真 Electron，脚本内 `delete env.ELECTRON_RUN_AS_NODE`
+    （⛔ 宿主 Claude 的 bash 带 `ELECTRON_RUN_AS_NODE=1` ⇒ electron.exe 退化成普通 Node ⇒ 启动秒退）。
+  - ⚠️ 文件名不以 `.test.mjs` 结尾 ⇒ `npm test` 不会跑到（它不是单测）。
+- 复用分支也要**如实回标题**（`BrowserTabPool.titleOf`）—— 不留空串给模型。
 
 ### 验证（已跑）
 
@@ -165,3 +170,6 @@ data: {"type":"turn_started","turnStarted":{
 - `npm test` ⇒ 422/422
 - `npx tsc --noEmit -p tsconfig.node.json` / `tsconfig.web.json` ⇒ 干净
 - `npm run build` ⇒ electron-vite 三段（main / preload / renderer）全通过
+- ★ **真机** `node test/e2e-browser-open.mjs` ⇒ PASS：真实 Electron 窗口开出 BrowserView、
+  `webContents.getTitle()` 读到 `Gacode M0 Browser E2E`、第二次 `reused:true`、
+  全程只开 1 个 tab、进程 `exit=0` / `stderr 0B`

@@ -53,6 +53,8 @@ export interface BrowserTabPool {
   open(url: string): Promise<{ tabId: string; title: string }>;
   /** 列出当前活着的 tab（按 url 找复用目标）。 */
   entries(): Iterable<[string, BrowserTabEntry]>;
+  /** 读一个活 tab 的标题（复用分支也要如实回报，不回空串）。 */
+  titleOf?(tabId: string): string;
 }
 
 let pool: BrowserTabPool | null = null;
@@ -148,10 +150,12 @@ export async function pcBrowserOpen(
     // ① 先找活着的同 url tab ⇒ 共用（用户手动开的那个也能被 agent 复用）。
     const reused = findLiveTabId(pool.entries(), url);
     if (reused) {
+      let title = '';
+      try { title = pool.titleOf?.(reused) || ''; } catch { /* tab 刚好销毁 ⇒ 空标题 */ }
       return {
         status: 'ok',
         exitCode: 0,
-        stdout: JSON.stringify({ tool: 'pc_browser_open', url, tabId: reused, reused: true, title: '' }),
+        stdout: JSON.stringify({ tool: 'pc_browser_open', url, tabId: reused, reused: true, title }),
       };
     }
 
