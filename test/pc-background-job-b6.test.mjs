@@ -386,10 +386,10 @@ test('GC-P27-26b · ★ 端侧把作业的 job_id 对齐到 pending_id（两边�
 test('GC-P27-26c · ★ 能力表**恒定**带 job 键（执行器是 app 内建的，不看 claude）', () => {
   const src = readSrc('electron/client-tools/deviceClient.ts');
   assert.ok(src.includes('probeJobExecutor'), '探针留着做诊断');
-  assert.ok(src.includes('buildCapabilityString'), '能力串由 jobCapability 拼');
+  assert.ok(src.includes('buildCapabilityString('), '能力串由 jobCapability 拼');
   assert.ok(
-    src.includes('buildCapabilityString({ pty, job: true })'),
-    '★ 能力**恒定**声明 job=1（执行器内建 ⇒ 不按 claude 的有无来决定）',
+    src.includes('job: true, browser') || src.includes('{ pty, job: true }'),
+    '★ 能力**恒定**声明 job=1（执行器内建 ⇒ 不按 claude 的有无来决定；browser 键另行判断）',
   );
   assert.ok(
     !src.includes('job: job.executor') && !src.includes('job: probe.executor'),

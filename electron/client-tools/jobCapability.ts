@@ -86,13 +86,17 @@ export function probeJobExecutor(): JobCapabilityProbe {
  * ⚠️ **顺序与老串保持一致**（`client-tools=1,pty=1,fs=1,screen=1,os=1`），
  *    `job=1` 追加在最后 ⇒ 老能力表逐字不变，只是多一个键。
  *
- * @param flags `pty` = node-pty 能不能用；`job` = 要不要声明后台作业执行器。
+ * @param flags `pty` = node-pty 能不能用；`job` = 要不要声明后台作业执行器；
+ *              `browser` = 本机浏览器能被 agent 驱动（`browser.ts` 池已接线，订正 31）。
  */
-export function buildCapabilityString(flags: { pty: boolean; job: boolean }): string {
+export function buildCapabilityString(flags: { pty: boolean; job: boolean; browser?: boolean }): string {
   const parts = ['client-tools=1'];
   if (flags.pty) parts.push('pty=1');
   parts.push('fs=1', 'screen=1', 'os=1');
   // ★ L-27j：后台作业执行器可用 ⇒ 额外声明 `job=1`。
   if (flags.job) parts.push('job=1');
+  // ★ [2026-11-15 · 订正 31 · M0.5] 浏览器池接线了才声明 `browser=1`。
+  //   ⚠️ 服务端 spec 现在认这个键（gaclaw bddaccc）⇒ 声明它才下发 pc_browser_*。
+  if (flags.browser) parts.push('browser=1');
   return parts.join(',');
 }

@@ -227,8 +227,56 @@ data: {"type":"turn_started","turnStarted":{
 ### 验证（已跑）
 
 - `node --test test/pc-browser-snapshot-m1.test.mjs` ⇒ 8/8
-- 全量 `node --test` ⇒ **431/431**
+- 全量 `node --test` ⇒ **430/430**（422 老 + 8 snapshot）
 - node / web typecheck 干净；`npm run build` 全通过
 - ★ **真机** `node test/e2e-browser-open.mjs` ⇒ PASS：snapshot 真抽到正文
   `"M0 OK 正文\n示例链接\n提交按钮"` + `[e1:a, e2:button, e3:input(搜索框)]`，
   顺序正确、placeholder 带出、href 不带出、`truncated:false`、`exit=0` / `stderr 0B`
+
+---
+
+## 订正 31 · M0.5（2026-11-15 · 服务端 spec + PC 能力声明 · **全链路打通**）
+
+> 前提：等另一个 agent 在 gaclaw 收工（`llm.executors.js` 等 6 个文件已提交进 `b558ee8`）
+> 且工作区只剩 untracked 杂物 ⇒ 可以动了。
+
+### 做了什么（两个仓各一处）
+
+| 仓 | 改动 | 作用 |
+|---|---|---|
+| **gaclaw** `src/llm/client-tools.js` | 加 `CAP_BROWSER='browser'` + `PC_TOOL_SPECS` 两条 spec（`pc_browser_open` / `pc_browser_snapshot`，`capabilities:[CAP_MASTER,CAP_BROWSER]`，`timeout_ms:30000`，`kind:'none'`） | 模型**看得见**这两个工具（端声明 browser=1 才下发，L-24e/L-24f 同口径） |
+| gaclaw `src/__tests__/client-tools-p1.test.js` | `GC-P1-4c` 改为「缺 browser ⇒ 仍 13 个老工具」；新增 `GC-P31-20`「声明 browser ⇒ 15 个全下发」 | 钉住新旧行为 |
+| **gacode-electron** `electron/client-tools/jobCapability.ts` | `buildCapabilityString` 加可选 `browser` 标志，声明时追加 `browser=1` | 能力串上报 |
+| gacode-electron `electron/client-tools/deviceClient.ts` | `deviceCapabilities()` 用 `hasBrowserTabPool()` 判 `browser`；池未接线就不声明 | ⛔ 实现了才声明，没接线别谎报 |
+| gacode-electron `test/pc-background-job-b6.test.mjs` | `GC-P27-26c` 源码文本断言放宽（`job: true, browser` 也认） | 断言跟新调用形状对齐 |
+
+### 铁律
+
+1. ⛔ **没接线就不声明** —— `hasBrowserTabPool()` 为 false ⇒ 能力串不带 `browser=1`
+   ⇒ 模型看不见 `pc_browser_*` ⇒ 不会调一个必然失败的工具（跟 L-24e「缺失即无端侧能力」同口径）。
+2. ⚠️ 时序依赖：`main.ts` 在 whenReady 里**先** `setBrowserTabPool` **再**起 renderer
+   ⇒ token 推来触发注册时池必然已接线，`deviceCapabilities()` 缓存不会漏报 browser。
+3. **注册时机**：`deviceCapabilities()` 有 `_capabilitiesCache` ⇒ 只在**首次注册**时算一次。
+4. `browser` 键**追加在 `job=1` 之后** ⇒ 老能力串逐字不变（GC-P27-22 断言不破）。
+
+### 验证（已跑）
+
+- gaclaw 相关 6 测试文件（client-tools ×2 / background-agent-visibility / approval ×2 / channel-tool-guard）⇒ **63/63**
+- PC：M0+M1+后台作业测试 38/38；全量 `npm test` ⇒ **430/430**
+- PC node/web typecheck 干净；`npm run build` 全通过
+- ★ **真机 E2E** ⇒ PASS，且新增日志确认：
+  `[client-tools/device] 浏览器池已接线 ⇒ 能力表声明 browser=1（pc_browser_* 可下发）`
+
+### 现在的完整链路（模型视角）
+
+```
+模型调 pc_browser_open(url)
+  → gaclaw client-execution 派单（spec 认，HIGH_RISK 自动带上）
+  → unified-api 扇出设备 SSE（browser 只是能力表一个键，零改动）
+  → PC executor → browser.ts → 共用 BrowserView 池 → 回 {url,title,tabId}
+  → gaclaw foldClientResult → 模型看到结果
+```
+
+⛔ M0.5 只暴露 open/snapshot 两个**读类**工具；`pc_browser_act`（点击/输入）和
+`pc_browser_shot`（截图）在 **M2**，危险动作分级闸门在 **M4** —— 到 M2 之前模型
+**只能看不能动**，这是刻意的安全边界。

@@ -47,6 +47,8 @@ import {
   markDispatchReported,
 } from './dispatchLedger.ts';
 import { buildCapabilityString, probeJobExecutor } from './jobCapability.ts';
+// [2026-11-15 · 订正 31 · M0.5] 浏览器池接线状态 ⇒ 决定要不要声明 browser=1
+import { hasBrowserTabPool } from './browser.ts';
 import { emitJobsChanged } from './jobView.ts';
 import type { JobReportPayload } from './jobReporter.ts';
 
@@ -155,7 +157,14 @@ export function deviceCapabilities(): string {
   if (!probe.executor) {
     console.warn('[client-tools/device] 后台作业执行器探针没过（不影响能力声明）:', probe.reason);
   }
-  _capabilitiesCache = buildCapabilityString({ pty, job: true });
+  // ★ [2026-11-15 · 订正 31 · M0.5] 浏览器池接好线了才声明 `browser=1`。
+  //   ⚠️ 时序：`main.ts` 在 whenReady 里先 `setBrowserTabPool` 再起 renderer
+  //     ⇒ token 推来触发注册时池必然已接线，此处判断不会漏报。
+  const browser = hasBrowserTabPool();
+  _capabilitiesCache = buildCapabilityString({ pty, job: true, browser });
+  if (browser) {
+    logDevice('浏览器池已接线 ⇒ 能力表声明 browser=1（pc_browser_* 可下发）');
+  }
   return _capabilitiesCache;
 }
 
