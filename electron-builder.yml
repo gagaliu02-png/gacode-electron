@@ -123,15 +123,20 @@
 #   · 能力表声明 browser=1(gaclaw bddaccc 已上线认 spec)
 #   - output 改 release-browser-v25/ 绕 Search Indexer (每次换新目录)
 
+# 0.7.26 (订正 31 · M2/M4): pc_browser_act（trusted 点击/输入）· 危险动作 L3 硬拒
+#   - M2: 点击走 sendInputEvent(isTrusted) · type 逐字符 · CSS 白名单
+#   - M4: 端侧 DANGEROUS_ACTION_RE + gaclaw browser-guard(4fca73e 已上线)
+#   - output 改 release-act-v26/ 绕 Search Indexer (每次换新目录)
+
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.25
+buildVersion: 0.7.26
 copyright: Copyright © 2026 gaga
 
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-browser-v25
+  output: release-act-v26
 
 files:
   - dist/**/*
