@@ -95,6 +95,8 @@ import {
 import { useToast } from "../components/ui/Toast";
 import { useChatStream } from "../lib/chat-stream";
 import { notifyAiReplyArrived } from "../lib/chat-notifications";
+// ★ [订正 30 · 2026-11-15] 「服务端起轮了」的端内广播（观众侧）。
+import { subscribeTurnStarted } from "../lib/turn-started";
 import {
   isTerminalDone,
   isCancelFrame,
@@ -847,6 +849,13 @@ export function ChatDetail() {
   // ══════════════════════════════════════════════════════════════════
   /** 这一轮是**本端发起**的吗？（旁观别人的轮次 ⇒ 不许泵队列） */
   const myTurnRef = useRef(false);
+  // ★ [订正 30 · 2026-11-15] 本端**拥有**的那一轮属于**哪个会话**（null = 没有）。
+  //   ⚠️ 不能拿 `myTurnRef` 当「本端正在跑自己那一轮」的判据 ——
+  //     · 它**跨会话存活**（切会话不复位 —— ChatDetail 换会话**不重挂载**）;
+  //     · 「用户喊停 / 切会话」那条路**不复位**它（见 :2306 的条件）;
+  //     · 它也**分不出**「这一轮属于哪个会话」。
+  //   ⇒ 「自动 attach」那个判据用**会话级**的这个（:2558 那段用）。
+  const ownTurnSessionIdRef = useRef<string | null>(null);
   /** 本机的聊天流现在**占着**吗？（终态帧之后服务端还要等 ACK 才关流 ⇒ 有窗口） */
   const streamBusyRef = useRef(false);
   /** 泵队列正在跑（防重入）。 */
@@ -1924,6 +1933,8 @@ export function ChatDetail() {
       if (!chatId) return;
       // ★ [2026-11-14 · 订正 28] 这一轮是**本端发起**的 ⇒ 轮次结束后由本端**泵队列**。
       myTurnRef.current = true;
+      // ★ [订正 30] 这一轮属于**本会话**（自动 attach 的判据用 —— 见上面的说明）。
+      ownTurnSessionIdRef.current = chatId;
       // 本机的聊天流**占着**（泵队列要等它彻底收掉才能起下一轮）。
       streamBusyRef.current = true;
       // 重置流式态
@@ -2298,6 +2309,9 @@ export function ChatDetail() {
         // ★ [2026-11-14 · 订正 28] 本机的流**彻底收掉**了（终态帧 + ACK + 服务端关流）
         //   ⇒ 泵队列可以起下一轮了。
         streamBusyRef.current = false;
+        // ★ [订正 30] 本端不再拥有任何一轮（喊停 / 断链 / 结束都走这里）
+        //   ⇒ 「自动 attach」的判据复位。
+        ownTurnSessionIdRef.current = null;
         // ── 出队（泵队列）──
         //   「轮次**自然结束**」⇒ 队列里还有 ⇒ 把队首那条当普通消息发出去。
         //   ⛔ 用户喊停（turnAc.aborted）⇒ **不泵**（用户明确放弃了当前方向）。
@@ -2552,6 +2566,42 @@ export function ChatDetail() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, attachEpoch]);
+
+  // =========================================================================
+  // ★ [订正 30 · 2026-11-15] 「服务端起轮了」⇒ **自动 attach**（观众侧）
+  //
+  //   后台任务回报到达时**服务端自己起一轮**（主 agent 读到报告后继续推进）
+  //   ⇒ 端侧**只当观众**（端侧不再起轮）：
+  //     收到 `turn_started` 帧 + 帧里的 sessionId == 当前会话
+  //     ⇒ **自动**接上那条在跑的轮次 ⇒ 实时看到主 agent 接着推进的全过程。
+  //
+  //   ⛔ **端侧不起轮**（不许用 work_unit_ref 发起 chat/stream ⇒ 双份）。
+  //   ⛔ **不插本地气泡**（服务端已经写了 user 行 ⇒ 本地再插 ⇒ 刷新后重复）。
+  //   ⛔ **不碰报告正文**（端侧只传 id）。
+  //
+  //   ⇒ 复用**现成的**「进场接回」那条路径（契约 L-57 / L-58）：
+  //      bump `attachEpoch` ⇒ 那条路径重跑一遍（先问 stream-state ⇒ 在跑才接
+  //      ⇒ attach）。⛔ **不重写** attach（`lib/chat-stream.ts` 的 `attach()`
+  //      已经在）—— 这里只发一个「重跑令牌」。
+  // =========================================================================
+  useEffect(() => {
+    if (!chatId) return;
+    return subscribeTurnStarted((info) => {
+      // 广播是**全局**的 ⇒ 这里按 sessionId **认领**（不是我的会话 ⇒ 不管）。
+      if (!info.sessionId || info.sessionId !== chatId) return;
+      // ⛔ 本端**正在跑自己那一轮**（本会话）⇒ 不许再接一次
+      //   （同一轮两条流 ⇒ 重复渲染）。
+      //   ⚠️ 判据是**会话级**的（`ownTurnSessionIdRef`）—— 不能用 `myTurnRef`:
+      //   它跨会话存活且喊停时不复位 ⇒ 会误杀**别的会话**的自动 attach。
+      if (ownTurnSessionIdRef.current === chatId) return;
+      // ⛔ 已经在旁观这一轮 ⇒ 不许再接（同一 id 会多出一行 —— 契约 L-57）。
+      if (attachLiveRef.current) return;
+      console.log(
+        `[turn-started] 服务端起轮了 (reason=${info.reason}) ⇒ 自动 attach: ${info.sessionId}`,
+      );
+      setAttachEpoch((e) => e + 1);
+    });
+  }, [chatId]);
 
   // =========================================================================
   // ★ 审批裁决 (契约 L-21 / L-22 / L-26 ~ L-30 / 任务书 P-10 / P-12 / P-14)

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 // ★ [P3 · 2026-11-12] 端侧能力探测（契约附录 订正 24 §3）。
 import { initClientCapabilities } from "./lib/client-capabilities";
 import {
@@ -12,7 +12,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { ToastProvider, useToast } from "./components/ui/Toast";
 import { AppShell } from "./components/layout/AppShell";
-import { NotificationSSEBridge } from "./lib/notifications-sse";
+import {
+  NotificationSSEBridge,
+  type TurnStartedInfo,
+} from "./lib/notifications-sse";
+// ★ [订正 30 · 2026-11-15] 「服务端起轮了」的**端内广播**（按 sessionId 派单）。
+import { dispatchTurnStarted } from "./lib/turn-started";
 import { DeepLinkBridge } from "./lib/deep-link";
 import { Login } from "./routes/Login";
 import { Register } from "./routes/Register";
@@ -96,6 +101,20 @@ export function App() {
     void initClientCapabilities();
   }, []);
 
+  // ★ [订正 30 · 2026-11-15] 「服务端起轮了」（新帧 `type: "turn_started"`）
+  //   ⇒ **按 sessionId 派给对应会话页**。
+  //
+  //   ⚠️ `NotificationSSEBridge` 是**全局挂载**的 ⇒ 它收到帧的时候**不知道
+  //     哪个会话页正在看** ⇒ 这里把载荷派到端内广播通道上
+  //     (`lib/turn-started.ts` —— 沿用本仓既有的 `window` 自定义事件惯例)，
+  //     由 `routes/ChatDetail.tsx` 按 sessionId **认领**（契约 §2.2）。
+  //
+  //   ⛔ **端侧不再起轮** —— 服务端已经起好了；这里**只搬运载荷**（id + sessionId）：
+  //     ⛔ 不发任何请求、⛔ 不带报告正文、⛔ 不插本地气泡（契约 §1.2 / §4）。
+  const handleTurnStarted = useCallback((info: TurnStartedInfo) => {
+    dispatchTurnStarted(info);
+  }, []);
+
   return (
     /*
      * 用 HashRouter 而不是 BrowserRouter — file:// 加载 + BrowserRouter 会触发
@@ -114,7 +133,7 @@ export function App() {
             <AuthClearListener />
             {/* 阶段 4: SSE 桥 (需 user, 但 useAuth 已就绪; 用 NotificationSSEBridge 内部 if 分支)
                 + Deep link 桥 (在 Router 内部 useNavigate) */}
-            <NotificationSSEBridge />
+            <NotificationSSEBridge onTurnStarted={handleTurnStarted} />
             <DeepLinkBridge />
             <Routes>
               <Route path="/login" element={<Login />} />

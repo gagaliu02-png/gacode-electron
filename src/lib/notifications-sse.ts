@@ -43,6 +43,28 @@
  *   - watchdog: 60s 没事件视为断流, 主动 abort + 重连 (某些代理会"卡"连接)
  *   - 关闭: unmount 清理, 避免 leak
  *
+ * ---------------------------------------------------------------------------
+ * 2026-11-15 (订正 30 · 观众侧) 改动 —— 新帧 `type: "turn_started"`
+ * ---------------------------------------------------------------------------
+ *   后台任务回报到达时**服务端自己起一轮** ⇒ 端侧**只当观众**（端侧不再起轮）。
+ *   通知流里因此多一个新帧:
+ *
+ *     data: {"type":"turn_started","turnStarted":{
+ *             "sessionId":"<会话id>", "inboxId":"<收件箱那封信的id>",
+ *             "jobId":"<后台作业id，可为空字符串>", "reason":"work_unit_result"}}
+ *
+ *   · ⚠️ **信号帧不带 `id:` 行** ⇒ `if (frame.id) lastEventId = frame.id`
+ *     自然**不推进游标** —— 这一行**不许改**（契约订正 30 §1.1 / §4）。
+ *   · ⛔ **必须用新 type `turn_started`** —— **不得复用 `work_unit_result`**:
+ *     旧端已经把它理解成「起轮指令」⇒ 复用 ⇒ **旧端会起轮 ⇒ 双份**。
+ *     新 type 旧端不认 ⇒ 走 `unknown` 兜底 ⇒ **老端不崩、不双份**（§1.2 铁律 1）。
+ *   · ⛔ **端侧不许起轮**（不许用 work_unit_ref 发起 chat/stream）⇒ 服务端起好了
+ *     （§1.2 铁律 2）。
+ *   · ⛔ **端侧不插本地气泡**（服务端已经写了 user 行 ⇒ 本地再插 ⇒ 刷新后重复）
+ *     + **端侧不碰报告正文**（端侧只传 id）（§4）。
+ *   ⇒ 端侧只做两件事: ① 提示/自动 attach ② 让用户看到。
+ *     「按 sessionId 派给对应会话页」由上层回调 (`onTurnStarted`) 接 (§2.2)。
+ *
  * 用法: AuthProvider 内部已经 registerSseAuthAccessor(), 在 App.tsx 挂这个
  * 组件即可, 仅在已登录时连。
  */
@@ -144,10 +166,51 @@ export function parseSseFrame(raw: string): SseFrame | null {
   return { id, data: dataLines.join("\n") };
 }
 
+/**
+ * turn_started 帧的载荷 (契约订正 30 §1.1)。
+ *
+ * ⚠️ **必须用新 type `turn_started`** —— ⛔ **不得复用 `work_unit_result`**
+ *   (旧端已经把它理解成「起轮指令」⇒ 复用 ⇒ **旧端会起轮 ⇒ 双份**)。
+ */
+export interface TurnStartedInfo {
+  /** 这一轮在哪个会话里 —— **必填**（没有它就没法路由 ⇒ 帧作废）。 */
+  sessionId: string;
+  /** 后台任务回报那封信的 id (收件箱行 id)。 */
+  inboxId: string;
+  /** 后台作业 id —— 未知时是**空字符串**（不是 null/undefined）。 */
+  jobId: string;
+  /** 起轮原因 —— 当前固定 `"work_unit_result"`（将来可能有别的起轮原因）。 */
+  reason: string;
+}
+
 /** SSE data 帧的载荷。 */
 export interface NotificationStreamEvent {
-  type: "connected" | "notification" | "unknown";
+  type: "connected" | "notification" | "turn_started" | "unknown";
   notification?: NotificationItem;
+  /** ★ [订正 30] 新帧「服务端起轮了」的载荷 (只有 `type === "turn_started"` 才有)。 */
+  turnStarted?: TurnStartedInfo;
+}
+
+/**
+ * normalizeTurnStarted — 把帧里的 `turnStarted` 归一成 `TurnStartedInfo`。
+ *
+ * ⛔ **形状不对 ⇒ null**（**不抛异常**）—— 端侧拿到一个看不懂的帧就跳过，
+ *   绝不能因为一个坏帧把整条通知流搞崩（契约 §4.5「不要让未知 type 崩掉」）。
+ *
+ * ⚠️ 字段一律**补成字符串**（`jobId` 未知时是**空字符串** —— 契约 §1.1 表格）;
+ *   `sessionId` 是**必填** —— 没有它没法路由 ⇒ 当这个帧不存在。
+ */
+export function normalizeTurnStarted(raw: unknown): TurnStartedInfo | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const sessionId = typeof o.sessionId === "string" ? o.sessionId : "";
+  if (!sessionId) return null;
+  return {
+    sessionId,
+    inboxId: typeof o.inboxId === "string" ? o.inboxId : "",
+    jobId: typeof o.jobId === "string" ? o.jobId : "",
+    reason: typeof o.reason === "string" ? o.reason : "",
+  };
 }
 
 /**
@@ -155,6 +218,7 @@ export interface NotificationStreamEvent {
  *
  * 后端帧: `{"type":"notification","notification":{...Prisma 行...}}`
  * 建连帧: `{"type":"connected"}`
+ * 起轮帧: `{"type":"turn_started","turnStarted":{...}}` (契约订正 30 §1.1)
  */
 export function parseNotificationEvent(data: string): NotificationStreamEvent {
   if (!data) return { type: "unknown" };
@@ -172,6 +236,14 @@ export function parseNotificationEvent(data: string): NotificationStreamEvent {
       type: "notification",
       notification: normalizeNotification(obj.notification),
     };
+  }
+  // ★ [订正 30 · 2026-11-15] 新帧「服务端起轮了」——
+  //   ⛔ 必须是**新** type（旧端不认 ⇒ 走 unknown 兜底 ⇒ 老端不崩、不双份）。
+  if (obj.type === "turn_started") {
+    const turnStarted = normalizeTurnStarted(obj.turnStarted);
+    // ⛔ 形状不对 ⇒ 回落 unknown 兜底（宁可跳过，也不许崩）。
+    if (!turnStarted) return { type: "unknown" };
+    return { type: "turn_started", turnStarted };
   }
   return { type: "unknown" };
 }
@@ -217,7 +289,25 @@ function notificationClickTarget(n: NotificationItem): string | null {
 // NotificationSSEBridge
 // =========================================================================
 
-export function NotificationSSEBridge() {
+/** NotificationSSEBridge 的入参。 */
+export interface NotificationSSEBridgeProps {
+  /**
+   * ★ [订正 30 · 2026-11-15] 「服务端起轮了」（新帧 `type: "turn_started"`）的回调。
+   *
+   *   ⛔ **端侧只当观众**（契约 §1.2 铁律 2 / §4）—— 这个回调里**不许**:
+   *     · 用 `work_unit_ref` 发起 chat/stream（端侧**不再起轮** ⇒ 否则双份）;
+   *     · 本地插一条「（后台任务XXX已完成）」气泡（服务端已经写了 user 行
+   *       ⇒ 本地再插 ⇒ 刷新后重复）;
+   *     · 碰报告正文（端侧只传 id）。
+   *
+   *   ⇒ 上层只做两件事: ① 按 `sessionId` 派给对应会话页 ② 让用户看到。
+   */
+  onTurnStarted?: (info: TurnStartedInfo) => void;
+}
+
+export function NotificationSSEBridge({
+  onTurnStarted,
+}: NotificationSSEBridgeProps = {}) {
   const { user, accessToken } = useAuth() as ReturnType<typeof useAuth> & {
     accessToken?: string | null;
   };
@@ -226,6 +316,12 @@ export function NotificationSSEBridge() {
   const navigate = useNavigate();
   // 跟踪 "上次事件时间", 60s 没事件视为断流 (避免代理卡住连接)
   const lastEventAtRef = useRef<number>(Date.now());
+  // ★ [订正 30] 回调的 ref 镜像 —— 上层每次渲染传新函数也不该**重连 SSE**
+  //   (回调身份进了 useEffect 依赖 ⇒ 一变就断流重连 ⇒ 白白丢帧)。
+  const onTurnStartedRef = useRef(onTurnStarted);
+  useEffect(() => {
+    onTurnStartedRef.current = onTurnStarted;
+  }, [onTurnStarted]);
 
   // -------------------------------------------------------------------------
   // C4-11 — 用户点了 Windows Toast → 主进程推回 target → 跳站内路由
@@ -306,6 +402,29 @@ export function NotificationSSEBridge() {
         retryTimer = null;
         void connect();
       }, delay);
+    };
+
+    /**
+     * ★ [订正 30 · 2026-11-15] 「服务端起轮了」这一帧的处理。
+     *
+     * ⛔ **端侧只当观众**（契约 §1.2 铁律 2 / §4）—— 这里**只**把载荷交上去:
+     *   · **不起轮**（不许用 work_unit_ref 发起 chat/stream ⇒ 双份）;
+     *   · **不插本地气泡**（服务端已经写了 user 行 ⇒ 本地再插 ⇒ 刷新后重复）;
+     *   · **不碰报告正文**（端侧只传 id）。
+     * ⇒ 真正干活的是上层: 按 sessionId 路由 + 自动 attach（§2.2）。
+     */
+    const handleTurnStarted = (info: TurnStartedInfo) => {
+      // 这一帧**也是**一个事件 ⇒ 看门狗的「多久没事件」要重置。
+      lastEventAtRef.current = Date.now();
+      try {
+        onTurnStartedRef.current?.(info);
+      } catch (err) {
+        // ⛔ 上层回调抛异常**不许**把整条通知流带崩（老端不崩是硬要求）。
+        console.warn("[gacode-sse] onTurnStarted 回调抛异常 (忽略)", err);
+      }
+      console.log(
+        `[gacode-sse] turn_started: session=${info.sessionId} reason=${info.reason}`,
+      );
     };
 
     const handleIncoming = (n: NotificationItem) => {
@@ -429,11 +548,17 @@ export function NotificationSSEBridge() {
           if (cancelled) return;
           const text = decoder.decode(value, { stream: true });
           for (const frame of parser.push(text)) {
+            // ⚠️ 信号帧（turn_started）**不带** `id:` 行 ⇒ 这里自然**不推进游标**
+            //   —— 这一行**不许改**（契约订正 30 §1.1 / §4）。
             if (frame.id) lastEventId = frame.id;
             const ev = parseNotificationEvent(frame.data);
             if (ev.type === "notification" && ev.notification) {
               handleIncoming(ev.notification);
+            } else if (ev.type === "turn_started" && ev.turnStarted) {
+              handleTurnStarted(ev.turnStarted);
             }
+            // ⛔ 未知 type ⇒ `parseNotificationEvent` 兜底成 "unknown"
+            //   ⇒ 这里**什么都不做**（老端不崩、不双份 —— 契约 §1.2 铁律 1）。
           }
         }
 
