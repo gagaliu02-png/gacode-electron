@@ -39,7 +39,13 @@ const TITLE = 'Gacode M0 Browser E2E';
 // ── ① 起一个最小本地 HTTP server（browser.ts 只放 http/https）────────────
 const server = http.createServer((_req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(`<!doctype html><html><head><title>${TITLE}</title></head><body>M0 OK</body></html>`);
+  res.end(`<!doctype html><html><head><title>${TITLE}</title></head>
+    <body>
+      <p>M0 OK 正文</p>
+      <a href="https://example.com/">示例链接</a>
+      <button>提交按钮</button>
+      <input placeholder="搜索框">
+    </body></html>`);
 });
 
 function listen() {
@@ -126,6 +132,34 @@ async function main() {
   // 只应有一行 "BrowserView opened"（复用不该再开）
   const openedCount = (out.match(/BrowserView opened: tabId=/g) || []).length;
   if (openedCount !== 1) problems.push(`真机开了 ${openedCount} 个 tab（期望 1）`);
+
+  // ⑤ ★ M1 真机 snapshot：executeJavaScript 真抽到正文 + 元素编号表
+  const snapLine = out.split(/\r?\n/).find((l) => l.includes('[e2e:pc_browser_snapshot] '));
+  if (!snapLine) problems.push('没拿到 snapshot 结果行');
+  else {
+    const marker = '[e2e:pc_browser_snapshot] ';
+    let r3, d3;
+    try {
+      r3 = JSON.parse(snapLine.slice(snapLine.indexOf(marker) + marker.length));
+      d3 = JSON.parse(r3.stdout);
+    } catch { problems.push('snapshot 结果不是 JSON'); }
+    if (d3) {
+      if (r3.status !== 'ok') problems.push(`snapshot status != ok: ${r3.status}`);
+      if (d3.title !== TITLE) problems.push(`snapshot title 不符: "${d3.title}"`);
+      if (!(d3.text.includes('M0 OK'))) problems.push(`正文没抽到: ${JSON.stringify(d3.text)}`);
+      if (!Array.isArray(d3.elements) || d3.elements.length < 3)
+        problems.push(`元素表不足: ${JSON.stringify(d3.elements && d3.elements.length)}`);
+      else {
+        const tags = d3.elements.map((e) => e.tag).sort();
+        if (!tags.includes('a') || !tags.includes('button') || !tags.includes('input'))
+          problems.push(`元素表缺 tag: ${tags}`);
+        const hasId = d3.elements.every((e, i) => e.id === `e${i + 1}`);
+        if (!hasId) problems.push('元素 id 不是 e1..eN 顺序');
+        // ⛔ 不把 href 带出来（example.com/?token 不能泄露）
+        if (JSON.stringify(d3).includes('example.com/')) problems.push('元素表把 href 带出来了');
+      }
+    }
+  }
 
   if (problems.length) {
     console.error('[e2e] FAIL:', problems.join(' | '), data);

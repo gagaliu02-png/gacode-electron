@@ -173,3 +173,62 @@ data: {"type":"turn_started","turnStarted":{
 - ★ **真机** `node test/e2e-browser-open.mjs` ⇒ PASS：真实 Electron 窗口开出 BrowserView、
   `webContents.getTitle()` 读到 `Gacode M0 Browser E2E`、第二次 `reused:true`、
   全程只开 1 个 tab、进程 `exit=0` / `stderr 0B`
+
+---
+
+## 订正 31 · M1 · `pc_browser_snapshot`（只读 DOM 快照，2026-11-15 · PC 端）
+
+> 设计依据：根目录 `docs/design/pc-browser-agent-2026-11.md` §5 / §6。
+> 仍只落 PC 仓，不碰 gaclaw / unified-api。
+
+### 做什么
+
+`pc_browser_snapshot`：在活 tab 的**页面主世界**跑一段**固定只读** JS，
+抽 **可读文本**（`document.createTreeWalker` 跳过 script/style/隐藏元素）
++ **可交互元素编号表**（`a,button,input,textarea,select,[role]...`，过滤不可见），
+生成 `e1..eN` 编号供 M2 `pc_browser_act` 引用。
+
+### 三条铁律（接 M0 的边界）
+
+1. ⛔ **注入脚本是固定常量**（`SNAPSHOT_SCRIPT`），模型给的任何参数**都不会拼进 JS** ⇒
+   模型借不了这条口子执行任意 JS（唯一的口子是 `BrowserTabPool.evalInTab`，只跑本模块脚本）。
+2. ⛔ **端侧回传前硬限长**（上下文顶爆防线，血泪来自 2026-11-13）：
+   正文 ≤ 8KB / 元素 ≤ 200 项 / 单元素 text ≤ 80 字符 / **stdout 总量 ≤ 12KB**。
+   超长标 `truncated:true` + 给 `next_cursor`；⛔ 不把整页 HTML 塞进上下文。
+3. ⛔ **不读 cookie / localStorage / fetch / `outerHTML` / `href` / `value`** ⇒
+   不把 URL 参数里的 token 带出来。脚本里连这些字样的**注释**都别写（单测会按纯文本扫）。
+
+### 编号表约定（M2 `stale_element_ref` 的底座）
+
+- 编号由端侧生成（`e${i+1}`），**只在下一次 snapshot 前有效**；按 `tabId` 存内存 `elementIndex` Map（⛔ 不落盘、不进日志）。
+- `isFreshElementRef(tabId, 'e12')` 判新鲜；tab 销毁（`openBrowserTab` 的 `destroyed` / `gacode:close-browser-tab`）⇒ `clearElementIndex`。
+- `resolveLiveTab`：优先 `tabId` ⇒ `url` ⇒ **最近创建**的活 tab（共用池 ⇒ agent 缺省读用户当前看的页面）；明确指定却找不到 ⇒ **不猜，报错**。
+
+### 分页
+
+`cursor` / `limit` 分页；**后续页不重复塞元素表**（省上下文）。
+`next_cursor` **严格前进且未到全文尾**才给（⛔ 不给"假游标"——text 被裁到 0 时 `at===cursor` 不满足 `>cursor`，自然不给，避免模型 `cursor=0` 无限重读）。
+
+### 兜底收敛（挂死血泪）
+
+总量超 12KB 时**依次**砍 text（字符二分保证递减到空）再砍元素表，带 `guard` 上限防死循环。
+⚠️ 光砍 text 不够——200 项元素表本身就可能 >12KB（实测 24KB）。
+⚠️ **循环砍 text 必须用字符二分或带 guard**；早期版本 `Math.floor(byteLen*0.7)` 在汉字 + 大元素表下**挂死**（测试文件级 20s 超时，`node --test` 把整个文件当单个用例杀掉）。
+
+### 端侧落点
+
+| 文件 | 改动 |
+|---|---|
+| `electron/client-tools/browser.ts` | `SNAPSHOT_SCRIPT`（固定只读）/ `SNAPSHOT_LIMITS` / `buildElementIndex` / `buildSnapshotOutput`（三层限长+分页+兜底）/ `resolveLiveTab` / `pcBrowserSnapshot` / `elementIndex` Map + `isFreshElementRef` / `clearElementIndex` / `BrowserTabPool.evalInTab` |
+| `electron/main.ts` | `setBrowserTabPool({... evalInTab})`（`view.webContents.executeJavaScript(script)`）；tab 销毁清 `elementIndex`；E2E 钩子加 `pc_browser_snapshot` |
+| `electron/client-tools/executor.ts` | `pc_browser_snapshot: 30000` + switch case |
+| `test/pc-browser-snapshot-m1.test.mjs`（新建） | 8 条：脚本只读 / 编号表 / 三层限长 / 分页 / fresh/clear / resolveLiveTab / ⛔参数不进JS / 失败如实回报 |
+
+### 验证（已跑）
+
+- `node --test test/pc-browser-snapshot-m1.test.mjs` ⇒ 8/8
+- 全量 `node --test` ⇒ **431/431**
+- node / web typecheck 干净；`npm run build` 全通过
+- ★ **真机** `node test/e2e-browser-open.mjs` ⇒ PASS：snapshot 真抽到正文
+  `"M0 OK 正文\n示例链接\n提交按钮"` + `[e1:a, e2:button, e3:input(搜索框)]`，
+  顺序正确、placeholder 带出、href 不带出、`truncated:false`、`exit=0` / `stderr 0B`

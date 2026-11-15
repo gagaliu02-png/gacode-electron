@@ -43,7 +43,7 @@ import {
   jobStop,
   startBackgroundJob,
 } from './backgroundJobs.ts';
-import { pcBrowserOpen } from './browser.ts';
+import { pcBrowserOpen, pcBrowserSnapshot } from './browser.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';
 
 // ===========================================================================
@@ -478,8 +478,9 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_job_start: 60000,
   pc_job_status: 60000,    // 查状态 / 停作业 都是同步短超时
   pc_job_stop: 60000,
-  // [2026-11-15 · 订正 31 · M0] 浏览器端侧工具（PC 内置 BrowserView 池）
+  // [2026-11-15 · 订正 31 · M0/M1] 浏览器端侧工具（PC 内置 BrowserView 池）
   pc_browser_open: 30000,
+  pc_browser_snapshot: 30000,
 };
 
 /** 端侧支持的工具名。 */
@@ -537,8 +538,9 @@ export async function executeClientTool(
     case 'pc_open_path': return pcOpenPath(args, cwd);
     case 'pc_system_info': return pcSystemInfo(args);
     case 'pc_process_list': return pcProcessList(args);
-    // [2026-11-15 · 订正 31 · M0] 浏览器：共用主进程 BrowserView tab 池
+    // [2026-11-15 · 订正 31 · M0/M1] 浏览器：共用主进程 BrowserView tab 池
     case 'pc_browser_open': return pcBrowserOpen(args);
+    case 'pc_browser_snapshot': return pcBrowserSnapshot(args);
     default:
       return fail(`未知的端侧工具: ${tool}`);
   }

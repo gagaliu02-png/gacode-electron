@@ -18,7 +18,7 @@ import { registerNotificationIpc } from './notifications';
 import { registerClientToolIpc, setClientToolWindow } from './client-tools/ipc';
 // [2026-11-15 · 订正 31 · M0] 浏览器端侧工具 —— 把**现有** tab 池注给执行器
 //   （用户和 agent 共用同一个池；不另起窗口、不另建池）。
-import { setBrowserTabPool } from './client-tools/browser';
+import { setBrowserTabPool, clearElementIndex } from './client-tools/browser';
 import { executeClientTool } from './client-tools/executor';
 import { getAppIcon, logIconStatus } from './icon';
 
@@ -418,6 +418,8 @@ async function openBrowserTab(target: string): Promise<{ tabId: string; title: s
         /* ignore */
       }
       browserTabs.delete(tabId);
+      // ★ M1：tab 没了 ⇒ 它那份元素编号表也作废（M2 act 引用 ⇒ stale_element_ref）
+      clearElementIndex(tabId);
     }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('gacode:browser-tab-closed', { tabId });
@@ -460,6 +462,8 @@ function registerBrowserTabIpc(): void {
         console.warn('[gacode-electron] closeBrowserView failed', err);
       }
       browserTabs.delete(args.tabId);
+      // ★ M1：手动关 tab 也作废编号表（destroyed 回调可能来不及带 tabId）
+      clearElementIndex(args.tabId);
       console.log(
         `[gacode-electron] BrowserView closed: tabId=${args.tabId}`,
       );
@@ -484,6 +488,14 @@ function registerBrowserTabIpc(): void {
       const entry = browserTabs.get(tabId);
       if (!entry || entry.view.webContents.isDestroyed()) return '';
       try { return entry.view.webContents.getTitle() || ''; } catch { return ''; }
+    },
+    // ★ M1：跑本模块生成的**固定只读脚本**（⛔ 模型参数不进 JS）
+    evalInTab: async (tabId, script) => {
+      const entry = browserTabs.get(tabId);
+      if (!entry || entry.view.webContents.isDestroyed()) {
+        throw new Error(`tab ${tabId} 已关闭`);
+      }
+      return entry.view.webContents.executeJavaScript(script);
     },
   });
 
@@ -990,6 +1002,9 @@ app.whenReady().then(() => {
         //   （PM 拍板「用户和 agent 共用」；真机验「不另起一个」）。
         const r2 = await executeClientTool('pc_browser_open', { url: e2eBrowserUrl }, null, 30000);
         console.log('[e2e:pc_browser_open:reuse] ' + JSON.stringify(r2));
+        // ★ M1：页面加载完，紧跟 snapshot ⇒ 真机验 executeJavaScript 抽 DOM
+        const snap = await executeClientTool('pc_browser_snapshot', {}, null, 30000);
+        console.log('[e2e:pc_browser_snapshot] ' + JSON.stringify(snap));
       } catch (e) {
         console.error('[e2e:pc_browser_open] THREW ' + (e as Error).message);
       } finally {
