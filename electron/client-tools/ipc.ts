@@ -27,6 +27,8 @@ import { localTasks } from './localTasks';
 // ★ [2026-11-13 · 订正 27 · B6] 后台作业：巡检（跑完 ⇒ 回传服务端）+ 界面接线。
 import { jobReporter } from './jobReporter';
 import { listJobInfos, onJobsChanged } from './jobView';
+// ★ [2026-11-17] 后台作业表自动清理（append-only jsonl 不压缩会一直涨）。
+import { startJobPruner } from './localJobs.ts';
 import {
   assertAllowed,
   appendAudit,
@@ -205,6 +207,10 @@ export function registerClientToolIpc(): void {
   // 巡检（`jobReporter`）在**主进程**跑：定时看「作业跑完没」⇒ 回传服务端（D3）
   // ⇒ 服务端另起一轮 agent 汇报，落回原会话（L-27c / L-27l）。
   jobReporter.start((jobId, payload) => deviceClient.reportJobResult(jobId, payload));
+
+  // ★ [2026-11-17] 启动作业表**自动压缩**：append-only jsonl 废行折叠掉（660 行 → 28 行）。
+  //   ⚠️ 只压缩，不删任何作业记录 / 日志（PM 拍板：历史作业列表要一直看得见）。
+  startJobPruner();
 
   // 本机后台作业列表（含已结束的，按开始时间倒序）。
   ipcMain.handle('gacode:client-tool-list-jobs', async () => listJobInfos());

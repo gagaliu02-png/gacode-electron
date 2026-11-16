@@ -216,3 +216,104 @@ export function markJobReported(id: string, summary?: string): LocalJob | null {
 export function listUnreportedJobs(): LocalJob[] {
   return listJobs().filter((j) => j && j.status !== 'reported');
 }
+
+// ===========================================================================
+// ★ [2026-11-17] 自动压缩 —— append-only jsonl 不压缩会一直涨
+// ===========================================================================
+
+/**
+ * 触发压缩的「废行比例」门槛。
+ *
+ * `local-jobs.jsonl` 每次状态变化追加一行（一个作业可能有 5~10 行），
+ * 但读取时按 jobId 折叠（后面的行覆盖前面的）⇒ 旧行全是废行。
+ * ⇒ 废行超过一半就重写一遍（**只留每个 id 的最后一行**）。
+ *
+ * ⚠️ **只压缩，不删除任何作业、不删任何日志** —— 用户的作业记录是
+ *    「我的电脑」页的历史列表，要一直看得见（PM 2026-11-17 拍板）。
+ *    磁盘上只剩「每个作业一行」⇒ 实测 660 行压到 28 行，体积降 ~95%，
+ *    但 UI 显示的作业一条不少。
+ */
+const COMPACT_WASTE_RATIO = 0.5;
+
+/**
+ * 压缩 append-only jsonl（不删任何作业记录 / 日志）。
+ *
+ * ## 做什么
+ *
+ *   1. 读整份账本 ⇒ 折叠出每个 jobId 的最后一行（**全部作业都留着**）；
+ *   2. 废行超过一半 ⇒ 原子重写 jsonl（写 .tmp + rename），
+ *      文件从「660 行废行」压到「28 行有效记录」；
+ *   3. ⛔ **不删日志、不删作业** —— 列表和历史一条不少。
+ *
+ * ## ⚠️ 安全性
+ *
+ *   · 所有作业（包括 running / cancelled / 最老的）**一行不动**；
+ *   · 原子重写 ⇒ 中途崩溃不会留下半截文件。
+ *
+ * @returns `{removedJobs:0, removedLogFiles:0, compacted}`（前两个恒 0 —— 只压缩不删除）
+ */
+export function pruneFinishedJobs(now = Date.now()): {
+  removedJobs: number;
+  removedLogFiles: number;
+  compacted: boolean;
+} {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(localJobsFile(), 'utf8');
+  } catch (_) {
+    return { removedJobs: 0, removedLogFiles: 0, compacted: false };
+  }
+  const lines = raw.split('\n').filter((s) => s.trim());
+  if (!lines.length) return { removedJobs: 0, removedLogFiles: 0, compacted: false };
+
+  // 折叠（同一份口径：后面的行覆盖前面的）——全部作业都保留。
+  const folded: Record<string, LocalJob> = {};
+  for (const line of lines) {
+    let rec: any;
+    try { rec = JSON.parse(line); } catch (_) { continue; }
+    if (!rec || !rec.id) continue;
+    folded[rec.id] = { ...(folded[rec.id] || {}), ...rec } as LocalJob;
+  }
+
+  const waste = lines.length - Object.keys(folded).length;
+  if (waste < lines.length * COMPACT_WASTE_RATIO) {
+    return { removedJobs: 0, removedLogFiles: 0, compacted: false };
+  }
+
+  const out = Object.values(folded).map((j) => JSON.stringify(j)).join('\n') + '\n';
+
+  // 原子重写（跟 deviceStore._persist 同款口径）。
+  const file = localJobsFile();
+  const tmp = `${file}.tmp-${process.pid}-${now}`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, out, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    console.error('[client-tools/jobs] 作业表压缩失败:', e && (e as Error).message);
+    return { removedJobs: 0, removedLogFiles: 0, compacted: false };
+  }
+  return { removedJobs: 0, removedLogFiles: 0, compacted: true };
+}
+
+/**
+ * 定期压缩定时器（主进程启动时开一次）。
+ *
+ * ⚠️ 间隔 **1 小时**：压缩只处理废行，不需要频繁跑。
+ * ⚠️ `unref()`：不许把主进程事件循环吊住。
+ */
+export const JOB_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+export function startJobPruner(): NodeJS.Timeout | null {
+  try {
+    // 启动时先跑一次（把历史上堆积的废行一次性压掉）。
+    pruneFinishedJobs();
+    const timer = setInterval(() => { pruneFinishedJobs(); }, JOB_PRUNE_INTERVAL_MS);
+    try { timer.unref(); } catch (_) { /* 老 Node 没有 unref */ }
+    return timer;
+  } catch (e) {
+    console.error('[client-tools/jobs] 启动作业清理失败:', e && (e as Error).message);
+    return null;
+  }
+}
