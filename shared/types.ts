@@ -168,6 +168,16 @@ export interface GacodeBridge {
     setAccessToken: (token: string | null) => Promise<{ ok: boolean }>;
 
     /**
+     * ★ [2026-11-17] 解绑 / 重新绑定这台电脑的「被 AI 控制」能力。
+     *
+     * 解绑后本机不再注册、不再接收派单；要恢复得点「重新绑定」或重新登录。
+     */
+    unbind: () => Promise<{ ok: boolean; error?: string | null }>;
+    rebind: () => Promise<{ ok: boolean; error?: string | null }>;
+    /** 登出前释放本机绑定（渲染层 logout() 在打 /auth/logout 之前调）。 */
+    unbindOnLogout: () => Promise<boolean>;
+
+    /**
      * node-pty 现在能不能用（决定要不要声明 `pty` 子能力）。
      * ⚠️ 没装好就不能声明 —— 否则模型会调 `pc_shell`，然后挂起等一个永远不回来的结果。
      */
@@ -389,6 +399,8 @@ export interface ClientToolStatus {
   registered: boolean;
   lastError: string | null;
   replacedDeviceId: string | null;
+  /** ★ [2026-11-17] 已被解绑（要恢复得重新绑定 / 重新登录）。 */
+  unbound: boolean;
   gate: ClientGateState;
 }
 

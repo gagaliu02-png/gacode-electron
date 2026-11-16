@@ -401,6 +401,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    // ★ [2026-11-17] **先解绑这台电脑，再撤销 refreshToken**。
+    //   ⚠️ 顺序不能反：/auth/logout 一旦把 refreshToken 作废，主进程就没凭证
+    //      去调 /devices/unbind 了 ⇒ 旧绑定留着 ⇒ 新账号注册 409 永久离线。
+    //   ⚠️ 解绑失败**不阻塞登出**（用户视角「登出」一定要成功）。
+    try {
+      await window.gacode?.clientTools?.unbindOnLogout?.();
+    } catch {
+      // 解绑失败也要继续登出
+    }
     try {
       await authApi.logout(refreshToken);
     } catch {

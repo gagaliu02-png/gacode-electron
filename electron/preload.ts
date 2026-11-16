@@ -148,6 +148,14 @@ contextBridge.exposeInMainWorld('gacode', {
     // 把 access token 推给主进程 (设备通道要用). 内存持有, 不持久化.
     setAccessToken: (token: string | null): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('gacode:client-tool-set-token', token),
+    /** ★ [2026-11-17] 解绑 / 重新绑定这台电脑的「被控制」能力。 */
+    unbind: (): Promise<{ ok: boolean; error?: string | null }> =>
+      ipcRenderer.invoke('gacode:client-tool-unbind'),
+    rebind: (): Promise<{ ok: boolean; error?: string | null }> =>
+      ipcRenderer.invoke('gacode:client-tool-rebind'),
+    /** 登出前释放本机绑定（渲染层 logout() 在打 /auth/logout 之前调）。 */
+    unbindOnLogout: (): Promise<boolean> =>
+      ipcRenderer.invoke('gacode:client-tool-unbind-on-logout'),
     ptyAvailable: (): Promise<boolean> =>
       ipcRenderer.invoke('gacode:client-tool-pty-available'),
     status: () => ipcRenderer.invoke('gacode:client-tool-status'),

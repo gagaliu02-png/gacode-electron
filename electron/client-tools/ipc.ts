@@ -47,6 +47,8 @@ export interface ClientToolStatus {
   registered: boolean;
   lastError: string | null;
   replacedDeviceId: string | null;
+  /** ★ [2026-11-17] 已被解绑（要恢复得重新绑定 / 重新登录）。 */
+  unbound: boolean;
   /** 闸门状态（总开关 / 急停）。 */
   gate: GateState;
 }
@@ -74,6 +76,13 @@ export function registerClientToolIpc(): void {
     return { ok: true };
   });
 
+  // ★ [2026-11-17] 解绑 / 重新绑定「电脑端控制」（「我的电脑」页按钮 + 登出链路）。
+  //   ⚠️ 解绑是**服务端 + 本机双向**的：服务端清绑定，本机进 unbound 态不再注册。
+  ipcMain.handle('gacode:client-tool-unbind', async () => deviceClient.unbind());
+  ipcMain.handle('gacode:client-tool-rebind', async () => deviceClient.rebind());
+  //   登出链路专用：在 /auth/logout 撤销 refreshToken **之前**调，把本机绑定释放掉。
+  ipcMain.handle('gacode:client-tool-unbind-on-logout', async () => deviceClient.unbindOnLogout());
+
   // —— node-pty 能不能用（决定要不要声明 `pty` 子能力）——
   //   ⚠️ 没装好 node-pty（原生模块 ABI 不对 / DLL 缺失）⇒ `pc_shell` 会挂起
   //      等一个**永远不回来的**结果 ⇒ 这时**不能**声明 `pty` 能力。
@@ -92,6 +101,7 @@ export function registerClientToolIpc(): void {
       registered: st.registered,
       lastError: st.lastError,
       replacedDeviceId: st.replacedDeviceId,
+      unbound: st.unbound,
       gate: readGateState(),
     } satisfies ClientToolStatus;
   });

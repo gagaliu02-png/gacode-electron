@@ -150,6 +150,41 @@ export function ClientToolsCard() {
     [bridge, toast],
   );
 
+  // ★ [2026-11-17] 解绑 / 重新绑定这台电脑的「被控制」能力。
+  //   解绑 = 服务端清绑定 + 本机停止注册/接单；要恢复得重新绑定或重新登录。
+  const toggleBind = useCallback(async () => {
+    if (!bridge) return;
+    setBusy(true);
+    const unbound = status?.unbound === true;
+    try {
+      const res = unbound ? await bridge.rebind() : await bridge.unbind();
+      if (res.ok) {
+        toast({
+          title: unbound ? "已重新绑定这台电脑" : "已解绑电脑端控制",
+          description: unbound
+            ? "设备通道正在重连，稍后会显示「在线」。"
+            : "本机已停止接收派单。要恢复，点「重新绑定」或退出登录后重新登录。",
+          variant: "success",
+        });
+      } else {
+        toast({
+          title: unbound ? "重新绑定失败" : "解绑失败",
+          description: res.error || "请稍后重试",
+          variant: "danger",
+        });
+      }
+      await refresh();
+    } catch (e) {
+      toast({
+        title: "操作失败",
+        description: e instanceof Error ? e.message : "请稍后重试",
+        variant: "danger",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, [bridge, status?.unbound, refresh, toast]);
+
   const clearAudit = useCallback(async () => {
     if (!bridge) return;
     setBusy(true);
@@ -177,6 +212,7 @@ export function ClientToolsCard() {
   const master = gate?.masterEnabled !== false;
   const killing = gate?.killSwitch === true;
   const online = status?.connected === true;
+  const unbound = status?.unbound === true;
   const replaced = !!status?.replacedDeviceId;
 
   return (
@@ -192,11 +228,13 @@ export function ClientToolsCard() {
               我的电脑：{status?.deviceName || "本机"}
             </div>
             <div className="text-[11px] text-fg-muted truncate">
-              {replaced
-                ? "已被同一账号在另一台电脑上顶掉，本机已失去执行能力。"
-                : online
-                  ? "在线 · 设备通道已建立，可以接收派单"
-                  : "离线 · 设备通道未连接（关掉 Gacode 或断网时无法接收派单）"}
+              {unbound
+                ? "已解绑 · 本机不再接收派单。点「重新绑定」或退出登录再登录可恢复。"
+                : replaced
+                  ? "已被同一账号在另一台电脑上顶掉，本机已失去执行能力。"
+                  : online
+                    ? "在线 · 设备通道已建立，可以接收派单"
+                    : "离线 · 设备通道未连接（关掉 Gacode 或断网时无法接收派单）"}
             </div>
           </div>
           <span
@@ -204,13 +242,25 @@ export function ClientToolsCard() {
               "shrink-0 text-[11px] px-2 py-0.5 rounded-full",
               replaced
                 ? "bg-danger-soft text-danger"
-                : online
-                  ? "bg-success-soft text-success"
-                  : "bg-bg-sunken text-fg-muted",
+                : unbound
+                  ? "bg-bg-sunken text-fg-muted"
+                  : online
+                    ? "bg-success-soft text-success"
+                    : "bg-bg-sunken text-fg-muted",
             ].join(" ")}
           >
-            {replaced ? "已失效" : online ? "在线" : "离线"}
+            {replaced ? "已失效" : unbound ? "已解绑" : online ? "在线" : "离线"}
           </span>
+          {/* ★ [2026-11-17] 解绑 / 重新绑定（账号切换场景：旧账号绑着这台机器 ⇒ 新账号永远离线） */}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void toggleBind()}
+            className="shrink-0 text-[11px] text-fg-muted hover:text-danger transition-colors duration-150 disabled:opacity-40"
+            aria-label={unbound ? "重新绑定这台电脑" : "解绑电脑端控制"}
+          >
+            {unbound ? "重新绑定" : "解绑"}
+          </button>
         </div>
 
         {/* ── 正在跑的任务（P6：多会话并行 ⇒ 看得见、管得住） ── */}

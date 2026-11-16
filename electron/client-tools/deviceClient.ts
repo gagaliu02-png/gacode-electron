@@ -67,6 +67,54 @@ export function deviceIdFile(): string {
   return path.join(app.getPath('userData'), 'device-id.json');
 }
 
+/**
+ * ★ [2026-11-17] 「已被解绑」的本地标记 —— **跟 deviceId 存在同一个文件**。
+ *
+ * ## 为什么要有它
+ *
+ * 服务端的解绑只清了「服务端那条绑定」；本机若还按老规矩自动重连/重注册，
+ * ⇒ 几秒内又把绑定抢回来 ⇒ **「解绑电脑端控制」等于白点**。
+ *
+ * ⇒ 解绑后本机进入 `unbound` 态：**不注册、不重连、不接派单**，
+ *   直到 (a) 用户显式点「重新绑定」，或 (b) **重新登录**（含启动时恢复会话）。
+ *
+ * ⚠️ **落盘**（跨重启保留）—— 只放内存的话，重启一次就自动绑回去了。
+ * ⚠️ 存在 device-id.json 里（不是另一个文件）⇒ 少一个文件、少一处清理。
+ */
+/**
+ * ★ [2026-11-17] 解绑原因（决定「重新登录」要不要自动清标记）：
+ *   · `logout`  —— 登出解绑 ⇒ 重新登录时**自动重新绑定**（PM 拍板）。
+ *   · `manual`  —— 用户点「解绑电脑端控制」⇒ **必须显式点「重新绑定」**，
+ *                  重新登录也不清（否则用户明明解绑了，一登录又绑回去）。
+ */
+export type UnbindReason = 'logout' | 'manual' | null;
+
+interface DeviceIdFile {
+  deviceId?: string;
+  createdAt?: number;
+  unbound?: boolean;
+  unbindReason?: UnbindReason;
+}
+
+function readDeviceIdFile(): DeviceIdFile {
+  try {
+    const raw = fs.readFileSync(deviceIdFile(), 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writeDeviceIdFile(data: { deviceId: string; createdAt?: number; unbound?: boolean; unbindReason?: UnbindReason }): void {
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.writeFileSync(deviceIdFile(), JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error('[client-tools/device] deviceId 落盘失败:', e && (e as Error).message);
+  }
+}
+
 /** 去重表（已结的 `pending_id`）。 */
 function doneFile(): string {
   return path.join(app.getPath('userData'), 'client-done.json');
@@ -74,21 +122,52 @@ function doneFile(): string {
 
 /** 取（没有就生成并落盘）本机 `deviceId`。 */
 export function getDeviceId(): string {
-  try {
-    const raw = fs.readFileSync(deviceIdFile(), 'utf8');
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.deviceId === 'string' && parsed.deviceId.length >= 8) {
-      return parsed.deviceId;
-    }
-  } catch (_) { /* 没有文件 ⇒ 第一次运行 */ }
-  const deviceId = randomUUID();
-  try {
-    fs.mkdirSync(app.getPath('userData'), { recursive: true });
-    fs.writeFileSync(deviceIdFile(), JSON.stringify({ deviceId, createdAt: Date.now() }, null, 2), 'utf8');
-  } catch (e) {
-    console.error('[client-tools/device] deviceId 落盘失败:', e && (e as Error).message);
+  const parsed = readDeviceIdFile();
+  if (parsed && typeof parsed.deviceId === 'string' && parsed.deviceId.length >= 8) {
+    return parsed.deviceId;
   }
+  const deviceId = randomUUID();
+  writeDeviceIdFile({ deviceId, createdAt: Date.now() });
   return deviceId;
+}
+
+/**
+ * ★ [2026-11-17] 本机是不是「已被解绑」（落盘标记）。
+ *
+ * ## 这个标记管什么
+ *
+ * 服务端的解绑只清了「服务端那条绑定」；本机若还按老规矩自动重连/重注册，
+ * ⇒ 几秒内又把绑定抢回来 ⇒ **「解绑电脑端控制」等于白点**。
+ *
+ * ⇒ 解绑后本机进入 `unbound` 态：**不注册、不重连、不接派单**，
+ *   直到 (a) 用户显式点「重新绑定」，或 (b) **重新登录**（含登录页输密码那次）。
+ */
+export function isUnboundLocally(): boolean {
+  return readDeviceIdFile().unbound === true;
+}
+
+/** 当前解绑原因（跨重启保留）。 */
+export function getUnbindReason(): UnbindReason {
+  return readDeviceIdFile().unbindReason || null;
+}
+
+/**
+ * ★ [2026-11-17] 标记 / 清除「已被解绑」本地状态。
+ *
+ * `unbound=true` ⇒ 已解绑（自动注册被挡住）；`false` ⇒ 允许自动注册。
+ */
+export function setUnboundLocally(unbound: boolean, reason: UnbindReason = null): void {
+  const parsed = readDeviceIdFile();
+  const deviceId =
+    typeof parsed.deviceId === 'string' && parsed.deviceId.length >= 8
+      ? parsed.deviceId
+      : getDeviceId();
+  writeDeviceIdFile({
+    deviceId,
+    createdAt: typeof parsed.createdAt === 'number' ? parsed.createdAt : Date.now(),
+    unbound: unbound === true,
+    unbindReason: unbound ? reason || 'manual' : null,
+  });
 }
 
 /** 机器名（给「我的电脑：张三的笔记本」用）。 */
@@ -228,6 +307,13 @@ export interface DeviceClientStatus {
   lastError: string | null;
   /** 服务端返回的「顶掉了哪台设备」。 */
   replacedDeviceId: string | null;
+  /**
+   * ★ [2026-11-17] **已被解绑**（用户主动点了「解绑」或账号登出）。
+   *
+   * ⛔ 为 true 时**不许**自动注册 / 重连 —— 解绑后必须显式「重新绑定」
+   *    或重新登录，才会重新绑定（否则「解绑」按钮等于白点）。
+   */
+  unbound: boolean;
 }
 
 /**
@@ -267,6 +353,13 @@ class DeviceClient {
   private connected = false;
   private lastError: string | null = null;
   private replacedDeviceId: string | null = null;
+  /**
+   * ★ [2026-11-17] **已被解绑**（用户主动解绑 / 账号登出）。
+   *
+   * ⛔ 为 true 时**不注册、不重连** ⇒ 解绑是真的解绑，不是「解完几秒又抢回来」。
+   * ⚠️ 从磁盘初始化 —— 解绑跨重启保留，重启 Gacode 不许偷偷绑回去。
+   */
+  private unbound = isUnboundLocally();
   private listeners = new Set<RequestListener>();
   /** ★ P6：正在跑的任务（pendingId → 任务 + 它的中止句柄）。 */
   private running = new Map<string, { task: RunningClientTask; ac: AbortController }>();
@@ -279,6 +372,7 @@ class DeviceClient {
       connected: this.connected,
       lastError: this.lastError,
       replacedDeviceId: this.replacedDeviceId,
+      unbound: this.unbound,
     };
   }
 
@@ -385,6 +479,120 @@ class DeviceClient {
     return n;
   }
 
+  /**
+   * ★ [2026-11-17] **登出 ⇒ 解绑这台设备**（渲染层在调 /auth/logout **之前**调）。
+   *
+   * 由渲染层 `logout()` 显式调用（⚠️ 不能在 setAccessToken(null) 之后再解绑 ——
+   * 那时 refreshToken 已被 /auth/logout 撤销，主进程也丢了 token）。
+   *
+   * @returns 解绑是否成功（失败不阻塞登出）。
+   */
+  async unbindOnLogout(): Promise<boolean> {
+    const token = this.accessToken;
+    if (!token) return false;
+    const deviceId = this.deviceId || getDeviceId();
+    try {
+      const res = await fetch(`${apiBase()}/devices/unbind`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ deviceId }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        logDevice(`登出解绑失败 ${res.status}: ${text.slice(0, 200)}`);
+        return false;
+      }
+      logDevice(`登出 ⇒ 已解绑这台设备（deviceId=${deviceId}）`);
+      return true;
+    } catch (e) {
+      logDevice(`登出解绑异常: ${e && (e as Error).message}`);
+      return false;
+    }
+  }
+
+  /**
+   * ★ [2026-11-17] **手动解绑**（用户在「我的电脑」页点「解绑电脑端控制」）。
+   *
+   * 语义：
+   *   · 服务端释放**这台设备**的绑定（不论它挂在哪个账号下）；
+   *   · 本机进入 `unbound` 态 ⇒ **不注册、不重连、不接派单**
+   *     （否则几秒后又抢回来 ⇒ 按钮等于白点）；
+   *   · 要恢复 ⇒ 点「重新绑定」，或**退出登录再登录**（PM 拍板：
+   *     「退出登录绑定信息就应该失效，重新登录流重新绑定」）。
+   *
+   * @returns `{ ok:true }` = 解绑成功（已停）；`{ ok:false, error }` = 如实回报。
+   */
+  async unbind(): Promise<{ ok: boolean; error?: string | null }> {
+    const token = this.accessToken;
+    if (!token) {
+      return { ok: false, error: '还没登录，无法解绑' };
+    }
+    const deviceId = this.deviceId || getDeviceId();
+    try {
+      const res = await fetch(`${apiBase()}/devices/unbind`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ deviceId }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        const error = `解绑失败 ${res.status}: ${text.slice(0, 200)}`;
+        logDevice(error);
+        return { ok: false, error };
+      }
+      // 本机进入「已解绑」⇒ 断通道 + 停一切重连/注册。
+      this.markUnbound(true, 'manual');
+      this.disconnect();
+      this.stopAllTasks();
+      logDevice(`已解绑 deviceId=${deviceId}（本机停止接收派单）`);
+      return { ok: true };
+    } catch (e) {
+      const error = `解绑异常: ${e && (e as Error).message}`;
+      logDevice(error);
+      return { ok: false, error };
+    }
+  }
+
+  /**
+   * ★ [2026-11-17] **重新绑定**（解绑之后想恢复）。
+   *
+   * 清本地「已解绑」标记 ⇒ 重新注册 + 重连。
+   */
+  async rebind(): Promise<{ ok: boolean; error?: string | null }> {
+    this.markUnbound(false);
+    if (!this.accessToken) {
+      return { ok: false, error: '还没登录，请先登录后再绑定' };
+    }
+    try {
+      await this.ensureConnected();
+      return { ok: true };
+    } catch (e) {
+      const error = `重新绑定失败: ${e && (e as Error).message}`;
+      logDevice(error);
+      return { ok: false, error };
+    }
+  }
+
+  /**
+   * ★ [2026-11-17] 记「已解绑 / 已绑定」本地态。
+   *
+   * ⛔ **已解绑 ⇒ 绝不注册、绝不重连** —— 这是「解绑按钮真的生效」的唯一保证。
+   */
+  private markUnbound(unbound: boolean, reason: UnbindReason = null): void {
+    this.unbound = unbound;
+    this.registered = false;
+    if (unbound) this.connected = false;
+    try {
+      setUnboundLocally(unbound, reason);
+    } catch (_) { /* 落盘失败不影响内存态 */ }
+  }
+
   /** 渲染层把 access token 推过来（内存持有，⛔ 不持久化 —— 跟渲染层同款口径）。 */
   setAccessToken(token: string | null): void {
     const changed = token !== this.accessToken;
@@ -392,6 +600,21 @@ class DeviceClient {
     logDevice(`setAccessToken ${token ? '有 token' : 'token 为空'}（changed=${changed}）`);
     if (!changed) return;
     this.retryDelay = 3000;
+
+    // ★ [2026-11-17] 登出时的解绑由渲染层 logout() **显式**调 unbindOnLogout()
+    //   （必须在 /auth/logout 撤销 refreshToken 之前做）—— 这里只停本机通道，不再发请求。
+    if (!token) {
+      this.markUnbound(true, 'logout');
+    } else if (getUnbindReason() === 'logout') {
+      // ★ [2026-11-17] **重新登录 ⇒ 自动重新绑定**（PM 拍板：
+      //   「退出登录绑定信息就应该失效，重新登录流重新绑定」）。
+      //   ⚠️ 只清「登出导致的解绑」—— 手动点「解绑」的那台机器
+      //      重新登录也**不**自动绑回去（用户明确解绑了）。
+      //   ⚠️ 只在 token **从无到有**（真正的登录）时处理：
+      //      refresh 换 token 前后都有 token，不会走到这里。
+      this.markUnbound(false);
+    }
+
     // ★ access token 只有 **15 分钟**有效期（服务端 TTL）⇒ 旧连接拿着的 token 一定会过期。
     //   ⇒ 换 token 时**必须掐掉**正在跑的那次连接（它拿着的是旧 token），
     //     否则重连会一直用旧 token ⇒ 401 ⇒ 设备通道**永久离线**。
@@ -417,6 +640,11 @@ class DeviceClient {
   async ensureConnected(): Promise<void> {
     if (!this.accessToken) {
       logDevice('ensureConnected: 没有 token ⇒ 不连');
+      return;
+    }
+    // ★ [2026-11-17] **已解绑 ⇒ 绝不注册**（解绑必须真的生效）。
+    if (this.unbound) {
+      logDevice('ensureConnected: 已解绑 ⇒ 不注册（要恢复请点「重新绑定」或重新登录）');
       return;
     }
     if (this.abort) {
