@@ -151,6 +151,9 @@ export async function tryRefresh(): Promise<boolean> {
 
 // ★ [P3 · 2026-11-12] 端侧能力声明（契约附录 订正 24 §3）。
 import { clientCapabilityHeader } from "./client-capabilities";
+// ★ [2026-11-16] **「这一行是不是系统注记」的判据** —— web 是原件端，PC 端逐字抄那一份。
+//   ⛔ 本文件**不许**另写一份判据（两端漂了就对不上）。
+import { isSystemNoticeMetadata } from "./sse/turn-identity";
 
 export async function request<T>(
   path: string,
@@ -398,6 +401,17 @@ export interface ChatMessage {
    *   老服务端 / 老数据没有 ⇒ undefined ⇒ 端侧回落老的启发式, 行为不变。
    */
   turnKey?: string | null;
+  /**
+   * ★ [2026-11-16] **这一行是不是「服务端投递的系统注记」**（不是用户说的话）。
+   *
+   *   服务端起轮（订正 30）时落了一条 `role='user'` 的消息行 ⇒ 光看 role
+   *   分不出来 ⇒ 端侧靠 `metadata.source` / `metadata.skip_transcript` 认它
+   *   ⇒ 渲染成**系统注记**（不是用户气泡、也不给用户消息专属操作）。
+   *
+   *   ⚠️ **判据只有一处**：`src/lib/sse/turn-identity.ts` 的
+   *     `isSystemNoticeMetadata()`（web 是原件端 · PC 端逐字抄那一份）。
+   */
+  isSystemNotice?: boolean;
   /**
    * ★ [订正 28 · L-28r] **收件箱行 id** —— 服务端在「补充」落库时写的
    *   `metadata.inbox_id`。
@@ -696,6 +710,12 @@ export async function getHistory(chatId: string): Promise<{
     // ★ v2 (契约订正 16): 这一行的**轮次身份** (`metadata.turnKey`)。
     //   与流式帧顶层的 turnKey 是**同一个值** ⇒ 两边可精确认亲 (空气泡根治)。
     let turnKey: string | null | undefined;
+    // ★ [2026-11-16] **这一行是不是「服务端投递的系统注记」**（不是用户说的话）。
+    //   · 服务端起轮（订正 30）落的 user 行 role 仍是 'user' ⇒ 光看 role 分不出来
+    //     ⇒ 端侧靠 metadata.source / metadata.skip_transcript 认它。
+    //   · ⚠️ **判据只有一处**：`lib/sse/turn-identity.ts` 的 `isSystemNoticeMetadata()`
+    //     （web 是原件端 · PC 端逐字抄那一份 ⇒ 两端不可能漂）。
+    let isSystemNotice = false;
     // ★ [订正 28 · L-28r] **收件箱行 id** (`metadata.inbox_id`) ——
     //   「补充」那条 (服务端 flush 时写的 user 行) ⇒ 端侧算合成 id
     //   `supplement:<inbox_id>` ⇒ 跟直播时插的那条**是同一条** (不重复显示)。
@@ -709,6 +729,8 @@ export async function getHistory(chatId: string): Promise<{
         // 知识库引用 id — 跟 web api.ts:552 同一口径 (只认数组, 元素原样透传).
         if (Array.isArray(meta?.knowledge_refs)) knowledgeRefs = meta.knowledge_refs as string[];
         if (typeof meta?.turnKey === "string" && meta.turnKey) turnKey = meta.turnKey;
+        // ★ [2026-11-16] 系统注记判据（唯一一份 · web 是原件端）。
+        isSystemNotice = isSystemNoticeMetadata(meta);
         if (meta?.inbox_id != null && meta.inbox_id !== "") {
           inboxId = String(meta.inbox_id);
         }
@@ -739,6 +761,8 @@ export async function getHistory(chatId: string): Promise<{
       knowledgeRefs,
       // ★ v2 (契约订正 16): 这一行的**轮次身份** —— 与流式帧顶层 turnKey 同值。
       turnKey,
+      // ★ [2026-11-16]: 这一行是不是系统注记（判据见 lib/sse/turn-identity.ts）。
+      isSystemNotice,
       // ★ [订正 28 · L-28r] 这一行是「补充」(会话收件箱) ⇒ 端侧按它算合成 id。
       inboxId,
       // 阶段 8: 撤回态 — server listChatMessages 已过滤 deletedAt,

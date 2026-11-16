@@ -166,6 +166,17 @@ export interface MessageBubbleProps {
   // ============== 0.7.5 ChatDetail P1 增量 ==============
   /** chat-id-9: server metadata.knowledge_refs (用户本轮挂载的 atom id 列表) */
   knowledgeRefs?: string[];
+  /**
+   * ★ [2026-11-16] **系统注记**（服务端投递的机器事件行）—— 不是用户说的话。
+   *
+   *   · 服务端起轮（订正 30）时落的 `role='user'` 行，metadata 带
+   *     `source='work_unit_result'` / `skip_transcript=true`
+   *     （判据见 `src/lib/sse/turn-identity.ts` 的 `isSystemNoticeMetadata`）。
+   *   ⇒ 渲染成**居中浅色提示条**，**不是**橙色用户气泡；
+   *   ⇒ **不出现**撤回 / 删除 这类**用户消息专属**操作（早返回 ⇒ 整个 ⋮ 菜单不渲染）。
+   *   ⚠️ 正文由**服务端**写 ⇒ 端侧只**显示**，**绝不本地合成**（契约 §4.2）。
+   */
+  isSystemNotice?: boolean;
   /** chat-id-40: server metadata.quoted_message_id / quoted_content */
   quotedMessageId?: string | null;
   quotedContent?: string | null;
@@ -752,8 +763,25 @@ export function MessageBubble(props: MessageBubbleProps & { messageId: string })
     phases,
     stripImageUrls,
     callTree,
+    isSystemNotice,
     ...rest
   } = props;
+  // ★ [2026-11-16] **系统注记**（服务端投递的机器事件行）—— 不是用户说的话。
+  //   · 服务端起轮（订正 30）时落的 role='user' 行，metadata 带
+  //     `source='work_unit_result'` / `skip_transcript=true`
+  //     （判据见 `src/lib/sse/turn-identity.ts` 的 `isSystemNoticeMetadata`）。
+  //   ⇒ 渲染成**居中浅色提示条**，**不是**橙色用户气泡；
+  //   ⇒ **不出现**撤回 / 删除 这类**用户消息专属**操作（早返回 ⇒ 整个 ⋮ 菜单不渲染）。
+  //   ⚠️ 正文由**服务端**写 ⇒ 端侧只**显示**，**绝不本地合成**（契约 §4.2）。
+  if (isSystemNotice) {
+    return (
+      <div className="flex justify-center" data-testid="system-notice">
+        <div className="max-w-[80%] rounded-lg border border-border bg-bg-sunken/60 px-3 py-1.5 text-xs text-fg-muted">
+          {rest.content}
+        </div>
+      </div>
+    );
+  }
   const bubbleProps = {
     ...rest,
     knowledgeRefs,

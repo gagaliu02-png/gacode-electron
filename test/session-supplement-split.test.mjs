@@ -279,6 +279,9 @@ test("GC-P28-S5 历史行（metadata.inbox_id）⇒ 同一个合成 id", async (
   // 加载 api.ts（真源码）⇒ 用桩 fetch 打一发 getHistory。
   writeModule(dir, "notifications", repoSrc("src/lib/notifications.ts"));
   writeModule(dir, "client-capabilities", repoSrc("src/lib/client-capabilities.ts"));
+  // ★ [2026-11-16] api.ts 的**运行时**依赖多了一个 `./sse/turn-identity`
+  //   （系统注记判据 · web 是原件端 · PC 逐字抄那一份；零 import ⇒ 不带别的）。
+  writeModule(dir, "turn-identity", repoSrc("src/lib/sse/turn-identity.ts"));
   const api = await import(
     writeModule(dir, "api", repoSrc(API), {
       rewriteImports: [
@@ -286,6 +289,7 @@ test("GC-P28-S5 历史行（metadata.inbox_id）⇒ 同一个合成 id", async (
         ["sse/turn-key-header", "./turn-key-header.mjs"],
         ["notifications", "./notifications.mjs"],
         ["client-capabilities", "./client-capabilities.mjs"],
+        ["sse/turn-identity", "./turn-identity.mjs"],
       ],
     })
   );

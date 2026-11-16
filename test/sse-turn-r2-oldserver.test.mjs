@@ -113,6 +113,10 @@ const chatSse = await import(
 //     —— api.ts 的**运行时** import ⇒ 不带它就是 ERR_MODULE_NOT_FOUND。
 writeModule(dir, "notifications", repoSrc("src/lib/notifications.ts"));
 writeModule(dir, "client-capabilities", repoSrc("src/lib/client-capabilities.ts"));
+// ★ [2026-11-16] api.ts 的**运行时**依赖多了一个 `./sse/turn-identity`
+//   （「这一行是不是系统注记」的判据 · web 是原件端 · PC 逐字抄那一份）。
+//   ⚠️ turn-identity.ts **零 import** ⇒ 拷贝链不用再带别的。
+writeModule(dir, "turn-identity", repoSrc("src/lib/sse/turn-identity.ts"));
 const api = await import(
   writeModule(dir, "api", repoSrc("src/lib/api.ts"), {
     rewriteImports: [
@@ -120,6 +124,7 @@ const api = await import(
       ["sse/turn-key-header", "./turn-key-header.mjs"],
       ["notifications", "./notifications.mjs"],
       ["client-capabilities", "./client-capabilities.mjs"],
+      ["sse/turn-identity", "./turn-identity.mjs"],
     ],
   })
 );

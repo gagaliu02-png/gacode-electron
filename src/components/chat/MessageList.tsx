@@ -49,6 +49,15 @@ export interface ChatMessageModel {
    *   两者是**同一个值** ⇒ 「本地流式行 ↔ 服务端那一行」可精确认亲 (空气泡根治)。
    */
   turnKey?: string | null;
+  /**
+   * ★ [2026-11-16] **这一行是不是「服务端投递的系统注记」**（不是用户说的话）。
+   *
+   *   服务端起轮（订正 30）时落了一条 `role='user'` 的消息行 ⇒ 光看 role 分不出来
+   *   ⇒ 端侧靠 `metadata.source` / `metadata.skip_transcript` 认它（判据见
+   *   `src/lib/sse/turn-identity.ts` 的 `isSystemNoticeMetadata`）⇒ 渲染成
+   *   **系统注记**（居中浅色提示条），**不出现**用户消息专属操作。
+   */
+  isSystemNotice?: boolean;
   /** chat-id-40: server metadata.quoted_message_id / quoted_content */
   quotedMessageId?: string | null;
   quotedContent?: string | null;
@@ -198,6 +207,8 @@ export function MessageList({
               recalled={m.recalled}
               recalledAt={m.recalledAt}
               knowledgeRefs={m.knowledgeRefs}
+              // ★ [2026-11-16] 系统注记（服务端投递的机器事件行）⇒ 渲染成居中提示条。
+              isSystemNotice={m.isSystemNotice}
               quotedMessageId={m.quotedMessageId}
               quotedContent={m.quotedContent}
               phases={m.phases}

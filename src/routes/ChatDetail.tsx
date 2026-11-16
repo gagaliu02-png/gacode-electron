@@ -97,6 +97,15 @@ import { useChatStream } from "../lib/chat-stream";
 // ★ [订正 32 · 2026-11-15] 会话级「一条流」常驻订阅（GET /chat/subscribe）。
 //   ⛔ 纯增量：开关默认关 ⇒ 老路径（start / attach / turn_started）逐字不变。
 import { usePersistentSubscribe } from "../lib/chat-subscribe";
+// ★ [2026-11-16] **轮次/消息的「发起方」判据**（web 是原件端 · PC 端逐字抄那一份）。
+//   · `claimPersistentFrame` —— 常驻订阅路径**认领**帧顶层的 turnKey（问题 1 的修法）；
+//   · `resolveTurnOrigin`   —— 这一轮是用户发起的还是服务端起的后台回报轮（问题 2）；
+//   · `isSystemNoticeMetadata` —— 这一行是不是「机器投递」⇒ 渲染成系统注记（问题 3）。
+import {
+  claimPersistentFrame,
+  emptyPersistentTurnState,
+  type PersistentTurnState,
+} from "../lib/sse/turn-identity";
 import { notifyAiReplyArrived } from "../lib/chat-notifications";
 // ★ [订正 30 · 2026-11-15] 「服务端起轮了」的端内广播（观众侧）。
 import { subscribeTurnStarted } from "../lib/turn-started";
@@ -688,6 +697,28 @@ export function ChatDetail() {
       ) => void)
     | null
   >(null);
+  /**
+   * ★ [2026-11-16] **「我端侧发起过」的轮次身份集合**。
+   *
+   *   · 来源 ①：`sendNoStream`（建轮不建流）的 JSON 应答里的 `turnKey`
+   *     —— 服务端建轮那一刻就把它给了（比第一帧早）。
+   *   · 来源 ②：发起流路径的 `onTurnKey` 回调（响应头 `x-turn-key`）。
+   *
+   *   ⚠️ **只存内存**（`useRef`）—— 不落持久化（判据见 `lib/sse/turn-identity.ts`）。
+   *   ⚠️ 这个集合是「origin 判定」的**唯一**依据：常驻流里用户提问轮和后台回报轮
+   *     长得一模一样 ⇒ 靠「帧的 turnKey 在不在这个集合里」区分。
+   */
+  const ownTurnKeysRef = useRef<Set<string>>(new Set());
+  /**
+   * ★ [2026-11-16] **常驻订阅当前正在旁观的那一轮**（认领状态）。
+   *
+   *   · `turnKey` —— 这一轮的轮次身份（认领自帧顶层 ⇒ 老路径的「认领」修法搬到常驻流）；
+   *   · `origin` —— 这一轮是**用户发起**的还是**服务端起的后台回报轮**；
+   *   · `seq`    —— 切了几轮（旁观落点行的 id 唯一化用）。
+   */
+  const persistentTurnRef = useRef<PersistentTurnState>(
+    emptyPersistentTurnState(),
+  );
 
   // ══════════════════════════════════════════════════════════════════
   // ★ [2026-11-14 · 订正 28 · W5] **会话收件箱（队列）** + **按钮状态机**
@@ -820,6 +851,9 @@ export function ChatDetail() {
         // ★ v2 (契约订正 16): 这一行的**轮次身份** (metadata.turnKey) ——
         //   与流式行的 turnKey 同值 ⇒ 可精确判「是不是同一轮」。
         turnKey: m.turnKey ?? null,
+        // ★ [2026-11-16]: 这一行是不是「服务端投递的系统注记」（判据在
+        //   lib/sse/turn-identity.ts）⇒ 渲染成居中提示条，不是用户气泡。
+        isSystemNotice: m.isSystemNotice ?? false,
         // ★ [2026-11-13] 这一轮的执行时间（本地时钟兜底）—— 气泡上的「共执行 N 秒」。
         startedAt: timing?.startedAt ?? null,
         finishedAt: timing?.finishedAt ?? null,
@@ -1478,6 +1512,10 @@ export function ChatDetail() {
     turnWasSplitRef.current = false;
     handledSupplementIdsRef.current = new Set();
     streamingEventsRef.current = [];
+    // ★ [2026-11-16] 切会话 ⇒ **常驻流的轮次身份也要复位**（它跨会话存活）。
+    //   不复位 ⇒ 新会话的第一帧会被判成「切轮」（turnKey 与上一会话的不同）
+    //   ⇒ 认领状态带着上一会话的 seq ⇒ 落点行 id 不唯一。
+    persistentTurnRef.current = emptyPersistentTurnState();
   }, [chatId]);
 
   /**
@@ -2073,7 +2111,7 @@ export function ChatDetail() {
       // =========================================================================
       if (persistentOn) {
         try {
-          await stream.sendNoStream({
+          const sent = await stream.sendNoStream({
             message: text,
             sessionId: chatId,
             imageUrls,
@@ -2081,6 +2119,14 @@ export function ChatDetail() {
             knowledgeRefs,
             onChunk: () => {}, // 帧走常驻流，这里不收
           });
+          // ★ [2026-11-16] **记下「这一轮是我发起的」** ——
+          //   服务端建轮那一刻就把 turnKey 给了（比第一帧早）⇒ 端侧据此判
+          //   「这一轮是用户提问轮还是服务端起的后台回报轮」（判据见
+          //   `lib/sse/turn-identity.ts` 的 `resolveTurnOrigin`）。
+          //   ⚠️ **只存内存**（`ownTurnKeysRef`）—— 不落持久化。
+          if (sent?.turnKey) {
+            ownTurnKeysRef.current.add(sent.turnKey);
+          }
           // 发成功 ⇒ 等常驻流的帧。本轮「占着」的标记交给终态帧路径收口：
           //   handleStreamChunk 的 isTerminalDone 会 clearLocalRow；这里只把
           //   streamBusyRef 复位（泵队列不必等一条不存在的本地流）。
@@ -2235,6 +2281,12 @@ export function ChatDetail() {
               //   ⇒ 本机那一行从这一刻起就带 turnKey ⇒ 就算一个帧都没收到就被杀,
               //     回来时也能靠 turnKey **精确**认亲 (空气泡根治点)。
               onTurnKey: (tk) => {
+                // ★ [2026-11-16] **记下「这一轮是我发起的」** ——
+                //   响应头 `x-turn-key` 在第一帧之前就到了 ⇒ 端侧据此判
+                //   「这一轮是用户提问轮还是服务端起的后台回报轮」
+                //   （判据见 `lib/sse/turn-identity.ts` 的 `resolveTurnOrigin`）。
+                //   ⚠️ **只存内存**（`ownTurnKeysRef`）—— 不落持久化。
+                if (tk) ownTurnKeysRef.current.add(tk);
                 if (streamingTurnKeyRef.current) return;
                 streamingTurnKeyRef.current = tk;
                 setStreamingTurnKey(tk);
@@ -2445,6 +2497,41 @@ export function ChatDetail() {
         persistentCursorRef.current = c;
       },
       onChunk: (chunk, _cur) => {
+        // ★ [2026-11-16] **认领这一帧的轮次身份**（常驻订阅路径）。
+        //
+        //   病根（安卓 6f5f523 · 真机 2026-11-16）：「认领 turnKey」的判据**只在
+        //   发起流路径**里生效 ⇒ 订正 32 之后发消息走 `X-Stream-Mode: none` ⇒
+        //   帧从 **GET chat/subscribe 常驻流**回来 ⇒ **从不经过发起流路径** ⇒
+        //   本地那一行**永远拿不到 turnKey** ⇒ 归并层（按 turnKey 判「同一轮」）
+        //   配不上 ⇒ **本地行 + 服务端行 = 两个一模一样的气泡**。
+        //
+        //   ⇒ 常驻订阅路径**必须**认领帧顶层的 turnKey，并把它**落到本地那一行上**
+        //     （判据只有一处：`lib/sse/turn-identity.ts` 的 `claimPersistentFrame`）。
+        //
+        //   ⚠️ 顺带算出这一轮的**发起方**（用户提问轮 / 后台回报轮）—— 帧自带
+        //     `origin` 优先；没有 ⇒ 用「我发起过的轮」反推（判据同一处）。
+        const claim = claimPersistentFrame(
+          persistentTurnRef.current,
+          chunk,
+          ownTurnKeysRef.current,
+        );
+        if (claim.switched) {
+          persistentTurnRef.current = claim.state;
+          // ★ **切轮 ⇒ 本机那一行的身份要换**（否则归并层拿**上一轮**的 turnKey
+          //   去配服务端那一行 ⇒ 配不上 ⇒ 两个一模一样的气泡）。
+          //   ⚠️ **不**在这里清本机的行（那会把用户刚发的那一行也撤掉）——
+          //   行由终态帧路径（`isTerminalDone`）自己收口。
+          if (claim.state.turnKey) {
+            streamingTurnKeyRef.current = claim.state.turnKey;
+            setStreamingTurnKey(claim.state.turnKey);
+          }
+          // 机器起的一轮（后台作业回报）⇒ 服务端**自己写了**一条 user 行
+          //   （系统注记）⇒ 刷一次历史让那行立刻出现。
+          //   ⛔ 端侧**不合成**它（契约 §4.2 · 只渲染服务端写的那行）。
+          if (claim.origin === "work_unit_result") {
+            queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+          }
+        }
         // ⛔ 常驻观众不拥有轮次 ⇒ 用 "attach" 渲染语义（不建发起方本地行）。
         handleStreamChunkRef.current?.(chunk, "attach", null);
       },
