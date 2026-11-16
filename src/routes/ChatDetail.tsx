@@ -449,23 +449,29 @@ const EMPTY_STREAMING_TURN_META: StreamingTurnMeta = {
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 /**
- * ★ [订正 32] 「一条流」常驻订阅开关 —— **默认关**（灰度）。
+ * ★ [订正 32] 「一条流」常驻订阅开关 —— **默认开**（2026-11-16 联调起，与 web / 安卓对齐）。
  *
- *   · 开：会话页建一条 GET /chat/subscribe 常驻 SSE（跨轮存活收帧）；
+ *   · 开（默认）：会话页建一条 GET /chat/subscribe 常驻 SSE（跨轮存活收帧）；
  *          发消息走 `X-Stream-Mode: none`（建轮不建流，帧回常驻流）；
  *          后台回报轮（服务端起轮）的帧也直接到常驻流 ⇒ 不再依赖通知流信号。
  *   · 关：老路径逐字不变（start 一轮一连接 + attach 接回 + turn_started 自动 attach）。
  *
  * ⚠️ 服务端回滚 / subscribe 返回 404/409 ⇒ 运行时**自动关**（见常驻 effect 的 onError）
  *    ⇒ 端侧退回老流程，无需发版。
- * 打开方式：localStorage `gacode:persistentStream=1`（真机验收用）；将来改默认即可全量。
+ * 手动关：localStorage `gacode:persistentStream=0`（想退回老路径时用）。
  */
 function persistentStreamEnabled(): boolean {
   try {
     if (typeof window === "undefined") return false;
-    return window.localStorage?.getItem("gacode:persistentStream") === "1";
+    // ★ [订正 32 · 2026-11-16] **默认开**（与 web / 安卓对齐 —— 三端都直接走常驻订阅）。
+    //   灰度期是「默认关 + localStorage=1 开」，联调开始后翻成「默认开 + localStorage=0 关」。
+    //   ⛔ 显式设了 "0" 才关 ⇒ 运行时想退回老路径仍有一条路（不用发版）。
+    //   ⛔ 服务端回滚 / subscribe 404/409 ⇒ 运行时自动关（见常驻 effect 的 onError）⇒ 退老流程。
+    const v = window.localStorage?.getItem("gacode:persistentStream");
+    if (v === "0" || v === "false" || v === "off") return false;
+    return true;
   } catch {
-    return false;
+    return true;
   }
 }
 
