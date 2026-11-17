@@ -38,6 +38,15 @@ import { LoaderCircleIcon, StopSquareIcon } from "../ui/Glyphs";
 /** 轮询间隔（毫秒）—— 作业状态会自己变（跑完 / 被停）。 */
 const REFRESH_MS = 5000;
 
+/**
+ * ★ [2026-11-17] 已结束作业在 UI 上最多显示几条。
+ *
+ * 本地记录一条不删、日志也不删（PM 拍板）⇒ 界面上不能无限堆，否则越看越长。
+ * ⇒ 「在跑的」全显示（那是用户当下要管的），「已结束的」只显示最近 10 条。
+ * ⚠️ 这里**只是显示截断**，不影响任何数据（刷新/订阅拿到的还是完整列表）。
+ */
+const MAX_SETTLED_SHOWN = 10;
+
 /** 服务 id → 人话类型名（`title` 缺省时的兜底）。 */
 const KIND_BY_SERVICE: Record<string, string> = {
   claude: "Claude Code",
@@ -195,11 +204,15 @@ export function BackgroundJobsSection() {
   );
 
   // 还在跑的排前面 ⇒ 用户先看到「还挂着的」；其余按开始时间倒序。
-  const { active, settled } = useMemo(() => {
+  // ★ [2026-11-17] 已结束的**只显示最近 10 条**（本地记录不删，只是 UI 截断）。
+  const { active, settled, settledHidden } = useMemo(() => {
     const sorted = [...jobs].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+    const activeJobs = sorted.filter(isActive);
+    const allSettled = sorted.filter((j) => !isActive(j));
     return {
-      active: sorted.filter(isActive),
-      settled: sorted.filter((j) => !isActive(j)),
+      active: activeJobs,
+      settled: allSettled.slice(0, MAX_SETTLED_SHOWN),
+      settledHidden: Math.max(0, allSettled.length - MAX_SETTLED_SHOWN),
     };
   }, [jobs]);
 
@@ -292,6 +305,11 @@ export function BackgroundJobsSection() {
               </div>
             );
           })}
+          {settledHidden > 0 ? (
+            <div className="text-[10px] text-fg-subtle">
+              更早的 {settledHidden} 条已隐藏（记录仍保留在本机，只是不显示）
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

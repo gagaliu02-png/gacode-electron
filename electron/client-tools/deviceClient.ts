@@ -51,6 +51,8 @@ import { buildCapabilityString, probeJobExecutor } from './jobCapability.ts';
 import { hasBrowserTabPool } from './browser.ts';
 import { emitJobsChanged } from './jobView.ts';
 import type { JobReportPayload } from './jobReporter.ts';
+// ★ [2026-11-17] 解绑 / 登出 ⇒ 清掉上一账号在本机的作业 / 派单 / 审计记录。
+import { clearAccountScopedLocalData } from './accountScope.ts';
 
 // ===========================================================================
 // 配置
@@ -506,6 +508,10 @@ class DeviceClient {
         return false;
       }
       logDevice(`登出 ⇒ 已解绑这台设备（deviceId=${deviceId}）`);
+      // ★ [2026-11-17] 换账号上来应该是**对应账号的记录** ⇒ 清掉本机上一账号的作业痕迹。
+      //   ⚠️ 先停任务再清（stopAllTasks 会读 job 表）⇒ 这里只清文件，不阻塞登出。
+      const cleared = clearAccountScopedLocalData();
+      logDevice(`登出 ⇒ 已清掉 ${cleared} 项上一账号的本机记录（作业 / 派单 / 审计）`);
       return true;
     } catch (e) {
       logDevice(`登出解绑异常: ${e && (e as Error).message}`);
@@ -550,7 +556,11 @@ class DeviceClient {
       this.markUnbound(true, 'manual');
       this.disconnect();
       this.stopAllTasks();
-      logDevice(`已解绑 deviceId=${deviceId}（本机停止接收派单）`);
+      // ★ [2026-11-17] 解绑 ⇒ 清掉本机上一账号的作业 / 派单 / 审计记录
+      //   （PM：换账号上来就应该是对应账号的记录）。
+      const cleared = clearAccountScopedLocalData();
+      logDevice(`已解绑 deviceId=${deviceId}（本机停止接收派单；清掉 ${cleared} 项本机记录）`);
+      emitJobsChanged(); // 通知 UI：作业列表已经清空
       return { ok: true };
     } catch (e) {
       const error = `解绑异常: ${e && (e as Error).message}`;
