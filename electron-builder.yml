@@ -133,6 +133,8 @@ productName: Gacode
 buildVersion: 0.7.26
 copyright: Copyright © 2026 gaga
 
+afterPack: scripts/after-pack-rcedit.cjs
+
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
@@ -185,6 +187,9 @@ publish:
   releaseType: release
 
 win:
+  # ★ [2026-11-17] electron-builder 自己那次 rcedit 调用必失败（多个 version-string + icon 同调
+  #   ⇒ rcedit 0.2.0 的资源节 bug）⇒ 交给 afterPack 分两步做（scripts/after-pack-rcedit.cjs）。
+  signAndEditExecutable: false
   target:
     - target: nsis
       arch:
