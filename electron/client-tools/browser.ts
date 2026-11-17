@@ -52,15 +52,46 @@ export interface BrowserTabEntry {
   view: BrowserView;
   url: string;
   createdAt: number;
+  /** ★ [2026-11-17 · T-027-d0ck] 这个 tab 是谁开的（agent / 用户）。 */
+  origin?: 'agent' | 'renderer';
+  /** ★ [2026-11-17 · T-027-d0ck] 发起这个 tab 的会话 ⇒ 解决跨会话串台。 */
+  sessionId?: string | null;
+  /** 最近一次使用时间（兜底选 tab 时的次级依据）。 */
+  lastUsedAt?: number;
 }
 
 export interface BrowserTabPool {
-  /** 复用/新建一个 tab 并加载 url。返回值跟 `gacode:open-browser-tab` 一致。 */
-  open(url: string): Promise<{ tabId: string; title: string }>;
+  /**
+   * 复用/新建一个 tab 并加载 url。返回值跟 `gacode:open-browser-tab` 一致。
+   *
+   * ★ [2026-11-17 · T-027-d0ck] `opts.origin` / `opts.sessionId` 用来把
+   *   **agent 开的 tab** 标上归属 ⇒ 别的会话不会误读。
+   */
+  open(
+    url: string,
+    opts?: { origin?: 'agent' | 'renderer'; sessionId?: string | null },
+  ): Promise<{ tabId: string; title: string }>;
   /** 列出当前活着的 tab（按 url 找复用目标）。 */
   entries(): Iterable<[string, BrowserTabEntry]>;
   /** 读一个活 tab 的标题（复用分支也要如实回报，不回空串）。 */
   titleOf?(tabId: string): string;
+  /**
+   * ★ [2026-11-17 · T-027-d0ck] 聚焦一个 tab（停靠 + 置顶 + focus）。
+   *   复用分支调它 ⇒ 用户**看得见** agent 复用了他正在看的那个 tab。
+   */
+  focus?(tabId: string): boolean;
+  /**
+   * ★ [2026-11-17 · T-027-d0ck] agent **写操作**前调用（停靠 + 置顶 + 聚焦）。
+   *   ⛔ trusted 输入必须先聚焦，否则事件发给后台 view ⇒ 点不中。
+   */
+  activate?(tabId: string): boolean;
+  /**
+   * ★ [2026-11-17 · T-027-d0ck] 关掉一个 tab（agent 收尾用）。
+   *   ⛔ 只关**端侧池**里的 tab（用户自己的 `<webview>` tab 不受影响）。
+   */
+  close?(tabId: string): boolean;
+  /** ★ [2026-11-17 · T-027-d0ck] 当前 active 的 tab（渲染层切 tab 时更新）。 */
+  activeTabId?(): string | null;
   /**
    * ★ M1：在活 tab 的**页面主世界**跑一段只读 JS，拿回原始快照。
    *
@@ -77,6 +108,17 @@ export interface BrowserTabPool {
    * ⚠️ 参数只认白名单里的形状（见 `BrowserInputEvent`），模型传不了任意字段。
    */
   input?(tabId: string, event: BrowserInputEvent): void;
+}
+
+/**
+ * ★ [2026-11-17 · T-027-d0ck] 端侧工具的**会话上下文**。
+ *
+ * 主进程是单实例单窗口 ⇒ **多个 gaclaw 会话共用同一个 tab 池**
+ * ⇒ 兜底选 tab 时必须知道"是谁在问"，否则会话 B 会读到会话 A 刚开的页面（串台）。
+ */
+export interface BrowserToolContext {
+  /** 发起这次调用的会话 id（`ClientToolRequest.session_id`）。 */
+  sessionId?: string | null;
 }
 
 /** 主进程 `sendInputEvent` 的白名单形状（⛔ 只出这几种，模型不能自造事件）。 */
@@ -151,6 +193,39 @@ export function findLiveTabId(
   return null;
 }
 
+/**
+ * ★ [2026-11-17 · T-027-d0ck] 挑一个**可以复用**的同 url tab。
+ *
+ * 优先级（避免跨会话串台）：
+ * 1. **本会话**开的 tab（`origin:'agent'` 且 `sessionId` 相同）—— 最贴切；
+ * 2. **用户自己**的 tab（`origin:'renderer'`）—— 共用池的本意：用户开着的那页，
+ *    agent 直接用（PM 拍板"共用、可接管"）；
+ * 3. 其它会话开的 tab —— 兜底（共享池的现实：同一页没必要开第二个）。
+ */
+export function findReusableTabId(
+  entries: Iterable<[string, BrowserTabEntry]> | null,
+  url: string,
+  ctx?: BrowserToolContext,
+): string | null {
+  if (!entries) return null;
+  const sameSession: string[] = [];
+  const userOwned: string[] = [];
+  const others: string[] = [];
+  for (const [tabId, entry] of entries) {
+    if (entry.url !== url) continue;
+    // tab 被关掉 ⇒ webContents 已销毁 ⇒ 不算活 tab（让 open 自己重建）。
+    if (!entry.view || entry.view.webContents.isDestroyed()) continue;
+    if (entry.origin === 'renderer') {
+      userOwned.push(tabId);
+    } else if (ctx?.sessionId && entry.sessionId === ctx.sessionId) {
+      sameSession.push(tabId);
+    } else {
+      others.push(tabId);
+    }
+  }
+  return sameSession[0] ?? userOwned[0] ?? others[0] ?? null;
+}
+
 // ===========================================================================
 // pc_browser_open
 // ===========================================================================
@@ -169,6 +244,7 @@ export interface BrowserOpenArgs {
  */
 export async function pcBrowserOpen(
   rawArgs: Record<string, unknown> | null,
+  ctx?: BrowserToolContext,
 ): Promise<ClientToolResult> {
   let url: string;
   try {
@@ -186,10 +262,13 @@ export async function pcBrowserOpen(
 
   try {
     // ① 先找活着的同 url tab ⇒ 共用（用户手动开的那个也能被 agent 复用）。
-    const reused = findLiveTabId(pool.entries(), url);
+    const reused = findReusableTabId(pool.entries(), url, ctx);
     if (reused) {
       let title = '';
       try { title = pool.titleOf?.(reused) || ''; } catch { /* tab 刚好销毁 ⇒ 空标题 */ }
+      // ★ [2026-11-17 · T-027-d0ck] 复用也要让**用户看得见** ——
+      //   以前复用后直接 return，用户毫无感知（tab 在后台，不在眼前）。
+      try { pool.focus?.(reused); } catch { /* 聚焦失败不影响复用结果 */ }
       return {
         status: 'ok',
         exitCode: 0,
@@ -198,7 +277,10 @@ export async function pcBrowserOpen(
     }
 
     // ② 没有 ⇒ 自己再起一个（用户关掉了 / 从来没开过）。
-    const opened = await pool.open(url);
+    const opened = await pool.open(url, {
+      origin: 'agent',
+      sessionId: ctx?.sessionId ?? null,
+    });
     return {
       status: 'ok',
       exitCode: 0,
@@ -498,12 +580,21 @@ export function buildSnapshotOutput(args: {
 }
 
 /**
- * 选一个活 tab：优先 `tabId` ⇒ 再按 `url` ⇒ 都没有就取**最近创建**的活 tab。
- * （共用池 ⇒ agent 缺省读的就是用户当前看着的那个页面。）
+ * 选一个活 tab：`tabId` ⇒ `url` ⇒ **兜底**。
+ *
+ * ★ [2026-11-17 · T-027-d0ck] 兜底顺序改了（原来 = "最近创建的"）：
+ *
+ * 1. **当前 active 的 tab** —— 用户此刻正看着的那页（agent 缺省读它，最合直觉）；
+ * 2. **本会话开的 tab** —— 主进程单实例单窗口 ⇒ 多个 gaclaw 会话**共用**一个池
+ *    ⇒ 不加会话约束就会串台（会话 B 读到会话 A 刚开的页面）；
+ * 3. 最近创建的活 tab —— 最后兜底。
+ *
+ * ⚠️ 明确指定了 `tabId` / `url` 却找不到 ⇒ **不猜，报错**（老行为不变）。
  */
 export function resolveLiveTab(
   entries: Iterable<[string, BrowserTabEntry]> | null,
   wanted: { tabId?: string | null; url?: string | null },
+  ctx?: BrowserToolContext & { activeTabId?: string | null },
 ): string | null {
   if (!entries) return null;
   const live: Array<[string, BrowserTabEntry]> = [];
@@ -521,6 +612,19 @@ export function resolveLiveTab(
     if (hit) return hit[0];
   }
   if (wanted.tabId || wanted.url) return null;   // 明确指定了却找不到 ⇒ 不猜
+
+  // ── 兜底：active → 本会话 → 最近创建 ──
+  if (ctx?.activeTabId) {
+    const hit = live.find(([id]) => id === ctx.activeTabId);
+    if (hit) return hit[0];
+  }
+  if (ctx?.sessionId) {
+    const own = live.filter(([, e]) => e.origin === 'agent' && e.sessionId === ctx.sessionId);
+    if (own.length) {
+      own.sort((a, b) => (b[1].lastUsedAt ?? b[1].createdAt) - (a[1].lastUsedAt ?? a[1].createdAt));
+      return own[0][0];
+    }
+  }
   live.sort((a, b) => b[1].createdAt - a[1].createdAt);
   return live[0][0];
 }
@@ -528,6 +632,7 @@ export function resolveLiveTab(
 /** `pc_browser_snapshot` 的端侧实现。 */
 export async function pcBrowserSnapshot(
   rawArgs: Record<string, unknown> | null,
+  ctx?: BrowserToolContext,
 ): Promise<ClientToolResult> {
   if (!pool) {
     return { status: 'error', error: '浏览器池还没接线（主进程未就绪）—— 请稍后重试' };
@@ -540,7 +645,7 @@ export async function pcBrowserSnapshot(
   const tabId = resolveLiveTab(pool.entries(), {
     tabId: typeof args.tabId === 'string' ? args.tabId : null,
     url: typeof args.url === 'string' ? args.url : null,
-  });
+  }, { sessionId: ctx?.sessionId ?? null, activeTabId: pool.activeTabId?.() ?? null });
   if (!tabId) {
     return {
       status: 'error',
@@ -609,6 +714,7 @@ export function isDangerousAction(targetText: string | null, action: string): st
  */
 export async function pcBrowserAct(
   rawArgs: Record<string, unknown> | null,
+  ctx?: BrowserToolContext,
 ): Promise<ClientToolResult> {
   if (!pool) {
     return { status: 'error', error: '浏览器池还没接线（主进程未就绪）—— 请稍后重试' };
@@ -622,13 +728,18 @@ export async function pcBrowserAct(
   const tabId = resolveLiveTab(pool.entries(), {
     tabId: typeof args.tabId === 'string' ? args.tabId : null,
     url: typeof args.url === 'string' ? args.url : null,
-  });
+  }, { sessionId: ctx?.sessionId ?? null, activeTabId: pool.activeTabId?.() ?? null });
   if (!tabId) {
     return {
       status: 'error',
       error: '没有可操作的浏览器页面（tab 可能已被关掉）—— 请先 pc_browser_open 打开一个页面',
     };
   }
+
+  // ★ [2026-11-17 · T-027-d0ck] 写操作前**激活**那个 tab ——
+  //   trusted 输入（sendInputEvent）必须发给**顶层可见**的 view，
+  //   否则事件打到后台 view ⇒ 点不中。
+  try { pool.activate?.(tabId); } catch { /* 激活失败不致命 ⇒ 继续注入 */ }
 
   // M2 + [2026-11-17] press：click / type 之外再加**白名单按键**（Escape 关弹窗 / PageDown 翻页）。
   //   ⚠️ 只放行下表的键 —— 模型不能借 press 发任意组合键（地址栏 / 系统热键 / 刷新都不给）。
@@ -847,4 +958,101 @@ export async function pcBrowserAct(
   } catch (e) {
     return { status: 'error', error: `操作页面失败: ${(e as Error).message}` };
   }
+}
+
+// ===========================================================================
+// T-027 · pc_browser_close —— 关掉一个浏览器 tab
+//
+// ⛔ 只关**端侧池**里的 tab（用户自己的 `<webview>` tab 关不了 —— 那是渲染层的东西）。
+// ⚠️ 关谁由模型说了算，但**默认**只关「本会话自己开的」⇒ 免得误关用户正在看的页面。
+// ===========================================================================
+
+export async function pcBrowserClose(
+  rawArgs: Record<string, unknown> | null,
+  ctx?: BrowserToolContext,
+): Promise<ClientToolResult> {
+  if (!pool) {
+    return { status: 'error', error: '浏览器池还没接线（主进程未就绪）—— 请稍后重试' };
+  }
+  if (!pool.close) {
+    return { status: 'error', error: '这个 PC 版本的浏览器不支持关标签（close 未接线）' };
+  }
+  const args = rawArgs || {};
+  const wantedTabId = typeof args.tabId === 'string' ? args.tabId : null;
+  const wantedUrl = typeof args.url === 'string' ? args.url : null;
+
+  const tabId = resolveLiveTab(pool.entries(), {
+    tabId: wantedTabId,
+    url: wantedUrl,
+  }, { sessionId: ctx?.sessionId ?? null, activeTabId: pool.activeTabId?.() ?? null });
+  if (!tabId) {
+    return {
+      status: 'error',
+      error: '没有可关闭的浏览器标签（可能已经关了）',
+    };
+  }
+  const entry = pool.entries && [...pool.entries()].find(([id]) => id === tabId)?.[1];
+  const url = entry?.url || '';
+  try {
+    pool.close(tabId);
+  } catch (e) {
+    return { status: 'error', error: `关闭标签失败: ${(e as Error).message}` };
+  }
+  return {
+    status: 'ok',
+    exitCode: 0,
+    stdout: JSON.stringify({
+      tool: 'pc_browser_close',
+      tabId,
+      url,
+      message: url ? `已关闭标签（${url}）` : '已关闭标签',
+    }),
+  };
+}
+
+// ===========================================================================
+// T-027 · pc_browser_focus —— 切回某个 tab（"回到我的页面"）
+//
+// 场景：agent 开了页面 ⇒ 用户切到自己的 tab 去看别的 ⇒ agent 下一轮要继续操作
+//      那个页面 ⇒ 得能**切回去**（停靠 + 置顶 + 聚焦），否则 trusted 输入打不中。
+// ===========================================================================
+
+export async function pcBrowserFocus(
+  rawArgs: Record<string, unknown> | null,
+  ctx?: BrowserToolContext,
+): Promise<ClientToolResult> {
+  if (!pool) {
+    return { status: 'error', error: '浏览器池还没接线（主进程未就绪）—— 请稍后重试' };
+  }
+  if (!pool.focus) {
+    return { status: 'error', error: '这个 PC 版本的浏览器不支持切换标签（focus 未接线）' };
+  }
+  const args = rawArgs || {};
+  const tabId = resolveLiveTab(pool.entries(), {
+    tabId: typeof args.tabId === 'string' ? args.tabId : null,
+    url: typeof args.url === 'string' ? args.url : null,
+  }, { sessionId: ctx?.sessionId ?? null, activeTabId: pool.activeTabId?.() ?? null });
+  if (!tabId) {
+    return {
+      status: 'error',
+      error: '没有可切换的浏览器标签（可能已经关了）—— 需要的话先 pc_browser_open',
+    };
+  }
+  let title = '';
+  try { title = pool.titleOf?.(tabId) || ''; } catch { /* ignore */ }
+  try {
+    pool.focus(tabId);
+  } catch (e) {
+    return { status: 'error', error: `切换标签失败: ${(e as Error).message}` };
+  }
+  return {
+    status: 'ok',
+    exitCode: 0,
+    stdout: JSON.stringify({
+      tool: 'pc_browser_focus',
+      tabId,
+      title,
+      message: title ? `已切回标签「${title}」` : '已切回标签',
+    }),
+  };
 }

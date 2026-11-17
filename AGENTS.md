@@ -451,3 +451,75 @@ data: {"events":[{"type":"user_message_processed","inboxId":"123","processedAt":
 | `electron/client-tools/executor.ts` | 4 个 case + 默认超时 |
 | `electron/client-tools/jobCapability.ts` / `deviceClient.ts` | 能力串多 `claude-code=1` |
 | `test/pc-claude-code-tools.test.mjs` | 12 例（含「只读模块不写盘」断言） |
+
+---
+
+## 订正 33 · PC 浏览器停靠（agent 的 BrowserView 落进 `/browser` 页的 tab 内容区）
+
+> [2026-11-17 · T-027-d0ck] 契约来源：根目录 `TASK_BOARD.md` 的 `T-027-d0ck`
+> （根目录 `docs/` 不是 git 仓 ⇒ 关键条款复述在本文件 + commit message）。
+>
+> ### 问题
+>
+> 订正 31 之前，agent 开的 BrowserView 由主进程 `setBounds(整个窗口内容区)` 落位
+> ⇒ **盖住整个客户端**（侧栏 / tab 条 / 地址栏全没了），而且用户与 agent 是
+> **两套系统**（用户走渲染层 `<webview>`，agent 走主进程 `BrowserView`）⇒
+> 两条 tab 条各说各话。
+>
+> ### 三个硬事实（踩过才知道）
+>
+> 1. ⛔ **主进程对 React 侧栏（256px）/ tab 条 / 地址栏完全无感知** ——
+>    它只拿得到裸窗口矩形 ⇒ 停靠矩形**必须由渲染层上报**
+>    （`gacode:report-browser-rect` ⇒ `/browser` 页内容区的 `getBoundingClientRect()`）。
+> 2. ⛔ **隐藏 tab 不能缩尺寸** —— `BrowserView` 的 bounds 就是 guest 的**视口尺寸**
+>    ⇒ 缩到 0×0 会让页面重排（响应式站变形）且 `innerWidth/innerHeight` 变 0
+>    ⇒ 我们自己的「视口边界校验」会把所有点击判成屏幕外。
+>    ⇒ 隐藏 = **移出可视区但保持尺寸**（`parkBounds`：`x = -(w + 200)`）。
+> 3. ⛔ **主进程是单实例单窗口** ⇒ 多个 gaclaw 会话**共用同一个 tab 池**
+>    ⇒ 兜底选 tab 必须带会话口径，否则串台（会话 B 读到会话 A 刚开的页面）。
+>
+> ### 停靠契约（坐标系 = 窗口内容区左上角，单位 CSS px）
+>
+> | 谁 | 做什么 | 通道 |
+> |---|---|---|
+> | 渲染层 `/browser` 页 | 上报「内容区矩形」；离开该页时报 `null`（= 现在没有浏览器区） | `gacode:report-browser-rect` |
+> | 主进程池 | 记下矩形并**重放**给已停靠的 view；`null` ⇒ 全部停泊 | `electron/browser-views.ts` |
+> | 渲染层 | 切 tab ⇒ `gacode:set-browser-active-tab`（`null` = 用户切回自己的 tab ⇒ 停泊 agent 的 view） | 同名 IPC |
+> | 主进程 → 渲染层 | 「新开了一个 tab」事件（agent 开的 ⇒ 用户看得见） | `gacode:browser-tab-opened` |
+>
+> - ⛔ **没有渲染层上报的矩形 ⇒ 绝不停靠**（兜底成「整个窗口」就是回到老毛病）
+>   ⇒ 先停泊着，等渲染层选了它再显示。
+> - ⚠️ 停靠矩形不合法（尺寸 ≤ 0）⇒ **忽略这次上报**（不猜默认值）。
+>
+> ### 跨会话口径（兜底选 tab 的顺序）
+>
+> 1. `tabId` / `url` 明确指定（找不到 ⇒ **不猜，报错**）；
+> 2. **当前 active 的 tab**（用户此刻正看着的那页）；
+> 3. **本会话**开的 tab（`origin:'agent'` 且 `sessionId` 相同）；
+> 4. 最近创建的活 tab。
+>
+> 复用（`pc_browser_open` 命中同 url）时的优先级：**本会话 > 用户自己的 > 别的会话**。
+>
+> ### 端侧工具（本批新增两个「收尾」工具）
+>
+> | 工具 | 作用 | 备注 |
+> |---|---|---|
+> | `pc_browser_close` | 关掉池里的一个 tab（agent 收尾用） | ⛔ 关不掉用户自己的 `<webview>` tab |
+> | `pc_browser_focus` | **切回**某个 tab（用户抢走焦点后，agent 要回到自己的页面） | trusted 输入必须先聚焦才打得中 |
+>
+> - 服务端 spec 在 gaclaw `src/llm/client-tools.js` 的 `PC_TOOL_SPECS`
+>   （⛔ 不在 spec 里 ⇒ 模型压根调不到 ⇒ 端侧实现了也没用）。
+> - ⛔ 端侧**只负责跑 + 如实回报**（L-24n / L-25q）：stdout 只回一行紧凑 JSON。
+>
+> ### 落点
+>
+> | 文件 | 作用 |
+> |---|---|
+> | `electron/browser-views.ts`（新） | **BrowserView 生命周期的唯一出口**（`BrowserViewPool`）：create/dock/park/focus/destroy + 几何护栏。⛔ 只 `import type` electron ⇒ `node --test` 能直接加载 |
+> | `electron/main.ts` | 池接线（替掉裸 Map）+ 4 个新 IPC + `openBrowserTab(url, {origin, sessionId})` |
+> | `electron/client-tools/browser.ts` | 池接口加 `focus/activate/close/activeTabId`；`pc_browser_close` / `pc_browser_focus`；兜底选 tab 换顺序 |
+> | `src/lib/browser-tabs.ts`（新） | 渲染层「外部 tab」模块级 store（跨路由存活）+ `computeDockRect`（纯逻辑，可单测） |
+> | `src/routes/Browser.tsx` | tab 条**合并** agent 的 tab + 内容区当停靠占位 + 上报矩形 |
+> | `src/components/layout/AppShell.tsx` | 全局桥：不在 `/browser` 页也听得见 agent 开了什么；窗口在前台才跳页 |
+> | `shared/types.ts` / `electron/preload.ts` | 新 IPC 的类型与暴露 |
+> | `test/pc-browser-dock.test.mjs`（新） | 14 例（矩形应用 / 停泊尺寸守恒 / 不盖客户端 / 跨会话 / close / focus） |

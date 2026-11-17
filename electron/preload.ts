@@ -3,7 +3,10 @@ import * as os from 'os';
 import * as path from 'path';
 import type {
   BookmarkEntry,
+  BrowserDockRect,
   BrowserTabClosedEvent,
+  BrowserTabOpenedEvent,
+  BrowserTabSummary,
   ClientToolRequest,
   DeepLinkEvent,
   GacodeBridge,
@@ -100,6 +103,19 @@ contextBridge.exposeInMainWorld('gacode', {
   // Browser.tsx 主要用 `<webview>` 标签管 tab, 这条监听备用
   onBrowserTabClosed: (callback: (event: BrowserTabClosedEvent) => void): (() => void) =>
     listenMain<BrowserTabClosedEvent>('gacode:browser-tab-closed', (e) => callback(e)),
+
+  // ★ [2026-11-17 · T-027-d0ck] 停靠契约 ——
+  //   BrowserView 停到 `/browser` 页的**内容区**里（不是盖满窗口）。
+  reportBrowserRect: (rect: BrowserDockRect | null): void => {
+    ipcRenderer.send('gacode:report-browser-rect', { rect });
+  },
+  listBrowserTabs: (): Promise<BrowserTabSummary[]> =>
+    ipcRenderer.invoke('gacode:list-browser-tabs'),
+  setBrowserActiveTab: (tabId: string | null): void => {
+    ipcRenderer.send('gacode:set-browser-active-tab', { tabId });
+  },
+  onBrowserTabOpened: (callback: (event: BrowserTabOpenedEvent) => void): (() => void) =>
+    listenMain<BrowserTabOpenedEvent>('gacode:browser-tab-opened', (e) => callback(e)),
 
   // refresh-fix: refreshToken 持久化桥 — 主进程持有
   // %APPDATA%/Gacode/refresh-token.json, 渲染层走 IPC. AuthProvider 在

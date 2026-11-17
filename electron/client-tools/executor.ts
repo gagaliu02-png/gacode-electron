@@ -44,7 +44,7 @@ import {
   jobStop,
   startBackgroundJob,
 } from './backgroundJobs.ts';
-import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct } from './browser.ts';
+import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus } from './browser.ts';
 import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
 // ★ [2026-11-17 · T-022] 等端侧 Claude Code 的处理结果（前台等）
@@ -669,6 +669,8 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_browser_open: 30000,
   pc_browser_snapshot: 30000,
   pc_browser_act: 30000,
+  pc_browser_close: 15000,
+  pc_browser_focus: 15000,
   // [2026-11-17 · T-020] Claude Code 管控端侧工具
   pc_cc_sessions: 30000,
   pc_cc_read: 60000,
@@ -735,9 +737,12 @@ export async function executeClientTool(
     case 'pc_system_info': return pcSystemInfo(args);
     case 'pc_process_list': return pcProcessList(args);
     // [2026-11-15 · 订正 31 · M0/M1/M2] 浏览器：共用主进程 BrowserView tab 池
-    case 'pc_browser_open': return pcBrowserOpen(args);
-    case 'pc_browser_snapshot': return pcBrowserSnapshot(args);
-    case 'pc_browser_act': return pcBrowserAct(args);
+    case 'pc_browser_open': return pcBrowserOpen(args, { sessionId: opts?.sessionId ?? null });
+    case 'pc_browser_snapshot': return pcBrowserSnapshot(args, { sessionId: opts?.sessionId ?? null });
+    case 'pc_browser_act': return pcBrowserAct(args, { sessionId: opts?.sessionId ?? null });
+    // [2026-11-17 · T-027] 收尾两件套：关标签 / 切回自己的页面
+    case 'pc_browser_close': return pcBrowserClose(args, { sessionId: opts?.sessionId ?? null });
+    case 'pc_browser_focus': return pcBrowserFocus(args, { sessionId: opts?.sessionId ?? null });
     // [2026-11-17 · T-020] Claude Code 管控
     case 'pc_cc_sessions': return pcCcSessions(args);
     case 'pc_cc_read': return pcCcRead(args);

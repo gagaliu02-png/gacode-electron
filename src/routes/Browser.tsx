@@ -22,7 +22,7 @@
  *     change 事件触发更新)
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { BottomSheet } from "../components/ui/BottomSheet";
@@ -34,6 +34,12 @@ import {
   removeBookmark,
 } from "../lib/bookmarks";
 import { createLibraryItem, summarizeLink } from "../lib/api";
+import {
+  computeDockRect,
+  consumePendingSelectId,
+  getBrowserTabsSnapshot,
+  subscribeBrowserTabs,
+} from "../lib/browser-tabs";
 import type { BookmarkEntry } from "../../shared/types";
 import {
   ArrowLeftBarIcon,
@@ -135,6 +141,77 @@ export function Browser() {
   const active = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
   const isBookmarked = !!bookmarks.find((b) => b.url === active?.url);
 
+  // ★ [2026-11-17 · T-027-d0ck] agent 开的 BrowserView tab（主进程池里活着的那批）。
+  //   它们**不在** React state 里 ⇒ 用模块级 store（跨路由存活）。
+  const external = useSyncExternalStore(
+    subscribeBrowserTabs,
+    getBrowserTabsSnapshot,
+  );
+  const [activeExternalId, setActiveExternalId] = useState<string | null>(null);
+  /** 当前显示的是不是 agent 的那个 tab（是 ⇒ 用户的 webview 让位）。 */
+  const activeExternal = external.tabs.find((t) => t.id === activeExternalId) ?? null;
+  /** 内容区容器（停靠矩形的测量对象）。 */
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * ★ [2026-11-17 · T-027-d0ck] 把「内容区矩形」上报给主进程 ——
+   *   BrowserView 就停在这个矩形里（不是盖满整个窗口）。
+   *
+   * ⚠️ 为什么要渲染层报：主进程对 React 侧栏（256px）/ tab 条 / 地址栏**无感知**。
+   * ⚠️ 什么时候报：挂载、窗口 resize、页面滚动、内容区尺寸变化（ResizeObserver）。
+   */
+  const reportDockRect = useCallback(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const rect = computeDockRect(el, {
+      x: window.scrollX,
+      y: window.scrollY,
+    });
+    if (!rect) return;   // 尺寸非正 ⇒ 不报（主进程会沿用上一个合法矩形）
+    window.gacode?.reportBrowserRect?.(rect);
+  }, []);
+
+  useEffect(() => {
+    reportDockRect();
+    const el = contentRef.current;
+    if (!el || typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", reportDockRect);
+      window.addEventListener("scroll", reportDockRect, true);
+      return () => {
+        window.removeEventListener("resize", reportDockRect);
+        window.removeEventListener("scroll", reportDockRect, true);
+      };
+    }
+    const ro = new ResizeObserver(() => reportDockRect());
+    ro.observe(el);
+    window.addEventListener("resize", reportDockRect);
+    window.addEventListener("scroll", reportDockRect, true);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", reportDockRect);
+      window.removeEventListener("scroll", reportDockRect, true);
+    };
+  }, [reportDockRect]);
+
+  /**
+   * ★ [2026-11-17 · T-027-d0ck] 切到 agent 的 tab / 切回自己的 tab。
+   *
+   * - 切到 agent tab ⇒ 告诉主进程「把它停靠 + 置顶 + 聚焦」（trusted 输入才打得中）
+   * - 切回自己的 webview ⇒ 告诉主进程「把 agent 的 view 停泊（移出可视区但**不缩尺寸**）」
+   */
+  const selectExternalTab = useCallback((tabId: string) => {
+    setActiveExternalId(tabId);
+    window.gacode?.setBrowserActiveTab?.(tabId);
+    window.gacode?.focusBrowserTab?.(tabId);
+  }, []);
+
+  const selectUserTab = useCallback((tabId: string) => {
+    setActiveExternalId(null);
+    setActiveTabId(tabId);
+    // ⚠️ 先报 active 再改 React state（少一帧闪）
+    window.gacode?.setBrowserActiveTab?.(null);
+  }, []);
+
   // ★ [批 G19] 快捷网址 = 收藏夹前 5 条 (原来写死 3 个, 两个已失效)。
   const quickLinks = useMemo(() => bookmarks.slice(0, QUICK_LINKS_LIMIT), [bookmarks]);
 
@@ -231,6 +308,9 @@ export function Browser() {
         canGoForward: false,
       },
     ]);
+    // ★ [T-027] 回到用户自己的 tab ⇒ agent 的 view 停泊（让位）
+    setActiveExternalId(null);
+    window.gacode?.setBrowserActiveTab?.(null);
     setActiveTabId(id);
     recordHistory(url);
   };
@@ -305,6 +385,8 @@ export function Browser() {
         canGoForward: false,
       };
       setTabs([newTab]);
+      setActiveExternalId(null);
+      window.gacode?.setBrowserActiveTab?.(null);
       setActiveTabId(newTab.id);
       return;
     }
@@ -312,6 +394,8 @@ export function Browser() {
     setTabs((cur) => cur.filter((t) => t.id !== id));
     if (activeTabId === id) {
       const next = tabs[Math.max(0, idx - 1)] ?? tabs[1];
+      setActiveExternalId(null);
+      window.gacode?.setBrowserActiveTab?.(null);
       setActiveTabId(next?.id ?? "");
     }
   };
@@ -331,6 +415,8 @@ export function Browser() {
       canGoForward: false,
     };
     setTabs((cur) => [...cur, tab]);
+    setActiveExternalId(null);
+    window.gacode?.setBrowserActiveTab?.(null);
     setActiveTabId(id);
     setUrlInput("");
   };
@@ -592,12 +678,40 @@ export function Browser() {
       })
     : [];
 
+  /**
+   * ★ [2026-11-17 · T-027-d0ck] agent 新开 tab ⇒ **自动切过去**。
+   *
+   * PM 拍板「用户看得见 agent 开了什么」⇒ agent 开了页面就切到它，
+   * 用户随时能接管（切回自己的 tab 即可，agent 的 tab 只是被停泊，**还活着**）。
+   *
+   * ⚠️ 只认「**等着被选中**」那一个（store 里的 pendingSelectId）——
+   *    不能"看见 agent tab 就抢"：用户主动回来看历史 tab 时不该被劫持。
+   */
+  useEffect(() => {
+    const pending = consumePendingSelectId();
+    if (!pending) return;
+    if (!external.tabs.some((t) => t.id === pending)) return;
+    setActiveExternalId(pending);
+    window.gacode?.setBrowserActiveTab?.(pending);
+    window.gacode?.focusBrowserTab?.(pending);
+  }, [external.tabs]);
+
+  /**
+   * ★ [T-027] 离开 `/browser` 页 ⇒ 告诉主进程「现在没有浏览器区」⇒
+   *   agent 的 view **停泊**（移出可视区）⇒ 绝不盖住客户端其它页面。
+   */
+  useEffect(() => {
+    return () => {
+      window.gacode?.reportBrowserRect?.(null);
+    };
+  }, []);
+
   return (
     <div className="min-h-full flex flex-col">
       {/* tab bar */}
       <div className="shrink-0 flex items-center gap-1 px-3 py-2 bg-bg-elevated overflow-x-auto">
         {tabs.map((t) => {
-          const isActive = t.id === activeTabId;
+          const isActive = t.id === activeTabId && !activeExternal;
           return (
             <div
               key={t.id}
@@ -609,7 +723,7 @@ export function Browser() {
                   ? "bg-bg-elevated text-fg"
                   : "bg-bg-sunken text-fg-muted hover:text-fg",
               ].join(" ")}
-              onClick={() => setActiveTabId(t.id)}
+              onClick={() => selectUserTab(t.id)}
               role="tab"
               aria-selected={isActive}
             >
@@ -635,6 +749,44 @@ export function Browser() {
             </div>
           );
         })}
+        {/* ★ [2026-11-17 · T-027-d0ck] agent 开的 tab —— 跟用户 tab **同一条条** */}
+        {external.tabs.map((t) => {
+          const isActive = t.id === activeExternalId;
+          return (
+            <div
+              key={t.id}
+              className={[
+                "group inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm shrink-0",
+                "cursor-pointer",
+                "max-w-[200px]",
+                isActive
+                  ? "bg-bg-elevated text-fg"
+                  : "bg-bg-sunken text-fg-muted hover:text-fg",
+              ].join(" ")}
+              onClick={() => selectExternalTab(t.id)}
+              role="tab"
+              aria-selected={isActive}
+              title={t.url}
+            >
+              <span className="shrink-0" aria-hidden="true">
+                {t.origin === "agent" ? "🤖" : "◉"}
+              </span>
+              <span className="truncate">{t.title || hostFromUrl(t.url)}</span>
+              <button
+                type="button"
+                aria-label="关闭标签"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  window.gacode?.closeBrowserTab?.(t.id);
+                  setActiveExternalId((cur) => (cur === t.id ? null : cur));
+                }}
+                className="shrink-0 text-fg-muted hover:text-fg"
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
         <button
           type="button"
           aria-label="新建标签"
@@ -647,8 +799,12 @@ export function Browser() {
       </div>
 
       {/* webview 区域 — 进度条 + 当前 tab 的 webview */}
-      <div className="flex-1 relative bg-bg-base">
-        {active ? (
+      <div ref={contentRef} className="flex-1 relative bg-bg-base">
+        {activeExternal ? (
+          /* ★ [T-027] agent 的 BrowserView 停靠在这里（主进程画的，在渲染层之上）。
+             渲染层这块只留一个**空的占位**（尺寸 = 停靠矩形 ⇒ 主进程照着它落位）。 */
+          <div className="absolute inset-0" aria-label={`agent 标签 ${activeExternal.title}`} />
+        ) : active ? (
           <>
             {/* 进度条: 顶部 1px 高, 跟随 active.progress 变化. 0 不渲染. */}
             {active.progress > 0 ? (

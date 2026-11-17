@@ -88,6 +88,27 @@ export interface GacodeBridge {
    */
   onBrowserTabClosed: (callback: (event: BrowserTabClosedEvent) => void) => () => void;
 
+  // ── [2026-11-17 · T-027-d0ck] 停靠契约 ──────────────────────────────
+  //
+  // ★ 主进程对 React 侧栏 (256px) / tab 条 / 地址栏**完全无感知** ——
+  //   只拿得到裸窗口矩形 ⇒ agent 的 BrowserView 一开就盖满整个窗口。
+  //   ⇒ 由 `/browser` 页的**内容区**自己上报矩形，主进程重放给 BrowserView。
+
+  /**
+   * 上报「内容区矩形」—— BrowserView 就停到这个矩形里。
+   * ⚠️ 尺寸必须为正（否则主进程忽略这次上报，不猜默认值）。
+   */
+  reportBrowserRect: (rect: BrowserDockRect | null) => void;
+
+  /** 问主进程「现在有哪些 BrowserView tab」（用户切走路由再回来时对账）。 */
+  listBrowserTabs: () => Promise<BrowserTabSummary[]>;
+
+  /** 告诉主进程谁是当前 active 的 tab（agent 的兜底选 tab 要读它）。 */
+  setBrowserActiveTab: (tabId: string | null) => void;
+
+  /** 监听「主进程新开了一个 BrowserView tab」（agent 开的 ⇒ 用户看得见）。 */
+  onBrowserTabOpened: (callback: (event: BrowserTabOpenedEvent) => void) => () => void;
+
   /**
    * refreshToken 持久化桥 — 渲染层走 IPC, 主进程读写
    * `%APPDATA%/Gacode/refresh-token.json`. 文件权限 0600 (Windows 下 fs.chmod
@@ -422,6 +443,38 @@ export type GacodeMenuEvent = 'new-chat' | 'about';
 /** BrowserView 关闭事件载荷 (主进程 → 渲染层)。 */
 export interface BrowserTabClosedEvent {
   tabId: string;
+}
+
+/**
+ * ★ [2026-11-17 · T-027-d0ck] BrowserView 的落位矩形。
+ *
+ * 单位 = **CSS px**（渲染层 `getBoundingClientRect()` 的坐标系）。
+ * ⚠️ 原点在**窗口内容区**左上角（不是屏幕左上角）。
+ */
+export interface BrowserDockRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** ★ [2026-11-17 · T-027-d0ck] 主进程 BrowserView tab 的摘要（画 tab 条用）。 */
+export interface BrowserTabSummary {
+  tabId: string;
+  url: string;
+  title: string;
+  /** 谁开的：agent 开的 vs 用户自己开的。 */
+  origin: 'agent' | 'renderer';
+  active: boolean;
+  sessionId: string | null;
+}
+
+/** ★ [2026-11-17 · T-027-d0ck] 「主进程新开了一个 tab」事件载荷。 */
+export interface BrowserTabOpenedEvent {
+  tabId: string;
+  url: string;
+  title: string;
+  origin: 'agent' | 'renderer';
 }
 
 /** Deep link 唤起 (主进程 → 渲染层)。 */

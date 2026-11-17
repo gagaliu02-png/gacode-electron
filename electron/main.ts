@@ -19,6 +19,7 @@ import { registerClientToolIpc, setClientToolWindow } from './client-tools/ipc';
 // [2026-11-15 · 订正 31 · M0] 浏览器端侧工具 —— 把**现有** tab 池注给执行器
 //   （用户和 agent 共用同一个池；不另起窗口、不另建池）。
 import { setBrowserTabPool, clearElementIndex } from './client-tools/browser';
+import { BrowserViewPool, normalizeDockRect, type TabOrigin } from './browser-views';
 import { executeClientTool } from './client-tools/executor';
 import { getAppIcon, logIconStatus } from './icon';
 
@@ -176,36 +177,45 @@ function parseDeepLink(url: string): string | null {
 // 返 { tabId } 给渲染层。后续 close/focus 用 tabId。
 // 现实里渲染层 Browser.tsx 主要用 `<webview>` 标签管 tab, 这条 IPC 给
 // "外层链接" 留入口 (如 chat 内容里的 url → in-app browser)。
+//
+// ★ [2026-11-17 · T-027-d0ck] 所有 view 动作收进 `browser-views.ts` 的
+//   `BrowserViewPool`（生命周期唯一出口）⇒ 将来迁 `WebContentsView` 只改那一个文件。
 // =========================================================================
-const browserTabs = new Map<
-  string,
-  { view: BrowserView; url: string; createdAt: number }
->();
 
 function focusExistingTab(window: BrowserWindow, tabId: string): boolean {
-  const tab = browserTabs.get(tabId);
-  if (!tab) return false;
-  if (window.isDestroyed()) return false;
-  const rect = window.getContentBounds();
-  tab.view.setBounds({
-    x: 0,
-    y: 0,
-    width: rect.width,
-    height: rect.height,
-  });
-  window.setTopBrowserView(tab.view);
-  return true;
+  return browserPool.focus(tabId);
 }
 
 function relayoutBrowserTabs(window: BrowserWindow): void {
-  if (window.isDestroyed()) return;
-  const rect = window.getContentBounds();
-  for (const tab of browserTabs.values()) {
-    tab.view.setBounds({ x: 0, y: 0, width: rect.width, height: rect.height });
-  }
+  browserPool.relayout();
 }
 
 let mainWindow: BrowserWindow | null = null;
+
+/**
+ * ★ [2026-11-17 · T-027-d0ck] 池的宿主适配器。
+ *
+ * ⚠️ 主进程是**单实例单窗口**（`createWindow` 只跑一次）⇒ 这里的 `mainWindow`
+ *    引用是稳定的；但仍然写成**惰性**的（方法体里才读）⇒ 窗口还没建时也不炸。
+ */
+const browserViewHost = {
+  isDestroyed: (): boolean => !mainWindow || mainWindow.isDestroyed(),
+  addBrowserView: (view: BrowserView): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.addBrowserView(view);
+  },
+  removeBrowserView: (view: BrowserView): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.removeBrowserView(view);
+  },
+  setTopBrowserView: (view: BrowserView): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setTopBrowserView(view);
+  },
+  getContentBounds: (): { width: number; height: number } =>
+    mainWindow && !mainWindow.isDestroyed()
+      ? mainWindow.getContentBounds()
+      : { width: 0, height: 0 },
+};
+
+const browserPool = new BrowserViewPool(browserViewHost);
 
 // 标记"用户主动退出" —— 托盘菜单"退出"会触发 app.quit() → before-quit
 // 设这个 flag,让 BrowserWindow 的 close 事件不再被劫持,真正销毁 → app 退出。
@@ -314,14 +324,7 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     // 关闭时把 BrowserView 全清掉
-    for (const tab of browserTabs.values()) {
-      try {
-        mainWindow?.removeBrowserView(tab.view);
-      } catch {
-        /* ignore */
-      }
-    }
-    browserTabs.clear();
+    browserPool.destroyAll();
     mainWindow = null;
   });
 }
@@ -378,7 +381,10 @@ function registerBrowserCacheIpc(): void {
  * 返回值多加一个 `title` —— ⚠️ **向后兼容**：渲染层 / preload 只读 `tabId`，
  * 多一个字段不影响任何现有调用方。agent 侧需要 title 回报给模型。
  */
-async function openBrowserTab(target: string): Promise<{ tabId: string; title: string }> {
+async function openBrowserTab(
+  target: string,
+  opts?: { origin?: TabOrigin; sessionId?: string | null },
+): Promise<{ tabId: string; title: string }> {
   if (!mainWindow || mainWindow.isDestroyed()) {
     throw new Error('mainWindow not ready');
   }
@@ -398,26 +404,31 @@ async function openBrowserTab(target: string): Promise<{ tabId: string; title: s
   } catch (err) {
     console.warn(`[gacode-electron] BrowserView loadURL failed: ${target}`, err);
   }
-  const rect = mainWindow.getContentBounds();
-  view.setBounds({ x: 0, y: 0, width: rect.width, height: rect.height });
-  mainWindow.addBrowserView(view);
-  mainWindow.setTopBrowserView(view);
-  browserTabs.set(tabId, { view, url: target, createdAt: Date.now() });
+  const origin: TabOrigin = opts?.origin ?? 'renderer';
+  browserPool.add(tabId, view, {
+    url: target,
+    origin,
+    sessionId: opts?.sessionId ?? null,
+  });
+  // ★ [2026-11-17 · T-027-d0ck] 停靠到**渲染层上报的内容区矩形**
+  //   （还没上报过 ⇒ 池里兜底成整个内容区 ⇒ 至少不是 0×0）。
+  browserPool.dock(tabId);
   console.log(
-    `[gacode-electron] BrowserView opened: tabId=${tabId} url=${target}`,
+    `[gacode-electron] BrowserView opened: tabId=${tabId} url=${target} origin=${origin}`,
   );
   // tab 内 content 销毁时反向通知渲染层 (窗口关闭 / 外链 replace 等)
-  // ★ 从 Map 删掉这一条 ⇒ agent 下次按 url 找不到活 tab ⇒ 自己再开一个
+  // ★ 从池里摘掉这一条 ⇒ agent 下次按 url 找不到活 tab ⇒ 自己再开一个
   //   （PM 2026-11-15：「他发现关闭了，他自己再起来就行了」）。
   view.webContents.on('destroyed', () => {
-    const entry = browserTabs.get(tabId);
+    const entry = browserPool.get(tabId);
     if (entry) {
       try {
         mainWindow?.removeBrowserView(entry.view);
       } catch {
         /* ignore */
       }
-      browserTabs.delete(tabId);
+      // ⚠️ 只摘条目，不再 destroy（webContents 自己已经死了 ⇒ 再 destroy 会抛）
+      browserPool.forget(tabId);
       // ★ M1：tab 没了 ⇒ 它那份元素编号表也作废（M2 act 引用 ⇒ stale_element_ref）
       clearElementIndex(tabId);
     }
@@ -430,6 +441,16 @@ async function openBrowserTab(target: string): Promise<{ tabId: string; title: s
     title = view.webContents.getTitle() || '';
   } catch {
     /* webContents 刚好销毁 ⇒ 空标题，不让它把整次 open 弄失败 */
+  }
+  // ★ [2026-11-17 · T-027-d0ck] 通知渲染层"多了一个 tab"⇒ 用户在 `/browser` 页
+  //   的 tab 条上能看见 agent 开的这个（用户看得见 agent 开了什么，PM 拍板）。
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('gacode:browser-tab-opened', {
+      tabId,
+      url: target,
+      title,
+      origin,
+    });
   }
   return { tabId, title };
 }
@@ -445,23 +466,10 @@ function registerBrowserTabIpc(): void {
   ipcMain.on(
     'gacode:close-browser-tab',
     (_event, args: { tabId: string }) => {
-      const tab = browserTabs.get(args?.tabId);
+      const tab = browserPool.get(args?.tabId);
       if (!tab) return;
-      try {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.removeBrowserView(tab.view);
-        }
-        // removeBrowserView 会自动 destroy 内容; 再调一次确保回收
-        // (某些 Electron 版本必须显式 destroy)
-        try {
-          (tab.view.webContents as unknown as { destroy?: () => void }).destroy?.();
-        } catch {
-          /* ignore */
-        }
-      } catch (err) {
-        console.warn('[gacode-electron] closeBrowserView failed', err);
-      }
-      browserTabs.delete(args.tabId);
+      // ★ 走池的唯一出口（removeBrowserView + destroy + 摘条目）
+      browserPool.destroy(args.tabId);
       // ★ M1：手动关 tab 也作废编号表（destroyed 回调可能来不及带 tabId）
       clearElementIndex(args.tabId);
       console.log(
@@ -478,20 +486,79 @@ function registerBrowserTabIpc(): void {
     },
   );
 
+  // ★ [2026-11-17 · T-027-d0ck] 渲染层上报「内容区矩形」。
+  //   主进程对 React 侧栏（256px）/ tab 条 / 地址栏**完全无感知** ⇒ 只拿得到
+  //   裸窗口矩形 ⇒ 一开就盖满整个窗口。⇒ 由 `/browser` 页的内容区自己报。
+  ipcMain.on(
+    'gacode:report-browser-rect',
+    (_event, args: { rect: unknown }) => {
+      // ⛔ `rect = null` = 渲染层说「现在没有浏览器区」（用户离开了 `/browser` 页）
+      //   ⇒ 把 agent 的 view 停泊（移出可视区）⇒ 绝不盖住客户端其它页面。
+      if (args?.rect === null || args?.rect === undefined) {
+        browserPool.setContentRect(null);
+        return;
+      }
+      const rect = normalizeDockRect(args?.rect);
+      // ⛔ 不合法 ⇒ 如实忽略（不猜默认值）—— 池会继续用上一个合法矩形。
+      if (!rect) {
+        console.warn('[gacode-electron] report-browser-rect: 矩形不合法，已忽略');
+        return;
+      }
+      browserPool.setContentRect(rect);
+    },
+  );
+
+  // ★ [2026-11-17 · T-027-d0ck] 渲染层问「现在有哪些 BrowserView tab」
+  //   （用户切走 `/browser` 再回来时对账用）。
+  ipcMain.handle(
+    'gacode:list-browser-tabs',
+    () => browserPool.list(),
+  );
+
+  // ★ [2026-11-17 · T-027-d0ck] 渲染层切 tab ⇒ 主进程知道谁是 active
+  //   （agent 的兜底要读它 ⇒ 见 `browser.ts` 的 `resolveLiveTab`）。
+  //   ⛔ `tabId = null` ⇒ 用户切回了自己的 `<webview>` tab ⇒ 把 agent 的 view
+  //      **停泊**（移出可视区但**不缩尺寸**）⇒ 用户看得见自己的页面。
+  ipcMain.on(
+    'gacode:set-browser-active-tab',
+    (_event, args: { tabId: string | null }) => {
+      const tabId = args?.tabId ?? null;
+      if (!tabId) {
+        browserPool.parkAll();
+        browserPool.setActiveTab(null);
+        return;
+      }
+      browserPool.focus(tabId);
+    },
+  );
+
   // ★ [2026-11-15 · 订正 31 · M0] 把**同一个** tab 池注给端侧执行器。
-  //   entries() 直接给 Map（不是快照）⇒ 用户关 tab 后 Map 自动少一条，
+  //   entries() 直接给池（不是快照）⇒ 用户关 tab 后池里自动少一条，
   //   agent 按 url 找不到 ⇒ 自己重建（共用、可接管、不另起窗口）。
   setBrowserTabPool({
-    open: openBrowserTab,
-    entries: () => browserTabs,
+    open: (url: string, opts?: { origin?: TabOrigin; sessionId?: string | null }) =>
+      openBrowserTab(url, opts),
+    entries: () => browserPool.entries(),
     titleOf: (tabId) => {
-      const entry = browserTabs.get(tabId);
+      const entry = browserPool.get(tabId);
       if (!entry || entry.view.webContents.isDestroyed()) return '';
       try { return entry.view.webContents.getTitle() || ''; } catch { return ''; }
     },
-    // ★ M1：跑本模块生成的**固定只读脚本**（⛔ 模型参数不进 JS）
+    // ★ [2026-11-17 · T-027-d0ck] 复用分支也要让**用户看得见**（聚焦那个 tab）
+    focus: (tabId) => browserPool.focus(tabId),
+    // ★ [2026-11-17 · T-027-d0ck] agent 写操作前调用（停靠 + 置顶 + 聚焦）
+    activate: (tabId) => browserPool.activate(tabId),
+    // ★ [2026-11-17 · T-027-d0ck] 关标签（agent 收尾用）
+    close: (tabId) => {
+      const ok = browserPool.destroy(tabId);
+      if (ok) clearElementIndex(tabId);
+      return ok;
+    },
+    // 当前 active 的 tab（渲染层切 tab 时更新）
+    activeTabId: () => browserPool.getActiveTabId(),
+    // M1：跑本模块生成的**固定只读脚本**（⛔ 模型参数不进 JS）
     evalInTab: async (tabId, script) => {
-      const entry = browserTabs.get(tabId);
+      const entry = browserPool.get(tabId);
       if (!entry || entry.view.webContents.isDestroyed()) {
         throw new Error(`tab ${tabId} 已关闭`);
       }
@@ -502,7 +569,7 @@ function registerBrowserTabIpc(): void {
     //      InputEvent 联合 —— TS 判别不了自定义 union ⇒ 断言（字段已在 browser.ts 校验过）。
     //   ⚠️ 必须先把它 setTopBrowserView + focus —— 否则 click 事件被发给后台的 view，丢不掉。
     input: (tabId, ev) => {
-      const entry = browserTabs.get(tabId);
+      const entry = browserPool.get(tabId);
       if (!entry || entry.view.webContents.isDestroyed()) return;
       try {
         // 点击前确保这个 view 是顶层可交互的（setTopBrowserView 不够 —— 还要 focus）

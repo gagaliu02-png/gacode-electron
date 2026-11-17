@@ -64,6 +64,11 @@ import {
   formatUnreadBadge,
   NOTIFICATION_POLL_MS,
 } from "../../lib/notifications";
+// ★ [2026-11-17 · T-027-d0ck] 浏览器 tab 的全局桥（agent 开了什么 ⇒ 用户看得见）。
+import {
+  AGENT_TAB_OPENED_EVENT,
+  startBrowserTabBridge,
+} from "../../lib/browser-tabs";
 
 const SIDEBAR_WIDTH = "w-64";
 const RECENT_DEFAULT_LIMIT = 5;
@@ -220,8 +225,36 @@ export function AppShell({ children }: { children: ReactNode }) {
     [],
   );
 
-  const title = headerTitle ?? resolveTitle(location.pathname);
-  const showBack = isSubRoute(location.pathname);
+  /**
+   * ★ [2026-11-17 · T-027-d0ck] 浏览器 tab 的全局桥。
+   *
+   * - 接主进程的「tab 开/关」事件 ⇒ **不在 `/browser` 页也看得见** agent 开了什么
+   *   （store 是模块级的 ⇒ 切走路由再回来对得上账）。
+   * - agent 开了 tab ⇒ **跳到 `/browser` 页**（PM 拍板「用户看得见 agent 开了什么」），
+   *   ⚠️ **只在窗口真的在前台时跳** —— 窗口在后台/最小化时不强抢屏幕。
+   */
+  useEffect(() => {
+    const dispose = startBrowserTabBridge();
+    const onAgentTabOpened = () => {
+      void window.gacode
+        ?.isWindowFocused?.()
+        .then((focused) => {
+          if (!focused) return;
+          if (location.pathname !== "/browser") navigate("/browser");
+        })
+        .catch(() => undefined);
+    };
+    window.addEventListener(AGENT_TAB_OPENED_EVENT, onAgentTabOpened);
+    return () => {
+      window.removeEventListener(AGENT_TAB_OPENED_EVENT, onAgentTabOpened);
+      dispose();
+    };
+    // ⚠️ 只在挂载时接一次（location/navigate 用的是闭包里的旧值也没关系：
+    //    跳转只需要 "/browser" 这个常量路径）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const title = headerTitle ?? resolveTitle(location.pathname);  const showBack = isSubRoute(location.pathname);
   // 0.7.6 — gaga 截图反馈 §1: Home 页不要 header (跟 web 同款 — web Home 只有左
   //   ☰ 按钮 + sticky transparent 背景, 不显示标题栏). electron 是桌面端 sidebar
   //   已常驻, Home 不要 header 等价于"右半部分纯背景 + 内容", 跟 sidebar 同底色
