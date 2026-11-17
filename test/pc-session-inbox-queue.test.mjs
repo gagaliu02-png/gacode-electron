@@ -126,11 +126,11 @@ test("GC-P28-7b 入队走**同一个** chat/stream 端点（服务端决定排�
 // GC-P28-3 · 「发送」在轮次在跑时 ⇒ 进队列
 // ===========================================================================
 
-test("GC-P28-3 轮次在跑时点「发送」⇒ 进队列（不打断、不立即发）", () => {
+test("GC-P28-3 轮次在跑 / 后台活在跑 ⇒ 进队列（不打断、不立即发）", () => {
   const code = repoCode(DETAIL);
   assert.ok(
-    /if \(streamingAssistantId && !streamingStalled\) \{\s*void enqueueIntoQueue\(/.test(code),
-    "★ 轮次在跑时 handleSubmit 必须走 enqueueIntoQueue（**不许**直接起新轮）",
+    /if \(\s*\(streamingAssistantId && !streamingStalled\) \|\|\s*sessionBackgroundWork\.length > 0\s*\) \{\s*void enqueueIntoQueue\(/.test(code),
+    "★ handleSubmit 必须按输入框状态机同一口径入队：主轮在跑 **或** 本会话后台活在跑",
   );
   assert.ok(
     /const enqueueIntoQueue = useCallback/.test(code),

@@ -3612,7 +3612,18 @@ export function ChatDetail() {
       //   (否则输入框永久锁死, 用户以为应用卡死)。
       // ★ [2026-11-14 · 订正 28] 轮次**还在跑** ⇒ 消息**进队列**
       //   （不打断、不立即发；§3.6）⇒ 输入框照常清空（消息没丢，在队列里）。
-      if (streamingAssistantId && !streamingStalled) {
+      // ★ [2026-11-17 · PC 后台任务显示顺序修复] 判据必须与输入框状态机
+      //   （`resolveChatAction({ turnRunning: isStreaming, pendingWork: hasPendingWork })`）
+      //   完全一致：后台活还在跑、主轮次已结束时也要**直接入队**。
+      //   病根：只看 `streamingAssistantId` ⇒ 后台活跑着但主轮已结束时走 startStream
+      //   ⇒ 服务端 202 queued ⇒ 本地先造了一个 LLM 占位行再 clearLocalRow ⇒
+      //   用户的乐观气泡只留在 QueueBar，要等队列泵出才进消息列表 ⇒
+      //   用户感觉「要等 LLM 气泡先出现，自己的气泡才出现」。
+      //   ⇒ 这里提前分流，别先发一次注定 202 的 POST。
+      if (
+        (streamingAssistantId && !streamingStalled) ||
+        sessionBackgroundWork.length > 0
+      ) {
         void enqueueIntoQueue(text, attachments);
         return true;
       }
@@ -3631,6 +3642,7 @@ export function ChatDetail() {
       chatId,
       streamingAssistantId,
       streamingStalled,
+      sessionBackgroundWork.length,
       waitingFirstFrame,
       startStream,
       armAutoTitle,
