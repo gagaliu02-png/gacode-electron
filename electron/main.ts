@@ -1106,6 +1106,76 @@ app.whenReady().then(() => {
     });
   }
 
+  // ★ [2026-11-17 · T-027-d0ck] 真机 E2E 钩子 · 停靠（只用于本地验收，生产不设）。
+  //
+  //   验四件事：
+  //   ① BrowserView 的 bounds **等于**上报的矩形（不是窗口全尺寸）
+  //   ② guest 的 `innerWidth/innerHeight` = 矩形尺寸 ⇒ 视口就是这个矩形
+  //   ③ **停泊（隐藏）后视口尺寸不变**（缩尺寸会让页面重排 ⇒ 铁律）
+  //   ④ 停靠状态下 trusted click 仍然生效
+  const e2eDockUrl = process.env.GACODE_E2E_BROWSER_DOCK || null;
+  if (e2eDockUrl && mainWindow) {
+    mainWindow.webContents.once('did-finish-load', async () => {
+      const DOCK_RECT = { x: 256, y: 96, width: 900, height: 600 };
+      try {
+        const opened = await executeClientTool('pc_browser_open', { url: e2eDockUrl }, null, 30000);
+        console.log('[e2e:dock:open] ' + JSON.stringify(opened));
+        const tabId = (() => {
+          try { return JSON.parse(String(opened.stdout || '')).tabId as string; } catch { return ''; }
+        })();
+        if (!tabId) throw new Error('open 没给出 tabId');
+
+        // ① 渲染层上报内容区矩形（这里直接调池，验的是主进程这一半）
+        browserPool.setContentRect(DOCK_RECT);
+        browserPool.focus(tabId);
+        // ⚠️ guest 的 innerWidth 是**异步**跟着 resize 更新的 ⇒ 读之前先等一拍
+        //   （否则量到还没生效的旧值 0×0）。
+        await new Promise((r) => setTimeout(r, 400));
+        const entry = browserPool.get(tabId);
+        const bounds = entry?.view?.getBounds?.() ?? null;
+        console.log('[e2e:dock:bounds] ' + JSON.stringify(bounds));
+
+        // ② 视口尺寸 = 矩形尺寸
+        const vp = await entry?.view?.webContents?.executeJavaScript(
+          'JSON.stringify({w: window.innerWidth, h: window.innerHeight})',
+        );
+        console.log('[e2e:dock:viewport] ' + String(vp));
+
+        // ③ 停泊 ⇒ 视口尺寸不变
+        browserPool.park(tabId);
+        await new Promise((r) => setTimeout(r, 250));
+        const vpParked = await entry?.view?.webContents?.executeJavaScript(
+          'JSON.stringify({w: window.innerWidth, h: window.innerHeight})',
+        );
+        console.log('[e2e:dock:viewport:parked] ' + String(vpParked));
+
+        // ④ 停靠回来 + trusted click 仍然生效
+        browserPool.focus(tabId);
+        await new Promise((r) => setTimeout(r, 250));
+        const snap = await executeClientTool('pc_browser_snapshot', { tabId }, null, 30000);
+        console.log('[e2e:dock:snapshot] ' + JSON.stringify(snap));
+        const act = await executeClientTool(
+          'pc_browser_act', { action: 'click', target: 'e2', tabId }, null, 30000,
+        );
+        await new Promise((r) => setTimeout(r, 300));
+        const snapAfter = await executeClientTool('pc_browser_snapshot', { tabId }, null, 30000);
+        console.log('[e2e:dock:act] ' + JSON.stringify(act));
+        console.log('[e2e:dock:snapshot:after] ' + JSON.stringify(snapAfter));
+
+        // ⑤ 收尾两件套：focus / close
+        const foc = await executeClientTool('pc_browser_focus', { tabId }, null, 15000);
+        console.log('[e2e:dock:focus] ' + JSON.stringify(foc));
+        const clo = await executeClientTool('pc_browser_close', { tabId }, null, 15000);
+        console.log('[e2e:dock:close] ' + JSON.stringify(clo));
+        console.log('[e2e:dock:alive] ' + String(browserPool.has(tabId)));
+      } catch (e) {
+        console.error('[e2e:dock] THREW ' + (e as Error).message);
+      } finally {
+        app.quit();
+      }
+    });
+  }
+
   // 阶段 4: webContents 就绪后补发一次 argv deep link
   if (pendingDeepLink && mainWindow) {
     mainWindow.webContents.once('did-finish-load', () => {
