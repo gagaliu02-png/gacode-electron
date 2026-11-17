@@ -523,3 +523,52 @@ data: {"events":[{"type":"user_message_processed","inboxId":"123","processedAt":
 > | `src/components/layout/AppShell.tsx` | 全局桥：不在 `/browser` 页也听得见 agent 开了什么；窗口在前台才跳页 |
 > | `shared/types.ts` / `electron/preload.ts` | 新 IPC 的类型与暴露 |
 > | `test/pc-browser-dock.test.mjs`（新） | 14 例（矩形应用 / 停泊尺寸守恒 / 不盖客户端 / 跨会话 / close / focus） |
+
+---
+
+## 订正 34 · T-028 —— 截图真走 LLM 识图 + 统一坐标系（2026-11-17 · PC 端）
+
+> [2026-11-17] 契约来源：根目录 `TASK_BOARD.md` 的 `T-028-sh0t`
+> （根目录 `docs/` 不是 git 仓 ⇒ 关键条款复述在本文件 + commit message）。
+> 服务端那一半（图片折叠 + `PC_TOOL_SPECS`）在 gaclaw `src/llm/client-execution.js`
+> 与 `src/llm/client-tools.js`。
+>
+> ### 问题
+>
+> `pc_screenshot` 以前只回一行「已截图并保存到 <本机路径>」⇒ **模型压根看不到那张图**
+> （产物折叠只报文件名 + 本机路径；公开 URL 根本没进模型上下文）。
+>
+> ### 三条铁律
+>
+> 1. ⛔ **端侧绝不把图片 base64 塞进 stdout**（2026-11-13 上下文顶爆血泪）——
+>    只回**公网 URL**（走现成的产物上传通路）+ **坐标块**。
+> 2. ⛔ **端侧不拼模型上下文**（L-24n / L-25q）——「去调 `image_understand`」那句
+>    指令由**服务端**写（gaclaw 的 `foldClientResult`），端侧只给数据。
+> 3. ⛔ **上传失败就如实说**——`deviceClient.uploadArtifacts` 上传失败时往 stdout 追加
+>    `[artifact_upload_failed] … ⇒ 模型看不到这张图`，不许假装成功。
+>
+> ### 坐标系契约（唯一定义）
+>
+> | 载体 | 原点 | 单位 | 附带的坐标块 |
+> |---|---|---|---|
+> | **浏览器** | 页面**可视区**左上角 | **CSS px** | `viewport{w,h}` + `scroll{x,y}` + `scale` + `image{w,h}` |
+> | **桌面** | 主显示器左上角 | **物理像素** | `coordinate_system:'screen'` + `display{index,w,h}` + `image{w,h}` |
+>
+> - `scale` = **截图物理像素 / CSS px**（= `devicePixelRatio`）。
+> - 元素编号 `eN` 的 `x/y` = viewport 坐标（与 `act` 的注入坐标**同源**）。
+> - ★ **`@shot:px,py`** —— 「上一次截图里的像素坐标」⇒ 端侧按 `scale` 换算成
+>   viewport 坐标再点 ⇒ 模型「看着截图报坐标」能直接用。
+>   ⚠️ 换算后**照样过视口边界校验**（屏幕外直接拒）。
+>   ⚠️ **视觉模型给的坐标不可靠** ⇒ 权威坐标永远是 DOM（`eN` / `text:`）。
+> - ⚠️ **桌面暂不提供点击**（Electron 没有桌面点击 API）⇒ 桌面截图只作「看」用。
+>
+> ### 端侧落点
+>
+> | 文件 | 作用 |
+> |---|---|
+> | `electron/client-tools/browser.ts` | `pc_browser_shot`（截视口 ⇒ PNG ⇒ artifact + 坐标块）/ `VIEWPORT_INFO_SCRIPT` / `shotMeta` 记忆 / `convertShotCoords`（纯函数）/ `@shot:px,py` 目标 / snapshot 补 `scroll`+`scale` |
+> | `electron/client-tools/executor.ts` | `pc_browser_shot` case + 超时 30s；`pc_screenshot` stdout 补坐标系块 |
+> | `electron/main.ts` | 池的 `capture`（`webContents.capturePage()`）——⚠️ 视图不可见时抓到**空图** ⇒ 端侧据此如实报错 |
+> | `electron/client-tools/deviceClient.ts` | 上传失败 ⇒ 往 stdout 追加「模型看不到这张图」 |
+> | `test/pc-browser-shot.test.mjs`（新） | 9 例（坐标块形状 / ⛔无 base64 / 不可见如实报错 / `@shot:` 换算 / 无截图记录报错 / 屏幕外拒 / 纯函数 / snapshot 补字段） |
+> | `test/e2e-browser-dock.mjs` | 真机 9 条判据（含 PNG 魔数 + 尺寸 = 视口 × dpr + `@shot:` 点中第二个按钮） |
