@@ -22,6 +22,8 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { executeClientTool } from './executor';
 import { deviceClient, getDeviceId, deviceCapabilities } from './deviceClient';
+// ★ [2026-11-17 · T-020 · S3] Claude Code hook 桥（显式安装，不自动装）
+import * as claudeHook from './claudeCodeHookService.ts';
 // [P7 · 2026-11-12] 本机定时任务（gaga 拍板：只在 Gacode 打开时跑，不写 Windows 计划任务）。
 import { localTasks } from './localTasks';
 // ★ [2026-11-13 · 订正 27 · B6] 后台作业：巡检（跑完 ⇒ 回传服务端）+ 界面接线。
@@ -75,8 +77,29 @@ export function registerClientToolIpc(): void {
   // —— 渲染层把 access token 推过来（内存持有，⛔ 不持久化）——
   ipcMain.handle('gacode:client-tool-set-token', async (_e, token: unknown) => {
     deviceClient.setAccessToken(typeof token === 'string' && token ? token : null);
+    // ★ [T-020 · S3] 有 token 就把 hook 桥**起好**（只起桥，不装 hook）。
+    //   装 hook 是用户显式动作 ⇒ 见 gacode:claude-hook-install。
+    if (typeof token === 'string' && token) {
+      try { await claudeHook.ensureStarted(); }
+      catch (e) { console.warn('[claude-hook] bridge start failed:', (e as Error).message); }
+    } else {
+      // 登出 ⇒ 停桥（但**不**自动卸 hook —— 那是用户装的配置，不该被登录态改变）
+      try { await claudeHook.stop(); }
+      catch (e) { console.warn('[claude-hook] bridge stop failed:', (e as Error).message); }
+    }
     return { ok: true };
   });
+
+  // ★ [T-020 · S3] Claude Code hook 的安装 / 卸载 / 状态（显式调用）
+  //   ⚠️ 装在 ~/.claude/settings.json ⇒ 全局影响本机所有 Claude Code 会话
+  //   ⇒ **必须**由用户显式点按钮，renderer 才发这个 IPC。
+  ipcMain.handle('gacode:claude-hook-status', async () => claudeHook.status());
+  ipcMain.handle('gacode:claude-hook-install', async (_e, opts: {
+    dryRun?: boolean;
+    event?: 'PermissionRequest' | 'PreToolUse';
+    onFailure?: 'block' | 'continue';
+  } = {}) => claudeHook.install(opts));
+  ipcMain.handle('gacode:claude-hook-uninstall', async (_e, opts: { dryRun?: boolean } = {}) => claudeHook.uninstall(opts));
 
   // ★ [2026-11-17] 解绑 / 重新绑定「电脑端控制」（「我的电脑」页按钮 + 登出链路）。
   //   ⚠️ 解绑是**服务端 + 本机双向**的：服务端清绑定，本机进 unbound 态不再注册。
