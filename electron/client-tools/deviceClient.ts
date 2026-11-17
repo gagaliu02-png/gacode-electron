@@ -375,6 +375,12 @@ class DeviceClient {
   private listeners = new Set<RequestListener>();
   /** ★ P6：正在跑的任务（pendingId → 任务 + 它的中止句柄）。 */
   private running = new Map<string, { task: RunningClientTask; ac: AbortController }>();
+  /**
+   * ★ [2026-11-17] **在途**的 pendingId（同步登记 ⇒ 同一派单不会被并发跑两次）。
+   *   ⚠️ `running` 那张表是在闸门**之后**才登记的 ⇒ 两个并发派单都能过闸门
+   *      ⇒ 这里单独一张「进门就登记」的表。
+   */
+  private inflight = new Set<string>();
   private taskListeners = new Set<TasksListener>();
 
   status(): DeviceClientStatus {
@@ -915,18 +921,39 @@ class DeviceClient {
       return;
     }
 
+    // ★ [2026-11-17 · 修「模型看不到图」] **在途去重**（同一 pendingId 别并发跑两次）。
+    //
+    //   现象（实测 2026-11-17）：同一条 `pc_screenshot` 派单**被并发执行了两次**
+    //   （设备通道重连补推 + 服务端重复推送）⇒ 两份结果抢同一个结算位 ⇒
+    //   后到的那个拿 409「结果已结过」⇒ **被丢掉**。
+    //   ⇒ 而**先结算的那一份恰好是「产物上传失败」的那次**（上传只成功了一份）
+    //   ⇒ 模型拿到的 payload 里**产物没有 url** ⇒ 只看到一行本机路径
+    //   ⇒ 「识别不了图」（模型只好绕道让本机 Claude Code 读文件）。
+    //
+    //   ⚠️ 旧的 `loadDone()` 只记「**跑完**的」⇒ 两次同时进来时都还没跑完 ⇒ 都放行。
+    //   ⇒ 这里加一个**同步登记**的在途集合：在跑的直接跳过（第一次执行会正常结算）。
+    if (this.inflight.has(pendingId)) {
+      console.log('[client-tools/device] 同一条派单正在跑，跳过重复派发:', pendingId);
+      return;
+    }
+
     // 通知渲染层（UI 显示「正在你的电脑上执行」）
     for (const cb of this.listeners) {
       try { cb(req); } catch (_) {}
     }
 
-    const result = await this.runRequest(req);
-    markDone(pendingId);
-    // ★ [P5 · 2026-11-12] 端侧产物 → 服务端托管（好进**交付中心**）。
-    //   只有 `kind:'file'`（单文件）上传；`kind:'workspace'`（目录/项目）**不上传**
-    //   （L-24o：目录产物不进交付中心，只报本机路径）。
-    const withUrls = await this.uploadArtifacts(result);
-    await this.uploadResult(pendingId, withUrls);
+    this.inflight.add(pendingId);
+    try {
+      const result = await this.runRequest(req);
+      markDone(pendingId);
+      // ★ [P5 · 2026-11-12] 端侧产物 → 服务端托管（好进**交付中心**）。
+      //   只有 `kind:'file'`（单文件）上传；`kind:'workspace'`（目录/项目）**不上传**
+      //   （L-24o：目录产物不进交付中心，只报本机路径）。
+      const withUrls = await this.uploadArtifacts(result);
+      await this.uploadResult(pendingId, withUrls);
+    } finally {
+      this.inflight.delete(pendingId);
+    }
   }
 
   /**
@@ -1045,18 +1072,39 @@ class DeviceClient {
       }
       try {
         const buf = await fs.promises.readFile(a.path);
-        const fd = new FormData();
-        fd.append('file', new Blob([buf]), a.name);
-        fd.append('localPath', a.path);
-        fd.append('deviceId', this.deviceId);
-        fd.append('kind', a.kind);
-        const res = await fetch(`${apiBase()}/devices/artifacts`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${this.accessToken}` },
-          body: fd,
-        });
-        if (!res.ok) {
-          console.warn('[client-tools/device] 产物上传失败:', res.status);
+        // ★ [2026-11-17] 上传**带重试** —— 一次瞬时失败就把「模型看不到这张图」坐实了
+        //   （实测 2026-11-17：一条派单被并发跑两次，其中一次上传失败 ⇒ 先结算的那份
+        //   产物**没有 url** ⇒ 模型只拿到本机路径 ⇒「识别不了图」）。
+        //   ⇒ 最多试 3 次（退避 1s / 3s）⇒ 瞬时失败基本都能救回来。
+        let res: Response | null = null;
+        let lastStatus = 0;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const fd = new FormData();
+          fd.append('file', new Blob([buf]), a.name);
+          fd.append('localPath', a.path);
+          fd.append('deviceId', this.deviceId);
+          fd.append('kind', a.kind);
+          try {
+            res = await fetch(`${apiBase()}/devices/artifacts`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${this.accessToken}` },
+              body: fd,
+            });
+          } catch (e) {
+            console.warn(
+              `[client-tools/device] 产物上传异常（第 ${attempt}/3 次）:`,
+              e && (e as Error).message,
+            );
+            res = null;
+          }
+          if (res && res.ok) break;
+          if (res) lastStatus = res.status;
+          if (attempt < 3) {
+            await new Promise((r) => setTimeout(r, attempt * 1000));
+          }
+        }
+        if (!res || !res.ok) {
+          console.warn('[client-tools/device] 产物上传失败:', lastStatus || '网络异常');
           if (String(a.mimeType || '').startsWith('image/')) {
             imageFailures.push(a.name);
           }
