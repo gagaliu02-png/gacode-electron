@@ -137,7 +137,7 @@ directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
   # 0.7.29: P2 上行线包（软停 / disposition / ack / 看门狗分级）
-  output: release-c32-v33
+  output: release-c34-v35
 
 files:
   - dist/**/*
