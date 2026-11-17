@@ -395,3 +395,59 @@ data: {"events":[{"type":"user_message_processed","inboxId":"123","processedAt":
 `test/p2-uplink-pc.test.mjs`（31 条）—— disposition 优先级与兜底、ack 的帧形状与
 「归一之前读」、本地行按 `inboxId` 匹配、interrupt 的双带与软停纪律、
 看门狗阶梯/休眠抑制的判定表、开关默认值。
+
+---
+
+## T-020 · Claude Code 管控端侧工具 `pc_cc_*`（2026-11-17）
+
+> 契约：服务端 gaclaw `src/llm/client-tools.js` 的 4 个 `pc_cc_*` spec
+> （**根目录 `docs/` 不是 git 仓** ⇒ 关键条款复述在本文件 + commit message）。
+
+### 做什么
+
+让 agent 能看见并操作用户电脑上**正在跑的 Claude Code 会话**（尤其是 VS Code 里那些）：
+
+| 工具 | 能力 | 副作用 |
+|---|---|---|
+| `pc_cc_sessions` | 列出活会话（sessionId/cwd/status/waiting_for/最近几轮） | 无 |
+| `pc_cc_read` | 读某个会话的最近若干轮（正文 + 工具名） | 无 |
+| `pc_cc_send` | 往会话**队列**插一条补充信息（`priority` = later/next/now） | 写 |
+| `pc_cc_control` | 改名 / 订阅「空闲时通知我」 | 写 |
+
+### 协议（逆向自 Claude Code 2.1.325 = 扩展的 `resources/native-binary/claude.exe`）
+
+- 每个活会话在 `~/.claude/sessions/<pid>.json` 登记
+  （`sessionId` / `cwd` / `status`（busy·idle·waiting·shell）/ `waitingFor` /
+  `entrypoint` / `messagingSocketPath`）。
+- 每会话有专属 **UDS inbox**：Windows 上是命名管道 `\.\pipe\LOCAL\cc-msg-<hex>`。
+- 认证 nonce 在 `~/.claude/sessions/<pid>.<sha256(canonSock)>.key`；
+  **首行必须**是 `{"type":"auth","token":"<nonce>"}\n`。
+  ★ sha256 是在**全小写**的规范路径 `\.\pipe\local\cc-msg-<hex>` 上算的。
+- `type:"user"` 帧 ⇒ 往目标会话队列插一条 user 消息（**不打断**当前轮）；
+  正文须包 `<cross-session-message from="uds:…">…</cross-session-message>`。
+- `type:"control"` 帧 + `action` ∈ `rename` / `notify_when_idle` / `peer_message_status`。
+- ⛔ **UDS 里没有「批准/拒绝权限」的 action** —— 权限走 VS Code 扩展↔CLI 的
+  `can_use_tool` 控制通道 ⇒ 权限闸只能走 **PreToolUse hook 桥**。
+
+### 三条铁律
+
+1. ⛔ **只连本机命名管道** —— UNC / 远程 / 非 pipe 路径一律拒（`isLocalPipePath`）。
+2. ⛔ **凭据不出进程** —— nonce 只在内存里用，不打印 / 不落盘 / 不回传服务端。
+3. ⛔ **只发 `user` / `control` 两种帧** + action 白名单 ⇒ 不给协议注入面。
+
+### 能力键 `claude-code`
+
+- 判据 = **`~/.claude/sessions` 目录在不在**（**不是**「此刻有没有活会话」——
+  否则没开 Claude Code 的机器永远学不会用这组工具）。
+- ⚠️ 跟 `job` 键同款口径：**没装 ⇒ 工具如实失败并回报**，不是「不下发」。
+- ⚠️ 能力头**不得用于鉴权**（L-24e）—— 真闸门在端侧 `gate.ts`。
+
+### 落点
+
+| 文件 | 作用 |
+|---|---|
+| `electron/client-tools/claudeCodeSession.ts` | **只读**视图：会话登记 + transcript 尾部解析（slug = cwd 非字母数字全换 `-`） |
+| `electron/client-tools/claudeCodePeer.ts` | **写**通道：UDS 客户端（auth 握手 / user 帧 / control 帧）+ IPC 白名单 |
+| `electron/client-tools/executor.ts` | 4 个 case + 默认超时 |
+| `electron/client-tools/jobCapability.ts` / `deviceClient.ts` | 能力串多 `claude-code=1` |
+| `test/pc-claude-code-tools.test.mjs` | 12 例（含「只读模块不写盘」断言） |
