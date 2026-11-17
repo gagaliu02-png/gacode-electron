@@ -34,6 +34,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { strArg } from './cliService.ts';
+// ★ [2026-11-17 · T-022] 汇报协议模板（结果块）——工具层自动追加，调用方不用手写。
+import { buildReportingContract } from './claudeResultFormat.ts';
 import type {
   CliEvent,
   CliInvocation,
@@ -127,7 +129,11 @@ export function buildClaudeInvocation(ctx: CliServiceContext): CliInvocation | n
     '--permission-mode', 'bypassPermissions',
     // ⚠️ 位置参数放**最后** —— `--add-dir` / `--tools` 这类「可变长」选项会把
     //    紧跟其后的位置参数一起吞掉 ⇒ 提示词必须排在所有选项之后。
-    task,
+    //
+    // ★ [2026-11-17 · T-022] 自动追加**汇报协议**（固定结果块）——
+    //   有了它，回传时能稳稳抓到 status/summary/result；
+    //   没按格式输出时仍会兜底到 result 事件 / 最后一段 assistant 正文。
+    task + buildReportingContract(),
   );
 
   return {

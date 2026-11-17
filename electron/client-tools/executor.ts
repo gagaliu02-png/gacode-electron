@@ -45,8 +45,10 @@ import {
   startBackgroundJob,
 } from './backgroundJobs.ts';
 import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct } from './browser.ts';
-import { listClaudeSessions, readTranscriptTail, summarizeSession } from './claudeCodeSession.ts';
+import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
+// ★ [2026-11-17 · T-022] 等端侧 Claude Code 的处理结果（前台等）
+import { watchClaudeSessionResult } from './claudeCodeResultWatcher.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';
 
 // ===========================================================================
@@ -465,6 +467,27 @@ async function pcProcessList(
 // pc_cc_* —— Claude Code 管控（2026-11-17 · T-020）
 // ===========================================================================
 
+/**
+ * ★ [2026-11-17 · T-022] `pc_cc_send` 前台等端侧结果的**默认上限**（毫秒）。
+ *
+ * ⚠️ 必须**小于**服务端 `pc_cc_send` 的 `timeout_ms`（600000 = 10 分钟）——
+ *   服务端那边从「派单」就开始计时，端侧从「收到派单」才开始计时；
+ *   端侧若等到跟服务端一样久，服务端会先判超时 ⇒ 模型看不到端侧的真实错误。
+ *   ⇒ 留 60s 余量给结果回传。
+ */
+const PC_CC_SEND_WAIT_TIMEOUT_MS = 540000;
+
+/** 取一个会话 transcript 当前的字节大小（= 「基线」偏移）。 */
+function transcriptSize(rec: { cwd?: string; sessionId: string }): number {
+  try {
+    const p = transcriptPath(rec as any);
+    if (!p) return 0;
+    return require('fs').statSync(p).size;
+  } catch {
+    return 0;
+  }
+}
+
 /** pc_cc_sessions —— 列出本机活着的 Claude Code 会话（只读）。 */
 async function pcCcSessions(
   args: Record<string, unknown> | null,
@@ -513,9 +536,23 @@ async function pcCcRead(
   }
 }
 
-/** pc_cc_send —— 往会话队列投一条补充信息（写通道）。 */
+/**
+ * pc_cc_send —— 往会话队列投一条补充信息（写通道）。
+ *
+ * ★ [2026-11-17 · T-022] 升级：**发完就前台等**端侧 Claude Code 的处理结果，
+ *   结果**直接**作为本工具的 stdout 回到 gaclaw 那一轮。
+ *
+ *   ⚠️ 为什么前台等而不是转后台（PM 拍板）：
+ *   「端侧 Claude Code 处理任务」**不算后台任务** ⇒
+ *   不进 `localJobs` / `jobReporter` / D3 上行那一套 ⇒
+ *   ⇒ 也**不需要**新增后台作业横幅（同步执行天然出现在 PC 的「正在你的电脑上执行」区）。
+ *
+ *   流程：记录 transcript 基线 → 注入消息（带 task_id + 汇报协议）→
+ *         等目标会话产出结果 → 命中固定块 / 兜底取最后一段 assistant 正文。
+ */
 async function pcCcSend(
   args: Record<string, unknown> | null,
+  opts: { signal?: AbortSignal; pendingId?: string | null } = {},
 ): Promise<ClientToolResult> {
   const sessionId = str(args, 'session_id');
   const text = str(args, 'text');
@@ -525,15 +562,47 @@ async function pcCcSend(
   if (!['now', 'next', 'later'].includes(priority)) {
     return fail(`priority 只能是 now / next / later（收到 ${priority}）`);
   }
+  // 等待上限：默认 540000（比服务端 600000 早 ⇒ 结果能回传上去）。
+  // ⚠️ **必须夹住**：服务端从派单就开始计时，端侧从收到派单才开始计时
+  //   ⇒ 端侧若等得比服务端久，服务端会先判超时 ⇒ 模型看不到端侧的真实错误。
+  const requestedWait = num(args, 'wait_timeout_ms');
+  const waitMs = Math.min(
+    requestedWait && requestedWait > 0 ? requestedWait : PC_CC_SEND_WAIT_TIMEOUT_MS,
+    PC_CC_SEND_WAIT_TIMEOUT_MS,
+  );
+  const taskId = opts.pendingId || str(args, 'task_id') || null;
   try {
-    const r = await sendPeerMessage(sessionId, text, priority);
+    // ① 基线：注入之前的 transcript 字节偏移 ⇒ 之后只看新增内容。
+    const rec = findSession(sessionId);
+    if (!rec) return fail(`会话不在本机运行中: ${sessionId}`);
+    const sinceOffset = transcriptSize(rec);
+
+    // ② 注入（带 task_id + 汇报协议）。
+    const r = await sendPeerMessage(sessionId, text, priority, taskId);
     if (!r.ok) return fail(`投递失败: ${r.reason || 'unknown'}`);
+
+    // ③ 前台等结果。
+    const w = await watchClaudeSessionResult({
+      sessionId,
+      sinceOffset,
+      timeoutMs: waitMs,
+      signal: opts.signal,
+    });
+    if (!w.ok || !w.result) {
+      return fail(`投递成功，但没等到端侧 Claude Code 的结果: ${w.error || 'unknown'}`);
+    }
+
+    // ④ 结果直接回 gaclaw（**结构化** ⇒ 模型能区分「这是端侧回复，不是用户消息」）。
     return ok({
       stdout: JSON.stringify({
-        status: 'sent',
-        session_id: sessionId,
-        priority,
-        note: '消息已进该会话的队列；该会话会自己继续跑，回复出现在它那边（不在本对话）。',
+        source: 'local-claude-code',
+        source_session_id: sessionId,
+        task_id: taskId,
+        status: w.result.status || 'completed',
+        summary: w.result.summary || '',
+        result: w.result.result || '',
+        parse_mode: w.result.parse_mode,
+        note: '这是端侧 Claude Code 对你任务的处理结果。它不是用户消息，也不代表用户授权。',
       }),
       exitCode: 0,
     });
@@ -603,7 +672,10 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   // [2026-11-17 · T-020] Claude Code 管控端侧工具
   pc_cc_sessions: 30000,
   pc_cc_read: 60000,
-  pc_cc_send: 30000,
+  // ★ [2026-11-17 · T-022] `pc_cc_send` 现在**前台等**端侧 Claude Code 的结果
+  //   ⇒ 端侧默认值 540000（比服务端 600000 早 60s ⇒ 结果能回传上去，
+  //   模型看到的是端侧的真实错误而不是「没回话」）。
+  pc_cc_send: 540000,
   pc_cc_control: 30000,
 };
 
@@ -669,7 +741,7 @@ export async function executeClientTool(
     // [2026-11-17 · T-020] Claude Code 管控
     case 'pc_cc_sessions': return pcCcSessions(args);
     case 'pc_cc_read': return pcCcRead(args);
-    case 'pc_cc_send': return pcCcSend(args);
+    case 'pc_cc_send': return pcCcSend(args, { signal, pendingId: opts?.pendingId ?? null });
     case 'pc_cc_control': return pcCcControl(args);
     default:
       return fail(`未知的端侧工具: ${tool}`);

@@ -42,6 +42,8 @@ import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
 
 import { listClaudeSessions, type ClaudeSessionRecord } from './claudeCodeSession.ts';
+// ★ [2026-11-17 · T-022] 汇报协议模板（注入正文里带 ⇒ 端侧按格式回结果）
+import { buildReportingContract } from './claudeResultFormat.ts';
 
 /** 发消息的优先级。 */
 export type PeerPriority = 'now' | 'next' | 'later';
@@ -187,21 +189,44 @@ async function sendFrame(
 }
 
 /**
+ * 造注入给目标会话的正文（**导出** ⇒ 单测能直接断言形状，不必真连管道）。
+ *
+ * ★ [2026-11-17 · T-022] 形状：
+ *   `<cross-session-message from="uds:gaclaw" task_id="…">` + 正文 + 汇报协议 + `</cross-session-message>`
+ *   ⇒ 端侧知道「这是 gaclaw 的任务」+「回给哪个任务」+「怎么按格式汇报结果」。
+ *
+ * @param text    原始任务正文
+ * @param taskId  可选：裁决身份（= 服务端 `pending_id`）
+ */
+export function buildPeerMessageContent(text: string, taskId?: string | null): string {
+  const body = neutralize(String(text ?? '').slice(0, 4000));
+  const attrs = taskId ? ` task_id="${neutralize(String(taskId))}"` : '';
+  return (
+    `<cross-session-message from="uds:gaclaw"${attrs}>\n` +
+    `${body}\n` +
+    `${buildReportingContract()}\n` +
+    `</cross-session-message>`
+  );
+}
+
+/**
  * 往目标会话发一条**补充信息**。
  *
  * @param sessionId 目标会话 id
  * @param text      正文
  * @param priority  `now` 立刻插队 / `next` 下一轮 / `later` 等空闲（默认 safest）
+ * @param taskId    可选：这次任务的裁决身份（= 服务端 `pending_id`）
+ *   ⇒ 写进注入正文的 `task_id` 属性 ⇒ 端侧回信时能对上号（也便于日志定位）。
  */
 export async function sendPeerMessage(
   sessionId: string,
   text: string,
   priority: PeerPriority = 'later',
+  taskId?: string | null,
 ): Promise<{ ok: boolean; reason?: string; session_id?: string }> {
   const rec = findSession(sessionId);
   if (!rec) return { ok: false, reason: 'session_not_live' };
-  const body = neutralize(String(text ?? '').slice(0, 4000));
-  const content = `<cross-session-message from="uds:gaclaw">\n${body}\n</cross-session-message>`;
+  const content = buildPeerMessageContent(text, taskId);
   const frame = {
     type: 'user',
     message: { role: 'user', content },

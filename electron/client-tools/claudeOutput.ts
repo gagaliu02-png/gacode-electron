@@ -18,6 +18,8 @@
  */
 
 import type { CliEvent } from './cliService.ts';
+// ★ [2026-11-17 · T-022] 公共结果提取组件（固定块 → result 事件 → assistant 兜底）
+import { extractClaudeResult } from './claudeResultFormat.ts';
 
 /**
  * 解析 `stream-json` 的一行。
@@ -82,23 +84,23 @@ export function isClaudeComplete(events: CliEvent[]): boolean {
 
 /**
  * 把事件汇成一段给用户看的结论。
+ *
+ * ★ [2026-11-17 · T-022] 走**公共结果提取组件**（`claudeResultFormat.ts`）：
+ *   优先级 = 固定结果块（`===GACLAW_RESULT_START/END===`）→ `result` 事件正文
+ *   → 最后一段 assistant 正文（兜底）→ 空。
+ *   ⇒ 修掉「`result.result` 为空 ⇒ 正文全丢」的真机事故（2026-11-17）。
  */
 export function summarizeClaude(events: CliEvent[], maxChars = 8000): string {
+  const extracted = extractClaudeResult(events, maxChars);
+  if (extracted.found && extracted.result) {
+    return extracted.result.length > maxChars
+      ? extracted.result.slice(0, maxChars - 1) + '…'
+      : extracted.result;
+  }
   const list = Array.isArray(events) ? events : [];
   const result = list.find((e) => e && e.type === 'result');
-  if (!result) {
-    const tail = list
-      .filter((e) => e && e.type === 'text' && typeof e.text === 'string')
-      .map((e) => e.text as string)
-      .slice(-20)
-      .join('\n');
-    return tail || '(Claude Code 没有产出结论)';
-  }
-  const text = String(result.text || '').trim();
-  if (!text) {
-    const raw = result.raw as any;
-    const subtype = raw && raw.subtype ? String(raw.subtype) : '未知';
-    return `(Claude Code 结束，但没有正文 —— subtype=${subtype})`;
-  }
-  return text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
+  const subtype = result && (result.raw as any) && (result.raw as any).subtype
+    ? String((result.raw as any).subtype)
+    : '未知';
+  return `(Claude Code 结束，但没有正文 —— subtype=${subtype})`;
 }
