@@ -43,6 +43,14 @@ import {
 } from "./chat-sse";
 import { buildChatStreamHeaders, CLIENT_ID_PC } from "./sse/client-id";
 import { clientCapabilityHeader } from "./client-capabilities";
+// ★ [P2-1/P2-2 · 2026-11-17] 服务端「消息去向」+「会话级 ack」的**唯一判据**。
+import {
+  readUserMessageProcessed,
+  type UserMessageProcessedEvent,
+} from "./session-events";
+// ★ [P2-4′ · 2026-11-17] 看门狗的**分级 + 休眠抑制**（判据在 `lib/sse-reconnect.ts`）。
+import { createSseWatchdog } from "./sse-reconnect";
+import { readP2Flags } from "./p2-features";
 import type { ChatChunk } from "./cancel";
 import type { AttachControlFrame } from "./chat-sse";
 
@@ -69,6 +77,16 @@ export interface PersistentSubscribeOptions {
   onError?: (err: Error) => void;
   /** 连接建立成功（首帧 subscribed 到达）。 */
   onOpen?: () => void;
+  /**
+   * ★ [P2-2 · 2026-11-17] **双发 ack 的第二次告知**（「那条排队消息已被处理」）。
+   *
+   *   ⚠️ 服务端把这一帧写给该 session 的**全部** socket（发起流 / 续传 / 只读接入 /
+   *   **常驻订阅**）⇒ 常驻订阅这条路**必须**消费它（发起流那条在 `chat-stream.ts`）。
+   *
+   *   ⚠️ 这一帧会被 `normalizeChatChunk` 的「未知 type 跳过」规则**丢掉**
+   *   ⇒ **必须在归一之前读**（见下面 `onData`）。
+   */
+  onUserMessageProcessed?: (ev: UserMessageProcessedEvent) => void;
 }
 
 export interface UsePersistentSubscribeResult {
@@ -151,87 +169,176 @@ export function usePersistentSubscribe(): UsePersistentSubscribeResult {
       // 见过 subscribed 首帧吗 —— 用它触发 onOpen（连接真的建立、开始收帧了）。
       let opened = false;
 
-      for (;;) {
-        if (ac.signal.aborted) return;
-
-        let res: Response;
-        try {
-          res = await fetchSubscribe(null, cursor);
-          if (res.status === 401) {
-            const fresh = await tryRefreshAccessToken();
-            if (fresh) {
-              res = await fetchSubscribe(fresh, cursor);
-            }
+      // ★ [P2-4′ · 2026-11-17] **分级 + 休眠抑制**看门狗（PM 拍板：新路就是默认路）。
+      //
+      //   ## 为什么这条流也要看门狗
+      //
+      //     常驻订阅是 PC 的**默认**通路（订正 32）⇒ 它要是静默死掉，界面就再也不更新
+      //     （而 socket 不一定给 EOF —— 半开连接会让页面「看着正常、其实收不到帧」）。
+      //
+      //   ## 为什么不会误杀
+      //
+      //     服务端每 ≤5s 发一条 `: keepalive` ⇒ **字节**口径 ⇒ 健康的流永远有动静。
+      //     ⚠️ 只看「帧」就完了 —— keepalive 是**注释帧** ⇒ 解析器直接跳过 ⇒
+      //     「一直有流量」会被误判成「停滞」⇒ 误报「网络失败」。
+      //
+      //   ## 判死之后
+      //
+      //     掐掉当前连接 ⇒ 读流抛错 ⇒ 走下面的退避重连（**带游标** ⇒ 补帧不丢）。
+      const p2 = readP2Flags();
+      let currentBody: ReadableStream<Uint8Array> | null = null;
+      const watchdog = createSseWatchdog({
+        graded: p2.watchdogGraded,
+        sleepSuppression: p2.watchdogSleepSuppression,
+        judgeDead: p2.watchdogJudgeDead,
+        isActive: () => !ac.signal.aborted,
+        onWarn: (info) => {
+          if (info.reason === "suspended") {
+            console.warn(
+              `[订正32] 常驻订阅疑似休眠/挂起 (档位 ${info.grade}, 阈值 ${Math.round(info.thresholdMs / 1000)}s) ⇒ 重新武装, 不判死`,
+            );
+            return;
           }
-        } catch (err) {
+          console.warn(
+            `[订正32] 常驻订阅静默 ${Math.round(info.idleMs / 1000)}s (档位 ${info.grade}) ⇒ 继续等`,
+          );
+        },
+        onTimeout: (idle) => {
+          console.warn(
+            `[订正32] 常驻订阅 ${Math.round(idle / 1000)}s 无字节 ⇒ 掐流重连`,
+          );
+          try {
+            currentBody?.cancel();
+          } catch {
+            /* ignore */
+          }
+        },
+      });
+      watchdog.arm();
+
+      try {
+        for (;;) {
+          if (ac.signal.aborted) return;
+
+          let res: Response;
+          try {
+            res = await fetchSubscribe(null, cursor);
+            if (res.status === 401) {
+              const fresh = await tryRefreshAccessToken();
+              if (fresh) {
+                res = await fetchSubscribe(fresh, cursor);
+              }
+            }
+          } catch (err) {
+            if (ac.signal.aborted) return;
+            if (attempt >= MAX_RECONNECT) {
+              opts.onError?.(err instanceof Error ? err : new Error(String(err)));
+              return;
+            }
+            await delay(1000 * 2 ** attempt);
+            attempt += 1;
+            continue;
+          }
+
+          // ⛔ 服务端老版本（无 subscribe 端点 / v2 未开）⇒ 端侧降级：
+          //   关掉常驻 flow，靠 onError 让调用方回落老路径（attach / turn_started）。不重连。
+          if (res.status === 404 || res.status === 409) {
+            opts.onError?.(
+              new Error(
+                `subscribe 不可用 (HTTP ${res.status}) —— 回落老路径 (attach/turn_started)`,
+              ),
+            );
+            return;
+          }
+          if (!res.ok || !res.body) {
+            if (attempt >= MAX_RECONNECT) {
+              opts.onError?.(new Error(`subscribe HTTP ${res.status}`));
+              return;
+            }
+            await delay(1000 * 2 ** attempt);
+            attempt += 1;
+            continue;
+          }
+
+          // 读流：常驻收帧；EOF（断线 / 闲置回收 / 主动 close）→ 记游标，退避重连。
+          //
+          // ⚠️ 读流**可能抛**（网络断 / 看门狗掐流）⇒ 这里必须**接住**
+          //   （以前没接 ⇒ 抛出去就是 unhandled rejection ⇒ 整条常驻流静默死掉）。
+          let readResult: { cursor: string | null } = { cursor: null };
+          // ★ [P2-4′] 看门狗判死时要掐的就是这条 body ⇒ 记着它。
+          currentBody = res.body;
+          try {
+            readResult = await readChatSse(res.body, {
+              onData: (payload, cur) => {
+                if (!payload || typeof payload !== "object") return;
+                if (cur) cursor = cur;
+                // ★ [P2-2] **双发 ack 必须在归一之前读** ——
+                //   `user_message_processed` 不是富事件 ⇒ 归一层的「未知 type 跳过」
+                //   会把它**丢掉** ⇒ 读晚了就永远收不到。
+                //   这一帧**只有** ack（没有 content / done）⇒ 消费掉，不喂渲染层。
+                const ack = readUserMessageProcessed(payload);
+                if (ack) {
+                  try {
+                    opts.onUserMessageProcessed?.(ack);
+                  } catch (err) {
+                    console.warn("[订正32] onUserMessageProcessed 抛异常 (忽略)", err);
+                  }
+                  return;
+                }
+                // ★ `subscribed` 是**控制帧**（服务端 writeControl 发的），但 PC 的
+                //   `parseAttachControl` 只认 attach_ok/attach_failed ⇒ 它从 onData 进来。
+                //   认出它 = 连接真正建立（回放已发完 / 开始 live）⇒ 触发 onOpen。
+                const isSubscribed =
+                  (payload as Record<string, unknown>).type === "subscribed";
+                if (isSubscribed) {
+                  if (!opened) {
+                    opened = true;
+                    setConnected(true);
+                    opts.onOpen?.();
+                  }
+                  return; // ⛔ 控制帧不喂给渲染层（没有内容）
+                }
+                // ⛔ 常驻观众**不拥有**任何一轮 ⇒ onChunk 走 attach 的渲染语义（rowPrefix "attach"）。
+                opts.onChunk(normalizeChatChunk(payload as ChatChunk), cur ?? null);
+              },
+              onControl: (frame) => opts.onControl?.(frame),
+              onCursor: (c) => {
+                if (!c) return;
+                cursor = c; // 本文件本地游标，重连带回
+                opts.onCursor?.(c);
+              },
+              // ★ [P2-4′] **字节**口径的活跃度 ⇒ 看门狗重新计时。
+              //   ⚠️ 服务端每 ≤5s 一条 `: keepalive` **注释帧** ⇒ 解析器跳过它
+              //   ⇒ 只看「帧」会把「一直有流量」误判成停滞 ⇒ 必须按字节计时。
+              onBytes: () => watchdog.notifyBytes(),
+            });
+          } catch (err) {
+            if (ac.signal.aborted) return;
+            console.warn("[订正32] 常驻订阅读流出错 ⇒ 退避重连:", err);
+            if (attempt >= MAX_RECONNECT) {
+              opts.onError?.(
+                err instanceof Error ? err : new Error(String(err)),
+              );
+              return;
+            }
+            await delay(1000 * 2 ** (attempt + 1));
+            attempt += 1;
+            continue;
+          }
+          if (readResult.cursor) cursor = readResult.cursor;
+          currentBody = null;
+
+          // 用户退出 / 组件卸载 ⇒ 不重连。
           if (ac.signal.aborted) return;
           if (attempt >= MAX_RECONNECT) {
-            opts.onError?.(err instanceof Error ? err : new Error(String(err)));
+            opts.onError?.(new Error("subscribe 连接多次中断，已停止重连"));
             return;
           }
-          await delay(1000 * 2 ** attempt);
+          await delay(1000 * 2 ** (attempt + 1));
           attempt += 1;
-          continue;
         }
-
-        // ⛔ 服务端老版本（无 subscribe 端点 / v2 未开）⇒ 端侧降级：
-        //   关掉常驻 flow，靠 onError 让调用方回落老路径（attach / turn_started）。不重连。
-        if (res.status === 404 || res.status === 409) {
-          opts.onError?.(
-            new Error(
-              `subscribe 不可用 (HTTP ${res.status}) —— 回落老路径 (attach/turn_started)`,
-            ),
-          );
-          return;
-        }
-        if (!res.ok || !res.body) {
-          if (attempt >= MAX_RECONNECT) {
-            opts.onError?.(new Error(`subscribe HTTP ${res.status}`));
-            return;
-          }
-          await delay(1000 * 2 ** attempt);
-          attempt += 1;
-          continue;
-        }
-
-        // 读流：常驻收帧；EOF（断线 / 闲置回收 / 主动 close）→ 记游标，退避重连。
-        const readResult = await readChatSse(res.body, {
-          onData: (payload, cur) => {
-            if (!payload || typeof payload !== "object") return;
-            if (cur) cursor = cur;
-            // ★ `subscribed` 是**控制帧**（服务端 writeControl 发的），但 PC 的
-            //   `parseAttachControl` 只认 attach_ok/attach_failed ⇒ 它从 onData 进来。
-            //   认出它 = 连接真正建立（回放已发完 / 开始 live）⇒ 触发 onOpen。
-            const isSubscribed =
-              (payload as Record<string, unknown>).type === "subscribed";
-            if (isSubscribed) {
-              if (!opened) {
-                opened = true;
-                setConnected(true);
-                opts.onOpen?.();
-              }
-              return; // ⛔ 控制帧不喂给渲染层（没有内容）
-            }
-            // ⛔ 常驻观众**不拥有**任何一轮 ⇒ onChunk 走 attach 的渲染语义（rowPrefix "attach"）。
-            opts.onChunk(normalizeChatChunk(payload as ChatChunk), cur ?? null);
-          },
-          onControl: (frame) => opts.onControl?.(frame),
-          onCursor: (c) => {
-            if (!c) return;
-            cursor = c; // 本文件本地游标，重连带回
-            opts.onCursor?.(c);
-          },
-        });
-        if (readResult.cursor) cursor = readResult.cursor;
-
-        // 用户退出 / 组件卸载 ⇒ 不重连。
-        if (ac.signal.aborted) return;
-        if (attempt >= MAX_RECONNECT) {
-          opts.onError?.(new Error("subscribe 连接多次中断，已停止重连"));
-          return;
-        }
-        await delay(1000 * 2 ** (attempt + 1));
-        attempt += 1;
+      } finally {
+        watchdog.disarm();
       }
     },
     [],

@@ -13,10 +13,15 @@
  *        isCancelFrame()  = done && cancelled === true
  *      两个判据必须分开, 单一 `done` 早退会丢中间正文 (unified-api:949/1085)。
  *
- *   2. `DELETE /yinian/chat/cancel/:id` 有两种 intent, 字节完全相同,
+ *   2. `DELETE /yinian/chat/cancel/:id` 有三种 intent, 字节完全相同,
  *      只能靠 intent 标记区分 (服务端按单 channel.connections.js classifyCancelIntent):
  *      - ACK_DONE   — 收尾 ACK, 语义"这轮完了", **不该武装取消**
- *      - USER_STOP  — 用户按停止, 语义"取消正在跑的这一轮"
+ *      - USER_STOP  — 用户按停止, 语义"取消正在跑的这一轮" ⇒ 硬掐上游 ⇒ 产出全丢
+ *      - INTERRUPT  — ★ [P2-3′ · 2026-11-17] **安全边界停止（软停）**:
+ *                     跑到安全边界（当前工具调用结束）才停 ⇒ 不掐上游
+ *                     ⇒ **这一轮的正文 / 工具成果保留**
+ *                     ⇒ 服务端不认识这个意图时按 legacy 处理（= 硬掐 = 老行为）
+ *                     ⇒ **不需要能力协商**
  *      携带方式: query `?intent=` **+** header `x-gaclaw-cancel-intent:`
  *      (两端都读, 顺序不同, 双带才是真稳)。
  *
@@ -25,7 +30,10 @@
  *   4. 这两条路径共用下面 sendCancelDelete() **一个构造点**,
  *      结构上不可能漏带 (对齐 Android CancelDeleteSender.requestFor)。
  *
- * 失败处理: ACK_DONE 静默, USER_STOP 警告日志 (漏发 = 界面骗用户说停, 服务端还在烧 token)。
+ * 失败处理: ACK_DONE 静默, USER_STOP / INTERRUPT 警告日志 (漏发 = 界面骗用户说停, 服务端还在烧 token)。
+ *
+ * ⚠️ [PM 2026-11-17 拍板] 产品铁律「打断 = 彻底丢弃产出」**作废**:
+ *    默认走 **INTERRUPT（软停）** ⇒ 产出保留。USER_STOP 只作应急退路。
  */
 
 // ★ RC-6 (F3c): 终态判据在**共享层** (`src/lib/sse/terminal.ts`) —— 与 web 那份逐字节相同。
@@ -47,8 +55,36 @@ const API_BASE = "https://www.gaga.sale/api/v1";
 /**
  * 双带 intent — query **和** header 都带,
  * call site 拿不到任何"哪个端读得到哪个"的玄学解释权。
+ *
+ * ⚠️ 三种意图的**线上字节完全相同**，只能靠这个标记让服务端分得清
+ *   (unified-api classifyCancelIntentValue: trim → toLowerCase → [-空白]+ → '_';
+ *    gaclaw channel.connections.js classifyCancelIntent: 同一套归一化):
+ *   - ACK_DONE   — 客户端收齐终态后发的收尾 ACK。语义是"这轮完了", gaclaw 不该武装取消,
+ *                  unified-api 也不该打 markCancelled —— 打上等于让 webhook 在落库前
+ *                  直接拒收这一轮, 也就是把正常一轮的答案吞掉 (unified-api:216-221)。
+ *   - USER_STOP  — 用户按"停止"。语义是"取消正在跑的这一轮" ⇒ 硬掐上游 ⇒ **产出全丢**。
+ *   - INTERRUPT  — ★ [P2-3′ · 2026-11-17] **安全边界停止（软停）**:
+ *       语义是"跑到安全边界（当前工具调用结束）才停" ⇒ **不掐上游** ⇒ 这一轮的
+ *       正文 / 工具成果**保留**。
+ *       ⚠️ PM 2026-11-17 拍板：产品铁律「打断 = 彻底丢弃产出」**就此作废**。
+ *       ⚠️ 服务端**不认识**这个意图时按 legacy 处理（= 硬掐 = 老行为）
+ *         ⇒ **不需要能力协商**。
  */
-export type CancelIntent = "ACK_DONE" | "USER_STOP";
+export type CancelIntent = "ACK_DONE" | "USER_STOP" | "INTERRUPT";
+
+/**
+ * 意图 → **线上字节**的映射（query 与 header 用**同一个**值）。
+ *
+ * ⚠️ ACK_DONE / USER_STOP 逐字不变（老端行为不变）;
+ * ⚠️ INTERRUPT 用**小写** `interrupt`（服务端别名集
+ *   `INTERRUPT_INTENT_ALIASES` = {interrupt, user_interrupt, safe_stop, soft_stop}，
+ *   归一化时 trim + 转小写 ⇒ 小写最稳）。
+ */
+const CANCEL_INTENT_WIRE: Record<CancelIntent, string> = {
+  ACK_DONE: "ACK_DONE",
+  USER_STOP: "USER_STOP",
+  INTERRUPT: "interrupt",
+};
 
 /**
  * 鉴权 accessor — api.ts 持有 in-memory accessToken,
@@ -243,23 +279,25 @@ export function isUserAbortError(err: unknown): boolean {
  *     跟 Android `CancelDeleteSender.requestFor` 一字不差的对齐语义。
  *   - `keepalive: true` — 用户按停止后立刻跳页/发下一条, 浏览器不能砍这个 DELETE。
  *   - 失败仅 log: ACK_DONE 失败 server 30s 后会自己 end, 无副作用;
- *                USER_STOP 失败才是真损失 (服务端继续烧 token), warn 一行。
+ *                USER_STOP / INTERRUPT 失败才是真损失 (服务端继续烧 token), warn 一行。
  *
  * 用法:
  *   - 轮次终态帧 (isTerminalDone): sendCancelDelete(id, 'ACK_DONE')
- *   - 用户按停止:                 sendCancelDelete(id, 'USER_STOP')
+ *   - 用户按停止:                 sendCancelDelete(id, 'USER_STOP' | 'INTERRUPT')
  *   - 收到 isCancelFrame:          **不调** (已经在取消中, ack 反而会重复)
  */
 export function sendCancelDelete(
   sessionId: string,
   intent: CancelIntent,
 ): void {
+  // ⚠️ 线上字节走映射表 (INTERRUPT ⇒ 小写 `interrupt`) ⇒ query 与 header 同值。
+  const wire = CANCEL_INTENT_WIRE[intent] ?? intent;
   const url = new URL(`${API_BASE}/yinian/chat/cancel/${sessionId}`);
-  url.searchParams.set("intent", intent);
+  url.searchParams.set("intent", wire);
 
   const { token } = getAuthSnapshot();
   const headers: Record<string, string> = {
-    "x-gaclaw-cancel-intent": intent,
+    "x-gaclaw-cancel-intent": wire,
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -272,7 +310,7 @@ export function sendCancelDelete(
     // 静默失败 = 服务端不知道要停 = 推理继续烧 token 而 UI 已显示停了, 比报错更糟
     // eslint-disable-next-line no-console
     console.warn(
-      `[cancel] DELETE intent=${intent} sessionId=${sessionId} 发送失败:`,
+      `[cancel] DELETE intent=${wire} sessionId=${sessionId} 发送失败:`,
       err instanceof Error ? err.message : String(err),
     );
   });

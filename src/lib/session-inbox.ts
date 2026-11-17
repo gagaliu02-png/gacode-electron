@@ -32,6 +32,9 @@
  */
 
 import { API_BASE, getAccessToken, request, tryRefresh } from "./api";
+// ★ [P2-1 · 2026-11-17] 服务端给的「这条消息去了哪」（`disposition`）—— **唯一判据**。
+//   ⚠️ 本文件**零副作用依赖** ⇒ `node --test` 能直接跑（判据只写一遍）。
+import { readDisposition, type ChatDisposition } from "./session-events";
 
 /** 入队请求的超时（毫秒）—— 服务端半死不活时别让用户干等。 */
 const ENQUEUE_TIMEOUT_MS = 20000;
@@ -144,8 +147,23 @@ export interface EnqueueMessageBody {
    * 服务端**明确**说「已排进队列」了吗？
    * · `true`  ⇒ 服务端返了 JSON 且标了排队（服务端把入队做成显式回执时）
    * · `false` ⇒ 只知道「收下了」（老服务端只返 SSE ⇒ 端侧靠 inbox 轮询确认）
+   *
+   * ★ [P2-1] 现在**优先**看 `disposition`：
+   *   · `disposition === 'queued'`  ⇒ 这条**进了队列**（服务端明说）⇒ `confirmed = true`
+   *   · `disposition === 'started'` ⇒ 这一轮**已经起了**（不是排队！）⇒ `confirmed = false`
+   *   · 读不到（老服务端）⇒ 落回老判据（`queued === true`）⇒ 逐字兼容。
    */
   confirmed: boolean;
+  /**
+   * ★ [P2-1 · 2026-11-17] **服务端说的「这条消息去了哪」**。
+   *
+   * · `'queued'`  —— 这条进了**会话收件箱**（排队中）⇒ 端侧**别撤乐观行**
+   * · `'started'` —— 这一轮**已经起了**（不是排队）⇒ 端侧**别当排队**、**别撤乐观行**
+   * · `null`     —— 老服务端没这个字段（**降级**：调用方落回老启发式）
+   *
+   * ⚠️ **老服务端没有 `disposition` ⇒ 读不到就按老逻辑走**（降级，不崩）。
+   */
+  disposition: ChatDisposition | null;
   /** 失败原因（`ok=false` 时有）。 */
   error?: string;
   /** 服务端给了队列行 id（老服务端不给 ⇒ 端侧靠 inbox 轮询认领）。 */
@@ -312,13 +330,21 @@ export async function enqueueUserMessage(
     try {
       res = await post();
     } catch (e) {
-      if (signal?.aborted) return { ok: false, confirmed: false, error: "已取消" };
+      if (signal?.aborted) {
+        return { ok: false, confirmed: false, disposition: null, error: "已取消" };
+      }
       if (ac.signal.aborted) {
-        return { ok: false, confirmed: false, error: "服务端没回话（超时）" };
+        return {
+          ok: false,
+          confirmed: false,
+          disposition: null,
+          error: "服务端没回话（超时）",
+        };
       }
       return {
         ok: false,
         confirmed: false,
+        disposition: null,
         error: e instanceof Error ? e.message : String(e),
       };
     }
@@ -333,6 +359,7 @@ export async function enqueueUserMessage(
           return {
             ok: false,
             confirmed: false,
+            disposition: null,
             error: e instanceof Error ? e.message : String(e),
           };
         }
@@ -341,15 +368,25 @@ export async function enqueueUserMessage(
 
     if (res.status === 409) {
       // 服务端说「这一轮还在跑，且没开入队」⇒ **没排上**。
-      return { ok: false, confirmed: false, error: "这一轮还在跑，消息没排进队列" };
+      return {
+        ok: false,
+        confirmed: false,
+        disposition: null,
+        error: "这一轮还在跑，消息没排进队列",
+      };
     }
     if (!res.ok) {
-      return { ok: false, confirmed: false, error: `HTTP ${res.status}` };
+      return {
+        ok: false,
+        confirmed: false,
+        disposition: null,
+        error: `HTTP ${res.status}`,
+      };
     }
 
     // 2xx ⇒ 服务端收下了。
     //   · 回的是 JSON ⇒ 服务端的入队回执：
-    //     `{ok, queued, inboxId, seq, content, attachments}`；
+    //     `{ok, queued, disposition, eventId, acceptedAt, inboxId, seq, content, attachments}`；
     //   · 回的是 SSE ⇒ 排队消息**没有**属于本端的内容 ⇒ 直接断开。
     const contentType = (res.headers.get("content-type") || "").toLowerCase();
     if (contentType.includes("application/json")) {
@@ -357,7 +394,15 @@ export async function enqueueUserMessage(
         const raw = (await res.json()) as Record<string, unknown>;
         const data =
           (raw && (raw.data as Record<string, unknown>)) || raw || {};
-        const queued = data.queued === true || raw.queued === true;
+        // ★ [P2-1 · 2026-11-17] **优先读 `disposition`**（服务端明说这条消息去了哪）。
+        //   ⚠️ 读不到（老服务端）⇒ **落回老判据**（`queued === true`）⇒ 逐字兼容。
+        const disposition = readDisposition(data) ?? readDisposition(raw);
+        const queued =
+          disposition === "queued"
+            ? true
+            : disposition === "started"
+              ? false
+              : data.queued === true || raw.queued === true;
         // 行 id：服务端入队回执用 `inboxId`；老形状用 `id`。
         const id = String(
           data.inboxId ?? raw.inboxId ?? data.id ?? raw.id ?? "",
@@ -370,6 +415,7 @@ export async function enqueueUserMessage(
         return {
           ok: true,
           confirmed: queued,
+          disposition,
           ...(id ? { messageId: id } : {}),
           ...(attachments ? { attachments } : {}),
         };
@@ -382,7 +428,9 @@ export async function enqueueUserMessage(
     } catch {
       /* 已经断了 */
     }
-    return { ok: true, confirmed: false };
+    // ⚠️ 老服务端（没有 `disposition`）：回的是 SSE ⇒ 服务端**建了轮**（不是排队）
+    //   ⇒ 按「200 SSE = 服务端建了轮」**事实推断**为 `started`（与 web 端同口径）。
+    return { ok: true, confirmed: false, disposition: "started" };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onOuterAbort);

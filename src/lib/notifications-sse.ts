@@ -94,6 +94,8 @@ import {
   createSseBackoff,
   createSseWatchdog,
 } from "./sse-reconnect";
+// ★ [P2-4′ · 2026-11-17] 看门狗的**分级 + 休眠抑制**开关（PM 拍板：新路就是默认路）。
+import { readP2Flags } from "./p2-features";
 
 /** 401 且换不到新 token → 等多久再连 (web notification-stream.ts:394)。 */
 const UNAUTHORIZED_RETRY_MS = 15_000;
@@ -359,9 +361,27 @@ export function NotificationSSEBridge({
     let lastEventId: string | null = null;
 
     // ⚠️ P2 — watchdog 的判据与算术在 `lib/sse-reconnect.ts` (会话流共用同一份)。
+    // ★ [P2-4′ · 2026-11-17] 分级阶梯（15s / 30s / 60s 各 warn ⇒ 120s 才判死）
+    //   + 休眠抑制（挂起/事件循环被堵 ⇒ 不判死，重新武装）。
+    const p2 = readP2Flags();
     const watchdog = createSseWatchdog({
       lastEventAt: () => lastEventAtRef.current,
       isActive: () => !cancelled && connected,
+      graded: p2.watchdogGraded,
+      sleepSuppression: p2.watchdogSleepSuppression,
+      judgeDead: p2.watchdogJudgeDead,
+      onWarn: (info) => {
+        // ⚠️ warn **不算错** ⇒ 只是可观测。
+        if (info.reason === "suspended") {
+          console.warn(
+            `[gacode-sse] 通知流疑似休眠/挂起 (档位 ${info.grade}) ⇒ 重新武装, 不判死`,
+          );
+          return;
+        }
+        console.warn(
+          `[gacode-sse] 通知流静默 ${Math.round(info.idleMs / 1000)}s (档位 ${info.grade}) ⇒ 继续等`,
+        );
+      },
       onTimeout: (idle) => {
         console.warn(
           `[gacode-sse] No event in ${Math.round(idle / 1000)}s, reconnecting`,
@@ -546,6 +566,10 @@ export function NotificationSSEBridge({
           const { value, done } = await reader.read();
           if (done) break;
           if (cancelled) return;
+          // ★ [P2-4′] **字节**口径的活跃度 ⇒ 看门狗重新计时。
+          //   ⚠️ 服务端每 25s 一条 `: heartbeat` **注释帧** ⇒ 解析器跳过它
+          //   ⇒ 只看「帧」会把「一直有流量」误判成停滞 ⇒ 60s 就重连一次（老行为）。
+          if (value && value.byteLength > 0) watchdog.notifyBytes();
           const text = decoder.decode(value, { stream: true });
           for (const frame of parser.push(text)) {
             // ⚠️ 信号帧（turn_started）**不带** `id:` 行 ⇒ 这里自然**不推进游标**

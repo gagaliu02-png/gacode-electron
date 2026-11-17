@@ -113,10 +113,16 @@ import {
   isTerminalDone,
   isCancelFrame,
   isUserAbortError,
+  sendCancelDelete,
   UserAbortError,
   type ChatChunk,
   type CancelIntent,
 } from "../lib/cancel";
+// ★ [P2-3′ · 2026-11-17] 「安全边界停止（软停）」+「看门狗分级/休眠抑制」的开关
+//   （PM 拍板：新路就是默认路 ⇒ 默认全开；判据只有这一份）。
+import { readP2Flags, resolveStopIntent } from "../lib/p2-features";
+// ★ [P2-2 · 2026-11-17] 会话级 ack（「那条排队消息已被处理」）的形状。
+import type { UserMessageProcessedEvent } from "../lib/session-events";
 import {
   uploadAttachment,
   deriveUploadMode,
@@ -590,12 +596,21 @@ interface LocalQueueEntry {
   content: string;
   /** 入列时刻（ISO）。 */
   createdAt: string;
-  /** 状态：送达中 / 服务端没确认。 */
-  state: "sending" | "unconfirmed";
+  /**
+   * 状态：送达中 / 服务端没确认 / **已被处理**（★ [P2-2] 服务端 ack 过了）。
+   */
+  state: "sending" | "unconfirmed" | "processed";
   /** 发出去的时刻（epoch ms）—— 用来判「多久没确认」。 */
   sentAt: number;
   /** ★ 附件（排队消息的附件**不丢**）—— 显示「📎 N 个附件」。 */
   attachments?: InboxAttachments | null;
+  /**
+   * ★ [P2-2 · 2026-11-17] 服务端给的**收件箱行 id**（= ack 帧里的 `inboxId`）。
+   *
+   *   ⚠️ **键是 `inboxId`，不是 `eventId`** —— 服务端的 `eventId` 是
+   *   `"inbox_<id>"`（带前缀的稳定别名）⇒ 跟 ack 帧里的 `inboxId` **对不上**。
+   */
+  inboxId?: string | null;
 }
 
 /** 队列轮询间隔（毫秒）。 */
@@ -744,6 +759,19 @@ export function ChatDetail() {
    * ⚠️ 服务端确认后（inbox 里出现同样内容）本项**自动消失** ⇒ 不重复显示。
    */
   const [localQueue, setLocalQueue] = useState<LocalQueueEntry[]>([]);
+  /**
+   * ★ [P2-2 · 2026-11-17] 服务端**已经处理掉**的队列项（ack 帧带来的 `inboxId` 集合）。
+   *
+   *   · 服务端在「那封信真的被取走/被消费」那一刻，往该 session 的**全部** socket
+   *     推一帧 `{events:[{type:'user_message_processed', inboxId, processedAt}]}`；
+   *   · 端侧据此把那条乐观行从「排队中」改成「已处理」（⛔ 别再让用户以为还没发出去）。
+   *
+   *   ⚠️ **键是 `inboxId`**（服务端收件箱行的 id）—— **不是** `eventId`
+   *   （服务端的 `eventId` = `"inbox_<id>"`，带前缀 ⇒ 对不上）。
+   */
+  const [processedInboxIds, setProcessedInboxIds] = useState<Set<string>>(
+    () => new Set<string>(),
+  );
   /** 队列条是不是展开着（父组件持有 ⇒ 收起时不丢）。 */
   const [queueExpanded, setQueueExpanded] = useState(false);
   /** 服务端说的「本会话还有没跑完的后台活」。 */
@@ -2127,6 +2155,41 @@ export function ChatDetail() {
           if (sent?.turnKey) {
             ownTurnKeysRef.current.add(sent.turnKey);
           }
+          // ★ [P2-1 · 2026-11-17] 服务端**明说**这条消息去了哪。
+          //   · `'queued'` —— 这条**进了会话收件箱**（排队中）⇒ **这一轮压根没起**
+          //     ⇒ 不会有帧来 ⇒ 收掉「等首帧」的流式行（**用户那条乐观气泡留着**
+          //     —— 消息没丢）；并摆一条本地队列项（带服务端 `inboxId`
+          //     ⇒ 后面 ack 帧能对上 ⇒ 标「已处理」）。
+          //   · `'started'` / null —— 起了新轮（老服务端没这个字段 ⇒ 老启发式）⇒ 照旧等帧。
+          if (sent?.disposition === "queued") {
+            clearLocalRow();
+            setWaitingFirstFrame(false);
+            streamBusyRef.current = false;
+            ownTurnSessionIdRef.current = null;
+            myTurnRef.current = false;
+            if (sent.inboxId) {
+              setLocalQueue((prev) => [
+                ...prev,
+                {
+                  id: `local:${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                  content: text,
+                  createdAt: new Date().toISOString(),
+                  state: "sending",
+                  sentAt: Date.now(),
+                  attachments:
+                    imageUrls.length || fileIds.length
+                      ? {
+                          image_urls: imageUrls,
+                          attached_file_ids: fileIds,
+                        }
+                      : null,
+                  inboxId: sent.inboxId,
+                },
+              ]);
+            }
+            void refreshInbox();
+            return;
+          }
           // 发成功 ⇒ 等常驻流的帧。本轮「占着」的标记交给终态帧路径收口：
           //   handleStreamChunk 的 isTerminalDone 会 clearLocalRow；这里只把
           //   streamBusyRef 复位（泵队列不必等一条不存在的本地流）。
@@ -2298,6 +2361,36 @@ export function ChatDetail() {
               },
               onChunk: (chunk: ChatChunk, cur: string | null) => {
                 onTurnChunk(chunk, cur);
+              },
+              // ★ [P2-2] 双发 ack（会话级）—— 发起流也是该 session 的 socket
+              //   ⇒ 服务端**也**把 ack 帧推给它 ⇒ 这里要消费。
+              onUserMessageProcessed: handleUserMessageProcessed,
+              // ★ [P2-1] 服务端把这条**排进队列**了（202）⇒ 这一轮压根没起
+              //   ⇒ 收掉「等首帧」的流式行（**用户那条乐观气泡留着**）。
+              onQueued: (info) => {
+                clearLocalRow();
+                setWaitingFirstFrame(false);
+                if (info.inboxId) {
+                  setLocalQueue((prev) => [
+                    ...prev,
+                    {
+                      id: `local:${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                      content: text,
+                      createdAt: new Date().toISOString(),
+                      state: "sending",
+                      sentAt: Date.now(),
+                      attachments:
+                        imageUrls.length || fileIds.length
+                          ? {
+                              image_urls: imageUrls,
+                              attached_file_ids: fileIds,
+                            }
+                          : null,
+                      inboxId: info.inboxId,
+                    },
+                  ]);
+                }
+                void refreshInbox();
               },
             });
           },
@@ -2496,6 +2589,9 @@ export function ChatDetail() {
       onCursor: (c) => {
         persistentCursorRef.current = c;
       },
+      // ★ [P2-2] 双发 ack（会话级）—— 常驻订阅**也**会收到（服务端写给该 session
+      //   的全部 socket）⇒ 这里消费（发起流那条在 `stream.start` 里）。
+      onUserMessageProcessed: handleUserMessageProcessed,
       onChunk: (chunk, _cur) => {
         // ★ [2026-11-16] **认领这一帧的轮次身份**（常驻订阅路径）。
         //
@@ -2716,6 +2812,8 @@ export function ChatDetail() {
               onTurnEpoch: (ep) => {
                 entry.dispatch({ type: "epoch", epoch: ep });
               },
+              // ★ [P2-2] 双发 ack（会话级）—— 接入流也是该 session 的 socket ⇒ 同样消费。
+              onUserMessageProcessed: handleUserMessageProcessed,
             });
           },
         },
@@ -3120,6 +3218,8 @@ export function ChatDetail() {
       createdAt: it.createdAt,
       injectable: !!it.injectable,
       local: null,
+      // ★ [P2-2] 服务端 ack 过的那条 ⇒ 标「已处理」（键 = **inboxId** = 服务端行 id）。
+      processed: processedInboxIds.has(it.id),
       attachments: it.attachments ?? null,
     }));
     const local: QueueEntry[] = localQueue.map((l) => ({
@@ -3128,10 +3228,12 @@ export function ChatDetail() {
       createdAt: l.createdAt,
       injectable: false,
       local: l.state,
+      // ★ [P2-2] 端侧乐观行 ⇒ 靠**服务端给的 inboxId** 对上 ack 帧。
+      processed: l.state === "processed",
       attachments: l.attachments ?? null,
     }));
     return [...server, ...local];
-  }, [inboxItems, localQueue]);
+  }, [inboxItems, localQueue, processedInboxIds]);
 
   // ref 镜像（泵队列的回调里要读最新的一份 ⇒ 闭包会过期）。
   inboxItemsRef.current = inboxItems;
@@ -3200,6 +3302,42 @@ export function ChatDetail() {
   };
 
   /**
+   * ★ [P2-2 · 2026-11-17] **双发 ack 的第二次告知** —— 「那条排队消息已被处理」。
+   *
+   *   ## 为什么两条路都要接
+   *
+   *     服务端把这一帧写给该 session 的**全部** socket（发起流 / 续传 / 只读接入 /
+   *     **常驻订阅**）⇒ PC 端**发起流**（`chat-stream.ts`）与**常驻订阅**
+   *     （`chat-subscribe.ts`）两条路都会收到 ⇒ 两边都调这一个回调。
+   *
+   *   ## 怎么认本地行
+   *
+   *     · **服务端行**：`inboxItems[].id` **就是** `inboxId` ⇒ 直接命中；
+   *     · **端侧乐观行**：靠入队时服务端给的 `inboxId`（`enqueueUserMessage` 的
+   *       `messageId`）对上 ⇒ 标成「已处理」。
+   *     ⛔ **不许**拿 `eventId` 对（服务端给的是 `"inbox_<id>"` ⇒ 对不上）。
+   */
+  const handleUserMessageProcessed = useCallback(
+    (ev: UserMessageProcessedEvent) => {
+      const inboxId = String(ev?.inboxId ?? "").trim();
+      if (!inboxId) return;
+      setProcessedInboxIds((prev) => {
+        if (prev.has(inboxId)) return prev;
+        const next = new Set(prev);
+        next.add(inboxId);
+        return next;
+      });
+      // 端侧乐观行 ⇒ 标「已处理」（去掉「排队中」角标）。
+      setLocalQueue((prev) =>
+        prev.map((l) =>
+          l.inboxId && l.inboxId === inboxId ? { ...l, state: "processed" } : l,
+        ),
+      );
+    },
+    [],
+  );
+
+  /**
    * ★ 「发送」进队列 —— 轮次在跑时，消息**不打断**、**不立即发**（§3.6）。
    *
    * ⚠️ 入队**没有**独立的用户端点 ⇒ 走**同一个** `POST /chat/stream`，
@@ -3262,14 +3400,42 @@ export function ChatDetail() {
         inputBarRef.current?.insertText(content);
         return;
       }
-      // ④ 排上了 ⇒ 用服务端回传的附件（**原样**）补齐本地项 + 立刻刷一次队列。
-      if (res.attachments) {
-        setLocalQueue((prev) =>
-          prev.map((l) =>
-            l.id === localId ? { ...l, attachments: res.attachments } : l,
-          ),
-        );
+      // ★ [P2-1 · 2026-11-17] 服务端**明说**这条消息去了哪（老服务端没有 ⇒ null）。
+      //   · `'queued'`  —— 排进队列了 ⇒ 乐观行**留着**（它就是队列项）+
+      //     记下服务端的 `inboxId` ⇒ 后面 ack 帧能对上（键 = **inboxId**）。
+      //   · `'started'` —— 服务端**起了新轮**（不是排队！）⇒ 这条**不是队列项**
+      //     ⇒ 收掉乐观队列行，改成一条**用户气泡**（消息一条都不许少）。
+      if (res.disposition === "started") {
+        setLocalQueue((prev) => prev.filter((l) => l.id !== localId));
+        setPendingUserMsg({
+          id: `pending-user-${Date.now()}`,
+          content: text,
+          imageUrls: imageUrls.length ? imageUrls : undefined,
+          attachedFileIds: fileIds.length ? fileIds : undefined,
+          attachedFileNames: attachments.length
+            ? attachments.map((a) => ({
+                fileId: a.fileId ?? a.url ?? "",
+                name: a.name ?? "文件",
+              }))
+            : undefined,
+          createdAt: new Date().toISOString(),
+        });
+        void refreshInbox();
+        return;
       }
+      // ④ 排上了 ⇒ 用服务端回传的附件（**原样**）补齐本地项 + 记下 `inboxId`。
+      setLocalQueue((prev) =>
+        prev.map((l) =>
+          l.id === localId
+            ? {
+                ...l,
+                ...(res.attachments ? { attachments: res.attachments } : {}),
+                // ★ [P2-2] 服务端给的收件箱行 id ⇒ ack 帧按它对上。
+                ...(res.messageId ? { inboxId: res.messageId } : {}),
+              }
+            : l,
+        ),
+      );
       void refreshInbox();
     },
     // ⚠️ `pendingKnowledgeRefs` 在 deps 里 —— 入队要带上这一轮挂的知识库条目
@@ -3398,6 +3564,43 @@ export function ChatDetail() {
     }
   }, [sessionBackgroundWork, refreshInbox, toast]);
 
+  /**
+   * ★ [P2-3′ · 2026-11-17] **停掉本会话正在跑的「端侧执行」**（设备通道那条线）。
+   *
+   *   ## 为什么软停也要做这件事
+   *
+   *     服务端只在**硬掐**（`intent=USER_STOP`）时才会通知设备通道停活
+   *     （unified-api `yinian.chat.routes.js`：`if (shouldMarkCancelled) { … }`
+   *     ⇒ `intent=interrupt` ⇒ `shouldMarkCancelled === false` ⇒ **不通知**）。
+   *     ⇒ 软停下**必须由本端自己停** ⇒ 别把 PC 上的进程留活（界面说停了、
+   *     进程还在改用户的代码 —— 那是最糟的一种不一致）。
+   *
+   *   ## 范围
+   *
+   *     只停**本会话**的（`task.sessionId === chatId`）⇒ 不碰别的会话的活。
+   */
+  const stopLocalClientTools = useCallback(async () => {
+    const bridge =
+      typeof window !== "undefined" ? window.gacode?.clientTools : undefined;
+    if (!bridge || typeof bridge.runningTasks !== "function") return;
+    if (typeof bridge.stopTask !== "function") return;
+    try {
+      const tasks = await bridge.runningTasks();
+      if (!Array.isArray(tasks)) return;
+      for (const t of tasks) {
+        if (!t || !t.pendingId) continue;
+        if (t.sessionId !== chatId) continue; // ⛔ 只停本会话的
+        try {
+          await bridge.stopTask(t.pendingId);
+        } catch (e) {
+          console.warn("[stop] 停端侧执行失败:", t.pendingId, e);
+        }
+      }
+    } catch (e) {
+      console.warn("[stop] 读端侧执行列表失败:", e);
+    }
+  }, [chatId]);
+
   const handleSubmit = useCallback(
     (text: string, attachments: PendingAttachment[]): boolean => {
       if (!chatId) return false;
@@ -3432,16 +3635,50 @@ export function ChatDetail() {
   );
 
   const handleStop = useCallback(() => {
+    // ★ [P2-3′ · 2026-11-17 · PM 拍板] **安全边界停止（软停）= 默认路**。
+    //
+    //   ## 软停做什么
+    //
+    //     ① 发 `DELETE /yinian/chat/cancel/:sessionId?intent=interrupt`
+    //        （**query + header 双带** —— `lib/cancel.ts::sendCancelDelete` 是唯一构造点）
+    //        ⇒ 服务端**不掐上游**、等 gaclaw 跑到**安全边界**才停 ⇒ **产出保留**；
+    //     ② ⛔ **不** abort 本地流 ⇒ **继续收帧、继续渲染**，直到收到终态帧
+    //        （本地那一行**不许**提前清掉 —— 清行是终态帧路径的事）；
+    //     ③ ⛔ **不**清/撤本地行（用户刚发的那条消息、正在流的那段正文都留着）；
+    //     ④ 端侧执行（设备通道）**照旧要停** —— 服务端在 interrupt 下**不**通知
+    //        设备通道 ⇒ 本端自己停（别把 PC 上的进程留活）。
+    //
+    //   ## 老行为（硬掐）还留着吗？
+    //
+    //     留着 —— 开关关掉时走那条路（`lib/p2-features.ts` 的 `safeStop=false`
+    //     ⇒ **应急退路**，不用等一次发版）。
+    const intent = resolveStopIntent(readP2Flags());
+    if (intent === "INTERRUPT") {
+      // ⚠️ 常驻订阅模式下**没有本地流**可掐 ⇒ 这一发必须由**宿主层**发
+      //   （`stream.abort("user")` 在常驻模式下什么也不做 —— 没有 active 流）。
+      if (chatId) sendCancelDelete(chatId, "INTERRUPT");
+      // 端侧执行的活照旧要停（服务端在 interrupt 下不通知设备通道）。
+      void stopLocalClientTools();
+      // 后台活照旧要停（§3.8「停止」的作用域 = 本会话的一切）。
+      void stopBackgroundWork();
+      // 如实告诉用户**这一轮会发生什么**（老行为是「产出全丢」⇒ 语义变了 ⇒ 要说清楚）。
+      toast({
+        message: "已请求在安全边界停止",
+        description: "这一轮跑到安全边界就停，已经生成的正文会保留。",
+        variant: "default",
+      });
+      return;
+    }
     // ★ RC-7: 用户按了停止 ⇒ 这一轮的叫停开关也要断 (否则重连状态机会接着跑)。
     turnAcRef.current?.abort();
     // ★ [2026-11-14 · 订正 28 · W5] 「停止」的作用域 = **本会话的一切**（§3.8）：
-    //   ① 主 agent 轮次（abort + USER_STOP ⇒ **彻底丢弃**产出，铁律不变）；
+    //   ① 主 agent 轮次（abort + USER_STOP ⇒ **彻底丢弃**产出，硬掐 = 老行为）；
     //   ② **所有**后台工作单元（本机的作业 + 服务端 pending-work 报的）—— 一视同仁。
     //   ⚠️ 主 agent 已经结束（按钮还在是因为后台活没停）⇒ ① 那路什么也不做，
     //      真正干活的是 ②。
     stream.abort("user");
     void stopBackgroundWork();
-  }, [stream, stopBackgroundWork]);
+  }, [chatId, stream, stopBackgroundWork, stopLocalClientTools, toast]);
 
   const handleRetry = useCallback(() => {
     if (!streamError) return;

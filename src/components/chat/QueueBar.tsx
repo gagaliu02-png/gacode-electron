@@ -52,8 +52,16 @@ export interface QueueEntry {
    * 端侧乐观行（还没被服务端确认）。
    * · `sending`     ⇒ 刚发出、服务端还没回话；
    * · `unconfirmed` ⇒ 服务端一直没确认（多半是没排上）⇒ 标灰 + 允许删掉。
+   * · `processed`   ⇒ ★ [P2-2 · 2026-11-17] 服务端**已经处理掉**了（ack 帧）
+   *   ⇒ 不再是「排队中」⇒ 标「已处理」。
    */
-  local?: "sending" | "unconfirmed" | null;
+  local?: "sending" | "unconfirmed" | "processed" | null;
+  /**
+   * ★ [P2-2 · 2026-11-17] 服务端**已经处理掉**这一条（ack 帧带来的 `inboxId`）。
+   *
+   *   ⇒ 显示「已处理」（⛔ 别再让用户以为它还排在队里）。
+   */
+  processed?: boolean;
   /**
    * ★ 附件（★ 2026-11-14 服务端 `bb46bd4`：排队消息的附件**不丢**）
    *   ⇒ 显示「📎 N 个附件」。
@@ -248,7 +256,13 @@ export function QueueBar({
               ].join(" ")}
             >
               <span className="text-[10px] text-fg-subtle shrink-0">
-                {it.injectable ? "已插队" : it.local === "unconfirmed" ? "未送达" : "排队中"}
+                {it.processed || it.local === "processed"
+                  ? "已处理"
+                  : it.injectable
+                    ? "已插队"
+                    : it.local === "unconfirmed"
+                      ? "未送达"
+                      : "排队中"}
               </span>
               <span
                 className="flex-1 min-w-0 text-xs text-fg truncate"

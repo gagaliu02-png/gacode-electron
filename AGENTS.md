@@ -280,3 +280,112 @@ data: {"type":"turn_started","turnStarted":{
 ⛔ M0.5 只暴露 open/snapshot 两个**读类**工具；`pc_browser_act`（点击/输入）和
 `pc_browser_shot`（截图）在 **M2**，危险动作分级闸门在 **M4** —— 到 M2 之前模型
 **只能看不能动**，这是刻意的安全边界。
+
+---
+
+## P2 · 上行线（2026-11-17 · PC 端）—— disposition / 双发 ack / 安全边界停止 / 看门狗分级
+
+> 服务端**已上线**：unified-api `08b2c9e` / gaclaw `2e28c84`。
+> 跨端口径在 `../gacode-web/AGENTS.md` 的同名章节（web 端持有跨端口径）——
+> 本节是 **PC 端**的落点与**只此一份**的判据位置。
+
+### P2-1 · `disposition` —— 「这条消息去了哪」（⛔ 不许再靠状态码猜）
+
+服务端在 `POST /yinian/sessions/:id/chat/stream` 的应答体里**明说**：
+
+| 应答 | 体 | 含义 |
+|---|---|---|
+| 202 | `{ok:true, queued:true, disposition:'queued', eventId:'inbox_<id>', acceptedAt, inboxId, seq, content, attachments}` | 这条**进了会话收件箱**（排队中）⇒ **这一轮没有被发起** |
+| 200（none 模式）| `{ok:true, sessionId, turnKey, terminalReason, disposition:'started'}` | 这一轮**已经起了** |
+
+⚠️ 老的「200 + SSE 流」那条路**没有 body** ⇒ 那一路只能按「200 SSE = 服务端建了轮」
+**事实推断**为 `started`（代码里注明了这是推断，不是服务端说的）。
+
+**判据只有一份** ⇒ `src/lib/session-events.ts`（零依赖模块 ⇒ `node --test` 能直接跑）：
+
+- `readDisposition(source)` —— 只认 `'queued'` / `'started'`；**读不到就返回 `null`**
+  （老服务端没有这个字段 ⇒ 调用方**落回老启发式** `queued === true`，行为逐字不变）。
+- 落点：
+  - `src/lib/session-inbox.ts`（`enqueueUserMessage`）—— **优先** `disposition`，
+    兜底老启发式；`EnqueueResult` 多带一个 `disposition` 字段。
+  - `src/lib/chat-stream.ts`（`sendNoStream`）—— 返回类型换成 `SendNoStreamResult`
+    （`{ok, turnKey, disposition, inboxId}`）⇒ **把 disposition 带出来**。
+  - `src/routes/ChatDetail.tsx` —— 宿主层按 disposition 分岔：
+    `'queued'` ⇒ **收掉「等首帧」的流式行**（这一轮压根没起）但**留住用户那条乐观气泡**
+    ⇒ 并摆一条带 `inboxId` 的队列项。
+
+### P2-2 · 双发 ack 的「第二次告知」 —— `user_message_processed`
+
+```
+data: {"events":[{"type":"user_message_processed","inboxId":"123","processedAt":"…"}]}
+```
+
+- `events` 在**帧的顶层**（⛔ **不是** `rich_event` 事件里）—— 认错地方就收不到；
+- `type` 是**新值** ⇒ 老端**逐条跳过**它（不崩）⇒ 端侧必须**显式消费**；
+- 这一帧会被 `normalizeChatChunk` 的「未知 type 跳过」规则**丢掉**
+  ⇒ **必须在归一之前读**；
+- 服务端把它写给该 session 的**全部** socket（发起流 / 续传 / 只读接入 / **常驻订阅**）
+  ⇒ **两条路都要消费**：`src/lib/chat-stream.ts`（发起流 + 接入流）、
+  `src/lib/chat-subscribe.ts`（常驻订阅）；
+- 宿主层唯一处理函数：`ChatDetail.tsx` 的 `handleUserMessageProcessed`；
+- ★ **本地行的键 = `inboxId`**（服务端收件箱行的 id）—— ⛔ **不是 `eventId`**
+  （服务端的 `eventId` = `"inbox_<id>"`，带前缀 ⇒ 永远对不上）。
+  服务端行：`inboxItems[].id` **就是** `inboxId`；端侧乐观行：入队回执的
+  `messageId`（= `inboxId`）要记在乐观行上（`LocalQueueEntry.inboxId`）。
+- 命中 ⇒ 那一条从「排队中」改成「**已处理**」（`QueueBar` 的 `processed`）。
+
+### P2-3′ · 停止 = **安全边界停止（软停）**（PM 2026-11-17 拍板：新路就是默认路）
+
+- 请求：`DELETE /yinian/chat/cancel/:sessionId?intent=interrupt`
+  **+** header `x-gaclaw-cancel-intent: interrupt`（**双带**；query 与 header 同值）
+  ⇒ 复用 PC **既有**的那条 DELETE 路径（⛔ 不新造 `/yinian/sessions/:id/chat/cancel/...`）；
+  唯一构造点 = `src/lib/cancel.ts::sendCancelDelete`（`CancelIntent` 加了第三种 `"INTERRUPT"`，
+  线上字节 = **小写** `interrupt`）；
+- 语义：服务端**不掐上游**，等 gaclaw 跑到**安全边界**才停 ⇒ **这一轮的正文 / 工具成果保留**；
+  ⛔ **产品铁律「打断 = 彻底丢弃产出」就此作废**（PM 2026-11-17）；
+- 端侧纪律（`ChatDetail.tsx` 的 `handleStop`，软停分支）：
+  ① 发 interrupt（**由宿主层发** —— 常驻订阅模式下没有本地流可掐）；
+  ② ⛔ **不** abort 本地流 ⇒ **继续收帧、继续渲染**，直到收到终态帧；
+  ③ ⛔ **不**清 / 撤本地行（清行是终态帧路径的事）；
+  ④ **端侧执行（设备通道）照旧要停** —— 服务端在 `intent=interrupt` 下
+  `shouldMarkCancelled === false` ⇒ **不**通知设备通道 ⇒ 本端自己停
+  （`stopLocalClientTools` ⇒ `clientTools.runningTasks()` + `stopTask`，只停本会话的）；
+- 老行为（硬掐 `USER_STOP`）**保留** ⇒ 开关关掉时退回（**应急退路**，不用等一次发版）。
+
+### P2-4′ · 看门狗：**分级 + 休眠抑制**
+
+- 分级阶梯 `[15000, 30000, 60000, 120000]`（抄 Claude Code `Wv9` 的 `j`）
+  ⇒ 静默 15s / 30s / 60s 各记一条 **warn（不算错）**，**120s 才判死**
+  （老口径 = 单档 60s 判死 ⇒ 净效果：判死从 60s 推迟到 120s ⇒ 不误杀「模型在想很久」的轮次）；
+- 计时口径 = **字节**（不是「完整帧」）：服务端每 ≤5s 一条 `: keepalive` **注释帧**
+  ⇒ 解析器**跳过**它 ⇒ 只看帧会把「一直有流量」误判成停滞 ⇒ 误报「网络失败」；
+  ⇒ 读帧层新增 `onBytes` 回调（`src/lib/chat-sse.ts`，⛔ **纯类型新增，不引运行时 import**
+  —— 该文件被既有测试按「固定依赖链」加载）；
+- 休眠抑制：定时器触发时若「实际经过 < 当前档位阈值 / 2」**或**「定时器比预定时刻晚醒超过阈值 / 2」
+  ⇒ 判为系统挂起 / 事件循环被堵 ⇒ **不判死**、重新武装（档位不变）+ 记一条 warn；
+- 判据只有一份 ⇒ `src/lib/sse-reconnect.ts`（**不在** `src/lib/sse/` 里 —— 那个目录是
+  web/PC **逐字节相同**的共享层，web 端断言锁着 md5）；
+- 接了看门狗的三条流：`chat-stream.ts`（发起流/续传）、`chat-subscribe.ts`（常驻订阅）、
+  `notifications-sse.ts`（通知流）。
+
+### 开关（**应急退路**，不是「要不要用新路」的门禁）
+
+`src/lib/p2-features.ts` —— 判据只有这一份，**默认全是 `true`**（PM 2026-11-17 拍板「新路就是默认路」）：
+
+| 键 | 默认 | 管什么 |
+|---|---|---|
+| `safeStop` | `true` | 停止 = 软停（`intent=interrupt`）⇒ 产出保留 |
+| `watchdogGraded` | `true` | 看门狗走 15/30/60/120 阶梯（判死 120s）|
+| `watchdogSleepSuppression` | `true` | 挂起 / 事件循环被堵 ⇒ 不判死 |
+| `watchdogJudgeDead` | `true` | 阶梯最后一档才判死（掐流走既有失败/降级路径）|
+
+- 翻法（优先级从高到低）：
+  ① **运行时 localStorage**（`gacode.p2.flags`，只写要覆盖的那几个键）—— 不用重新构建；
+  ② **代码常量**（`P2_FLAG_DEFAULTS`）—— 改代码 ⇒ 重新构建生效（可审计、可回滚）。
+- ⚠️ 三个看门狗开关与 `safeStop` **各自独立**（PM 要求分开）。
+
+### 断言
+
+`test/p2-uplink-pc.test.mjs`（31 条）—— disposition 优先级与兜底、ack 的帧形状与
+「归一之前读」、本地行按 `inboxId` 匹配、interrupt 的双带与软停纪律、
+看门狗阶梯/休眠抑制的判定表、开关默认值。

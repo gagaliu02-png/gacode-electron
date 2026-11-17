@@ -309,6 +309,21 @@ export interface ChatSseHandlers {
   onCursor?: (cursor: string | null) => void;
   /** 帧不是合法 JSON (心跳 / 注释 / 半截帧) —— 不抛, 只报。 */
   onParseError?: (raw: string, err: unknown) => void;
+  /**
+   * ★ [P2-4′ · 2026-11-17] **收到字节**（不是收到完整帧！）—— 每次读到网络字节都调。
+   *
+   *   ## 为什么是「字节」不是「帧」
+   *
+   *     服务端每 ≤5s 发一条 `: keepalive` **注释帧** ⇒ 解析器**直接跳过**
+   *     （`parseSseFrame` 忽略 `:` 开头的行）⇒ **帧级**看门狗看不到任何动静
+   *     ⇒ 「服务端一直有流量」也会被误判成「停滞」⇒ 误报「网络失败」。
+   *     ⇒ 看门狗的计时口径必须是**字节**。
+   *
+   *   ⚠️ 本回调是**纯类型新增**（⛔ 不引任何运行时 import）——
+   *     本文件被既有测试按「固定依赖链」加载 ⇒ 多一个运行时依赖就多一处
+   *     `ERR_MODULE_NOT_FOUND`。
+   */
+  onBytes?: (byteLength: number) => void;
 }
 
 /** 读帧结果。 */
@@ -367,6 +382,14 @@ export async function readChatSse(
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
+      // ★ [P2-4′] **字节口径**的活跃度 —— 看门狗靠它重新计时（心跳/半截帧也算有动静）。
+      if (value && value.byteLength > 0) {
+        try {
+          handlers.onBytes?.(value.byteLength);
+        } catch {
+          /* 看门狗回调抛异常不许带崩读流 */
+        }
+      }
       const text = decoder.decode(value, { stream: true });
       for (const frame of parser.push(text)) {
         handleFrame(frame.data, frame.id);

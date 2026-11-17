@@ -73,6 +73,16 @@ import { buildChatStreamHeaders, CLIENT_ID_PC } from "./sse/client-id";
 // ★ [P3 · 2026-11-12] 端侧能力声明 (契约附录 订正 24 §3)。
 import { clientCapabilityHeader } from "./client-capabilities";
 import { createSseBackoff, createSseWatchdog } from "./sse-reconnect";
+// ★ [P2-1/P2-2 · 2026-11-17] 服务端「消息去向」+「会话级 ack」的**唯一判据**
+//   （零依赖模块 ⇒ `node --test` 能直接跑；判据只写一遍）。
+import {
+  readDisposition,
+  readUserMessageProcessed,
+  type ChatDisposition,
+  type UserMessageProcessedEvent,
+} from "./session-events";
+// ★ [P2-4′ · 2026-11-17] 看门狗的**分级 + 休眠抑制**开关（PM 拍板：新路就是默认路）。
+import { readP2Flags } from "./p2-features";
 // ★ v2 (契约订正 17): 轮次身份从**响应头**取 (判据只有这一份, 跟 web 同一份)。
 // ★ RC-3 (契约订正 19): 进程级 epoch 也从**响应头**取 (同一个文件, 同一份判据)。
 import { readTurnKeyHeader, readTurnEpochHeader } from "./sse/turn-key-header";
@@ -162,6 +172,27 @@ export interface UseChatStreamOptions {
    */
   onTurnEpoch?: (epoch: string) => void;
   /**
+   * ★ [P2-2 · 2026-11-17] **双发 ack 的第二次告知**（「那条排队消息已被处理」）。
+   *
+   *   服务端把这一帧写给该 session 的**全部** socket（发起流 / 续传 / 只读接入 /
+   *   常驻订阅）⇒ **两条路都要消费**（发起流在这里，常驻订阅在 `chat-subscribe.ts`）。
+   *
+   *   ⚠️ 这一帧会被 `normalizeChatChunk` 的「未知 type 跳过」规则**丢掉**
+   *   （`user_message_processed` 不是富事件）⇒ **必须在归一之前读**（见 `runStream`）。
+   */
+  onUserMessageProcessed?: (ev: UserMessageProcessedEvent) => void;
+  /**
+   * ★ [P2-1 · 2026-11-17] 服务端把这条消息**排进队列**了（202 ⇒ `disposition:'queued'`）。
+   *
+   *   · 这一轮**没有**被发起 ⇒ 不会有帧来 ⇒ 宿主层据此收掉「等首帧」的流式行
+   *     （**用户那条乐观气泡留着** —— 消息没丢）；
+   *   · `inboxId` = 服务端给的收件箱行 id ⇒ 宿主层拿它跟 ack 帧对上。
+   */
+  onQueued?: (info: {
+    disposition: ChatDisposition | null;
+    inboxId: string | null;
+  }) => void;
+  /**
    * ★ v2 (R2-PC): 续传模式 (契约 L-35 / L-36)。
    *
    *   传了这个字段 ⇒ **第一次请求**就走续传形态:
@@ -207,6 +238,11 @@ export interface AttachChatStreamOptions {
    */
   onTurnEpoch?: (epoch: string) => void;
   /**
+   * ★ [P2-2 · 2026-11-17] 双发 ack 的第二次告知（接入流也是该 session 的一个 socket
+   *   ⇒ 服务端**也会**把 ack 帧推给它）⇒ 同样要消费。
+   */
+  onUserMessageProcessed?: (ev: UserMessageProcessedEvent) => void;
+  /**
    * ★ RC-3 (契约订正 19): 端侧记住的服务端**进程级** epoch ⇒ attach 时带回去。
    * 有值 ⇒ 请求带 `X-Turn-Epoch`; 没有 ⇒ 不带 (行为与改动前逐字一致)。
    */
@@ -244,6 +280,27 @@ const MAX_RECONNECT_ATTEMPTS = 3;
  * 调用方: const { start, abort } = useChatStream(); start({...});
  */
 
+/**
+ * ★ [P2-1 · 2026-11-17] `sendNoStream` 的应答（**服务端明说这条消息去了哪**）。
+ *
+ *   · `disposition === 'started'` —— 这一轮**已经起了**（消息直接进模型）；
+ *   · `disposition === 'queued'`  —— 这条**进了会话收件箱**（排队中）⇒
+ *     **这一轮没有被发起** ⇒ 不会有帧来 ⇒ 宿主层别傻等首帧；
+ *   · `disposition === null`     —— 老服务端没这个字段 ⇒ 落回老启发式。
+ *   · `inboxId` —— 服务端给的收件箱行 id（**只有排队时才有**）
+ *     ⇒ 宿主层拿它跟 ack 帧（`user_message_processed.inboxId`）对上。
+ */
+export interface SendNoStreamResult {
+  /** 服务端收下了吗。 */
+  ok: boolean;
+  /** 这一轮的身份（`disposition === 'started'` 时有）。 */
+  turnKey: string | null;
+  /** 服务端说的「这条消息去了哪」（老服务端 ⇒ null）。 */
+  disposition: ChatDisposition | null;
+  /** 服务端给的收件箱行 id（= ack 帧里的 `inboxId`；没有 ⇒ null）。 */
+  inboxId: string | null;
+}
+
 export interface ChatStreamHandle {
   /** 发起一轮新的对话 (body 带 message ⇒ 服务端建新轮次)。 */
   start: (opts: UseChatStreamOptions) => Promise<void>;
@@ -264,9 +321,9 @@ export interface ChatStreamHandle {
    *   ⚠️ 与 `start` 的区别：start = 一轮一连接（自己读流 + 收尾 ACK）；
    *     sendNoStream = 只发不接（帧从常驻流来）。
    *
-   *   @returns 服务端应答（含 turnKey）。失败抛错。
+   *   @returns 服务端应答（含 turnKey / disposition）。失败抛错。
    */
-  sendNoStream: (opts: UseChatStreamOptions) => Promise<{ ok: boolean; turnKey: string | null }>;
+  sendNoStream: (opts: UseChatStreamOptions) => Promise<SendNoStreamResult>;
   /**
    * 中止当前流. reason:
    *   - "user"     用户主动按停止 → 走 USER_STOP
@@ -363,6 +420,15 @@ export function useChatStream(): ChatStreamHandle {
         onTurnEpoch?: (epoch: string) => void;
         // ★ RC-3: 端侧记住的服务端 epoch ⇒ 续传时带回去 (有值才带)。
         epoch?: string | null;
+        // ★ [P2-2]: 双发 ack（会话级）—— 这一帧**必须在归一之前**读。
+        onUserMessageProcessed?: (ev: UserMessageProcessedEvent) => void;
+        // ★ [P2-1]: 服务端把这条排进队列了（202）。
+        onQueued?: (info: {
+          disposition: ChatDisposition | null;
+          inboxId: string | null;
+        }) => void;
+        // ★ [P2-4′]: 字节口径的活跃度（心跳/半截帧也算有动静）。
+        onBytes?: () => void;
       },
       ac: AbortController,
     ): Promise<void> => {
@@ -440,6 +506,32 @@ export function useChatStream(): ChatStreamHandle {
         );
       }
 
+      // ★ [P2-1 · 2026-11-17] **202 = 服务端把这条排进队列了**（不是起新轮）。
+      //
+      //   服务端在「这一轮还在跑」时把消息收进**会话收件箱** ⇒ 回 **202 JSON**
+      //   `{ok:true, queued:true, disposition:'queued', eventId, acceptedAt, inboxId, …}`
+      //   ⇒ **这一轮没有被发起** ⇒ 后面**不会有任何帧** ⇒ 读流是错的 ⇒ 这里直接收工。
+      //
+      //   ⚠️ 老服务端没有 202 这条路（要么 409 要么 200 SSE）⇒ 判据是状态码，行为不变。
+      if (res.status === 202) {
+        let queuedBody: Record<string, unknown> = {};
+        try {
+          const raw = (await res.json()) as Record<string, unknown>;
+          queuedBody =
+            (raw && (raw.data as Record<string, unknown>)) || raw || {};
+        } catch {
+          /* body 不是 JSON ⇒ 后面按「读不到 disposition」处理 */
+        }
+        const disposition = readDisposition(queuedBody);
+        const inboxId = queuedBody.inboxId != null ? String(queuedBody.inboxId) : null;
+        try {
+          opts.onQueued?.({ disposition, inboxId });
+        } catch (e) {
+          console.warn("[gacode-sse] onQueued 回调抛异常 (忽略)", e);
+        }
+        return;
+      }
+
       // ★ v2 (契约订正 17): **轮次身份在响应头就到** —— 不用等第一个数据帧。
       //   服务端建轮那一刻就把 `X-Turn-Key` 写进响应头 (毫秒级), 而第一个数据帧
       //   要等模型出字 (TTFT 3~20s) ⇒ 这段窗口里客户端被杀就永远认不出亲。
@@ -472,6 +564,19 @@ export function useChatStream(): ChatStreamHandle {
       await readChatSse(res.body, {
         onData: (payload, cur) => {
           if (!payload || typeof payload !== "object") return;
+          // ★ [P2-2 · 2026-11-17] **双发 ack 必须在归一之前读** ——
+          //   `user_message_processed` 不是富事件 ⇒ `normalizeChatChunk` 的
+          //   「未知 type 跳过」会把它**丢掉** ⇒ 读晚了就永远收不到。
+          //   这一帧**只有** ack（没有 content / done）⇒ 消费掉，不喂渲染层。
+          const ack = readUserMessageProcessed(payload);
+          if (ack) {
+            try {
+              opts.onUserMessageProcessed?.(ack);
+            } catch (e) {
+              console.warn("[gacode-sse] onUserMessageProcessed 回调抛异常 (忽略)", e);
+            }
+            return;
+          }
           // ★ 过归一层 (契约 L-8 ~ L-12) —— 未知 / 死类型逐条跳过 (L-9 / L-11),
           //   `pending_id` 的 snake / camel 别名在这里统一解析好 (L-21)。
           // ★ v2: 游标一起透出 (T-09 幂等要靠它把帧与 seq 对上)。
@@ -482,6 +587,8 @@ export function useChatStream(): ChatStreamHandle {
           opts.onCursor?.(cursor);
         },
         onControl: (frame) => opts.onControl?.(frame),
+        // ★ [P2-4′] **字节**口径的活跃度 ⇒ 看门狗重新计时（心跳也算有动静）。
+        onBytes: () => opts.onBytes?.(),
       });
     },
     [],
@@ -523,6 +630,10 @@ export function useChatStream(): ChatStreamHandle {
 
       let sawDone = false;
       let sawCancel = false;
+      // ★ [P2-1 · 2026-11-17] 服务端把这条**排进队列**了（202）吗？
+      //   ⇒ 这一轮**没有被发起** ⇒ 不存在「终态帧」⇒ **不许**报「没有终态帧」
+      //   （那会让宿主层弹降级/重试条 —— 而其实只是「它在排队」）。
+      let sawQueued = false;
       // ★ RC-5: 见过「本端续传接不回来」的失败帧吗。
       //   ⛔ **不许**把它并进 `sawDone` —— `sawDone` 驱动收尾的 `ACK_DONE` DELETE,
       //     而服务端那一轮**可能还在跑** (失败帧只是「你接不回来」, 不是「这一轮结束了」)
@@ -574,9 +685,29 @@ export function useChatStream(): ChatStreamHandle {
       const backoff = createSseBackoff();
       const lastEventAt = { current: Date.now() };
       let attemptAc: AbortController | null = null;
+      // ★ [P2-4′ · 2026-11-17] 看门狗的**分级 + 休眠抑制**开关
+      //   （PM 拍板：新路就是默认路 ⇒ 三个开关默认全开；判据在 `lib/p2-features.ts`）。
+      const p2 = readP2Flags();
       const watchdog = createSseWatchdog({
         lastEventAt: () => lastEventAt.current,
         isActive: () => !ac.signal.aborted,
+        // ★ 分级阶梯（15s / 30s / 60s 各记一条 warn ⇒ **120s 才判死**）
+        //   —— 比老口径（单档 60s 判死）更宽容 ⇒ 不误杀「模型在想很久」的轮次。
+        graded: p2.watchdogGraded,
+        sleepSuppression: p2.watchdogSleepSuppression,
+        judgeDead: p2.watchdogJudgeDead,
+        onWarn: (info) => {
+          // ⚠️ warn **不算错** ⇒ 只是可观测（不触发失败路径）。
+          if (info.reason === "suspended") {
+            console.warn(
+              `[gacode-sse] 会话流疑似休眠/挂起 (档位 ${info.grade}, 阈值 ${Math.round(info.thresholdMs / 1000)}s) ⇒ 重新武装, 不判死`,
+            );
+            return;
+          }
+          console.warn(
+            `[gacode-sse] 会话流静默 ${Math.round(info.idleMs / 1000)}s (档位 ${info.grade}, 阈值 ${Math.round(info.thresholdMs / 1000)}s) ⇒ 继续等`,
+          );
+        },
         onTimeout: (idle) => {
           console.warn(
             `[gacode-sse] 会话流 ${Math.round(idle / 1000)}s 无事件, 断线重连`,
@@ -631,6 +762,30 @@ export function useChatStream(): ChatStreamHandle {
                   opts.onCursor?.(cursor);
                 },
                 onControl: (frame) => opts.onControl?.(frame),
+                // ★ [P2-1] 服务端把这条**排进队列**了（202）⇒ 这一轮不会被发起。
+                onQueued: (info) => {
+                  sawQueued = true;
+                  try {
+                    opts.onQueued?.(info);
+                  } catch (e) {
+                    console.warn("[gacode-sse] onQueued 回调抛异常 (忽略)", e);
+                  }
+                },
+                // ★ [P2-2] 双发 ack（会话级）—— 这一帧必须在归一之前读。
+                onUserMessageProcessed: (ev) => {
+                  try {
+                    opts.onUserMessageProcessed?.(ev);
+                  } catch (e) {
+                    console.warn(
+                      "[gacode-sse] onUserMessageProcessed 回调抛异常 (忽略)",
+                      e,
+                    );
+                  }
+                },
+                // ★ [P2-4′] **字节**口径的活跃度 ⇒ 看门狗重新计时。
+                //   ⚠️ 服务端每 ≤5s 一条 `: keepalive` **注释帧** ⇒ 解析器跳过它
+                //   ⇒ 只看「帧」会把「一直有流量」误判成停滞 ⇒ 必须按字节计时。
+                onBytes: () => watchdog.notifyBytes(),
                 // ★ v2 (契约订正 17): 身份从响应头透出 (比第一个数据帧早 3~20s)。
                 onTurnKey: (turnKey) => opts.onTurnKey?.(turnKey),
                 // ★ RC-3 (契约订正 19): 进程级 epoch 从响应头透出 + 续传时带回去。
@@ -673,8 +828,10 @@ export function useChatStream(): ChatStreamHandle {
           //   · 收到轮次终态 / 取消帧 ⇒ 这一轮完了, 不重连。
           //   · ★ RC-5: 收到「续传接不回来」帧 ⇒ 这一轮**接不回来了**
           //     ⇒ 也不重连 (重连也接不回来, 白烧预算)。
+          //   · ★ [P2-1] 服务端把它**排进队列**了（202）⇒ 这一轮**压根没起**
+          //     ⇒ 没有流可续 ⇒ 不重连 (重连只会再排一次队)。
           //   · 否则 = **异常断流** (服务端半路断了) ⇒ 退避后走续传模式接回。
-          if (sawDone || sawCancel || sawFailed) break;
+          if (sawDone || sawCancel || sawFailed || sawQueued) break;
           if (attempt >= MAX_RECONNECT_ATTEMPTS) break;
           console.warn(
             `[gacode-sse] 会话流提前结束, ${backoff.current}ms 后续传 (第 ${attempt + 1} 次)`,
@@ -730,6 +887,10 @@ export function useChatStream(): ChatStreamHandle {
       //
       //   ⛔ 放在 try/catch **外面** ⇒ 本地那个 catch 不会把它当「网络错误」
       //     (它会调 opts.onError ⇒ 宿主层弹错条) —— 降级**不弹错**是硬要求。
+      //
+      // ★ [P2-1] **排队（202）不是「没有终态帧」** ⇒ 这一轮压根没起 ⇒ 直接收工
+      //   （⛔ 不许报「没有终态帧」—— 那会让宿主层弹降级/重试条，而它只是「在排队」）。
+      if (sawQueued) return;
       if (
         shouldReportMissingTerminal({
           aborted: ac.signal.aborted,
@@ -861,6 +1022,20 @@ export function useChatStream(): ChatStreamHandle {
         await readChatSse(res.body, {
           onData: (payload, cur) => {
             if (!payload || typeof payload !== "object") return;
+            // ★ [P2-2] 双发 ack —— 接入流也是该 session 的 socket ⇒ 服务端**也**推它
+            //   ⇒ 同样**必须在归一之前**读（否则被「未知 type 跳过」丢掉）。
+            const ack = readUserMessageProcessed(payload);
+            if (ack) {
+              try {
+                opts.onUserMessageProcessed?.(ack);
+              } catch (e) {
+                console.warn(
+                  "[gacode-sse] onUserMessageProcessed 回调抛异常 (忽略)",
+                  e,
+                );
+              }
+              return;
+            }
             // ★ 与发起流**同一份**归一层 (契约 L-8 ~ L-12) —— 不写第二遍。
             // ★ v2: 游标一起透出 (T-09 幂等要靠它把帧与 seq 对上)。
             opts.onChunk(normalizeChatChunk(payload as ChatChunk), cur ?? null);
@@ -900,7 +1075,7 @@ export function useChatStream(): ChatStreamHandle {
    *      `knowledge_refs` —— 与 `start` 的 body 构造一致。
    */
   const sendNoStream = useCallback(
-    async (opts: UseChatStreamOptions): Promise<any> => {
+    async (opts: UseChatStreamOptions): Promise<SendNoStreamResult> => {
       const body: Record<string, unknown> = { message: opts.message };
       if (opts.imageUrls && opts.imageUrls.length > 0) {
         body.image_urls = opts.imageUrls;
@@ -940,8 +1115,32 @@ export function useChatStream(): ChatStreamHandle {
       if (!res.ok) {
         throw new SseHttpError(res.status, `chat/stream none HTTP ${res.status}`);
       }
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; turnKey?: string | null };
-      return { ok: !!data.ok, turnKey: data.turnKey ?? null };
+      // ★ [P2-1 · 2026-11-17] 应答体（两种形状）：
+      //   · 200 `{ok:true, sessionId, turnKey, terminalReason, disposition:'started'}`
+      //     ⇒ 这一轮**已经起了**；
+      //   · 202 `{ok:true, queued:true, disposition:'queued', eventId, acceptedAt,
+      //          inboxId, seq, content, attachments}`
+      //     ⇒ 这条**进了会话收件箱**（排队中）⇒ 这一轮**没有被发起**。
+      const raw = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      const data =
+        (raw && (raw.data as Record<string, unknown>)) || raw || {};
+      // ⚠️ **优先读 `disposition`**（服务端明说这条消息去了哪）；
+      //   读不到（老服务端）⇒ null ⇒ 调用方落回老启发式。
+      const disposition = readDisposition(data) ?? readDisposition(raw);
+      const turnKey =
+        typeof data.turnKey === "string"
+          ? data.turnKey
+          : typeof raw.turnKey === "string"
+            ? raw.turnKey
+            : null;
+      const inboxId =
+        data.inboxId != null ? String(data.inboxId) : raw.inboxId != null ? String(raw.inboxId) : null;
+      return {
+        ok: !!(data.ok ?? raw.ok),
+        turnKey,
+        disposition,
+        inboxId,
+      };
     },
     [],
   );
