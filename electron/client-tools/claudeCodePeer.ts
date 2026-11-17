@@ -152,16 +152,16 @@ async function sendFrame(
   const holdMs = opts.holdMs ?? 400;
   return new Promise((resolve) => {
     let settled = false;
+    let timer: NodeJS.Timeout | null = null;
     const done = (r: { ok: boolean; reason?: string }) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       try { sock.destroy(); } catch { /* ignore */ }
       resolve(r);
     };
 
     const sock = net.connect({ path: sockPath });
-    const timer = setTimeout(() => done({ ok: true }), holdMs);
 
     sock.on('connect', async () => {
       try {
@@ -170,11 +170,17 @@ async function sendFrame(
         await writeFrame(sock, frame);
       } catch (e: any) {
         done({ ok: false, reason: 'write_failed:' + (e?.message || 'unknown') });
+        return;
       }
+      // ★ 计时器**从写完之后**开始 —— 连接建立可能比 holdMs 慢
+      //   （早前版本从 connect 之前就起表 ⇒ 慢机器上会「还没写就判成功」）。
+      timer = setTimeout(() => done({ ok: true }), holdMs);
     });
     sock.on('error', (e: any) => done({ ok: false, reason: 'socket_error:' + (e?.code || e?.message || 'unknown') }));
     sock.on('close', () => {
-      // auth 被拒 ⇒ 服务端立刻 destroy ⇒ 视为失败
+      // ★ 服务端是**长驻 inbox** —— 收完帧它**不会**关连接。
+      //   ⇒ 「被关掉」= 服务端**拒了**（auth 帧不合法 ⇒ 立刻 destroy）。
+      //   （早前版本用「写完 + 固定等 N 秒」判成功，在这台机器上会误报 timeout。）
       done({ ok: false, reason: 'connection_closed_by_server' });
     });
   });
