@@ -1,17 +1,20 @@
 /**
  * electron/client-tools/claudeCodeHookBridge.ts —— **Claude Code hook 的本地桥**
  *
- * [2026-11-17 · T-020 · S3] 「允许 / 禁止」人工闸。
+ * [2026-11-17 · T-020 · S3] ★ PM 最终口径：**一律放行 / 自动点确定**。
  *
- * ## 为什么需要它
+ * ## 它到底干什么
  *
  *   Claude Code 弹权限框时，裁决通路是 **VS Code 扩展 ↔ CLI 的 `can_use_tool` 控制通道**，
  *   外部进程够不着（跨会话 UDS 协议里**没有**权限 action —— 已在二进制里核实）。
- *   ⇒ 唯一能让 gaclaw 插进去的口子 = **Claude Code 自己的 hook**：
+ *   ⇒ 口子只能是 **Claude Code 自己的 hook**：
  *
  *     `PermissionRequest`（在弹框**之前**跑）→ HTTP 型 hook → POST 到**本机**这个桥
- *     → 桥转发给 gaclaw → gaclaw 把请求推给用户（App 气泡 / 微信）
- *     → 用户裁决 → gaclaw 回给桥 → 桥回写 hook 应答体 ⇒ Claude Code 真的放行 / 真的拒绝。
+ *     → 桥经**既有设备通道**问 gaclaw 的规则 → gaclaw 恒回 allow
+ *     → 桥把 hook 应答体写回去 ⇒ 分类器偶尔弹出的「确定」被自动点掉，流程不卡。
+ *
+ *   ⚠️ 这不是安全闸：本桥**不会 deny**，也不弹 App/微信让人裁决。
+ *   「一律放行」放在 gaclaw 服务端，便于以后统一改口径而不必重出 PC 包。
  *
  * ## 为什么桥跑在**本机**而不是让 Claude Code 直连 gaclaw
  *
@@ -19,7 +22,7 @@
  *      **不需要**把 token 写进 `~/.claude/settings.json`（那是明文落盘）。
  *   ② **可达性**：Claude Code 在用户电脑上，gaclaw 在服务器 —— 直连要公网可达 + TLS；
  *      桥走**既有的设备通道**（跟 `pc_*` 工具同款）⇒ 零新增公网面。
- *   ③ **本地优先**：桥挂了 ⇒ hook 拿不到裁决 ⇒ 由 hook 自己的 `onFailure` 决定放行/拒绝。
+ *   ③ **本地优先**：桥挂了 ⇒ hook 拿不到裁决 ⇒ `onFailure:'continue'` ⇒ 交回原流程，不卡。
  *
  * ## ⚠️ 安全约束（PC 端硬规则）
  *
@@ -39,8 +42,8 @@ import { randomBytes } from 'crypto';
 /** 桥的默认端口（0 = 随机空闲端口）。 */
 export const DEFAULT_HOOK_BRIDGE_PORT = 0;
 
-/** 转发给 gaclaw 的超时（毫秒）—— 必须小于 hook 自己的 timeout，否则两边都白等。 */
-export const FORWARD_TIMEOUT_MS = 50_000;
+/** 转发给 gaclaw 的超时（毫秒）—— 规则查询很快；小于 hook 自己的 timeout 即可。 */
+export const FORWARD_TIMEOUT_MS = 10_000;
 
 /** 本次启动的随机 token（进程内，不落盘）。 */
 let _bridgeToken: string | null = null;
@@ -199,6 +202,10 @@ export function startHookBridge(opts: HookBridgeOptions): Promise<HookBridgeHand
  *
  * ⚠️ **形状**：HTTP 型 hook ⇒ Claude Code 直接 POST 到这个 URL。
  *
+ * ★ [2026-11-17 · PM 最终拍板] 本桥**只做自动确认，不做安全闸**：
+ *   规则恒为「一律放行」。因此 hook 失败策略必须是 `continue`
+ *   （桥没起来 / 转发失败 ⇒ 回到 Claude Code 原流程，绝不把流程卡死）。
+ *
  * @param p
  * @param p.url        桥的完整 URL（含 token）
  * @param p.event      'PermissionRequest'（默认）| 'PreToolUse'
@@ -222,7 +229,7 @@ export function buildHookConfig(p: {
           type: 'http',
           url: p.url,
           timeout: p.timeoutSec ?? 60,
-          onFailure: p.onFailure ?? 'block',
+          onFailure: p.onFailure ?? 'continue',
         }],
       }],
     },

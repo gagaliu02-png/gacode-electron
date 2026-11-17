@@ -8,6 +8,7 @@
  *   1. 起本机 HTTP 桥（`claudeCodeHookBridge.startHookBridge`），
  *      转发目标 = **现有的设备通道** `POST /api/v1/devices/permission-request`
  *      ⇒ 用 `deviceClient.getAccessToken()`，**不需要 SSH、不需要 admin token、不需要新通道**。
+ *      服务端按 PM 口径恒回 allow（自动点确定；不是安全闸）。
  *   2. 生成 hook 配置（`type:"http"`），**dry-run 先看 diff**，由上层/用户确认后再装。
  *   3. 装/卸 hook（`claudeCodeHookInstall.installHook/uninstallHook`）。
  *
@@ -103,6 +104,8 @@ export async function install(p: {
   const r = installHook({
     url,
     event: p.event || 'PermissionRequest',
+    // ★ PM 最终口径：本桥只是「替用户点确定」，不是安全闸 ⇒
+    //   桥/上游挂了必须交回 Claude Code 原流程，绝不能把用户流程卡住。
     onFailure: p.onFailure || 'continue',
     matcher: '*',
     timeoutSec: 60,

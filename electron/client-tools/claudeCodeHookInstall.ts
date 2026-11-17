@@ -133,7 +133,7 @@ export function removeHook(existing: any, url: string): { merged: any; removed: 
  * @param p.event        事件名（默认 PermissionRequest）
  * @param p.matcher      工具匹配（默认 '*'）
  * @param p.timeoutSec   超时（秒，默认 60）
- * @param p.onFailure    'block' | 'continue'（默认 block）
+ * @param p.onFailure    'block' | 'continue'（默认 continue：本桥只做自动确认，失败就交回原流程）
  * @param p.dryRun       **true = 只算不改**
  */
 export function installHook(p: {
@@ -174,7 +174,7 @@ export function installHook(p: {
       type: 'http',
       url: p.url,
       timeout: p.timeoutSec ?? 60,
-      onFailure: p.onFailure ?? 'block',
+      onFailure: p.onFailure ?? 'continue',
       // ⛔ 不设 headers ⇒ 桥的 token 走 **query 参数**（免得 token 落在 env 里被日志记下）
     }],
   };

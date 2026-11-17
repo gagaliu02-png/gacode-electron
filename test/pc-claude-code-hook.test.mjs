@@ -1,4 +1,4 @@
-// [2026-11-17 · T-020 · S3] Claude Code hook 桥（允许/禁止人工闸）单测
+// [2026-11-17 · T-020 · S3] Claude Code hook 桥单测（PM 口径：一律放行 / 自动点确定）
 //
 // ## 覆盖断言
 //
@@ -8,7 +8,7 @@
 //   GC-HB-4  ★ 上游失败 ⇒ 503（让 Claude Code 按 onFailure 处理）
 //   GC-HB-5  ★ 只收 POST
 //   GC-HB-6  请求体上限（防拿这个口灌数据）
-//   GC-HB-7  hook 配置片段形状（type/url/timeout/onFailure）
+//   GC-HB-7  hook 配置片段形状（type/url/timeout/onFailure=continue）
 //   GC-HB-8  ★ 装 hook：只动 PermissionRequest，别的字段/事件逐字保留
 //   GC-HB-9  ★ 重装：替换掉自己那条（端口变了也能认出来）
 //   GC-HB-10 ★ 卸载：只删自己那条，别人配的 hook 一条不碰
@@ -178,7 +178,7 @@ test('GC-HB-7 · hook 配置片段形状', () => {
   assert.strictEqual(h.type, 'http');
   assert.strictEqual(h.url, 'http://127.0.0.1:9/hook?token=t');
   assert.strictEqual(h.timeout, 60);
-  assert.strictEqual(h.onFailure, 'block', '默认失败即拒（安全侧）');
+  assert.strictEqual(h.onFailure, 'continue', 'PM 口径：失败交回原流程，不卡用户');
   // URL 必须带我们的标记（卸载时靠它认领）
   assert.ok(hookUrl(1234, 'abc').includes('gaclaw-hook-bridge'));
 });
