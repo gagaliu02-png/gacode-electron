@@ -43,6 +43,11 @@ scripts/*
 #   同款声明式例外。⚠️ 该脚本入库前已把硬编码绝对路径改成从
 #   scripts/lib/schedule-loader.mjs 导入 ROOT —— 否则换个 checkout 路径就跑不了。
 !scripts/verify-schedule-b7-archived.mjs
+# 出包钩子 (T-021 · 2026-11-17): rcedit 0.2.0 的「空值参数」坑 ⇒ 必须入库
+#   —— electron-builder 自己那次 rcedit 调用**固定带空值** ⇒ 必炸
+#   ⇒ 靠这个 afterPack 钩子自己写版本资源。
+#   ⚠️ 不入库 ⇒ clone 下来**出不了包** ⇒ 同款声明式例外 (不用 git add -f)。
+!scripts/after-pack-rcedit.cjs
 # SSE 接回批 (2026-10-28): 游标/续传头 + 进场接回 + 审批链路 + 富事件降级 四支断言,
 #   外加变异反证台 (每条断言必须有「改了它就转红」的证据)。
 #   同款声明式例外 —— 父目录已放行 + `scripts/*` 已重新忽略, 这里逐个豁免。
