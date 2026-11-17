@@ -26,9 +26,9 @@ import { deviceClient, getDeviceId, deviceCapabilities } from './deviceClient';
 import { localTasks } from './localTasks';
 // ★ [2026-11-13 · 订正 27 · B6] 后台作业：巡检（跑完 ⇒ 回传服务端）+ 界面接线。
 import { jobReporter } from './jobReporter';
-import { listJobInfos, onJobsChanged } from './jobView';
+import { listJobInfos, onJobsChanged, emitJobsChanged } from './jobView';
 // ★ [2026-11-17] 后台作业表自动清理（append-only jsonl 不压缩会一直涨）。
-import { startJobPruner } from './localJobs.ts';
+import { startJobPruner, clearFinishedJobs } from './localJobs.ts';
 import {
   assertAllowed,
   appendAudit,
@@ -214,6 +214,13 @@ export function registerClientToolIpc(): void {
 
   // 本机后台作业列表（含已结束的，按开始时间倒序）。
   ipcMain.handle('gacode:client-tool-list-jobs', async () => listJobInfos());
+
+  // ★ [2026-11-17] 一键清空「已结束」的后台作业（在跑的不动）。
+  ipcMain.handle('gacode:client-tool-clear-jobs', async () => {
+    const res = clearFinishedJobs();
+    emitJobsChanged();
+    return res;
+  });
 
   // 停一个后台作业（杀进程树）⇒ 跟「用户点了停止」是**同一条**路
   //   （`deviceClient.stopTask` 会杀掉 detached 进程 + 把「已被停止」回传服务端）。

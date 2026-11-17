@@ -198,6 +198,9 @@ export interface GacodeBridge {
     /** 一键清空审计。 */
     clearAudit: () => Promise<{ cleared: number }>;
 
+    /** ★ [2026-11-17] 一键清空「已结束」的后台作业（在跑的不动）。 */
+    clearJobs: () => Promise<{ cleared: number }>;
+
     /** 跑一个端侧工具（**同样过闸门**）。 */
     execute: (input: {
       tool: string;

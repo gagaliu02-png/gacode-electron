@@ -163,6 +163,9 @@ contextBridge.exposeInMainWorld('gacode', {
       ipcRenderer.invoke('gacode:client-tool-set-gate', next),
     audit: (limit?: number) => ipcRenderer.invoke('gacode:client-tool-audit', limit),
     clearAudit: () => ipcRenderer.invoke('gacode:client-tool-clear-audit'),
+    /** ★ [2026-11-17] 一键清空「已结束」的后台作业（在跑的不动）。 */
+    clearJobs: (): Promise<{ cleared: number }> =>
+      ipcRenderer.invoke('gacode:client-tool-clear-jobs'),
     execute: (input: {
       tool: string;
       args?: Record<string, unknown>;

@@ -298,6 +298,68 @@ export function pruneFinishedJobs(now = Date.now()): {
 }
 
 /**
+ * ★ [2026-11-17] **一键清空「已结束」的后台作业记录**（UI「清空」按钮）。
+ *
+ * 对齐「执行记录」的清空交互（gate.clearAudit）—— 用户点一下就把历史清掉。
+ *
+ * ## 只清已结束的，**绝不清正在跑的**
+ *
+ *   · 清：`reported` / `failed` / `cancelled`（都已经是终态）；
+ *   · 留：`queued` / `running`（还在跑，清了就再也看不到、停不掉）；
+ *   · 同时删掉被清作业的 `jobs/<jobId>.log`（输出日志）。
+ *
+ * ⚠️ 跟 `pruneFinishedJobs()` 的区别：那个是**自动压缩废行、一条不删**；
+ *    这个是**用户显式点「清空」⇒ 真的删掉**已结束的作业（跟执行记录一个待遇）。
+ *
+ * @returns `{cleared}`（清掉了几条已结束作业）
+ */
+export function clearFinishedJobs(now = Date.now()): { cleared: number } {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(localJobsFile(), 'utf8');
+  } catch (_) {
+    return { cleared: 0 };
+  }
+  const lines = raw.split('\n').filter((s) => s.trim());
+  if (!lines.length) return { cleared: 0 };
+
+  // 折叠（后面的行覆盖前面的）—— 判终态要看最后一次状态。
+  const folded: Record<string, LocalJob> = {};
+  for (const line of lines) {
+    let rec: any;
+    try { rec = JSON.parse(line); } catch (_) { continue; }
+    if (!rec || !rec.id) continue;
+    folded[rec.id] = { ...(folded[rec.id] || {}), ...rec } as LocalJob;
+  }
+  const isFinished = (j: LocalJob) =>
+    j.status === 'reported' || j.status === 'failed' || j.status === 'cancelled';
+  const finishedIds = Object.values(folded).filter(isFinished).map((j) => j.id);
+  if (!finishedIds.length) return { cleared: 0 };
+
+  const kept = Object.values(folded).filter((j) => !isFinished(j));
+  const out = kept.length ? kept.map((j) => JSON.stringify(j)).join('\n') + '\n' : '';
+
+  // 原子重写（跟 pruneFinishedJobs 同款口径）。
+  const file = localJobsFile();
+  const tmp = `${file}.tmp-${process.pid}-${now}`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, out, 'utf8');
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    console.error('[client-tools/jobs] 清空已结束作业失败:', e && (e as Error).message);
+    return { cleared: 0 };
+  }
+
+  // jsonl 写好了 ⇒ 再删日志。
+  for (const id of finishedIds) {
+    try { fs.unlinkSync(jobLogFile(id)); } catch (_) { /* 日志不存在 / 被占用 ⇒ 忽略 */ }
+  }
+  return { cleared: finishedIds.length };
+}
+
+/**
  * 定期压缩定时器（主进程启动时开一次）。
  *
  * ⚠️ 间隔 **1 小时**：压缩只处理废行，不需要频繁跑。

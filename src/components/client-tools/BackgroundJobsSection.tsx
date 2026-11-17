@@ -33,7 +33,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LocalJobInfo } from "../../../shared/types";
 import { useToast } from "../ui/Toast";
-import { LoaderCircleIcon, StopSquareIcon } from "../ui/Glyphs";
+import { LoaderCircleIcon, StopSquareIcon, TrashIcon } from "../ui/Glyphs";
 
 /** 轮询间隔（毫秒）—— 作业状态会自己变（跑完 / 被停）。 */
 const REFRESH_MS = 5000;
@@ -203,9 +203,30 @@ export function BackgroundJobsSection() {
     [bridge, refresh, toast],
   );
 
+  /** ★ [2026-11-17] 一键清空已结束的作业（像「执行记录」的清空）。 */
+  const clearFinished = useCallback(async () => {
+    const b = bridge;
+    if (!b || typeof b.clearJobs !== "function") return;
+    try {
+      const res = await b.clearJobs();
+      toast({
+        title: "后台作业记录已清空",
+        description: `清掉了 ${res.cleared} 条已结束的作业（正在跑的不受影响）。`,
+        variant: "default",
+      });
+      await refresh();
+    } catch (e) {
+      toast({
+        title: "清空失败",
+        description: e instanceof Error ? e.message : "请稍后重试",
+        variant: "danger",
+      });
+    }
+  }, [bridge, refresh, toast]);
+
   // 还在跑的排前面 ⇒ 用户先看到「还挂着的」；其余按开始时间倒序。
   // ★ [2026-11-17] 已结束的**只显示最近 10 条**（本地记录不删，只是 UI 截断）。
-  const { active, settled, settledHidden } = useMemo(() => {
+  const { active, settled, settledHidden, settledTotal } = useMemo(() => {
     const sorted = [...jobs].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
     const activeJobs = sorted.filter(isActive);
     const allSettled = sorted.filter((j) => !isActive(j));
@@ -213,6 +234,7 @@ export function BackgroundJobsSection() {
       active: activeJobs,
       settled: allSettled.slice(0, MAX_SETTLED_SHOWN),
       settledHidden: Math.max(0, allSettled.length - MAX_SETTLED_SHOWN),
+      settledTotal: allSettled.length,
     };
   }, [jobs]);
 
@@ -291,7 +313,21 @@ export function BackgroundJobsSection() {
       {/* ── 已结束 ── */}
       {settled.length > 0 ? (
         <div className="space-y-1.5">
-          <div className="text-[11px] text-fg-muted">已结束（{settled.length}）</div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[11px] text-fg-muted">已结束（{settledTotal}）</div>
+            {typeof bridge?.clearJobs === "function" && settledTotal > 0 ? (
+              <button
+                type="button"
+                onClick={() => void clearFinished()}
+                className="shrink-0 inline-flex items-center gap-1 text-[11px] text-fg-muted hover:text-danger transition-colors duration-150"
+                aria-label="清空已结束的后台作业"
+                title="清空已结束的后台作业（正在跑的不受影响）"
+              >
+                <TrashIcon className="w-3.5 h-3.5" />
+                清空
+              </button>
+            ) : null}
+          </div>
           {settled.map((j) => {
             const st = jobStatusText(j.status);
             return (
