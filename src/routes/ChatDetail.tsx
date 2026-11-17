@@ -3536,6 +3536,12 @@ export function ChatDetail() {
   const stopBackgroundWork = useCallback(async () => {
     // ⚠️ 先看「有没有活要停」—— 没有就**静默**返回（⛔ 别每次按停止都弹一句「停不掉」）。
     if (sessionBackgroundWork.length === 0) return;
+    // ★ [T-030 · 2026-11-17] **通知服务端停后台活** ——
+    //   本机桥 `stopJob` 只能停**这台电脑上**的作业；**服务端自己跑的后台子 agent**
+    //   （`cloud_agent`）停不掉 ⇒ 必须发一条带 `stop_background` 意图的 DELETE，
+    //   服务端据此 `backgroundAgent.stopAllForSession()`（gaclaw 侧）。
+    //   ⚠️ **不能**复用 `USER_STOP`（会武装 pending cancel ⇒ 掐死队列里排着的下一条）。
+    sendCancelDelete(chatId, "STOP_BACKGROUND");
     const bridge =
       typeof window !== "undefined" ? window.gacode?.clientTools : undefined;
     if (!bridge || typeof bridge.stopJob !== "function") {

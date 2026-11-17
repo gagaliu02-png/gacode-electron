@@ -131,8 +131,12 @@ export function buildJobReport(
   const stdout = summary ? truncate(summary, REPORT_MAX_STDOUT_CHARS) : undefined;
 
   // ① 用户喊停的 ⇒ 失败原因就是「被用户停止」。
+  //   ★ [T-030 · 2026-11-17] **带 `cancelledByUser: true`** —— 服务端据此**静默结算**
+  //   （不投收件箱、不起轮、不产生任何 assistant 消息）。
+  //   ⇒ 否则用户点「停止后台任务」后，作业被杀、巡检回传「被停了」⇒ 服务端又起一轮汇报
+  //   ⇒ **观感 =「点了停止，任务还在回报」**（真机 session 1026）。
   if (job.status === 'cancelled') {
-    return { status: 'error', stdout, error: '作业已被用户停止' };
+    return { status: 'error', stdout, error: '作业已被用户停止', cancelledByUser: true };
   }
   // ② Claude Code 自己报错（`result` 事件带 `is_error`）。
   const resultEvent = events.find((e) => e && e.type === 'result');

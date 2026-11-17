@@ -449,9 +449,16 @@ class DeviceClient {
    *
    * ⚠️ 标「已回传过」是为了**只回传一次**（巡检不会再报一遍）。
    * ⚠️ 状态**保留** `cancelled`（UI 要显示「被用户停了」）⇒ 只补 `reportedAt`。
+   *
+   * ★ [2026-11-17 · T-030] **带 `cancelledByUser: true`** ——
+   *   服务端据此**只结账、不起轮汇报**（否则用户点了停止、任务却「还在回报」）。
    */
   private async reportJobStopped(jobId: string, message: string): Promise<void> {
-    const ok = await this.uploadResult(jobId, { status: 'error', error: message });
+    const ok = await this.uploadResult(jobId, {
+      status: 'error',
+      error: message,
+      cancelledByUser: true,
+    });
     if (!ok) return;
     updateJob(jobId, { reportedAt: Date.now(), summary: message });
     markDispatchReported(jobId, message);

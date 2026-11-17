@@ -363,15 +363,29 @@ test("P2-2h 队列条能看出「已处理」（⛔ 别再显示「排队中」�
 test("P2-3a 取消意图有第三种：INTERRUPT（线上字节 = 小写 interrupt）", () => {
   const src = repoSrc(CANCEL);
   const code = repoCode(CANCEL);
-  assert.match(
-    src,
-    /export type CancelIntent = "ACK_DONE" \| "USER_STOP" \| "INTERRUPT"/,
-    "★ CancelIntent 要有 INTERRUPT",
+  // ★ [T-030 · 2026-11-17] 类型声明改成多行 union（多了 STOP_BACKGROUND）⇒
+  //   断言改成「四个成员都在」，不再钉死单行写法。
+  const typeDecl = src.slice(
+    src.indexOf("export type CancelIntent"),
+    src.indexOf("export type CancelIntent") + 1600,
   );
+  for (const m of ['"ACK_DONE"', '"USER_STOP"', '"INTERRUPT"', '"STOP_BACKGROUND"']) {
+    assert.match(
+      typeDecl,
+      new RegExp(m.replace(/"/g, '"')),
+      `★ CancelIntent 要有 ${m}`,
+    );
+  }
   assert.match(
     code,
     /INTERRUPT:\s*"interrupt"/,
     "★ 线上字节用**小写** interrupt（服务端别名集：interrupt/user_interrupt/safe_stop/soft_stop）",
+  );
+  // ★ [T-030] 「停后台活」也有它的线上字节（小写 stop_background）。
+  assert.match(
+    code,
+    /STOP_BACKGROUND:\s*"stop_background"/,
+    "★ 线上字节用小写 stop_background（服务端别名集：stop_background）",
   );
 });
 

@@ -75,7 +75,21 @@ const API_BASE = "https://www.gaga.sale/api/v1";
  *       ⚠️ 服务端**不认识**这个意图时按 legacy 处理（= 硬掐 = 老行为）
  *         ⇒ **不需要能力协商**。
  */
-export type CancelIntent = "ACK_DONE" | "USER_STOP" | "INTERRUPT";
+export type CancelIntent =
+  | "ACK_DONE"
+  | "USER_STOP"
+  | "INTERRUPT"
+  /**
+   * ★ [T-030 · 2026-11-17] **停后台活**（用户点「停止后台任务」）。
+   *
+   * 语义 = 停**本会话**的后台活（服务端跑的后台子 agent + 设备派单的作业），
+   * **不武装 pending cancel** ⇒ 不误伤下一轮。
+   *
+   * ⚠️ 为什么不能复用 `USER_STOP`：它会让 gaclaw **武装 pending cancel**
+   *   ⇒ 队列里排着的下一条消息被 pre-abort（v1.2.61 同款故障）。
+   * ⚠️ 为什么不能复用 `INTERRUPT`：那是「软停」（跑到安全边界才停、要保住产出）。
+   */
+  | "STOP_BACKGROUND";
 
 /**
  * 意图 → **线上字节**的映射（query 与 header 用**同一个**值）。
@@ -84,11 +98,14 @@ export type CancelIntent = "ACK_DONE" | "USER_STOP" | "INTERRUPT";
  * ⚠️ INTERRUPT 用**小写** `interrupt`（服务端别名集
  *   `INTERRUPT_INTENT_ALIASES` = {interrupt, user_interrupt, safe_stop, soft_stop}，
  *   归一化时 trim + 转小写 ⇒ 小写最稳）。
+ * ⚠️ STOP_BACKGROUND 用**小写** `stop_background`（服务端别名集
+ *   `STOP_BACKGROUND_INTENT_ALIASES` = {stop_background}，同样小写最稳）。
  */
 const CANCEL_INTENT_WIRE: Record<CancelIntent, string> = {
   ACK_DONE: "ACK_DONE",
   USER_STOP: "USER_STOP",
   INTERRUPT: "interrupt",
+  STOP_BACKGROUND: "stop_background",
 };
 
 /**
