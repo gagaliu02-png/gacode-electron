@@ -72,6 +72,8 @@ export interface HookBridgeOptions {
   fetchImpl?: FetchLike;
   /** 端口（0 = 随机）。 */
   port?: number;
+  /** 固定 token（从已装 hook 的 URL 读回 ⇒ 重启后仍对得上）。 */
+  token?: string;
   /** 每次请求的额外字段（userId / channelId 等）。 */
   context?: Record<string, unknown>;
 }
@@ -93,7 +95,9 @@ export interface HookBridgeHandle {
  */
 export function startHookBridge(opts: HookBridgeOptions): Promise<HookBridgeHandle> {
   const fetchImpl: FetchLike = opts.fetchImpl || ((globalThis as any).fetch as FetchLike);
-  const token = bridgeToken();
+  // ★ 若已经装了 hook ⇒ 用配置里的固定地址/token（重启后还能对上）。
+  //   没装过才随机生成，等 install 把地址写进 settings.json。
+  const token = opts.token || bridgeToken();
 
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -187,6 +191,7 @@ export function startHookBridge(opts: HookBridgeOptions): Promise<HookBridgeHand
     server.on('error', reject);
     server.listen(opts.port ?? DEFAULT_HOOK_BRIDGE_PORT, '127.0.0.1', () => {
       const addr = server.address();
+      // 固定端口启动失败会走 server.on('error') ⇒ 这里一定拿到想要的那个端口
       const port = typeof addr === 'object' && addr ? addr.port : 0;
       resolve({
         port,

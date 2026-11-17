@@ -34,7 +34,7 @@ export function claudeSettingsFile(): string {
 }
 
 /** 我们加的 hook 的标记（用于识别「哪条是我们装的」）。 */
-const HOOK_MARKER = 'gaclaw-hook-bridge';
+export const HOOK_MARKER = 'gaclaw-hook-bridge';
 
 export interface HookInstallResult {
   ok: boolean;
@@ -223,5 +223,3 @@ export function uninstallHook(p: { url: string; dryRun?: boolean }): HookInstall
   }
   return { ok: true, file, summary: summary + ` → ${file}` };
 }
-
-export { HOOK_MARKER };

@@ -28,8 +28,11 @@ import {
 import {
   installHook,
   uninstallHook,
+  claudeSettingsFile,
+  HOOK_MARKER,
   type HookInstallResult,
 } from './claudeCodeHookInstall.ts';
+import * as fs from 'fs';
 
 /** 本服务单例（主进程）。 */
 let _handle: HookBridgeHandle | null = null;
@@ -41,6 +44,27 @@ let _installedUrl: string | null = null;
 /** 桥当前是否活着。 */
 export function isRunning(): boolean {
   return !!_handle;
+}
+
+/** 从已装 hook 的 URL 读回「固定端口 + token」⇒ Gacode 重启后桥仍对得上配置。 */
+function installedEndpoint(): { port: number; token: string } | null {
+  try {
+    const raw = fs.readFileSync(claudeSettingsFile(), 'utf8');
+    const settings = JSON.parse(raw);
+    const entries = settings && settings.hooks && settings.hooks.PermissionRequest;
+    if (!Array.isArray(entries)) return null;
+    for (const e of entries) {
+      for (const h of Array.isArray(e?.hooks) ? e.hooks : []) {
+        const url = h && typeof h.url === 'string' ? h.url : '';
+        if (!url.includes(HOOK_MARKER)) continue;
+        const u = new URL(url);
+        const port = Number(u.port);
+        const token = u.searchParams.get('token') || '';
+        if (port > 0 && token) return { port, token };
+      }
+    }
+  } catch (_) { /* 没装 / 解析失败 ⇒ 用新的随机端口 */ }
+  return null;
 }
 
 /** 当前 hook URL（没起桥时为 null）。 */
@@ -57,7 +81,10 @@ export async function ensureStarted(): Promise<HookBridgeHandle> {
   if (_handle) return _handle;
   if (_starting) return _starting;
   _starting = (async () => {
+    const installed = installedEndpoint();
     const h = await startHookBridge({
+      // 装过 hook ⇒ 固定监听那个端口、用那个 token，重启后不用重装。
+      ...(installed || {}),
       endpoint: `${apiBase()}/devices/permission-request`,
       authorization: (() => {
         const t = deviceClient.getAccessToken();
@@ -100,7 +127,10 @@ export async function install(p: {
   onFailure?: 'block' | 'continue';
 } = {}): Promise<HookInstallResult> {
   const h = await ensureStarted();
-  const url = hookUrl(h.port, h.token);
+  // ★ 第一次装：让桥监听一个固定端口（不用随机端口），重启后还能复用。
+  const url = installedEndpoint()
+    ? hookUrl(h.port, h.token)
+    : `http://127.0.0.1:${h.port}/hook/permission?token=${encodeURIComponent(h.token)}&src=${HOOK_MARKER}`;
   const r = installHook({
     url,
     event: p.event || 'PermissionRequest',
