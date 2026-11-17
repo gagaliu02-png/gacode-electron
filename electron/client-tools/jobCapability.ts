@@ -87,9 +87,12 @@ export function probeJobExecutor(): JobCapabilityProbe {
  *    `job=1` 追加在最后 ⇒ 老能力表逐字不变，只是多一个键。
  *
  * @param flags `pty` = node-pty 能不能用；`job` = 要不要声明后台作业执行器；
- *              `browser` = 本机浏览器能被 agent 驱动（`browser.ts` 池已接线，订正 31）。
+ *              `browser` = 本机浏览器能被 agent 驱动（`browser.ts` 池已接线，订正 31）；
+ *              `claudeCode` = 本机 Claude Code 会话可被管控（`claudeCodeSession.ts` 接线了，订正 T-020）。
  */
-export function buildCapabilityString(flags: { pty: boolean; job: boolean; browser?: boolean }): string {
+export function buildCapabilityString(
+  flags: { pty: boolean; job: boolean; browser?: boolean; claudeCode?: boolean },
+): string {
   const parts = ['client-tools=1'];
   if (flags.pty) parts.push('pty=1');
   parts.push('fs=1', 'screen=1', 'os=1');
@@ -98,5 +101,8 @@ export function buildCapabilityString(flags: { pty: boolean; job: boolean; brows
   // ★ [2026-11-15 · 订正 31 · M0.5] 浏览器池接线了才声明 `browser=1`。
   //   ⚠️ 服务端 spec 现在认这个键（gaclaw bddaccc）⇒ 声明它才下发 pc_browser_*。
   if (flags.browser) parts.push('browser=1');
+  // ★ [2026-11-17 · T-020] Claude Code 管控接线了才声明 `claude-code=1`。
+  //   ⚠️ 服务端 spec 认这个键 ⇒ 声明它才下发 pc_cc_*。
+  if (flags.claudeCode) parts.push('claude-code=1');
   return parts.join(',');
 }

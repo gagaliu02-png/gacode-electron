@@ -334,23 +334,27 @@ data: {"events":[{"type":"user_message_processed","inboxId":"123","processedAt":
   `messageId`（= `inboxId`）要记在乐观行上（`LocalQueueEntry.inboxId`）。
 - 命中 ⇒ 那一条从「排队中」改成「**已处理**」（`QueueBar` 的 `processed`）。
 
-### P2-3′ · 停止 = **安全边界停止（软停）**（PM 2026-11-17 拍板：新路就是默认路）
+### P2-3′′ · 「停止」= **硬打断**（PM 2026-11-17 拍板，最新口径）· `INTERRUPT` 只用于**插话**
 
-- 请求：`DELETE /yinian/chat/cancel/:sessionId?intent=interrupt`
-  **+** header `x-gaclaw-cancel-intent: interrupt`（**双带**；query 与 header 同值）
-  ⇒ 复用 PC **既有**的那条 DELETE 路径（⛔ 不新造 `/yinian/sessions/:id/chat/cancel/...`）；
-  唯一构造点 = `src/lib/cancel.ts::sendCancelDelete`（`CancelIntent` 加了第三种 `"INTERRUPT"`，
-  线上字节 = **小写** `interrupt`）；
-- 语义：服务端**不掐上游**，等 gaclaw 跑到**安全边界**才停 ⇒ **这一轮的正文 / 工具成果保留**；
-  ⛔ **产品铁律「打断 = 彻底丢弃产出」就此作废**（PM 2026-11-17）；
-- 端侧纪律（`ChatDetail.tsx` 的 `handleStop`，软停分支）：
-  ① 发 interrupt（**由宿主层发** —— 常驻订阅模式下没有本地流可掐）；
-  ② ⛔ **不** abort 本地流 ⇒ **继续收帧、继续渲染**，直到收到终态帧；
-  ③ ⛔ **不**清 / 撤本地行（清行是终态帧路径的事）；
-  ④ **端侧执行（设备通道）照旧要停** —— 服务端在 `intent=interrupt` 下
-  `shouldMarkCancelled === false` ⇒ **不**通知设备通道 ⇒ 本端自己停
-  （`stopLocalClientTools` ⇒ `clientTools.runningTasks()` + `stopTask`，只停本会话的）；
-- 老行为（硬掐 `USER_STOP`）**保留** ⇒ 开关关掉时退回（**应急退路**，不用等一次发版）。
+- PM 原话：「用户侧的停止按钮，应该和之前一样，就是**直接打断**。」
+  ⇒ **「用户按停止」恒发 `USER_STOP`**（掐上游 ⇒ 这一轮的正文 / 工具成果 / 思考**全部丢弃**）
+  —— 就是 P2 之前的老行为。⇒ **「停止」按钮永远不发 `INTERRUPT`**。
+- **`INTERRUPT`（软停 / 安全边界停止）真正的用途 = 插话**：PM 澄清「软停是**插话**的语义 ——
+  有新内容插进来（用户发起 / 后端任务发起）时，服务端软停把上一轮收掉（产出保留），
+  然后带新内容开下一轮。**这条路由服务端自己发起，端侧不需要发软停指令。**」
+- 端侧纪律（`ChatDetail.tsx` 的 `handleStop`，**硬掐**那条路 = 现行行为）：
+  ① `turnAcRef.current?.abort()` —— 断这一轮的叫停开关（RC-7）；
+  ② `stream.abort("user")` —— 掐本地流 + 发 `DELETE …?intent=USER_STOP`
+     （发起流由它自己的收尾路径发；只读接入流在这里直接发，契约 L-54 / L-55）；
+  ③ `stopBackgroundWork()` —— 本会话的后台活一视同仁（§3.8）。
+  ⇒ 这一轮产出（正文 / 工具成果 / 思考）**全部丢弃**。
+- 保留但**当前不可达**（**保险丝**，⛔ 别删，将来插话要从这儿发）：
+  `handleStop` 里那条 `intent === "INTERRUPT"` 分支 —— `resolveStopIntent()` **恒**返回
+  `"USER_STOP"` ⇒ 永远进不去。分支内容（发 interrupt + 不 abort 本地流 + 不撤本地行 +
+  本端自己停端侧执行）保持原样，供插话路径复用。
+- 线上字节：`src/lib/cancel.ts::sendCancelDelete`（唯一构造点；`CancelIntent` 有第三种
+  `"INTERRUPT"`，线上字节 = **小写** `interrupt`；query + header **双带**）。
+  ⚠️ 服务端**不认识** `interrupt` 时按 legacy 处理（= 硬掐 = 老行为）⇒ **不需要能力协商**。
 
 ### P2-4′ · 看门狗：**分级 + 休眠抑制**
 
@@ -374,10 +378,12 @@ data: {"events":[{"type":"user_message_processed","inboxId":"123","processedAt":
 
 | 键 | 默认 | 管什么 |
 |---|---|---|
-| `safeStop` | `true` | 停止 = 软停（`intent=interrupt`）⇒ 产出保留 |
+| `safeStop` | `true` | ⚠️ **不再作用于「停止」按钮**（停止恒 `USER_STOP`）⇒ 现在只是**将来插话 / 软停**路径的预留位 |
 | `watchdogGraded` | `true` | 看门狗走 15/30/60/120 阶梯（判死 120s）|
 | `watchdogSleepSuppression` | `true` | 挂起 / 事件循环被堵 ⇒ 不判死 |
 | `watchdogJudgeDead` | `true` | 阶梯最后一档才判死（掐流走既有失败/降级路径）|
+
+- ⚠️ `resolveStopIntent()` **恒返回 `"USER_STOP"`** ⇒ 改 `safeStop` **不会**改变「停止」的行为。
 
 - 翻法（优先级从高到低）：
   ① **运行时 localStorage**（`gacode.p2.flags`，只写要覆盖的那几个键）—— 不用重新构建；

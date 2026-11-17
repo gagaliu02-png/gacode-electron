@@ -49,6 +49,8 @@ import {
 import { buildCapabilityString, probeJobExecutor } from './jobCapability.ts';
 // [2026-11-15 · 订正 31 · M0.5] 浏览器池接线状态 ⇒ 决定要不要声明 browser=1
 import { hasBrowserTabPool } from './browser.ts';
+// [2026-11-17 · T-020] Claude Code 管控能力判据
+import { hasClaudeCodeSessions } from './claudeCodeSession.ts';
 import { emitJobsChanged } from './jobView.ts';
 import type { JobReportPayload } from './jobReporter.ts';
 // ★ [2026-11-17] 解绑 / 登出 ⇒ 清掉上一账号在本机的作业 / 派单 / 审计记录。
@@ -242,9 +244,17 @@ export function deviceCapabilities(): string {
   //   ⚠️ 时序：`main.ts` 在 whenReady 里先 `setBrowserTabPool` 再起 renderer
   //     ⇒ token 推来触发注册时池必然已接线，此处判断不会漏报。
   const browser = hasBrowserTabPool();
-  _capabilitiesCache = buildCapabilityString({ pty, job: true, browser });
+  // ★ [2026-11-17 · T-020] Claude Code 管控：本机有 Claude Code 会话登记目录才声明。
+  //   ⚠️ 「没装 Claude Code」的语义 = 工具如实失败并回报，不是「不下发」
+  //   （跟 `job` 键同款口径）⇒ 判据用「目录在不在」这种**真接线**信号，
+  //   而不是「有没有活会话」（没活会话时也该能下发，否则永远学不会用）。
+  const claudeCode = hasClaudeCodeSessions();
+  _capabilitiesCache = buildCapabilityString({ pty, job: true, browser, claudeCode });
   if (browser) {
     logDevice('浏览器池已接线 ⇒ 能力表声明 browser=1（pc_browser_* 可下发）');
+  }
+  if (claudeCode) {
+    logDevice('本机有 Claude Code 会话登记 ⇒ 能力表声明 claude-code=1（pc_cc_* 可下发）');
   }
   return _capabilitiesCache;
 }
@@ -603,6 +613,44 @@ class DeviceClient {
     } catch (_) { /* 落盘失败不影响内存态 */ }
   }
 
+  /**
+   * token 变**空**时的宽限窗口（毫秒）—— 覆盖「刷新 token 过程中短暂置空」这一下。
+   *
+   * ★ [2026-11-17 · 修] 病根（真机日志 2026-11-17 14:25:55）：
+   * ```
+   * 14:25:55.032  注册成功 deviceId=969e7158-…
+   * 14:25:55.179  setAccessToken token 为空（changed=true）
+   * 14:25:55.182  连接被中止（换 token / 退出）      ← ★ 正在跑的设备通道 SSE 被掐
+   * ```
+   * ⇒ 那一下只是**刷新过程中的瞬时态**（token 换新的前先把旧的清了）⇒ 却把通道掐了
+   * ⇒ 设备通道掉线 ⇒ **派单收不到**（用户看到「我的电脑离线」但其实只是抖了一下）。
+   */
+  private static readonly NULL_TOKEN_GRACE_MS = 3000;
+  private _nullTokenTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * token 变空 ⇒ **宽限**一小会儿再决定要不要掐通道。
+   *
+   * · 期间补上新 token ⇒ 当没事（通道不断，不 abort）。
+   * · 一直没补（= 真登出）⇒ 掐通道 + 标记已解绑（= 改动前的行为）。
+   */
+  private scheduleNullTokenGrace(): void {
+    if (this._nullTokenTimer) clearTimeout(this._nullTokenTimer);
+    this._nullTokenTimer = setTimeout(() => {
+      this._nullTokenTimer = null;
+      if (this.accessToken) return;   // 期间补上来了 ⇒ 当没事
+      logDevice('token 持续为空 ⇒ 判定为登出 ⇒ 停本机通道');
+      this.markUnbound(true, 'logout');
+      if (this.abort) {
+        try { this.abort.abort(); } catch (_) { /* ignore */ }
+        this.abort = null;
+        this.connected = false;
+      }
+    }, DeviceClient.NULL_TOKEN_GRACE_MS);
+    const t = this._nullTokenTimer as unknown as { unref?: () => void };
+    if (t && typeof t.unref === 'function') t.unref();
+  }
+
   /** 渲染层把 access token 推过来（内存持有，⛔ 不持久化 —— 跟渲染层同款口径）。 */
   setAccessToken(token: string | null): void {
     const changed = token !== this.accessToken;
@@ -611,11 +659,21 @@ class DeviceClient {
     if (!changed) return;
     this.retryDelay = 3000;
 
+    // ★ [2026-11-17 · 修] token 为空**可能是刷新过程中的瞬时态** ⇒ **先宽限，别立刻掐通道**。
+    //   （真机 14:25:55：token 短暂为空 ⇒ 通道被 abort ⇒ 设备通道掉线 ⇒ 派单收不到）
+    //   ⇒ 真登出的处理挪到 [scheduleNullTokenGrace] 里（宽限期内没有新 token 才算登出）。
+    if (!token) {
+      this.scheduleNullTokenGrace();
+      return;
+    }
+    if (this._nullTokenTimer) {
+      clearTimeout(this._nullTokenTimer);
+      this._nullTokenTimer = null;
+    }
+
     // ★ [2026-11-17] 登出时的解绑由渲染层 logout() **显式**调 unbindOnLogout()
     //   （必须在 /auth/logout 撤销 refreshToken 之前做）—— 这里只停本机通道，不再发请求。
-    if (!token) {
-      this.markUnbound(true, 'logout');
-    } else if (getUnbindReason() === 'logout') {
+    if (getUnbindReason() === 'logout') {
       // ★ [2026-11-17] **重新登录 ⇒ 自动重新绑定**（PM 拍板：
       //   「退出登录绑定信息就应该失效，重新登录流重新绑定」）。
       //   ⚠️ 只清「登出导致的解绑」—— 手动点「解绑」的那台机器
@@ -673,6 +731,13 @@ class DeviceClient {
         return;
       }
       this.lastError = (e as Error).message;
+      // ★ [2026-11-17 · 修] 「已绑定到别的账号」⇒ **不重试**（重试不可能成功）。
+      //   ⇒ 停下来等用户切号 / 手动解绑 ⇒ 免得日志被 409 刷满、也免得徒劳地打服务端。
+      if ((e as Error & { code?: string })?.code === 'DEVICE_BOUND_TO_OTHER_USER') {
+        logDevice('这台电脑已绑定到别的账号 ⇒ 停止重试（等你切号或点「重新绑定」）');
+        if (this.abort === ac) this.abort = null;
+        return;
+      }
       logDevice(`连接失败: ${this.lastError}`);
       if (this.abort === ac) this.abort = null;
       this.scheduleRetry();
@@ -717,6 +782,16 @@ class DeviceClient {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
+      // ★ [2026-11-17 · 修] 「这台电脑已经绑定到别的账号」（409）**不是**可重试的失败。
+      //   病根（真机日志 2026-11-17 14:29~14:32）：切号后 PC 反复重试注册 ⇒
+      //   3s→6s→…→60s 退避重试 **整整 3 分钟**，日志刷满
+      //   「连接失败: 注册失败 409 DEVICE_BOUND_TO_OTHER_USER」。
+      //   ⇒ 重试**不可能**成功（绑定关系不会自己变）⇒ 停下来，等用户切号或手动解绑。
+      if (res.status === 409 && /DEVICE_BOUND_TO_OTHER_USER/.test(text)) {
+        const err = new Error(`注册失败 409: ${text.slice(0, 200)}`) as Error & { code?: string };
+        err.code = 'DEVICE_BOUND_TO_OTHER_USER';
+        throw err;
+      }
       throw new Error(`注册失败 ${res.status}: ${text.slice(0, 200)}`);
     }
     const body = (await res.json().catch(() => ({}))) as { replacedDeviceId?: string | null };

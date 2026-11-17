@@ -14,10 +14,10 @@
 //      · **必须在归一之前读**（归一层的「未知 type 跳过」会把它丢掉）；
 //      · 本地行的键 = **`inboxId`**（⛔ 不是 `eventId` —— 服务端给的是 `inbox_<id>`）。
 //
-//   ③ 停止 = **安全边界停止（软停）** —— PM 2026-11-17 拍板「新路就是默认路」
-//        `DELETE /yinian/chat/cancel/:sessionId?intent=interrupt`（query + header 双带）
-//      ⇒ 产出**保留**；端侧**不许**清本地行、要继续收帧到终态帧；
-//      ⇒ 端侧执行（设备通道）**照旧要停**。
+//   ③ 「停止」= **硬打断** —— PM 2026-11-17 拍板（最新口径）
+//        「用户侧的停止按钮，应该和之前一样，就是直接打断。」
+//      ⇒ 恒发 `USER_STOP`（掐上游 ⇒ 正文 / 工具成果 / 思考**全丢**）；
+//      ⇒ `INTERRUPT`（软停）只用于**插话**（服务端自己发起）⇒ 端侧停止按钮不碰它。
 //
 //   ④ 看门狗**分级 + 休眠抑制**
 //        阶梯 `[15000, 30000, 60000, 120000]` ⇒ 15/30/60s 各记一条 warn，**120s 才判死**；
@@ -356,7 +356,8 @@ test("P2-2h 队列条能看出「已处理」（⛔ 别再显示「排队中」�
 });
 
 // ===========================================================================
-// ③ · 停止 = 安全边界停止（软停）—— PM 2026-11-17 拍板「新路就是默认路」
+// ③ · 「停止」= 硬打断 —— PM 2026-11-17 拍板（最新口径）
+//    `INTERRUPT`（软停）只用于**插话**（服务端自己发起）⇒ 端侧停止按钮不碰它。
 // ===========================================================================
 
 test("P2-3a 取消意图有第三种：INTERRUPT（线上字节 = 小写 interrupt）", () => {
@@ -393,48 +394,77 @@ test("P2-3b intent **双带**（query + header），且走 PC 既有的那条 DE
   );
 });
 
-test("P2-3c 软停是**默认路**（PM 拍板），老行为只作应急退路", () => {
-  assert.equal(P2_FLAG_DEFAULTS.safeStop, true, "★ safeStop 默认开（新路）");
+test("P2-3c 「停止」**恒发 USER_STOP**（PM 2026-11-17：停止 = 硬打断 ⇒ 产出全丢）", () => {
+  // ★ 口径变更（PM 新拍板 ⇒ 期望值从 INTERRUPT 改成 USER_STOP）：
+  //   旧期望「默认发 interrupt（软停 ⇒ 产出保留）」**已作废** ——
+  //   「用户侧的停止按钮，应该和之前一样，就是直接打断。」
+  assert.equal(P2_FLAG_DEFAULTS.safeStop, true, "safeStop 字段保留（= 插话路径的预留位）");
   assert.equal(
     resolveStopIntent(P2_FLAG_DEFAULTS),
-    "INTERRUPT",
-    "★ 默认发 interrupt（软停 ⇒ 产出保留）",
+    "USER_STOP",
+    "★ 「停止」恒发 USER_STOP（硬掐 ⇒ 产出全丢）",
   );
   assert.equal(
     resolveStopIntent({ ...P2_FLAG_DEFAULTS, safeStop: false }),
     "USER_STOP",
-    "★ 关掉开关 ⇒ 退回老行为（硬掐）",
+    "★ 关掉 safeStop 也一样是 USER_STOP（该开关不再作用于「停止」）",
+  );
+  assert.equal(
+    resolveStopIntent({ ...P2_FLAG_DEFAULTS, safeStop: true }),
+    "USER_STOP",
+    "★ 打开 safeStop 也一样是 USER_STOP（同上）",
   );
 });
 
-test("P2-3d 停止键：软停时**不掐本地流、不撤本地行**，只发 interrupt", () => {
+test("P2-3d 停止键恒走**老路（硬掐）**：掐本地流 + 断叫停开关 + 停后台活", () => {
   const detail = repoCode(DETAIL);
   const start = detail.indexOf("const handleStop = useCallback");
   assert.ok(start > 0, "★ 找不到 handleStop");
-  const stop = detail.slice(start, start + 4000);
-  // 软停分支
+  const stop = detail.slice(start, start + 8000);
+  // 硬掐路径（现行行为）
+  assert.match(
+    stop,
+    /turnAcRef\.current\?\.abort\(\)/,
+    "★ 停止 ⇒ 断这一轮的叫停开关（RC-7）",
+  );
+  assert.match(
+    stop,
+    /stream\.abort\("user"\)/,
+    "★ 停止 ⇒ 掐本地流 + 发 DELETE intent=USER_STOP（老行为）",
+  );
+  assert.match(
+    stop,
+    /void stopBackgroundWork\(\)/,
+    "★ 停止 ⇒ 本会话的后台活一视同仁（§3.8）",
+  );
+  // 软停分支 = **保险丝**（当前不可达 —— resolveStopIntent 恒 USER_STOP，见 P2-3c）
+  //   ⇒ 必须保留（将来插话路径要从这儿发）⇒ 断言它在、且它在硬掐那条路**之前**。
   const iBranch = stop.indexOf('intent === "INTERRUPT"');
-  assert.ok(iBranch > 0, "★ handleStop 要有软停分支");
+  assert.ok(iBranch > 0, "★ 软停分支保留做保险丝（将来插话要用）");
   const branch = stop.slice(iBranch, stop.indexOf("return;", iBranch));
   assert.match(
     branch,
     /sendCancelDelete\(\s*chatId\s*,\s*"INTERRUPT"\s*\)/,
-    "★ 软停 ⇒ 发 DELETE intent=interrupt（双带由 cancel.ts 保证）",
+    "★ 保险丝分支内容原样保留（发 interrupt）",
   );
   assert.ok(
     !/stream\.abort\(/.test(branch),
-    "⛔ 软停**不许**掐本地流（要继续收帧到终态帧）",
+    "⛔ 保险丝分支不许掐本地流（插话时要继续收帧到终态帧）",
   );
   assert.ok(
     !/turnAcRef\.current\?\.abort\(/.test(branch),
-    "⛔ 软停**不许**断叫停开关（那会让宿主层撤掉本地行）",
+    "⛔ 保险丝分支不许断叫停开关（那会让宿主层撤掉本地行）",
   );
   assert.ok(
     !/clearLocalRow\(/.test(branch),
-    "⛔ 软停**不许**清本地行（清行是终态帧路径的事）",
+    "⛔ 保险丝分支不许清本地行（清行是终态帧路径的事）",
   );
-  // 老路还在（应急退路）
-  assert.match(stop, /stream\.abort\("user"\)/, "★ 老路（硬掐）还在 ⇒ 应急退路可用");
+  // 硬掐那条路在保险丝 return **之后** ⇒ 保险丝不可达时唯一生效的就是硬掐。
+  const iReturn = stop.indexOf("return;", iBranch);
+  assert.ok(
+    stop.indexOf('stream.abort("user")') > iReturn,
+    "★ 硬掐路径在保险丝 return 之后（保险丝不可达 ⇒ 停止 = 硬掐）",
+  );
 });
 
 test("P2-3e 端侧执行（设备通道）**照旧要停**（软停不许把进程留活）", () => {
@@ -455,7 +485,7 @@ test("P2-3e 端侧执行（设备通道）**照旧要停**（软停不许把进�
     /t\.sessionId\s*!==\s*chatId/,
     "★ 只停**本会话**的（⛔ 不许停别的会话的活）",
   );
-  // 软停分支里要调它
+  // 软停（插话）分支里要调它
   const stop = detail.slice(
     detail.indexOf("const handleStop = useCallback"),
     detail.indexOf("const handleStop = useCallback") + 4000,
@@ -463,11 +493,11 @@ test("P2-3e 端侧执行（设备通道）**照旧要停**（软停不许把进�
   assert.match(
     stop,
     /void stopLocalClientTools\(\)/,
-    "★ 软停 ⇒ 端侧执行照旧要停（服务端在 interrupt 下**不**通知设备通道）",
+    "★ 插话（软停）分支 ⇒ 端侧执行照旧要停（服务端在 interrupt 下**不**通知设备通道）",
   );
 });
 
-test("P2-3f 开关是**应急退路**（localStorage ⇒ 不用等一次发版）", () => {
+test("P2-3f 开关仍可读可写（localStorage ⇒ 应急退路不用等一次发版）", () => {
   assert.equal(P2_FLAG_STORAGE_KEY, "gacode.p2.flags");
   // 假 storage
   const store = new Map();
@@ -485,7 +515,14 @@ test("P2-3f 开关是**应急退路**（localStorage ⇒ 不用等一次发版�
   // 只写一个键 ⇒ 其它键回落常量
   writeP2Flag("safeStop", false, fake);
   const after = readP2Flags(fake);
-  assert.equal(after.safeStop, false, "★ 应急退路：改一行 localStorage 就退回老行为");
+  // ⚠️ 口径更新（PM 2026-11-17）：`safeStop` **不再**作用于「停止」按钮 ⇒
+  //   翻它**不会**改变「停止」的行为（`resolveStopIntent` 恒 USER_STOP，见 P2-3c）。
+  assert.equal(after.safeStop, false, "★ 开关字段仍可读可写（= 插话路径的预留位）");
+  assert.equal(
+    resolveStopIntent(after),
+    "USER_STOP",
+    "★ 翻 safeStop **不会**改变「停止」发什么（恒 USER_STOP）",
+  );
   assert.equal(after.watchdogGraded, true, "★ 没写的键回落代码常量");
   // 坏 JSON ⇒ 忽略
   store.set("gacode.p2.flags", "{not json");

@@ -17,9 +17,11 @@
  *      只能靠 intent 标记区分 (服务端按单 channel.connections.js classifyCancelIntent):
  *      - ACK_DONE   — 收尾 ACK, 语义"这轮完了", **不该武装取消**
  *      - USER_STOP  — 用户按停止, 语义"取消正在跑的这一轮" ⇒ 硬掐上游 ⇒ 产出全丢
- *      - INTERRUPT  — ★ [P2-3′ · 2026-11-17] **安全边界停止（软停）**:
- *                     跑到安全边界（当前工具调用结束）才停 ⇒ 不掐上游
- *                     ⇒ **这一轮的正文 / 工具成果保留**
+ *                     ★ **「停止」按钮恒发这个**（PM 2026-11-17 拍板）
+ *      - INTERRUPT  — **插话用的软停意图**: 跑到安全边界（当前工具调用结束）才停
+ *                     ⇒ 不掐上游 ⇒ **这一轮的正文 / 工具成果保留**
+ *                     ⇒ ⚠️ **服务端自己发起**（有新内容插进来时把上一轮收掉）
+ *                        ⇒ **端侧的「停止」按钮不用它**
  *                     ⇒ 服务端不认识这个意图时按 legacy 处理（= 硬掐 = 老行为）
  *                     ⇒ **不需要能力协商**
  *      携带方式: query `?intent=` **+** header `x-gaclaw-cancel-intent:`
@@ -32,8 +34,9 @@
  *
  * 失败处理: ACK_DONE 静默, USER_STOP / INTERRUPT 警告日志 (漏发 = 界面骗用户说停, 服务端还在烧 token)。
  *
- * ⚠️ [PM 2026-11-17 拍板] 产品铁律「打断 = 彻底丢弃产出」**作废**:
- *    默认走 **INTERRUPT（软停）** ⇒ 产出保留。USER_STOP 只作应急退路。
+ * ⚠️ [PM 2026-11-17 拍板] 产品铁律「打断 = 彻底丢弃产出」**依然成立**:
+ *    「用户按停止」恒发 **USER_STOP（硬掐）** ⇒ 产出全丢。
+ *    INTERRUPT 只在**插话**路径上用（服务端发起），端侧停止按钮不碰它。
  */
 
 // ★ RC-6 (F3c): 终态判据在**共享层** (`src/lib/sse/terminal.ts`) —— 与 web 那份逐字节相同。
@@ -63,10 +66,12 @@ const API_BASE = "https://www.gaga.sale/api/v1";
  *                  unified-api 也不该打 markCancelled —— 打上等于让 webhook 在落库前
  *                  直接拒收这一轮, 也就是把正常一轮的答案吞掉 (unified-api:216-221)。
  *   - USER_STOP  — 用户按"停止"。语义是"取消正在跑的这一轮" ⇒ 硬掐上游 ⇒ **产出全丢**。
- *   - INTERRUPT  — ★ [P2-3′ · 2026-11-17] **安全边界停止（软停）**:
+ *     ★ PM 2026-11-17 拍板：「用户侧的停止按钮，应该和之前一样，就是直接打断」
+ *       ⇒ **「停止」按钮恒发 USER_STOP**。
+ *   - INTERRUPT  — **插话用的软停意图**:
  *       语义是"跑到安全边界（当前工具调用结束）才停" ⇒ **不掐上游** ⇒ 这一轮的
  *       正文 / 工具成果**保留**。
- *       ⚠️ PM 2026-11-17 拍板：产品铁律「打断 = 彻底丢弃产出」**就此作废**。
+ *       ⚠️ **服务端自己发起**（有新内容插进来时把上一轮收掉）⇒ **端侧的停止按钮不用它**。
  *       ⚠️ 服务端**不认识**这个意图时按 legacy 处理（= 硬掐 = 老行为）
  *         ⇒ **不需要能力协商**。
  */
@@ -283,7 +288,9 @@ export function isUserAbortError(err: unknown): boolean {
  *
  * 用法:
  *   - 轮次终态帧 (isTerminalDone): sendCancelDelete(id, 'ACK_DONE')
- *   - 用户按停止:                 sendCancelDelete(id, 'USER_STOP' | 'INTERRUPT')
+ *   - 用户按停止:                 sendCancelDelete(id, 'USER_STOP')
+ *                                  ★ 恒 USER_STOP（PM 2026-11-17：停止 = 硬打断）；
+ *                                  'INTERRUPT' 只留给**插话 / 软停**路径（服务端发起）。
  *   - 收到 isCancelFrame:          **不调** (已经在取消中, ack 反而会重复)
  */
 export function sendCancelDelete(

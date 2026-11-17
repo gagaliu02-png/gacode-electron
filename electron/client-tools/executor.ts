@@ -32,6 +32,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
+import { randomUUID } from 'crypto';
 import { desktopCapturer, nativeImage, shell } from 'electron';
 import { runCommand } from './pty';
 import {
@@ -44,6 +45,8 @@ import {
   startBackgroundJob,
 } from './backgroundJobs.ts';
 import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct } from './browser.ts';
+import { listClaudeSessions, readTranscriptTail, summarizeSession } from './claudeCodeSession.ts';
+import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';
 
 // ===========================================================================
@@ -459,6 +462,121 @@ async function pcProcessList(
 }
 
 // ===========================================================================
+// pc_cc_* —— Claude Code 管控（2026-11-17 · T-020）
+// ===========================================================================
+
+/** pc_cc_sessions —— 列出本机活着的 Claude Code 会话（只读）。 */
+async function pcCcSessions(
+  args: Record<string, unknown> | null,
+): Promise<ClientToolResult> {
+  try {
+    const onlyVscode = bool(args, 'only_vscode');
+    let sessions = listClaudeSessions();
+    if (onlyVscode) sessions = sessions.filter((s) => s.entrypoint === 'claude-vscode');
+    const out = sessions.map((s) => summarizeSession(s));
+    return ok({
+      stdout: JSON.stringify({ count: out.length, sessions: out }),
+      exitCode: 0,
+    });
+  } catch (e) {
+    return fail(`列 Claude Code 会话失败: ${(e as Error).message}`);
+  }
+}
+
+/** pc_cc_read —— 读一个会话的最近若干轮（只读）。 */
+async function pcCcRead(
+  args: Record<string, unknown> | null,
+): Promise<ClientToolResult> {
+  const sessionId = str(args, 'session_id');
+  if (!sessionId) return fail('缺少 session_id');
+  const maxTurns = num(args, 'max_turns') || 12;
+  try {
+    const rec = findSession(sessionId);
+    if (!rec) return fail(`会话不在本机运行中: ${sessionId}`);
+    const { turns, totalLines } = readTranscriptTail(rec, { maxTurns });
+    const summary = summarizeSession(rec);
+    return ok({
+      stdout: JSON.stringify({
+        session_id: sessionId,
+        status: rec.status,
+        waiting_for: rec.waitingFor || null,
+        likely_awaiting_permission: summary.likely_awaiting_permission,
+        cwd: rec.cwd,
+        name: rec.name || null,
+        tail_lines_scanned: totalLines,
+        turns,
+      }),
+      exitCode: 0,
+    });
+  } catch (e) {
+    return fail(`读会话进度失败: ${(e as Error).message}`);
+  }
+}
+
+/** pc_cc_send —— 往会话队列投一条补充信息（写通道）。 */
+async function pcCcSend(
+  args: Record<string, unknown> | null,
+): Promise<ClientToolResult> {
+  const sessionId = str(args, 'session_id');
+  const text = str(args, 'text');
+  if (!sessionId) return fail('缺少 session_id');
+  if (!text) return fail('缺少 text');
+  const priority = (str(args, 'priority') || 'later') as 'now' | 'next' | 'later';
+  if (!['now', 'next', 'later'].includes(priority)) {
+    return fail(`priority 只能是 now / next / later（收到 ${priority}）`);
+  }
+  try {
+    const r = await sendPeerMessage(sessionId, text, priority);
+    if (!r.ok) return fail(`投递失败: ${r.reason || 'unknown'}`);
+    return ok({
+      stdout: JSON.stringify({
+        status: 'sent',
+        session_id: sessionId,
+        priority,
+        note: '消息已进该会话的队列；该会话会自己继续跑，回复出现在它那边（不在本对话）。',
+      }),
+      exitCode: 0,
+    });
+  } catch (e) {
+    return fail(`投递失败: ${(e as Error).message}`);
+  }
+}
+
+/** pc_cc_control —— 控制动作（改名 / 订阅空闲通知）。 */
+async function pcCcControl(
+  args: Record<string, unknown> | null,
+): Promise<ClientToolResult> {
+  const sessionId = str(args, 'session_id');
+  const action = str(args, 'action');
+  if (!sessionId) return fail('缺少 session_id');
+  if (!action) return fail('缺少 action');
+  if (action === 'rename') {
+    const name = str(args, 'name');
+    if (!name) return fail('rename 需要 name');
+    const r = await sendPeerControl(sessionId, 'rename', { name });
+    if (!r.ok) return fail(`改名失败: ${r.reason || 'unknown'}`);
+    return ok({ stdout: JSON.stringify({ status: 'renamed', session_id: sessionId, name }), exitCode: 0 });
+  }
+  if (action === 'notify_when_idle') {
+    // 订阅「我空闲时通知你」—— 回执地址用本会话的 inbox
+    const r = await sendPeerControl(sessionId, 'notify_when_idle', {
+      from: 'uds:gaclaw',
+      msg_id: randomUUID(),
+    });
+    if (!r.ok) return fail(`订阅空闲通知失败: ${r.reason || 'unknown'}`);
+    return ok({
+      stdout: JSON.stringify({
+        status: 'subscribed',
+        session_id: sessionId,
+        note: '已请求该会话在空闲时回notice；回执走它自己的 peer 通道。',
+      }),
+      exitCode: 0,
+    });
+  }
+  return fail(`不支持的 action: ${action}`);
+}
+
+// ===========================================================================
 // 分发
 // ===========================================================================
 
@@ -482,6 +600,11 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_browser_open: 30000,
   pc_browser_snapshot: 30000,
   pc_browser_act: 30000,
+  // [2026-11-17 · T-020] Claude Code 管控端侧工具
+  pc_cc_sessions: 30000,
+  pc_cc_read: 60000,
+  pc_cc_send: 30000,
+  pc_cc_control: 30000,
 };
 
 /** 端侧支持的工具名。 */
@@ -543,6 +666,11 @@ export async function executeClientTool(
     case 'pc_browser_open': return pcBrowserOpen(args);
     case 'pc_browser_snapshot': return pcBrowserSnapshot(args);
     case 'pc_browser_act': return pcBrowserAct(args);
+    // [2026-11-17 · T-020] Claude Code 管控
+    case 'pc_cc_sessions': return pcCcSessions(args);
+    case 'pc_cc_read': return pcCcRead(args);
+    case 'pc_cc_send': return pcCcSend(args);
+    case 'pc_cc_control': return pcCcControl(args);
     default:
       return fail(`未知的端侧工具: ${tool}`);
   }
