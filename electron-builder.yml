@@ -140,7 +140,9 @@ directories:
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
   # 0.7.29: P2 上行线包（软停 / disposition / ack / 看门狗分级）
   # 0.7.31: 浏览器统一（订正 33 停靠 + 订正 34 截图识图/坐标系）
-  output: release-c34-v36
+  #   ⚠️ 每次换新目录（本仓老规矩）：躲 Windows Search Indexer 锁旧目录
+  #      —— 那个锁也是 rcedit 写不进版本资源（"Unable to commit changes"）的元凶之一。
+  output: release-c34-v38
 
 files:
   - dist/**/*

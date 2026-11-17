@@ -77,33 +77,90 @@ function findRcedit() {
 }
 
 /**
+ * ★ [2026-11-17 · 修] 带**重试**地写版本资源。
+ *
+ * ## 真凶（实测隔离，别再改口）
+ *
+ *   同样的参数，**构建刚结束**时失败、**几分钟后**再跑就成功 ⇒
+ *   **临时锁**：Defender / Windows Search Indexer 正在扫描这个**刚写出来**的 exe
+ *   ⇒ rcedit 打不开它 ⇒ "Unable to commit changes"。
+ *   ⚠️ 不是「空值参数」（实测：空 OriginalFilename + 全新 exe 也能过）；
+ *   ⚠️ 也不是「中文」（实测：中文 FileDescription 在全新 exe 上一遍就过）；
+ *   ⚠️ 也不是「输出目录被复用」（实测：全新目录同样会撞）。
+ *
+ *   ⇒ 解法 = **重试 + 退避**（锁几十秒内会松开）+ **不炸构建**。
+ */
+async function writeVersionResource(rcedit, exePath, args, attempts = 8) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      execFileSync(rcedit, [exePath, ...args], { stdio: 'pipe' });
+      return true;
+    } catch (err) {
+      const first = String((err && err.message) || '').split('\n')[0];
+      if (i < attempts) {
+        console.warn(
+          `[after-pack] rcedit 第 ${i}/${attempts} 次失败（多半是 Defender/Search Indexer `
+          + `正在扫描这个刚写出来的 exe ⇒ 临时锁）: ${first}`,
+        );
+        await new Promise((r) => setTimeout(r, 5000 * i));   // 5s / 10s / 15s … 退避
+      } else {
+        console.error(`[after-pack] ⛔ rcedit 重试 ${attempts} 次仍失败: ${first}`);
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * @param {object} context electron-builder 的 afterPack 上下文
  */
 async function afterPack(context) {
-  if (!context || context.electronPlatformName !== 'win') return;
+  // ⚠️⚠️ [2026-11-17 · 修] `context.electronPlatformName` 的值是 **`win32`**
+  //   （= Electron 的 `platform.nodeName` = Node 的 process.platform），
+  //   **不是** `'win'` ⇒ 旧版这道守卫在 Windows 上**永远成立** ⇒ 钩子**静默什么都不做**
+  //   ⇒ 构建照过、**版本资源根本没写**（实测 0.7.30 的 exe 仍是 Electron 32.3.3）。
+  //   ⇒ 两个写法都收（'win32' 是事实，'win' 留着兼容别处）。
+  console.log('[after-pack] 钩子已触发（platform=' + String(context && context.electronPlatformName) + '）');
+  if (!context) return;
+  const platformName = String(context.electronPlatformName || '').toLowerCase();
+  if (platformName !== 'win32' && platformName !== 'win') return;
 
   const exeName = `${context.packager.appInfo.productFilename}.exe`;
   const exePath = path.join(context.appOutDir, exeName);
   if (!fs.existsSync(exePath)) {
-    console.warn(`[after-pack] 找不到 exe（跳过版本资源写入）: ${exePath}`);
+    console.error(`[after-pack] ⛔ 找不到 exe（**版本资源没写**）: ${exePath}`);
     return;
   }
 
   const rcedit = findRcedit();
   if (!rcedit) {
-    console.warn('[after-pack] 找不到 rcedit-x64.exe（跳过版本资源写入）');
+    console.error(`[after-pack] ⛔ 找不到 rcedit-x64.exe（**版本资源没写**），缓存目录: ${winCodeSignCacheDir()}`);
     return;
   }
 
   // 取值口径与 electron-builder 默认一致（见文件头注释）。
+  //
+  // ⚠️⚠️ [2026-11-17 · 修] **不能**从 `appOutDir/package.json` 读 description ——
+  //   应用打成 **app.asar** 了 ⇒ 那个路径**不存在** ⇒ 读失败 ⇒ FileDescription 写成空串
+  //   （实测 0.7.31 第一版：ProductName 对了，FileDescription 是空的）。
+  //   ⇒ 正确来源 = `packager.appInfo.description`（electron-builder 自己从 package.json
+  //      的 metadata 取的，跟它默认那次 rcedit 同源）。
   const pkgPath = path.join(context.appOutDir, 'package.json');
   let description = '';
   let version = context.packager.appInfo.version;
   try {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    description = pkg.description || '';
-    if (pkg.version) version = pkg.version;
+    description = (context.packager.appInfo && context.packager.appInfo.description) || '';
   } catch (_) { /* 用默认 */ }
+  if (!description) {
+    // 兜底：项目根的 package.json（appOutDir 里没有时）
+    try {
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(context.packager.projectDir, 'package.json'), 'utf8'),
+      );
+      description = pkg.description || '';
+      if (pkg.version) version = pkg.version;
+    } catch (_) { /* 用默认 */ }
+  }
 
   const copyright = (context.packager.platformSpecificBuildOptions
     && context.packager.platformSpecificBuildOptions.copyright) || 'Copyright © 2026 gaga';
@@ -134,7 +191,15 @@ async function afterPack(context) {
     '--set-product-version', productVersion,
   ];
   const iconArgs = fs.existsSync(iconPath) ? ['--set-icon', iconPath] : [];
-  execFileSync(rcedit, [exePath, ...versionArgs, ...iconArgs], { stdio: 'inherit' });
+  const ok = await writeVersionResource(rcedit, exePath, [...versionArgs, ...iconArgs]);
+  if (!ok) {
+    // ⛔ 不炸构建（炸了整个包都出不来），但必须喊出来（别再默默出 Electron 默认资源）。
+    console.error(
+      '[after-pack] ⛔ 版本资源没写成 ⇒ exe 的版本资源会是 Electron 默认值'
+      + '（重打一遍通常就好；或手动跑一次 rcedit）',
+    );
+    return;
+  }
 
   console.log(`[after-pack] 版本资源写入完成（一次调用 · 不带空的 OriginalFilename）: ${exePath}  product=${productVersion}`);
 };
