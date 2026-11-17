@@ -130,7 +130,7 @@
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.31
+buildVersion: 0.7.32
 copyright: Copyright © 2026 gaga
 
 afterPack: scripts/after-pack-rcedit.cjs
@@ -142,7 +142,8 @@ directories:
   # 0.7.31: 浏览器统一（订正 33 停靠 + 订正 34 截图识图/坐标系）
   #   ⚠️ 每次换新目录（本仓老规矩）：躲 Windows Search Indexer 锁旧目录
   #      —— 那个锁也是 rcedit 写不进版本资源（"Unable to commit changes"）的元凶之一。
-  output: release-c34-v38
+  # 0.7.32: 修「模型看不到图」—— 端侧在途去重 + 上传重试
+  output: release-c34-v39
 
 files:
   - dist/**/*
