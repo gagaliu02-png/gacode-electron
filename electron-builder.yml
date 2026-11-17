@@ -136,7 +136,7 @@ copyright: Copyright © 2026 gaga
 directories:
   buildResources: build
   # 0.7.13: 隔离输出目录 (每次换新目录, 绕 Windows Search Indexer 锁旧目录)
-  output: release-c32-v30
+  output: release-c32-v31
 
 files:
   - dist/**/*
