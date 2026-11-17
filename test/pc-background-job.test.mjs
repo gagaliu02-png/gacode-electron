@@ -268,3 +268,62 @@ test('Claude Code 输出协议：出错时如实反映', () => {
   assert.equal(bad.isError, true);
   assert.ok(summarizeClaude([bad]).includes('error_max_turns'), '没正文时要说清 subtype');
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GC-T35 · 作业跑完后 pc_job_status 必须立刻说真话
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// 病根（真机 session 1035 · pc_claude 写「北京诗」）：
+//   作业 07:09:10 就跑完了（台账 status=reported / exitCode=0 / 结果完整），
+//   但模型的 8 次 pc_job_status 拿到的**全是同一句「状态: 正在跑」**。
+//
+// 原因：describeJob 只看 status==='reported' 和 isProcessAlive(pid)，
+//   而 `alive` 探的是 **detached + unref 过的子进程** ⇒ Windows 上可能仍报「活着」
+//   ⇒ 明明退出了还显示「正在跑」⇒ 模型对着同一句话空转。
+
+test('GC-T35-10 · 进程已退出（exitCode 有值）⇒ 状态必须是「已完成」而不是「正在跑」', async () => {
+  const { describeJob } = await import('../electron/client-tools/jobRunner.ts');
+  const job = {
+    id: 't35-job-1',
+    serviceId: 'raw',
+    argv: ['x'],
+    cwd: null,
+    pid: 999999,              // 一个几乎肯定不存在的 pid ⇒ alive=false
+    outputFile: null,
+    status: 'running',        // ★ 还没被巡检回传 ⇒ 旧逻辑会判「已结束」
+    startedAt: Date.now() - 1000,
+    outputOffset: 0,
+    sessionId: '1035',
+    exitCode: 0,              // ★ 进程**确实退出了**
+    summary: '作业跑完了',
+  };
+  const text = describeJob(job);
+  assert.ok(text.includes('已完成'),
+    '★ exitCode 有值 ⇒ 进程已退出 ⇒ 状态必须说「已完成」，实际: ' + text);
+  assert.ok(!text.includes('正在跑'),
+    '★ 绝不能还报「正在跑」（模型会对着同一句话空转），实际: ' + text);
+  assert.ok(text.includes('退出码: 0'), '★ 退出码要如实显示，实际: ' + text);
+});
+
+test('GC-T35-11 · 退出码非 0 ⇒ 状态说「已失败」', async () => {
+  const { describeJob } = await import('../electron/client-tools/jobRunner.ts');
+  const job = {
+    id: 't35-job-2', serviceId: 'raw', argv: ['x'], cwd: null, pid: 999999,
+    outputFile: null, status: 'running', startedAt: Date.now(), outputOffset: 0,
+    sessionId: '1035', exitCode: 2, summary: null,
+  };
+  const text = describeJob(job);
+  assert.ok(text.includes('已失败'), '★ 退出码非 0 ⇒ 必须说「已失败」，实际: ' + text);
+});
+
+test('GC-T35-12 · 还没退出 ⇒ 仍然是「正在跑」（不许把活着的作业说成完成）', async () => {
+  const { describeJob } = await import('../electron/client-tools/jobRunner.ts');
+  const job = {
+    id: 't35-job-3', serviceId: 'raw', argv: ['x'], cwd: null,
+    pid: process.pid,        // ★ 自己 ⇒ 一定活着
+    outputFile: null, status: 'running', startedAt: Date.now(), outputOffset: 0,
+    sessionId: '1035', exitCode: null, summary: null,
+  };
+  const text = describeJob(job);
+  assert.ok(text.includes('正在跑'), '★ 活着的作业必须报「正在跑」，实际: ' + text);
+});

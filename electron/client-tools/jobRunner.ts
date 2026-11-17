@@ -364,7 +364,39 @@ export function describeJob(job: LocalJob): string {
   const svc = getCliService(job.serviceId);
   const title = svc ? svc.title : job.serviceId;
   const alive = job.pid ? isProcessAlive(job.pid) : false;
-  const state = job.status === 'reported' ? '已回传' : alive ? '正在跑' : '已结束';
+  // ★ [T-035 · 2026-11-18] **进程退出码也算「已完成」**。
+  //
+  //   ## 病根（真机 session 1035 · pc_claude 写「北京诗」）
+  //
+  //     作业 07:09:10 就跑完了（台账 status=reported / exitCode=0 / 结果完整），
+  //     但模型的 8 次 pc_job_status 拿到的**全是同一句「状态: 正在跑」**。
+  //
+  //   ## 为什么
+  //
+  //     `watchJobExit` 的 `child.on('exit')` 记下 exitCode 的**那一刻**，作业已经结束；
+  //     但巡检（jobReporter）**还没回传** ⇒ `job.status` 仍是 'running'。
+  //     ⇒ 改前只看 `status==='reported'` 和 `isProcessAlive(pid)` ⇒ 两个都不命中「已完成」
+  //     ⇒ 只能落到 `alive ? '正在跑' : '已结束'`。
+  //     而 `alive` 探的是 **detached 子进程**（`child.unref()` 过）⇒ Windows 上
+  //     `process.kill(pid, 0)` 对已 unref 的 detached 进程**可能仍报活着**
+  //     ⇒ 于是明明退出了还显示「正在跑」。
+  //
+  //   ## 现在
+  //
+  //     `exitCode != null` ⇒ 进程**确实退出了** ⇒ 状态直接判「已完成」
+  //     （退出码非 0 ⇒ 「已失败」）。这样模型即使轮询也**立刻**拿到真状态，
+  //     不会对着同一句「正在跑」空转。
+  const exited = job.exitCode != null;
+  const failed = exited && job.exitCode !== 0;
+  const state = job.status === 'reported'
+    ? '已回传'
+    : failed
+      ? '已失败（退出码非 0）'
+      : exited
+        ? '已完成（进程已退出，结果回传中）'
+        : alive
+          ? '正在跑'
+          : '已结束';
   const lines = [
     `作业 ${job.id}`,
     `类型: ${title}`,
@@ -372,6 +404,7 @@ export function describeJob(job: LocalJob): string {
     `开始于: ${new Date(job.startedAt).toISOString()}`,
   ];
   if (job.pid) lines.push(`进程 pid: ${job.pid}`);
+  if (job.exitCode != null) lines.push(`退出码: ${job.exitCode}`);
   if (job.summary) {
     lines.push('最近进展:');
     lines.push(job.summary.length > 2000 ? job.summary.slice(0, 2000) + '…' : job.summary);
