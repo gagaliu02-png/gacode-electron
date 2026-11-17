@@ -44,7 +44,7 @@ import {
   jobStop,
   startBackgroundJob,
 } from './backgroundJobs.ts';
-import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus } from './browser.ts';
+import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus, pcBrowserShot } from './browser.ts';
 import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
 // ★ [2026-11-17 · T-022] 等端侧 Claude Code 的处理结果（前台等）
@@ -340,8 +340,25 @@ async function pcScreenshot(
       size: png.length,
       mimeType: 'image/png',
     };
+    // ★ [T-028] 桌面 = **screen 坐标**（原点 = 主显示器左上角，单位 = 物理像素）。
+    //   桌面暂不提供点击（Electron 没有桌面点击 API）⇒ 这张图只作「看」用。
+    const thumb = src.thumbnail;
+    const displayIndex = display && /^\d+$/.test(display) ? Number(display) : 0;
+    const bounds = (src as unknown as { display_id?: string }).display_id ?? '';
     return ok({
-      stdout: `已截图并保存到 ${target}（${png.length} 字节）`,
+      stdout: JSON.stringify({
+        tool: 'pc_screenshot',
+        coordinate_system: 'screen',
+        display: {
+          index: displayIndex,
+          id: bounds,
+          w: thumb.getSize().width,
+          h: thumb.getSize().height,
+        },
+        image: { w: thumb.getSize().width, h: thumb.getSize().height },
+        image_file: artifact.name,
+        bytes: png.length,
+      }),
       exitCode: 0,
       artifacts: [artifact],
     });
@@ -671,6 +688,7 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_browser_act: 30000,
   pc_browser_close: 15000,
   pc_browser_focus: 15000,
+  pc_browser_shot: 30000,
   // [2026-11-17 · T-020] Claude Code 管控端侧工具
   pc_cc_sessions: 30000,
   pc_cc_read: 60000,
@@ -743,6 +761,8 @@ export async function executeClientTool(
     // [2026-11-17 · T-027] 收尾两件套：关标签 / 切回自己的页面
     case 'pc_browser_close': return pcBrowserClose(args, { sessionId: opts?.sessionId ?? null });
     case 'pc_browser_focus': return pcBrowserFocus(args, { sessionId: opts?.sessionId ?? null });
+    // [2026-11-17 · T-028] 截视口 ⇒ 图片走产物上传拿公网 URL（模型再调 image_understand）
+    case 'pc_browser_shot': return pcBrowserShot(args, { sessionId: opts?.sessionId ?? null });
     // [2026-11-17 · T-020] Claude Code 管控
     case 'pc_cc_sessions': return pcCcSessions(args);
     case 'pc_cc_read': return pcCcRead(args);

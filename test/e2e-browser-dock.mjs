@@ -43,6 +43,7 @@ const server = http.createServer((_req, res) => {
       <a href="https://example.com/">示例链接</a>
       <button id="trigger" onclick="document.getElementById('status').textContent='BUTTON_CLICKED'">提交按钮</button>
       <input placeholder="搜索框">
+      <button id="trigger2" onclick="document.getElementById('status').textContent='SHOT_CLICKED'">第二个按钮</button>
     </body></html>`);
 });
 
@@ -83,6 +84,25 @@ async function main() {
   });
   server.close();
 
+  // ★ 验 PNG 是**真的 PNG**（魔数 + IHDR 尺寸），且尺寸 = 视口 × dpr
+  const pngPath = (out.match(/\[e2e:dock:shot:path\] (.+)/) || [])[1];
+  let pngOk = false;
+  if (pngPath && fs.existsSync(pngPath.trim())) {
+    try {
+      const buf = fs.readFileSync(pngPath.trim());
+      const isMagic = buf.length > 24
+        && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
+      const w = buf.readUInt32BE(16);
+      const h = buf.readUInt32BE(20);
+      // ⚠️ shot 那行 stdout 是**转义过的 JSON 字符串** ⇒ 别去抠它 ⇒ 主进程单独打一行 scale
+      const scale = Number((out.match(/\[e2e:dock:shot:scale\] ([\d.]+)/) || [])[1] || 1);
+      console.log(`[e2e] png magic=${isMagic} size=${w}x${h} scale=${scale}`);
+      pngOk = isMagic && w > 0 && h > 0 && Math.abs(w / scale - 900) < 2;
+    } catch (e) {
+      console.log('[e2e] png read failed: ' + e.message);
+    }
+  }
+
   console.log('\n──────── 判据 ────────');
   const checks = [
     ['① bounds = 上报矩形（不是窗口全尺寸）',
@@ -92,10 +112,14 @@ async function main() {
     ['④ 停靠下 trusted click 生效', /BUTTON_CLICKED/],
     ['⑤ focus 成功', /\[e2e:dock:focus\] \{"status":"ok"/],
     ['⑥ close 成功且 tab 真没了', /\[e2e:dock:alive\] false/],
+    ['⑦ 截图回坐标块（viewport/scale/image）', /\[e2e:dock:shot\] \{"status":"ok"/],
+    ['⑧ 截图落盘是真 PNG（PNG 魔数 + 尺寸 = 视口 × dpr）', pngOk],
+    ['⑨ @shot: 按图上像素坐标点中了第二个按钮', /SHOT_CLICKED/],
   ];
   let bad = 0;
   for (const [label, re] of checks) {
-    const ok = re.test(out);
+    // 判据可以是布尔（本地算出来的），也可以是正则（对着子进程 stdout 跑）
+    const ok = typeof re === 'boolean' ? re : re.test(out);
     if (!ok) bad++;
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}`);
   }

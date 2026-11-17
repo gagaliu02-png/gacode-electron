@@ -70,6 +70,9 @@ function fakeDom(elements, { w = 1000, h = 800, title = 'T', url = 'https://x/' 
     location: { href: url },
     innerWidth: w,
     innerHeight: h,
+    // ★ [T-028] 坐标系契约要读滚动位置（DOM 真实有这两个全局）
+    scrollX: 0,
+    scrollY: 0,
     getComputedStyle(e, pseudo) {
       if (pseudo === '::before') return { content: e._before || 'none' };
       if (pseudo === '::after') return { content: e._after || 'none' };

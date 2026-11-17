@@ -35,7 +35,7 @@
  */
 
 import type { BrowserView } from 'electron';
-import type { ClientToolResult } from './types.ts';
+import type { ClientToolArtifact, ClientToolResult } from './types.ts';
 
 // ===========================================================================
 // 依赖注入：主进程的 tab 池
@@ -90,6 +90,15 @@ export interface BrowserTabPool {
    *   ⛔ 只关**端侧池**里的 tab（用户自己的 `<webview>` tab 不受影响）。
    */
   close?(tabId: string): boolean;
+  /**
+   * ★ [T-028] 截**视口**（`webContents.capturePage()`）⇒ PNG。
+   *
+   * ⚠️ 返回的 `width/height` 是**物理像素**（= CSS px × devicePixelRatio）
+   *    ⇒ 换算 viewport 坐标要除以 `scale`。
+   * ⚠️ 视图不可见（被停泊 / 用户不在浏览器页）⇒ 抓到的是**空图**
+   *    ⇒ 端侧据此如实报错，不假装截到了。
+   */
+  capture?(tabId: string): Promise<{ png: Buffer; width: number; height: number }>;
   /** ★ [2026-11-17 · T-027-d0ck] 当前 active 的 tab（渲染层切 tab 时更新）。 */
   activeTabId?(): string | null;
   /**
@@ -427,8 +436,26 @@ export const SNAPSHOT_SCRIPT = `(() => {
   return {
     title: document.title || '', url: location.href, text: chunks.join('\\n'), elements,
     viewport: { w: innerWidth, h: innerHeight },
+    // ★ [T-028] 坐标系契约：滚动位置 + 缩放比（截图物理像素 / CSS px）
+    scroll: {
+      x: Math.round(typeof scrollX === 'number' ? scrollX : 0),
+      y: Math.round(typeof scrollY === 'number' ? scrollY : 0),
+    },
+    // ⛔ 用裸全局 + typeof 守卫（写成 window.devicePixelRatio 在精简 stub 里会炸）
+    scale: (typeof devicePixelRatio === 'number' ? devicePixelRatio : 1),
   };
 })()`;
+
+/**
+ * ★ [T-028] 只读**视口信息**脚本（固定常量，⛔ 模型不能改）。
+ *
+ * 用来拿「坐标系契约」里的三个数：视口尺寸 / 滚动位置 / 缩放比。
+ */
+export const VIEWPORT_INFO_SCRIPT = `(() => ({
+  vw: innerWidth, vh: innerHeight,
+  sx: Math.round(scrollX), sy: Math.round(scrollY),
+  dpr: window.devicePixelRatio || 1,
+}))()`;
 
 /** 注入脚本返回的原始形状。 */
 export interface RawSnapshot {
@@ -437,6 +464,10 @@ export interface RawSnapshot {
   text?: unknown;
   elements?: unknown;
   viewport?: unknown;
+  /** ★ [T-028] 页面滚动位置（viewport 坐标 vs 文档坐标 的换算基准）。 */
+  scroll?: unknown;
+  /** ★ [T-028] devicePixelRatio（截图物理像素 / CSS px 的比）。 */
+  scale?: unknown;
 }
 
 /** 带编号的元素（模型引用 `e12` 用）。 */
@@ -530,6 +561,9 @@ export function buildSnapshotOutput(args: {
     url: typeof raw.url === 'string' ? raw.url.slice(0, 500) : '',
     title: typeof raw.title === 'string' ? raw.title.slice(0, 200) : '',
     viewport: raw.viewport && typeof raw.viewport === 'object' ? raw.viewport : undefined,
+    // ★ [T-028] 坐标系契约：滚动位置 + 缩放比
+    scroll: raw.scroll && typeof raw.scroll === 'object' ? raw.scroll : undefined,
+    scale: typeof raw.scale === 'number' ? raw.scale : undefined,
     text: page,
     elements,
     truncated: textTruncated || (cursor === 0 && Array.isArray(raw.elements) && raw.elements.length > SNAPSHOT_LIMITS.MAX_ELEMENTS),
@@ -847,6 +881,26 @@ export async function pcBrowserAct(
         };
       })()`;
       pos = (await pool.evalInTab(tabId, script)) as typeof pos;
+    } else if (/^@shot:-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/i.test(targetStr)) {
+      // ── B2：★ [T-028] **截图里的像素坐标** ⇒ 按 scale 换算成 viewport 坐标 ──
+      //   模型「看着截图报坐标」直接可用（截图是视口的像素图，天然 1:1 映射）。
+      //   ⚠️ 视觉模型给的坐标**不可靠** ⇒ 权威坐标永远是 DOM；
+      //      这条只是**提示性**通道，换算后照样过**视口边界校验**（屏幕外直接拒）。
+      const [spx, spy] = targetStr.slice('@shot:'.length).split(',').map((s) => Number(s.trim()));
+      const meta = getShotMeta(tabId);
+      const conv = convertShotCoords(meta, spx, spy);
+      if (!conv) {
+        return {
+          status: 'error',
+          error: '这个标签页还没有截图记录，无法把截图坐标换算成页面坐标 —— 先调 pc_browser_shot 截一张',
+        };
+      }
+      const vp = (await pool.evalInTab(tabId,
+        `(() => ({ found: true, vw: innerWidth, h: innerHeight }))()`)) as { vw?: number; vh?: number };
+      pos = {
+        found: true, x: conv.x, y: conv.y, vw: vp?.vw, vh: vp?.vh,
+        tag: 'shot-coordinate', via: 'shot-coordinate',
+      };
     } else if (/^@-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(targetStr)) {
       // ── B：viewport 坐标兜底 ────────────────────────────────────────────
       const [px, py] = targetStr.slice(1).split(',').map((s) => Number(s.trim()));
@@ -872,7 +926,7 @@ export async function pcBrowserAct(
       // ★ 修 bug：旧版把 JSON.stringify(sel) 的结果又包一层 JSON.stringify 传给
       //   querySelector ⇒ 传进去的是带引号的 JSON 字符串（如 `".login"`）⇒ 永远匹配不到。
       if (!/^[#.\[\]a-zA-Z0-9_\-=: "']+$/.test(targetStr)) {
-        return { status: 'error', error: `target 写法不认识（支持 e12 / text:文字 / @x,y / 简单 CSS）: ${targetStr}` };
+        return { status: 'error', error: `target 写法不认识（支持 e12 / text:文字 / @x,y / @shot:px,py / 简单 CSS）: ${targetStr}` };
       }
       const script = `(() => {
         ${INTERACTIVE_COLLECTOR_JS}
@@ -1055,4 +1109,157 @@ export async function pcBrowserFocus(
       message: title ? `已切回标签「${title}」` : '已切回标签',
     }),
   };
+}
+
+// ===========================================================================
+// T-028 · pc_browser_shot —— 截**视口**（模型看得见的图）
+//
+// ⛔ **端侧绝不把图片 base64 塞进 stdout**（2026-11-13 上下文顶爆血泪）——
+//    只回**公网 URL**（走 artifact 上传那条现成通路）+ 一块**坐标块**。
+// ⛔ **端侧不拼模型上下文**（L-24n / L-25q）——「要『看图』就先调 image_understand」
+//    那句指令由**服务端**写（gaclaw 的 `foldClientResult`），端侧只给数据。
+//
+// ## 坐标系契约（浏览器 = viewport 坐标，单位 CSS px）
+//
+//   - 原点 = 页面**可视区**左上角；x → 右，y → 下。
+//   - `scale` = 截图物理像素 / CSS px（= devicePixelRatio）。
+//   - `@shot:px,py` = **上一次截图里的像素坐标** ⇒ 端侧按 `scale` 换算成
+//     viewport 坐标再点 ⇒ 模型「看着截图报坐标」能直接用。
+// ===========================================================================
+
+/** 每个 tab 最近一次截图的元信息（供 `@shot:` 换算）。⛔ 只在内存里。 */
+export interface BrowserShotMeta {
+  /** 截图的物理像素宽高。 */
+  imageW: number;
+  imageH: number;
+  /** 物理像素 / CSS px。 */
+  scale: number;
+  /** 当时的视口尺寸（CSS px）。 */
+  viewportW: number;
+  viewportH: number;
+}
+
+const shotMeta = new Map<string, BrowserShotMeta>();
+
+/** 读某个 tab 最近一次截图的元信息（没有 ⇒ null）。 */
+export function getShotMeta(tabId: string): BrowserShotMeta | null {
+  return shotMeta.get(tabId) ?? null;
+}
+
+/** 清掉某个 tab 的截图元信息（tab 销毁时调）。 */
+export function clearShotMeta(tabId: string): void {
+  shotMeta.delete(tabId);
+}
+
+/**
+ * ★ [T-028] 把「截图里的像素坐标」换算成 viewport 坐标。
+ *
+ * @returns 换算结果；没有截图记录 ⇒ `null`（调用方如实报错，不瞎猜比例）。
+ */
+export function convertShotCoords(
+  meta: BrowserShotMeta | null,
+  px: number,
+  py: number,
+): { x: number; y: number } | null {
+  if (!meta) return null;
+  const scale = meta.scale > 0 ? meta.scale : 1;
+  return { x: Math.round(px / scale), y: Math.round(py / scale) };
+}
+
+/** `pc_browser_shot` 的入参形状。 */
+export interface BrowserShotArgs {
+  tabId?: unknown;
+  url?: unknown;
+  /** 可选：把截图也存到本机某个路径（默认存临时目录）。 */
+  save_path?: unknown;
+}
+
+export async function pcBrowserShot(
+  rawArgs: Record<string, unknown> | null,
+  ctx?: BrowserToolContext,
+): Promise<ClientToolResult> {
+  if (!pool) {
+    return { status: 'error', error: '浏览器池还没接线（主进程未就绪）—— 请稍后重试' };
+  }
+  if (!pool.capture || !pool.evalInTab) {
+    return { status: 'error', error: '这个 PC 版本的浏览器不支持截图（capture 未接线）' };
+  }
+  const args = (rawArgs || {}) as BrowserShotArgs;
+
+  const tabId = resolveLiveTab(pool.entries(), {
+    tabId: typeof args.tabId === 'string' ? args.tabId : null,
+    url: typeof args.url === 'string' ? args.url : null,
+  }, { sessionId: ctx?.sessionId ?? null, activeTabId: pool.activeTabId?.() ?? null });
+  if (!tabId) {
+    return {
+      status: 'error',
+      error: '没有可截图的浏览器页面（tab 可能已被关掉）—— 请先 pc_browser_open 打开一个页面',
+    };
+  }
+
+  try {
+    // ① 视口信息（坐标系的三个数）
+    const info = (await pool.evalInTab(tabId, VIEWPORT_INFO_SCRIPT)) as {
+      vw?: number; vh?: number; sx?: number; sy?: number; dpr?: number;
+    } | null;
+    const vw = Number(info?.vw) || 0;
+    const vh = Number(info?.vh) || 0;
+    const sx = Number(info?.sx) || 0;
+    const sy = Number(info?.sy) || 0;
+
+    // ② 截**视口**（capturePage 抓的就是 webContents 的可视区）
+    const shot = await pool.capture(tabId);
+    const imageW = Number(shot?.width) || 0;
+    const imageH = Number(shot?.height) || 0;
+    if (!shot?.png || !imageW || !imageH) {
+      // ⛔ 视图当前不可见（用户不在 `/browser` 页 / tab 被停泊）⇒ 如实说
+      return {
+        status: 'error',
+        error: '截不到图：当前这个标签页不可见（用户可能不在浏览器页）。先用 pc_browser_focus 切回它再试。',
+      };
+    }
+
+    // ③ 落盘 ⇒ 交给现成的产物上传通路（→ 公网 URL）
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const target = typeof args.save_path === 'string' && args.save_path.trim()
+      ? path.resolve(args.save_path.trim())
+      : path.join(os.tmpdir(), `gacode-browser-shot-${Date.now()}.png`);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, shot.png);
+
+    // ④ 缩放比 = 物理像素 / CSS px（截图与视口天然 1:1 映射，只是可能带 dpr）
+    const scale = vw > 0 ? imageW / vw : (Number(info?.dpr) || 1);
+    shotMeta.set(tabId, { imageW, imageH, scale, viewportW: vw, viewportH: vh });
+
+    const artifact: ClientToolArtifact = {
+      kind: 'file',
+      name: path.basename(target),
+      path: target,
+      size: shot.png.length,
+      mimeType: 'image/png',
+    };
+
+    // ⑤ stdout = **坐标块**（不含 base64、不含"请调用 image_understand"那句
+    //    —— 那句由服务端折叠时写，端侧不拼模型上下文）。
+    return {
+      status: 'ok',
+      exitCode: 0,
+      stdout: JSON.stringify({
+        tool: 'pc_browser_shot',
+        tabId,
+        url: typeof args.url === 'string' ? args.url : '',
+        coordinate_system: 'viewport',
+        viewport: { w: vw, h: vh },
+        scroll: { x: sx, y: sy },
+        scale: Number(scale.toFixed(4)),
+        image: { w: imageW, h: imageH },
+        image_file: artifact.name,
+      }),
+      artifacts: [artifact],
+    };
+  } catch (e) {
+    return { status: 'error', error: `截图失败: ${(e as Error).message}` };
+  }
 }

@@ -18,7 +18,7 @@ import { registerNotificationIpc } from './notifications';
 import { registerClientToolIpc, setClientToolWindow } from './client-tools/ipc';
 // [2026-11-15 · 订正 31 · M0] 浏览器端侧工具 —— 把**现有** tab 池注给执行器
 //   （用户和 agent 共用同一个池；不另起窗口、不另建池）。
-import { setBrowserTabPool, clearElementIndex } from './client-tools/browser';
+import { setBrowserTabPool, clearElementIndex, clearShotMeta } from './client-tools/browser';
 import { BrowserViewPool, normalizeDockRect, type TabOrigin } from './browser-views';
 import { executeClientTool } from './client-tools/executor';
 import { getAppIcon, logIconStatus } from './icon';
@@ -431,6 +431,8 @@ async function openBrowserTab(
       browserPool.forget(tabId);
       // ★ M1：tab 没了 ⇒ 它那份元素编号表也作废（M2 act 引用 ⇒ stale_element_ref）
       clearElementIndex(tabId);
+      // ★ [T-028] 截图元信息同理作废（@shot: 换算会用到）
+      clearShotMeta(tabId);
     }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('gacode:browser-tab-closed', { tabId });
@@ -472,6 +474,8 @@ function registerBrowserTabIpc(): void {
       browserPool.destroy(args.tabId);
       // ★ M1：手动关 tab 也作废编号表（destroyed 回调可能来不及带 tabId）
       clearElementIndex(args.tabId);
+      // ★ [T-028] 截图元信息同理作废
+      clearShotMeta(args.tabId);
       console.log(
         `[gacode-electron] BrowserView closed: tabId=${args.tabId}`,
       );
@@ -548,6 +552,21 @@ function registerBrowserTabIpc(): void {
     focus: (tabId) => browserPool.focus(tabId),
     // ★ [2026-11-17 · T-027-d0ck] agent 写操作前调用（停靠 + 置顶 + 聚焦）
     activate: (tabId) => browserPool.activate(tabId),
+    // ★ [T-028] 截**视口** ⇒ PNG（物理像素 = CSS px × devicePixelRatio）
+    //   ⚠️ 视图不可见（被停泊 / 用户不在浏览器页）⇒ 抓到的是**空图**
+    //      ⇒ 返回 0×0，端侧据此如实报错，不假装截到了。
+    capture: async (tabId) => {
+      const entry = browserPool.get(tabId);
+      if (!entry || entry.view.webContents.isDestroyed()) {
+        throw new Error(`tab ${tabId} 已关闭`);
+      }
+      const img = await entry.view.webContents.capturePage();
+      const size = img.getSize();
+      if (!size.width || !size.height) {
+        return { png: Buffer.alloc(0), width: 0, height: 0 };
+      }
+      return { png: img.toPNG(), width: size.width, height: size.height };
+    },
     // ★ [2026-11-17 · T-027-d0ck] 关标签（agent 收尾用）
     close: (tabId) => {
       const ok = browserPool.destroy(tabId);
@@ -1161,6 +1180,39 @@ app.whenReady().then(() => {
         const snapAfter = await executeClientTool('pc_browser_snapshot', { tabId }, null, 30000);
         console.log('[e2e:dock:act] ' + JSON.stringify(act));
         console.log('[e2e:dock:snapshot:after] ' + JSON.stringify(snapAfter));
+
+        // ★ [T-028] 截图 ⇒ 真 PNG（物理像素 = 视口 × dpr）+ `@shot:` 按图上坐标点击
+        const shot = await executeClientTool('pc_browser_shot', { tabId }, null, 30000);
+        console.log('[e2e:dock:shot] ' + JSON.stringify(shot));
+        const shotOut = (() => {
+          try { return JSON.parse(String(shot.stdout || '')); } catch { return null; }
+        })();
+        const shotPath = (shot.artifacts && shot.artifacts[0] && shot.artifacts[0].path) || '';
+        console.log('[e2e:dock:shot:path] ' + shotPath);
+        console.log('[e2e:dock:shot:scale] ' + String(shotOut && shotOut.scale ? shotOut.scale : 1));
+        console.log('[e2e:dock:shot:image] ' + JSON.stringify((shotOut && shotOut.image) || null));
+        if (shotOut && shotOut.scale) {
+          // 用「快照里第二个按钮的 viewport 坐标」换算成「截图里的像素坐标」
+          const snap2 = await executeClientTool('pc_browser_snapshot', { tabId }, null, 30000);
+          let target = null;
+          try {
+            const parsed = JSON.parse(String(snap2.stdout || ''));
+            const el = (parsed.elements || []).find(
+              (e: { text?: string; x?: number; y?: number }) => e.text === '第二个按钮',
+            );
+            if (el) target = `@shot:${Math.round(el.x * shotOut.scale)},${Math.round(el.y * shotOut.scale)}`;
+          } catch { /* ignore */ }
+          console.log('[e2e:dock:shot:target] ' + String(target));
+          if (target) {
+            const act2 = await executeClientTool(
+              'pc_browser_act', { action: 'click', target, tabId }, null, 30000,
+            );
+            await new Promise((r) => setTimeout(r, 300));
+            const snap3 = await executeClientTool('pc_browser_snapshot', { tabId }, null, 30000);
+            console.log('[e2e:dock:act:shot] ' + JSON.stringify(act2));
+            console.log('[e2e:dock:snapshot:after:shot] ' + JSON.stringify(snap3));
+          }
+        }
 
         // ⑤ 收尾两件套：focus / close
         const foc = await executeClientTool('pc_browser_focus', { tabId }, null, 15000);

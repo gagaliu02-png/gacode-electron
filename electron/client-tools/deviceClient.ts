@@ -1028,6 +1028,9 @@ class DeviceClient {
     const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
     if (!artifacts.length) return result;
     const out: ClientToolArtifact[] = [];
+    // ★ [2026-11-17 · T-028] 图片产物上传失败 ⇒ **如实说**
+    //   （铁律 3：不许假装成功 —— 模型看不到这张图，就得让它知道）。
+    const imageFailures: string[] = [];
     for (const a of artifacts) {
       if (!a || a.kind !== 'file') {
         if (a) out.push(a);
@@ -1047,6 +1050,9 @@ class DeviceClient {
         });
         if (!res.ok) {
           console.warn('[client-tools/device] 产物上传失败:', res.status);
+          if (String(a.mimeType || '').startsWith('image/')) {
+            imageFailures.push(a.name);
+          }
           out.push(a);
           continue;
         }
@@ -1063,8 +1069,18 @@ class DeviceClient {
         });
       } catch (e) {
         console.warn('[client-tools/device] 产物上传异常:', e && (e as Error).message);
+        if (String(a.mimeType || '').startsWith('image/')) {
+          imageFailures.push(a.name);
+        }
         out.push(a);
       }
+    }
+    if (imageFailures.length) {
+      const note =
+        `[artifact_upload_failed] 图片未能上传（${imageFailures.join(', ')}）` +
+        ` ⇒ 模型看不到这张图；请改用 pc_browser_snapshot 读页面内容。`;
+      return { ...result, stdout: result.stdout ? `${result.stdout}
+${note}` : note, artifacts: out };
     }
     return { ...result, artifacts: out };
   }
