@@ -119,6 +119,36 @@ test('GC-P31-32 type：逐个字符注入，不把整段文本拼进 JS', async 
   setBrowserTabPool(null);
 });
 
+test('GC-P31-35 press：白名单按键走 trusted keyDown/keyUp，禁用 Ctrl/Alt/Meta/F5，不靠 evalInTab', async () => {
+  const entries = new Map([['t', fakeEntry('https://x/', 1)]]);
+  const calls = installPool(entries, { pos: { found: true, x: 1, y: 1, tag: 'button', text: '无关' } });
+
+  const ok = await pcBrowserAct({ tabId: 't', action: 'press', key: 'Escape' });
+  assert.equal(ok.status, 'ok');
+  assert.equal(JSON.parse(ok.stdout).key, 'Escape');
+  // focus（mouseMove）+ trusted keyDown/keyUp —— mouseMove 不会触发页面点击
+  assert.deepEqual(calls.inputs, [
+    { type: 'mouseMove', x: 0, y: 0 },
+    { type: 'keyDown', keyCode: 'Escape', key: 'Escape' },
+    { type: 'keyUp', keyCode: 'Escape', key: 'Escape' },
+  ]);
+  assert.equal(calls.evalScripts.length, 0, 'press 绝不调用 evalInTab');
+
+  // 白名单的滚动键也走同一条路
+  for (const key of ['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', 'Tab', 'Backspace', 'Delete', 'Space']) {
+    const r = await pcBrowserAct({ tabId: 't', action: 'press', key });
+    assert.equal(r.status, 'ok', `白名单键应放行: ${key}`);
+  }
+
+  // ⛔ 组合键 / 刷新 / 地址栏快捷键全部拒
+  for (const key of ['Control+L', 'Ctrl+R', 'Alt+Left', 'Meta+Enter', 'F5', 'command+r', '']) {
+    const r = await pcBrowserAct({ tabId: 't', action: 'press', key });
+    assert.equal(r.status, 'error', `非白名单键应拒: ${key}`);
+    assert.match(r.error, /press 只支持白名单按键/);
+  }
+  setBrowserTabPool(null);
+});
+
 // ===========================================================================
 // GC-P31-33 · CSS 选择器校验
 // ===========================================================================

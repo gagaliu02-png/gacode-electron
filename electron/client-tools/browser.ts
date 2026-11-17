@@ -234,8 +234,87 @@ export const SNAPSHOT_LIMITS = {
   TOTAL_BYTES: 12 * 1024,
 } as const;
 
+/**
+ * snapshot 与 act 共用的「可交互元素」抽取器源码（在页面主世界里执行）。
+ *
+ * ★ 两份脚本必须同源：旧版 snapshot 先过滤不可见元素再编号，act 却对未过滤的
+ *   querySelectorAll 取第 N 个 ⇒ 编号错位（实测 e132 点中屏幕外笔记 1120,2545）。
+ *   现在编号、坐标、可见性都由这一段产出，严格一致。
+ *
+ * 覆盖：标准控件 / role / onclick / contenteditable / cursor:pointer 的 div、
+ * 伪元素文字（::before/::after）、shadow DOM、同源 iframe（坐标换算到主 frame 视口）。
+ */
+export const INTERACTIVE_COLLECTOR_JS = `
+  function __normText(v) { return String(v == null ? '' : v).replace(/\\s+/g, ' ').trim(); }
+  function __ownText(el) {
+    let t = el.innerText || el.value || el.getAttribute('aria-label') ||
+            el.getAttribute('placeholder') || el.getAttribute('title') || '';
+    try {
+      for (const pe of ['::before', '::after']) {
+        const c = getComputedStyle(el, pe).content;
+        if (c && c !== 'none' && c !== 'normal') t = t + ' ' + c.replace(/^["']|["']$/g, '');
+      }
+    } catch (_) {}
+    return __normText(t);
+  }
+  function __isInteractive(el) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'a' || tag === 'button' || tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    const role = el.getAttribute('role') || '';
+    if (/^(button|link|checkbox|radio|tab|menuitem|switch|option)$/.test(role)) return true;
+    if (el.hasAttribute('onclick') || el.hasAttribute('onmousedown') || el.hasAttribute('onpointerdown')) return true;
+    if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') return true;
+    try { if (getComputedStyle(el).cursor === 'pointer') return true; } catch (_) {}
+    return false;
+  }
+  function __walk(root, ox, oy, out, depth, limit) {
+    if (depth > 4 || out.length >= limit) return;
+    let all;
+    try { all = root.querySelectorAll('*'); } catch (_) { return; }
+    for (const el of all) {
+      if (out.length >= limit) break;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'template') continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      let cs;
+      try { cs = getComputedStyle(el); } catch (_) { continue; }
+      if (cs.visibility === 'hidden' || cs.display === 'none' || cs.opacity === '0') continue;
+      const left = ox + r.left, top = oy + r.top;
+      const x = left + r.width / 2, y = top + r.height / 2;
+      out.push({
+        tag, text: __ownText(el).slice(0, 200),
+        role: el.getAttribute('role') || '', placeholder: el.getAttribute('placeholder') || '',
+        x: Math.round(x), y: Math.round(y),
+        left: Math.round(left), top: Math.round(top),
+        width: Math.round(r.width), height: Math.round(r.height),
+        interactive: __isInteractive(el),
+        inView: x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight,
+      });
+      // shadow DOM 与主 frame 共用坐标系 ⇒ 偏移不变；iframe 是独立坐标系 ⇒ 叠加 host 左上角。
+      if (el.shadowRoot) __walk(el.shadowRoot, ox, oy, out, depth + 1, limit);
+      if (tag === 'iframe') {
+        try {
+          const d = el.contentDocument;
+          if (d && d.body) __walk(d.body, left, top, out, depth + 1, limit);
+        } catch (_) { /* 跨域 iframe 读不到 ⇒ 跳过 */ }
+      }
+    }
+  }
+  function __collectAll(limit) {
+    const out = [];
+    const b = document.body || document.documentElement;
+    if (b) __walk(b, 0, 0, out, 0, limit || 3000);
+    return out;
+  }
+  function __collectInteractive(limit) {
+    return __collectAll(4000).filter(function (e) { return e.interactive && e.inView; }).slice(0, limit || 400);
+  }
+`;
+
 /** 页面里注入的那段**只读**脚本（固定常量，⛔ 模型不能改）。 */
 export const SNAPSHOT_SCRIPT = `(() => {
+  ${INTERACTIVE_COLLECTOR_JS}
   // ⛔ 只读：不改 DOM、不发请求、不取凭据或本地存储
   const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE','SVG','IFRAME']);
   const body = document.body || document.documentElement;
@@ -259,28 +338,14 @@ export const SNAPSHOT_SCRIPT = `(() => {
     if (chunks.length > 4000) break;   // 页面再大也不让注入层爆
   }
 
-  // ② 可交互元素 → 编号表素材（编号在宿主侧生成，页面里不给 id）
-  const SEL = 'a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]';
-  const elements = [];
-  for (const el of body.querySelectorAll(SEL)) {
-    if (elements.length >= 400) break;
-    const r = el.getBoundingClientRect();
-    // 不可见（0 尺寸 / display:none / visibility:hidden）⇒ 不收
-    if (!r.width || !r.height) continue;
-    const cs = getComputedStyle(el);
-    if (cs.visibility === 'hidden' || cs.display === 'none') continue;
-    let text = (el.innerText || el.value || el.getAttribute('aria-label') ||
-                el.getAttribute('placeholder') || el.getAttribute('title') || '').trim();
-    text = text.replace(/\\s+/g, ' ').slice(0, 200);
-    elements.push({
-      tag: el.tagName.toLowerCase(),
-      text,
-      role: el.getAttribute('role') || '',
-      placeholder: el.getAttribute('placeholder') || '',
-      // ⛔ 不读 href / value / 序列化整节点 —— 不把 URL 参数里的 token 带出来
-    });
-  }
-  return { title: document.title || '', url: location.href, text: chunks.join('\\n'), elements };
+  // ② 可交互元素 → 编号表素材（与 act 的 ELEM_IDX 解析共用同一段抽取器）
+  const elements = __collectInteractive(${SNAPSHOT_LIMITS.MAX_ELEMENTS}).map(function (e) {
+    return { tag: e.tag, text: e.text, role: e.role, placeholder: e.placeholder, x: e.x, y: e.y };
+  });
+  return {
+    title: document.title || '', url: location.href, text: chunks.join('\\n'), elements,
+    viewport: { w: innerWidth, h: innerHeight },
+  };
 })()`;
 
 /** 注入脚本返回的原始形状。 */
@@ -289,6 +354,7 @@ export interface RawSnapshot {
   url?: unknown;
   text?: unknown;
   elements?: unknown;
+  viewport?: unknown;
 }
 
 /** 带编号的元素（模型引用 `e12` 用）。 */
@@ -298,6 +364,9 @@ export interface SnapshotElement {
   text: string;
   role?: string;
   placeholder?: string;
+  /** 中心点的 viewport 坐标（与 act 点击坐标同源）。 */
+  x?: number;
+  y?: number;
 }
 
 /** 编号表内存态（按 tabId 存；⛔ 不落盘、不进日志）。 */
@@ -339,6 +408,8 @@ export function buildElementIndex(tabId: string, raw: unknown): SnapshotElement[
     };
     if (o.role) item.role = String(o.role).slice(0, 30);
     if (o.placeholder) item.placeholder = String(o.placeholder).slice(0, 80);
+    if (Number.isFinite(o.x)) item.x = Math.round(o.x as number);
+    if (Number.isFinite(o.y)) item.y = Math.round(o.y as number);
     out.push(item);
   }
   elementIndex.set(tabId, { ids: out.map((x) => x.id), at: Date.now() });
@@ -376,6 +447,7 @@ export function buildSnapshotOutput(args: {
     tabId,
     url: typeof raw.url === 'string' ? raw.url.slice(0, 500) : '',
     title: typeof raw.title === 'string' ? raw.title.slice(0, 200) : '',
+    viewport: raw.viewport && typeof raw.viewport === 'object' ? raw.viewport : undefined,
     text: page,
     elements,
     truncated: textTruncated || (cursor === 0 && Array.isArray(raw.elements) && raw.elements.length > SNAPSHOT_LIMITS.MAX_ELEMENTS),
@@ -523,19 +595,17 @@ export function isDangerousAction(targetText: string | null, action: string): st
 }
 
 /**
- * 用 `e12` 编号（snapshot 生成的）找元素坐标。
- * ⛔ 编号只来自 `elementIndex` Map（browser.ts 内存态），不是模型自己编的。
- */
-
-/**
  * M2 主函数：在活 tab 上做一次点击（trusted）或输入（trusted）。
  *
- * `target` 支持：
- *   · `e12`  → snapshot 生成的元素编号（优先，模型几乎总用它）
- *   · CSS    → `[data-x]` / `button.login` 等，直接 querySelector
+ * `target` 支持四种写法：
+ *   · `e12`        → snapshot 生成的元素编号（与 snapshot 共用抽取器 ⇒ 编号/坐标同源）
+ *   · `text:我知道了` → 按**可见文字**精确定位（div / 伪元素 / shadow DOM / 同源 iframe 都支持）
+ *   · `@1120,2545`  → 按 viewport 坐标点击（兜底手段；屏幕外直接拒）
+ *   · CSS           → `[data-x]` / `button.login` 等简单选择器（class/id/attr）
  *
  * ⚠️ 点击**绝对**走 `pool.input`（`webContents.sendInputEvent`）⇒ trusted 事件。
  * ⚠️ 危险动作（命中 `isDangerousAction`）⇒ 端侧直接拒（L3 兜底）。
+ * ⚠️ 任何定位方式拿到的坐标，注入前都统一过**视口边界校验**，屏幕外的绝不点。
  */
 export async function pcBrowserAct(
   rawArgs: Record<string, unknown> | null,
@@ -560,17 +630,58 @@ export async function pcBrowserAct(
     };
   }
 
-  // 只支持 click / type 两个动作（M2）；press / scroll / wait 后续批次。
-  if (action !== 'click' && action !== 'type') {
+  // M2 + [2026-11-17] press：click / type 之外再加**白名单按键**（Escape 关弹窗 / PageDown 翻页）。
+  //   ⚠️ 只放行下表的键 —— 模型不能借 press 发任意组合键（地址栏 / 系统热键 / 刷新都不给）。
+  if (action !== 'click' && action !== 'type' && action !== 'press') {
     return {
       status: 'error',
-      error: `pc_browser_act 目前只支持 action=click / type，收到 "${action}"`,
+      error: `pc_browser_act 目前只支持 action=click / type / press，收到 "${action}"`,
+    };
+  }
+
+  // ★ [2026-11-17] press —— trusted keyDown/keyUp（浏览器页面内），用于：
+  //   · Escape     关闭遮罩 / 弹窗（够不着按钮时优先，不用盲点坐标）
+  //   · Enter/Tab  表单与焦点推进
+  //   · PageDown/PageUp/ArrowUp/ArrowDown/Home/End  页面滚动（别去猜看不到区域的坐标）
+  //   ⛔ 不含 Ctrl/Alt/Meta/F5/Cmd+R 之类 —— 不许刷新、开地址栏、切标签、触发系统热键。
+  if (action === 'press') {
+    const key = typeof args.key === 'string' ? args.key : typeof args.target === 'string' ? args.target : '';
+    const ALLOWED_PRESS_KEYS = new Set([
+      'Escape', 'Enter', 'Tab', 'Backspace', 'Delete',
+      'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+      'PageUp', 'PageDown', 'Home', 'End', 'Space',
+    ]);
+    if (!ALLOWED_PRESS_KEYS.has(key)) {
+      return {
+        status: 'error',
+        error: `press 只支持白名单按键: ${[...ALLOWED_PRESS_KEYS].join(' / ')}（收到 "${key}"）`,
+      };
+    }
+    const keyCode = key === 'Space' ? ' ' : key;
+    // Electron 的 trusted 键盘事件必须先让 view 顶层 + focus（main.ts 现在只对 mouse 做，
+    //   key 事件前先发一个 harmless mouseMove 到 (0,0) 触发 focus —— 不改页面内容）。
+    pool.input(tabId, { type: 'mouseMove', x: 0, y: 0 });
+    pool.input(tabId, { type: 'keyDown', keyCode, key });
+    pool.input(tabId, { type: 'keyUp', keyCode, key });
+    return {
+      status: 'ok',
+      exitCode: 0,
+      stdout: JSON.stringify({
+        tool: 'pc_browser_act',
+        action: 'press',
+        tabId,
+        key,
+        message: `已按键 ${key}（trusted）`,
+      }),
     };
   }
 
   // ── 危险动作：L3 端侧兜底 ──────────────────────────────────────────────
   if (action === 'click') {
-    const targetText = typeof args.text === 'string' ? args.text : null;
+    // text: 目标本身就是要点的可见文字 ⇒ 也要过闸门（否则「删除」这类按钮会被 text 定位绕过）
+    const targetStr = typeof args.target === 'string' ? args.target : '';
+    const fromTarget = targetStr.startsWith('text:') ? targetStr.slice('text:'.length) : null;
+    const targetText = typeof args.text === 'string' ? args.text : fromTarget;
     const danger = isDangerousAction(targetText, action);
     if (danger) {
       return {
@@ -583,45 +694,94 @@ export async function pcBrowserAct(
   try {
     // ── 定位元素坐标 ────────────────────────────────────────────────────
     const target = args.target;
-    let sel: string;
-    if (typeof target === 'string') {
-      sel = target.startsWith('e') ? `ELEM_IDX:${Number(target.slice(1)) - 1}` : target;
-    } else {
-      return { status: 'error', error: 'pc_browser_act 缺 target（元素编号 e12 或 CSS 选择器）' };
-    }
+    const targetStr = typeof target === 'string' ? target : '';
+    let pos: {
+      found: boolean; x?: number; y?: number; vw?: number; vh?: number;
+      reason?: string; tag?: string; text?: string; via?: string;
+    } = { found: false, reason: '缺 target' };
 
-    // 解析：要么 ELEM_IDX:n（snapshot 编号），要么 CSS selector。
-    let pos: { found: boolean; x?: number; y?: number; reason?: string; tag?: string; text?: string };
-    if (sel.startsWith('ELEM_IDX:')) {
-      const idx = Number(sel.slice('ELEM_IDX:'.length));
-      // 用固定脚本按「第 N 个可交互元素」取坐标（⚠️ 不用 querySelector 编 selector —— 编号不是 DOM id）
-      const script = `(() => {
-        const SEL = 'a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]';
-        const els = [...(document.body||document.documentElement).querySelectorAll(SEL)];
-        const el = els[${idx}];
-        if (!el) return { found: false, reason: '编号越界' };
-        const r = el.getBoundingClientRect();
-        if (!r.width || !r.height) return { found: false, reason: '元素不可见' };
-        return { found: true, x: r.left + r.width/2, y: r.top + r.height/2, tag: el.tagName.toLowerCase(), text: (el.innerText || '').slice(0,40) };
-      })()`;
-      pos = (await pool.evalInTab(tabId, script)) as typeof pos;
-    } else {
-      // CSS selector —— ⛔ 校验：只放行简单的 class/id/attr 选择器，拦复杂表达式防止注入
-      //   ⚠️ 用独立字面量字符类（`[`/`]` 是普通字符），允许引号包裹的 attr 值；
-      //     但**禁止** `(` `)` `;` `<` `>` 等会拼成函数/表达式/标签的字符。
-      if (!/^[#.\[\]a-zA-Z0-9_\-=: "']+$/.test(sel)) {
-        return { status: 'error', error: `选择器含非法字符，只支持简单 CSS（class/id/attr）: ${sel}` };
+    if (targetStr.startsWith('text:')) {
+      // ── A：按可见文字精确定位 ──────────────────────────────────────────
+      const needle = targetStr.slice('text:'.length).replace(/\\s+/g, ' ').trim();
+      if (!needle) {
+        return { status: 'error', error: 'text: 后面要跟可见文字（例：text:我知道了）' };
       }
       const script = `(() => {
-        try {
-          const el = document.querySelector(JSON.stringify(${JSON.stringify(sel)}));
-          if (!el) return { found: false, reason: '找不到选择器' };
-          const r = el.getBoundingClientRect();
-          if (!r.width || !r.height) return { found: false, reason: '元素不可见' };
-          return { found: true, x: r.left + r.width/2, y: r.top + r.height/2, tag: el.tagName.toLowerCase(), text: (el.innerText || '').slice(0,40) };
-        } catch (e) { return { found: false, reason: 'querySelector 异常' }; }
+        ${INTERACTIVE_COLLECTOR_JS}
+        const q = ${JSON.stringify(needle)}.replace(/\\s+/g, ' ').trim();
+        const all = __collectAll(6000);
+        let m = all.filter(function (e) { return e.text === q; });       // 精确匹配优先
+        if (!m.length) m = all.filter(function (e) { return e.text.indexOf(q) !== -1; });
+        if (!m.length) return { found: false, reason: '页面上找不到这段文字: ' + q, vw: innerWidth, vh: innerHeight };
+        m = m.filter(function (e) { return e.inView; });                  // ⛔ 屏幕外的一律不点
+        if (!m.length) return { found: false, reason: '文字在页面里但不在可视区（可能要滚动到它）: ' + q, vw: innerWidth, vh: innerHeight };
+        // 同名多个：优先可交互的，再取面积最小的叶子节点（更深的 div/按钮，而不是包住它的容器）
+        const interactive = m.filter(function (e) { return e.interactive; });
+        if (interactive.length) m = interactive;
+        m.sort(function (a, b) { return (a.width * a.height) - (b.width * b.height); });
+        const best = m[0];
+        // 歧义判定：面积最小的候选若有多个不同坐标且互不包含 ⇒ 不知道点哪个，报错而不是瞎点
+        const top = m.filter(function (e) { return e.x === best.x && e.y === best.y; });
+        const contains = function (a, b) {
+          return a.left <= b.left && a.top <= b.top &&
+                 a.left + a.width >= b.left + b.width && a.top + a.height >= b.top + b.height;
+        };
+        const distinct = m.filter(function (e) { return !contains(best, e) && !contains(e, best); });
+        if (distinct.length > 0) {
+          return { found: false, reason: '文字「' + q + '」匹配到多个不同的可见元素，请换更精确的文字或用坐标 @x,y', vw: innerWidth, vh: innerHeight, ambiguous: distinct.length + 1 };
+        }
+        return {
+          found: true, x: best.x, y: best.y, vw: innerWidth, vh: innerHeight,
+          tag: best.tag, text: best.text.slice(0, 40), via: 'text', matches: top.length,
+        };
       })()`;
       pos = (await pool.evalInTab(tabId, script)) as typeof pos;
+    } else if (/^@-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(targetStr)) {
+      // ── B：viewport 坐标兜底 ────────────────────────────────────────────
+      const [px, py] = targetStr.slice(1).split(',').map((s) => Number(s.trim()));
+      const vp = (await pool.evalInTab(tabId,
+        `(() => ({ found: true, vw: innerWidth, vh: innerHeight }))()`)) as { vw?: number; vh?: number };
+      pos = { found: true, x: px, y: py, vw: vp?.vw, vh: vp?.vh, tag: 'coordinate', via: 'coordinate' };
+    } else if (/^e\d+$/.test(targetStr)) {
+      // ── C：snapshot 编号（与 snapshot 共用抽取器 ⇒ 编号/坐标严格同源） ──
+      const idx = Number(targetStr.slice(1)) - 1;
+      const script = `(() => {
+        ${INTERACTIVE_COLLECTOR_JS}
+        const els = __collectInteractive(${SNAPSHOT_LIMITS.MAX_ELEMENTS});
+        const el = els[${idx}];
+        if (!el) return { found: false, reason: '编号越界（请重新 pc_browser_snapshot）', vw: innerWidth, vh: innerHeight };
+        return {
+          found: true, x: el.x, y: el.y, vw: innerWidth, vh: innerHeight,
+          tag: el.tag, text: el.text.slice(0, 40), via: 'element',
+        };
+      })()`;
+      pos = (await pool.evalInTab(tabId, script)) as typeof pos;
+    } else {
+      // ── CSS selector —— 只放行简单 class/id/attr，拦复杂表达式防止注入 ──
+      // ★ 修 bug：旧版把 JSON.stringify(sel) 的结果又包一层 JSON.stringify 传给
+      //   querySelector ⇒ 传进去的是带引号的 JSON 字符串（如 `".login"`）⇒ 永远匹配不到。
+      if (!/^[#.\[\]a-zA-Z0-9_\-=: "']+$/.test(targetStr)) {
+        return { status: 'error', error: `target 写法不认识（支持 e12 / text:文字 / @x,y / 简单 CSS）: ${targetStr}` };
+      }
+      const script = `(() => {
+        ${INTERACTIVE_COLLECTOR_JS}
+        try {
+          const el = document.querySelector(${JSON.stringify(targetStr)});
+          if (!el) return { found: false, reason: '找不到选择器: ' + ${JSON.stringify(targetStr)}, vw: innerWidth, vh: innerHeight };
+          const r = el.getBoundingClientRect();
+          const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+          return {
+            found: true, x, y, vw: innerWidth, vh: innerHeight,
+            tag: el.tagName.toLowerCase(), text: (el.innerText || '').slice(0, 40), via: 'css',
+            inView: x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight,
+          };
+        } catch (e) { return { found: false, reason: 'querySelector 异常', vw: innerWidth, vh: innerHeight }; }
+      })()`;
+      const cssPos = (await pool.evalInTab(tabId, script)) as typeof pos & { inView?: boolean };
+      if (cssPos.inView === false) {
+        return { status: 'error', error: `目标元素中心点 (${cssPos.x},${cssPos.y}) 在可视区外，拒绝点击（请滚动到它或改用文本/坐标定位）` };
+      }
+      pos = cssPos;
     }
 
     if (!pos || !pos.found) {
@@ -632,6 +792,18 @@ export async function pcBrowserAct(
     }
     const x = Math.round(pos.x ?? 0);
     const y = Math.round(pos.y ?? 0);
+
+    // ★ 统一视口校验：任何定位方式拿到的坐标，注入前都要过这一关，屏幕外直接拒。
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return { status: 'error', error: `目标坐标无效（${x},${y}），拒绝点击` };
+    }
+    const vw = pos.vw, vh = pos.vh;
+    if (typeof vw === 'number' && typeof vh === 'number' && (x < 0 || y < 0 || x > vw || y > vh)) {
+      return {
+        status: 'error',
+        error: `目标坐标 (${x},${y}) 在可视区外（viewport ${vw}×${vh}），拒绝点击 —— 避免误点屏幕外的内容`,
+      };
+    }
 
     // ── 注入 trusted 事件 ────────────────────────────────────────────────
     if (action === 'click') {
@@ -645,7 +817,7 @@ export async function pcBrowserAct(
           tool: 'pc_browser_act',
           action: 'click',
           tabId,
-          target: { type: 'element', x, y, tag: pos.tag, text: pos.text },
+          target: { type: pos.via || 'element', x, y, tag: pos.tag, text: pos.text, ...(pos.via === 'text' ? { matches: (pos as { matches?: number }).matches } : {}) },
           message: `已点击 ${pos.tag}（${x},${y}）`,
         }),
       };
