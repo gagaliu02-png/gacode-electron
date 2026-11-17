@@ -147,10 +147,21 @@ export function startHookBridge(opts: HookBridgeOptions): Promise<HookBridgeHand
           };
           if (opts.authorization) headers.authorization = opts.authorization;
 
+          // ★ Claude Code hook 原生字段是 `hook_event_name` / `tool_name`；
+          //   unified-api `/devices/permission-request` 的 schema 要 `eventName` / `toolName`。
+          //   桥在这里做一次**只补不覆盖**的归一化，避免真实 hook 触发时 400。
+          const upstreamBody: Record<string, unknown> = { ...(opts.context || {}), ...payload };
+          if (!upstreamBody.toolName && typeof (upstreamBody as any).tool_name === 'string') {
+            upstreamBody.toolName = (upstreamBody as any).tool_name;
+          }
+          if (!upstreamBody.eventName && typeof (upstreamBody as any).hook_event_name === 'string') {
+            upstreamBody.eventName = (upstreamBody as any).hook_event_name;
+          }
+
           const upstream = await fetchImpl(opts.endpoint, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ ...(opts.context || {}), ...payload }),
+            body: JSON.stringify(upstreamBody),
             signal: ac.signal,
           });
 

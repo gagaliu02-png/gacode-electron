@@ -134,6 +134,29 @@ test('GC-HB-3 · ★ 转发：输入原样带给上游，**只把 hook 应答体
   }
 });
 
+test('GC-HB-3b · ★ Claude Code 原生字段归一化：hook_event_name/tool_name ⇒ eventName/toolName', async () => {
+  const hookResp = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
+  const up = fakeUpstream(200, { hookResponse: hookResp });
+  const h = await startHookBridge({
+    endpoint: 'http://gaclaw.invalid/req',
+    fetchImpl: up,
+  });
+  try {
+    const r = await callBridge(h.port, {
+      token: h.token,
+      body: { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } },
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(up.calls[0].body.toolName, 'Bash');
+    assert.strictEqual(up.calls[0].body.eventName, 'PermissionRequest');
+    // 原始字段也不能丢（上游/审计想看完整 hook 输入时还有）
+    assert.strictEqual(up.calls[0].body.tool_name, 'Bash');
+    assert.strictEqual(up.calls[0].body.hook_event_name, 'PermissionRequest');
+  } finally {
+    await h.close();
+  }
+});
+
 test('GC-HB-4 · ★ 上游失败 ⇒ 503（让 Claude Code 按 onFailure 处理）', async () => {
   const up = fakeUpstream(500, { error: 'boom' });
   const h = await startHookBridge({ endpoint: 'http://gaclaw.invalid/req', fetchImpl: up });
