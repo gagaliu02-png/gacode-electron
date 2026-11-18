@@ -117,9 +117,12 @@ writeModule(dir, "client-capabilities", repoSrc("src/lib/client-capabilities.ts"
 //   （「这一行是不是系统注记」的判据 · web 是原件端 · PC 逐字抄那一份）。
 //   ⚠️ turn-identity.ts **零 import** ⇒ 拷贝链不用再带别的。
 writeModule(dir, "turn-identity", repoSrc("src/lib/sse/turn-identity.ts"));
+// ★ [2026-11-18 · T-039] api.ts 的 401 续期改为委托 `auth-refresh.ts`（单飞只有一份）
+writeModule(dir, "auth-refresh", repoSrc("src/lib/auth-refresh.ts"));
 const api = await import(
   writeModule(dir, "api", repoSrc("src/lib/api.ts"), {
     rewriteImports: [
+      ["auth-refresh", "./auth-refresh.mjs"],
       ["rich-events", "./rich-events.mjs"],
       ["sse/turn-key-header", "./turn-key-header.mjs"],
       ["notifications", "./notifications.mjs"],

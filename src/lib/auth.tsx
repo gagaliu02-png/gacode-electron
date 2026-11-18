@@ -49,6 +49,9 @@ import {
   type User,
 } from "./api";
 import { registerCancelAuthAccessors } from "./cancel";
+// ★ [2026-11-18 · T-039] 401 续期 helper（零 import 的叶子模块）的接线点
+import { configureAuthRetry } from "./auth-retry";
+import { tryRefreshAccessToken } from "./auth-refresh";
 import { registerUploadAuthAccessors } from "./upload";
 
 interface AuthContextValue {
@@ -211,6 +214,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // stage 4: SSE EventSource 不能自定义 header, 把 getter 注入到 api.ts,
     // 由 buildNotificationStreamUrl() 拼到 ?token= query. 同一份 snapshot.
     registerSseAuthAccessor(() => accessToken);
+    // ★ [2026-11-18 · T-039] **把「带 token + 401 自动续期」的依赖注入进去**
+    //   （`lib/auth-retry.ts` 刻意零 import ⇒ 这里是它唯一的接线点）。
+    //   · getToken：当前内存 accessToken ⇒ SSE 第一次就带它（不再靠 cookie + 401 重试）
+    //   · refresh：`auth-refresh.ts` 的单飞续期（**全仓只有这一份**）
+    //   · onAuthExpired：续期失败 ⇒ 清登录态 + 通知 UI（跳 /login）
+    configureAuthRetry({
+      getToken: () => accessToken,
+      refresh: () => tryRefreshAccessToken(),
+      onAuthExpired: () => {
+        setAccessTokenState(null);
+        setRefreshTokenState(null);
+        setUser(null);
+        void clearPersistedRefreshToken();
+        window.dispatchEvent(new CustomEvent("gacode:auth-cleared"));
+      },
+    });
     // 监听 refresh 成功事件 (lib/api.ts:tryRefresh dispatch)
     const onRefreshed = (e: Event) => {
       const detail = (e as CustomEvent<{

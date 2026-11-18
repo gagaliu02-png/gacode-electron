@@ -143,8 +143,11 @@ test("S5 EOF 后带最新游标退避重连 (补缺口)", () => {
   assert.match(code.subscribe, /if \(ac\.signal\.aborted\) return;/, "用户退出不重连");
   assert.match(code.subscribe, /1000 \* 2 \*\* attempt/, "退避存在");
   // 游标是循环变量 ⇒ 每次 fetchSubscribe 都传它 ⇒ 重连天然带最新值。
-  assert.match(code.subscribe, /fetchSubscribe\(null, cursor\)/, "首次请求带游标");
-  assert.match(code.subscribe, /fetchSubscribe\(fresh, cursor\)/, "401 重试也带游标");
+  // ★ [2026-11-18 · T-039] 401 处理改成统一 helper（`fetchWithAuthRetry`）⇒
+  //   第一次就带当前 token（不再 `fetchSubscribe(null, cursor)`），重发由 helper 内部做。
+  assert.match(code.subscribe, /fetchWithAuthRetry\(\(t\) => fetchSubscribe\(t, cursor\)/,
+    "首次请求就走带 token 的统一 helper（401 续期由 helper 负责）");
+  assert.match(code.subscribe, /AuthExpiredError/, "登录过期要单独处理（停掉重连）");
   assert.match(code.subscribe, /cursor = c;/, "onCursor 推进本地游标");
   assert.match(code.subscribe, /if \(readResult\.cursor\) cursor = readResult\.cursor;/, "EOF 后落最终游标");
 });

@@ -172,8 +172,11 @@ export async function loadScheduleModules(dir) {
   writeModule(dir, "rich-events", readSrc(SCHEDULE_SRC.richEvents));
   // [P3 · 2026-11-12] api.ts 的第二个运行时依赖 —— 同上, 必须跟 api.mjs 同目录。
   writeModule(dir, "client-capabilities", readSrc(SCHEDULE_SRC.clientCapabilities));
+  // ★ [2026-11-18 · T-039] api.ts 的 401 续期委托 `auth-refresh.ts`（单飞只有一份）
+  writeModule(dir, "auth-refresh", readSrc("src/lib/auth-refresh.ts"));
   writeModule(dir, "api", readSrc(SCHEDULE_SRC.api), {
     rewriteImports: [
+      ["./auth-refresh", "./auth-refresh.mjs"],
       ["./notifications", "./notifications.mjs"],
       ["./rich-events", "./rich-events.mjs"],
       ["./client-capabilities", "./client-capabilities.mjs"],

@@ -98,12 +98,15 @@ writeModule(dir, "cancel", repoSrc("src/lib/cancel.ts"), {
   rewriteImports: [["./rich-events", "./rich-events.mjs"]],
 });
 writeModule(dir, "auth-refresh", repoSrc("src/lib/auth-refresh.ts"));
+// ★ [2026-11-18 · T-039] chat-stream.ts 的 401 走 `auth-retry.ts`（零 import 叶子模块）
+writeModule(dir, "auth-retry", repoSrc("src/lib/auth-retry.ts"));
 writeModule(dir, "sse-reconnect", repoSrc("src/lib/sse-reconnect.ts"));
 const sseUrl = writeModule(dir, "sse", repoSrc("src/lib/chat-stream.ts"), {
   rewriteImports: [
     ["react", "./react-stub.mjs"],
     ["./cancel", "./cancel.mjs"],
     ["./auth-refresh", "./auth-refresh.mjs"],
+    ["./auth-retry", "./auth-retry.mjs"],
     ["./chat-sse", "./chat-sse.mjs"],
     ["./sse-reconnect", "./sse-reconnect.mjs"],
   ],

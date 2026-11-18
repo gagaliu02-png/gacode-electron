@@ -282,9 +282,13 @@ test("GC-P28-S5 历史行（metadata.inbox_id）⇒ 同一个合成 id", async (
   // ★ [2026-11-16] api.ts 的**运行时**依赖多了一个 `./sse/turn-identity`
   //   （系统注记判据 · web 是原件端 · PC 逐字抄那一份；零 import ⇒ 不带别的）。
   writeModule(dir, "turn-identity", repoSrc("src/lib/sse/turn-identity.ts"));
+  // ★ [2026-11-18 · T-039] api.ts 的 401 续期改为委托 `auth-refresh.ts`（单飞只有一份）
+  //   ⇒ 临时模块图要把它一起搬进来（auth-refresh.ts 零 import ⇒ 不带别的）。
+  writeModule(dir, "auth-refresh", repoSrc("src/lib/auth-refresh.ts"));
   const api = await import(
     writeModule(dir, "api", repoSrc(API), {
       rewriteImports: [
+        ["auth-refresh", "./auth-refresh.mjs"],
         ["rich-events", "./rich-events.mjs"],
         ["sse/turn-key-header", "./turn-key-header.mjs"],
         ["notifications", "./notifications.mjs"],

@@ -42,6 +42,9 @@ import type { ExecutionPhase } from "../components/chat/ExecutionTimeline";
 //   `lib/rich-events.ts` 形成循环 import (那个文件零 import)。
 import type { RichEventBase } from "./rich-events";
 import { normalizeRichEvent } from "./rich-events";
+// ★ [2026-11-18 · T-039] 401 续期的**唯一单飞实现**（本文件与 SSE 路径共用一份）
+//   ⚠️ `auth-refresh.ts` 不 import 本文件 ⇒ 无循环依赖。
+import { tryRefreshAccessToken } from "./auth-refresh";
 
 /**
  * 后端 API base —— 绝对地址。
@@ -98,55 +101,14 @@ interface V2Response<T> {
 }
 
 /** 并发去重的 refresh promise (跟 gacode-web api.ts 一致) */
-let refreshPromise: Promise<boolean> | null = null;
-
+// ★ [2026-11-18 · T-039] **全仓只保留一份单飞** —— 原来 api.ts 与 auth-refresh.ts
+//   各有一份 ⇒ 两条路同时 401 会各刷一次；而 server 端 refresh token 是 **rotation**
+//   （旧的立刻作废）⇒ 后刷的那次拿到已作废的 token ⇒ 偶发真失败。
+//   ⇒ 现在统一委托给 `auth-refresh.ts` 的单飞实现（它从磁盘读 refreshToken，
+//      rotation 后永远是最新值）。
 export async function tryRefresh(): Promise<boolean> {
-  if (refreshPromise) return refreshPromise;
-  refreshPromise = (async () => {
-    try {
-      // server `auth.routes.js:29-35` schema 要求 body.refreshToken (minLength 10),
-      // `auth.service.js:127` 首行校验. 不带 body 一定 schema 失败 → clearAuth
-      // → "会话过期". 旧实现只 `credentials: "include"` 但 server 不再读 cookie
-      // 路径, refresh token 走 body. (unified-api 0.x 改版后的协议.)
-      const rt = getRefreshToken();
-      if (!rt) return false;
-      const r = await fetch(`${API_BASE}/auth/refresh`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken: rt }),
-      });
-      if (!r.ok) return false;
-      const json = (await r.json()) as V2Response<{
-        accessToken?: string;
-        refreshToken?: string;
-      }>;
-      if (!json.ok || !json.data?.accessToken) return false;
-      // 通知 AuthProvider 更新内存里的 accessToken + refreshToken.
-      // server 走 rotation, 旧 refreshToken 立刻失效 — 必须同步刷盘 (由
-      // AuthProvider 监听事件时调 gacode.authStorage.write).
-      window.dispatchEvent(
-        new CustomEvent("gacode:auth-refreshed", {
-          detail: {
-            accessToken: json.data.accessToken,
-            // server 可能不返 refreshToken (旧 token 仍有效但未轮换); 这时
-            // 保持原值. 但其实 rotation 已写死, 老 token 下次一定失效, 所以
-            // 一般都有新 refreshToken. 没返就 fallthrough 到 undefined,
-            // AuthProvider 那边不会动.
-            refreshToken: json.data.refreshToken,
-          },
-        }),
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-  try {
-    return await refreshPromise;
-  } finally {
-    refreshPromise = null;
-  }
+  const fresh = await tryRefreshAccessToken();
+  return !!fresh;
 }
 
 // ★ [P3 · 2026-11-12] 端侧能力声明（契约附录 订正 24 §3）。
@@ -212,8 +174,12 @@ export async function request<T>(
     if (typeof window !== "undefined" && (window as unknown as { __GACODE_E2E__?: boolean }).__GACODE_E2E__) {
       throw new Error("unauthorized (e2e bypass)");
     }
-    const refreshed = await tryRefresh();
-    if (!refreshed) {
+    // ★ [2026-11-18 · T-039] **直接用续期返回的新 token 重发** ——
+    //   旧写法是 `await tryRefresh()` 之后 `getAccessToken()`：那是 **React state**，
+    //   事件派发 ⇒ setState ⇒ 还没重新渲染 ⇒ 读到的**可能还是旧 token**
+    //   ⇒ 重发又 401 ⇒ 直接把用户踢下线（`schedule-http.ts` 里早就记过这个坑）。
+    const fresh = await tryRefreshAccessToken();
+    if (!fresh) {
       // refresh 失败 → 清空 in-memory 状态 + 通知 UI 层 (App.tsx 的
       // AuthClearListener 会 toast + 跳 /login). Protected 路由也会
       // 在下次渲染时检测到 user=null 自动跳.
@@ -222,10 +188,7 @@ export async function request<T>(
       throw new Error("unauthorized");
     }
     // 用新 token 重发
-    const newToken = getAccessToken();
-    if (newToken) {
-      headers.set("Authorization", `Bearer ${newToken}`);
-    }
+    headers.set("Authorization", `Bearer ${fresh}`);
     res = await fetch(`${API_BASE}${path}`, {
       ...init,
       headers,

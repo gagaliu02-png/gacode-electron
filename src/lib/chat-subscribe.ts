@@ -35,7 +35,8 @@
  *    / client-id / cancel 已就绪）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { tryRefreshAccessToken } from "./auth-refresh";
+// ★ [2026-11-18 · T-039] 401 续期统一走 `sse/auth-retry.ts`
+import { fetchWithAuthRetry, AuthExpiredError } from "./auth-retry";
 import {
   normalizeChatChunk,
   readChatSse,
@@ -222,15 +223,20 @@ export function usePersistentSubscribe(): UsePersistentSubscribeResult {
 
           let res: Response;
           try {
-            res = await fetchSubscribe(null, cursor);
-            if (res.status === 401) {
-              const fresh = await tryRefreshAccessToken();
-              if (fresh) {
-                res = await fetchSubscribe(fresh, cursor);
-              }
-            }
+            // ★ [2026-11-18 · T-039] 第一次就带当前 token + 401 自动续期重试
+            //   （旧写法 `fetchSubscribe(null)` 起手 ⇒ 不带 Authorization ⇒ 靠 cookie
+            //    ⇒ 闲置后第一条订阅必然 401）。
+            res = await fetchWithAuthRetry((t) => fetchSubscribe(t, cursor), {
+              label: "chat subscribe",
+              // ⚠️ 常驻订阅续期失败 ⇒ **停掉重连**（别把「登录过期」当成网络抖动无限重试）
+              clearOnExpired: false,
+            });
           } catch (err) {
             if (ac.signal.aborted) return;
+            if (err instanceof AuthExpiredError) {
+              opts.onError?.(err);
+              return;
+            }
             if (attempt >= MAX_RECONNECT) {
               opts.onError?.(err instanceof Error ? err : new Error(String(err)));
               return;

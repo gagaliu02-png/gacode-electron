@@ -60,7 +60,8 @@ import {
   sendCancelDelete,
   UserAbortError,
 } from "./cancel";
-import { tryRefreshAccessToken } from "./auth-refresh";
+// ★ [2026-11-18 · T-039] 401 续期统一走 `sse/auth-retry.ts`（带 token + 单飞续期 + 专用错误）
+import { fetchWithAuthRetry } from "./auth-retry";
 import {
   buildResumeHeaders,
   normalizeChatChunk,
@@ -464,17 +465,10 @@ export function useChatStream(): ChatStreamHandle {
         });
       };
 
-      let res = await fetchStream(null);
-      if (res.status === 401) {
-        const newToken = await tryRefreshAccessToken();
-        if (newToken) {
-          console.warn(
-            "[gacode-sse] chat stream got 401, refreshed token, retrying",
-          );
-          res = await fetchStream(newToken);
-        }
-        // newToken=null (refresh 失败) → 仍 401, 下面 !res.ok 抛错给上层
-      }
+      // ★ [2026-11-18 · T-039] **第一次就带当前 accessToken** + 401 自动续期重试
+      //   （旧写法是 `fetchStream(null)` 起手 ⇒ 压根不带 Authorization ⇒ 靠 cookie
+      //    ⇒ 闲置后第一条消息必然 401 → refresh → 重试，且新 token 只用于那一次）。
+      const res = await fetchWithAuthRetry(fetchStream, { label: "chat stream" });
 
       if (!res.ok) {
         // ★ RC-12: 409 的**机器可读码**必须带上来 ——
@@ -977,16 +971,11 @@ export function useChatStream(): ChatStreamHandle {
           });
         };
 
-        let res = await fetchAttach(null);
-        if (res.status === 401) {
-          const newToken = await tryRefreshAccessToken();
-          if (newToken) {
-            console.warn(
-              "[gacode-sse] chat attach got 401, refreshed token, retrying",
-            );
-            res = await fetchAttach(newToken);
-          }
-        }
+        // ★ [2026-11-18 · T-039] 同上：第一次带 token + 401 自动续期
+        const res = await fetchWithAuthRetry(
+          (t) => fetchAttach(t),
+          { label: "chat attach" },
+        );
         if (!res.ok || !res.body) {
           throw new SseHttpError(
             res.status,
@@ -1107,11 +1096,10 @@ export function useChatStream(): ChatStreamHandle {
         });
       };
 
-      let res = await doFetch(null);
-      if (res.status === 401) {
-        const newToken = await tryRefreshAccessToken();
-        if (newToken) res = await doFetch(newToken);
-      }
+      // ★ [2026-11-18 · T-039] 同上：第一次带 token + 401 自动续期
+      const res = await fetchWithAuthRetry((t) => doFetch(t), {
+        label: "chat/stream none",
+      });
       if (!res.ok) {
         throw new SseHttpError(res.status, `chat/stream none HTTP ${res.status}`);
       }
