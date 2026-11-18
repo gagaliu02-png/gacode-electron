@@ -1168,11 +1168,20 @@ class DeviceClient {
       try {
         const parsed = JSON.parse(stdout);
         if (parsed && parsed.tool === 'pc_browser_shot' && parsed.upload) {
+          const t = Date.now();
+          const timings = {
+            ...(parsed.upload.timings || {}),
+            t_upload_start: parsed.upload.timings?.t_upload_start || t,
+            t_upload_end: t,
+            t_url_assigned: t,
+            t_response: t,
+          };
           parsed.upload = {
             ...parsed.upload,
             status: 'ready',
             url: shotUrls[0],
             error: '',
+            timings,
           };
           stdout = JSON.stringify(parsed);
         }
@@ -1184,7 +1193,16 @@ class DeviceClient {
         try {
           const parsed = JSON.parse(stdout);
           if (parsed && parsed.tool === 'pc_browser_shot' && parsed.upload) {
-            parsed.upload = { ...parsed.upload, status: 'failed', url: '', error: errorMessage };
+            const t = Date.now();
+            parsed.upload = {
+              ...parsed.upload, status: 'failed', url: '', error: errorMessage,
+              timings: {
+                ...(parsed.upload.timings || {}),
+                t_upload_start: parsed.upload.timings?.t_upload_start || t,
+                t_upload_end: t,
+                t_response: t,
+              },
+            };
             stdout = JSON.stringify(parsed);
           }
         } catch { /* ignore */ }

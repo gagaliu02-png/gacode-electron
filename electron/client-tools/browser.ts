@@ -1436,7 +1436,10 @@ export async function pcBrowserShot(
         // T-062: `url` used to be the PAGE url (often '') and was mistaken for the screenshot URL.
         // The real screenshot URL is filled by deviceClient.uploadArtifacts into `upload.url`.
         page_url: typeof args.url === 'string' ? args.url : '',
-        upload: { shotId, status: 'pending', url: '', saved: target },
+        upload: {
+          shotId, status: 'pending', url: '', saved: target,
+          timings: { t_capture: Date.now() },
+        },
         coordinate_system: 'viewport',
         viewport: { w: vw, h: vh },
         scroll: { x: sx, y: sy },
