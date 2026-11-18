@@ -116,6 +116,16 @@ export function registerClientToolIpc(): void {
     return deviceCapabilities().includes('pty=1');
   });
 
+  // ★ [T-046 · 2026-11-18] 渲染层的 chat 请求要用**主进程这份**能力串。
+  //   病根：渲染层 `client-capabilities.ts` 之前**自己拼**（只带 pty/fs/screen/os）
+  //   ⇒ `job` / `browser` / **`claude-code`** 三个键从来没进过 chat 请求的头
+  //   ⇒ 服务端按能力裁剪 ⇒ `pc_cc_*`（Claude Code 管控那一族）**永远不下发**
+  //   ⇒ 用户观感「LLM 看不到 Claude Code 工具」，尽管**其他端侧工具都看得到**。
+  //   ⇒ 判据必须在**同一处**（`deviceCapabilities()`）—— 跟设备注册上报的那份完全一致。
+  ipcMain.handle('gacode:client-tool-capabilities', async (): Promise<string> => {
+    return deviceCapabilities();
+  });
+
   // —— 状态（设备通道 + 闸门）——
   ipcMain.handle('gacode:client-tool-status', async () => {
     const st = deviceClient.status();

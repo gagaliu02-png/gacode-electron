@@ -184,6 +184,9 @@ contextBridge.exposeInMainWorld('gacode', {
       ipcRenderer.invoke('gacode:client-tool-unbind-on-logout'),
     ptyAvailable: (): Promise<boolean> =>
       ipcRenderer.invoke('gacode:client-tool-pty-available'),
+    /** ★ [T-046] **主进程那份完整能力串** —— 跟设备注册上报的完全一致（含 claude-code / job / browser）。 */
+    capabilities: (): Promise<string> =>
+      ipcRenderer.invoke('gacode:client-tool-capabilities'),
     status: () => ipcRenderer.invoke('gacode:client-tool-status'),
     setGate: (next: { masterEnabled?: boolean; killSwitch?: boolean }) =>
       ipcRenderer.invoke('gacode:client-tool-set-gate', next),

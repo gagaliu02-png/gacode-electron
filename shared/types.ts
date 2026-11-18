@@ -216,6 +216,12 @@ export interface GacodeBridge {
      */
     ptyAvailable: () => Promise<boolean>;
 
+    /**
+     * ★ [T-046 · 2026-11-18] **主进程那份完整能力串** —— 跟设备注册上报的逐字一致，
+     *   含 `claude-code=1` / `job=1` / `browser=1`（渲染层**不许**自己另拼一份 ⇒ 工具会少）。
+     */
+    capabilities?: () => Promise<string>;
+
     /** 设备通道状态 + 闸门状态（UI 显示「我的电脑：xx（在线 / 离线）」）。 */
     status: () => Promise<ClientToolStatus>;
 
