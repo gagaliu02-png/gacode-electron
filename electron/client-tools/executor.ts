@@ -44,7 +44,7 @@ import {
   jobStop,
   startBackgroundJob,
 } from './backgroundJobs.ts';
-import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus, pcBrowserShot } from './browser.ts';
+import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus, pcBrowserShot, pcBrowserBack, pcBrowserWindow } from './browser.ts';
 import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
 // ★ [2026-11-17 · T-022] 等端侧 Claude Code 的处理结果（前台等）
@@ -689,6 +689,8 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_browser_close: 15000,
   pc_browser_focus: 15000,
   pc_browser_shot: 30000,
+  pc_browser_back: 15000,
+  pc_browser_window: 15000,
   // [2026-11-17 · T-020] Claude Code 管控端侧工具
   pc_cc_sessions: 30000,
   pc_cc_read: 60000,
@@ -758,6 +760,10 @@ export async function executeClientTool(
     case 'pc_browser_open': return pcBrowserOpen(args, { sessionId: opts?.sessionId ?? null });
     case 'pc_browser_snapshot': return pcBrowserSnapshot(args, { sessionId: opts?.sessionId ?? null });
     case 'pc_browser_act': return pcBrowserAct(args, { sessionId: opts?.sessionId ?? null });
+    // [T-060] 浏览器回退（固定脚本 history.back，不开放 Alt+Left 组合键）
+    case 'pc_browser_back': return pcBrowserBack(args, { sessionId: opts?.sessionId ?? null });
+    // [T-060] 窗口拉到前台 / 用完最小化（截图和浏览器操作的前后态）
+    case 'pc_browser_window': return pcBrowserWindow(args);
     // [2026-11-17 · T-027] 收尾两件套：关标签 / 切回自己的页面
     case 'pc_browser_close': return pcBrowserClose(args, { sessionId: opts?.sessionId ?? null });
     case 'pc_browser_focus': return pcBrowserFocus(args, { sessionId: opts?.sessionId ?? null });

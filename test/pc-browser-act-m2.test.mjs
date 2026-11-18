@@ -5,7 +5,7 @@
 // ## 覆盖断言
 //
 //   GC-P31-30  ★ 点击走 **sendInputEvent**（trusted），绝不 `executeJavaScript(el.click())`
-//   GC-P31-31  ★ 危险动作（发布/提交/点赞/删除…）端侧直接拒（L3 兜底）
+//   GC-P31-31  ★ 危险动作（下单/支付/删除…）端侧直接拒（L3 兜底）；站内互动放行
 //   GC-P31-32  type 输入逐字符注入（不拼整段文本进 JS）
 //   GC-P31-33  CSS 选择器校验：只放行简单 class/id/attr，拦复杂表达式
 //   GC-P31-34  用 e12 编号定位走「第 N 个可交互元素」脚本（不编 selector）
@@ -74,11 +74,11 @@ test('GC-P31-30 click 必须注入 mouseDown/mouseUp（且 evalInTab 只用于�
 // GC-P31-31 · 危险动作硬拒
 // ===========================================================================
 
-test('GC-P31-31 ★ 危险动作（发布/提交/点赞/删除）端侧直接拒', async () => {
+test('GC-P31-31 ★ 危险动作（下单/支付/删除）端侧直接拒；站内互动放行', async () => {
   const entries = new Map([['t', fakeEntry('https://x/', 1)]]);
   installPool(entries, { pos: { found: true, x: 1, y: 2, tag: 'button', text: '发布' } });
 
-  for (const [target, text] of [['e1', '发布'], ['e1', '点赞'], ['e1', '删除'], ['e1', '下单支付']]) {
+  for (const [target, text] of [['e1', '删除'], ['e1', '下单支付']]) {
     const r = await pcBrowserAct({ tabId: 't', action: 'click', target, text });
     assert.equal(r.status, 'error', `应该拒: ${text}`);
     assert.match(r.error, /危险动作|拦截/, `错误要说明原因: ${text}`);
@@ -89,11 +89,16 @@ test('GC-P31-31 ★ 危险动作（发布/提交/点赞/删除）端侧直接拒
   const ok = await pcBrowserAct({ tabId: 't', action: 'click', target: 'e1', text: '查看详情' });
   assert.equal(ok.status, 'ok');
   assert.equal(calls.inputs.length, 3, '普通点击正常注入');
+  // T-060: 收藏/发布/点赞这类站内互动现在也放行
+  for (const text of ['收藏', '发布', '点赞', '评论']) {
+    const r = await pcBrowserAct({ tabId: 't', action: 'click', target: 'e1', text });
+    assert.equal(r.status, 'ok', `站内互动应放行: ${text}`);
+  }
   setBrowserTabPool(null);
 });
 
 test('GC-P31-31b isDangerousAction 纯函数：type 永放行 / 空文本放行到服务端判', () => {
-  assert.equal(isDangerousAction('发布', 'click'), !!DANGEROUS_ACTION_RE.test('发布') && '元素文本命中危险词（发布/提交/点赞/删除…）');
+  assert.equal(isDangerousAction('删除', 'click'), !!DANGEROUS_ACTION_RE.test('删除') && '元素文本命中危险词（下单/支付/删除/注销…）');
   assert.equal(isDangerousAction(null, 'click'), null, '拿不到文本 ⇒ 端侧不判，交给服务端');
   assert.equal(isDangerousAction('', 'click'), null);
   assert.equal(isDangerousAction('随便输入点啥', 'type'), null, 'type 永不放行危险判定');

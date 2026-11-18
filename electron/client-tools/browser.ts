@@ -101,6 +101,10 @@ export interface BrowserTabPool {
   capture?(tabId: string): Promise<{ png: Buffer; width: number; height: number }>;
   /** ★ [2026-11-17 · T-027-d0ck] 当前 active 的 tab（渲染层切 tab 时更新）。 */
   activeTabId?(): string | null;
+  /** ★ [T-060] 把 Gacode 主窗口从最小化拉到前台（截图/操作前）。 */
+  bringToFront?(): boolean;
+  /** ★ [T-060] 把 Gacode 主窗口最小化（工具用完后的收尾）。 */
+  minimize?(): boolean;
   /**
    * ★ M1：在活 tab 的**页面主世界**跑一段只读 JS，拿回原始快照。
    *
@@ -714,7 +718,7 @@ export async function pcBrowserSnapshot(
 //   （模态框到处都是 + 搜索/发送是核心功能）—— 只留**不可逆 / 影响账号**的动词。
 //   与服务端 `gaclaw/src/llm/browser-guard.js` 的 DANGEROUS_WORDS **同口径**。
 export const DANGEROUS_ACTION_RE =
-  /(发布|点赞|收藏|评论|回复|下单|支付|付款|删除|移除|注销|退出登录|绑定|解绑|举报|投诉|拉黑)/;
+  /(下单|支付|付款|删除|移除|注销|退出登录|绑定|解绑|举报|投诉|拉黑)/;
 
 /**
  * 判定一次点击/输入是否算「危险动作」（L3）。
@@ -725,10 +729,10 @@ export const DANGEROUS_ACTION_RE =
  * @returns 命中原因；没命中返回 null。
  */
 export function isDangerousAction(targetText: string | null, action: string): string | null {
-  if (action === 'type') return null;                 // 输入文本本身不危险（危险在那次「点击提交」）
+  if (action === 'type' || action === 'press' || action === 'scroll') return null;  // 非点击动作无「元素文本」语义
   if (!targetText) return null;                       // 拿不到元素文本 ⇒ 端侧判不了，交给服务端按动作/域名判
   if (DANGEROUS_ACTION_RE.test(targetText)) {
-    return '元素文本命中危险词（发布/提交/点赞/删除…）';
+    return '元素文本命中危险词（下单/支付/删除/注销…）';
   }
   return null;
 }
@@ -746,6 +750,71 @@ export function isDangerousAction(targetText: string | null, action: string): st
  * ⚠️ 危险动作（命中 `isDangerousAction`）⇒ 端侧直接拒（L3 兜底）。
  * ⚠️ 任何定位方式拿到的坐标，注入前都统一过**视口边界校验**，屏幕外的绝不点。
  */
+/**
+ * [T-060] 浏览器**回退**：固定脚本 history.back()（模型参数不进 JS）。
+ * 不开放 Alt+Left 组合键（会误触系统/地址栏快捷键），只在当前活 tab 内回退一步。
+ */
+const BACK_SCRIPT = `(() => {
+  history.back();
+  return { url: location.href, title: document.title || '' };
+})()`;
+
+/**
+ * [T-060] 浏览器窗口前后台工具：截图/操作前把实例拉到前台，用完后再最小化回去。
+ * `action`: 'front' | 'minimize'
+ */
+export async function pcBrowserWindow(
+  rawArgs: Record<string, unknown> | null,
+): Promise<ClientToolResult> {
+  if (!pool) return { status: 'error', error: '浏览器池还没接线（主进程未就绪）—— 请稍后重试' };
+  const args = rawArgs || {};
+  const action = typeof args.action === 'string' ? args.action : '';
+  if (action !== 'front' && action !== 'minimize') {
+    return { status: 'error', error: 'pc_browser_window 只支持 action=front / minimize' };
+  }
+  const fn = action === 'front' ? pool.bringToFront : pool.minimize;
+  if (!fn) {
+    return { status: 'error', error: `这个 PC 版本不支持窗口 ${action} 控制（主进程未接线）` };
+  }
+  let ok = false;
+  try { ok = fn() !== false; } catch { ok = false; }
+  if (!ok) return { status: 'error', error: `窗口 ${action} 控制失败` };
+  return {
+    status: 'ok', exitCode: 0,
+    stdout: JSON.stringify({ tool: 'pc_browser_window', action, message: action === 'front' ? '已把 Gacode 窗口拉到前台' : '已把 Gacode 窗口最小化' }),
+  };
+}
+
+export async function pcBrowserBack(
+  rawArgs: Record<string, unknown> | null,
+  ctx?: BrowserToolContext,
+): Promise<ClientToolResult> {
+  if (!pool) return { status: 'error', error: '浏览器池还没接线（主进程未就绪）—— 请稍后重试' };
+  if (!pool.evalInTab) return { status: 'error', error: '这个 PC 版本的浏览器不支持回退（evalInTab 未接线）' };
+  const args = rawArgs || {};
+  const tabId = resolveLiveTab(pool.entries(), {
+    tabId: typeof args.tabId === 'string' ? args.tabId : null,
+    url: typeof args.url === 'string' ? args.url : null,
+  }, { sessionId: ctx?.sessionId ?? null, activeTabId: pool.activeTabId?.() ?? null });
+  if (!tabId) {
+    return { status: 'error', error: '没有可回退的浏览器页面（tab 可能已被关掉）—— 请先 pc_browser_open 打开一个页面' };
+  }
+  try { pool.activate?.(tabId); } catch { /* ignore */ }
+  try {
+    const info = await pool.evalInTab(tabId, BACK_SCRIPT) as { url?: string; title?: string };
+    return {
+      status: 'ok', exitCode: 0,
+      stdout: JSON.stringify({
+        tool: 'pc_browser_back', tabId,
+        url: info?.url || '', title: info?.title || '',
+        message: '已发起历史回退（history.back）；页面可能异步导航，请随后 pc_browser_snapshot 确认当前页面。',
+      }),
+    };
+  } catch (e) {
+    return { status: 'error', error: `回退失败: ${(e as Error).message}` };
+  }
+}
+
 export async function pcBrowserAct(
   rawArgs: Record<string, unknown> | null,
   ctx?: BrowserToolContext,
@@ -777,17 +846,50 @@ export async function pcBrowserAct(
 
   // M2 + [2026-11-17] press：click / type 之外再加**白名单按键**（Escape 关弹窗 / PageDown 翻页）。
   //   ⚠️ 只放行下表的键 —— 模型不能借 press 发任意组合键（地址栏 / 系统热键 / 刷新都不给）。
-  if (action !== 'click' && action !== 'type' && action !== 'press') {
+  if (action !== 'click' && action !== 'type' && action !== 'press' && action !== 'scroll') {
     return {
       status: 'error',
-      error: `pc_browser_act 目前只支持 action=click / type / press，收到 "${action}"`,
+      error: `pc_browser_act 目前只支持 action=click / type / press / scroll，收到 "${action}"`,
+    };
+  }
+
+  // ★ [T-060] scroll —— trusted mouseWheel（浏览器页面内滚动）。
+  //   小红书/抖音这类无限流页面里，键盘 PageDown 经常不生效（焦点在视频/卡片里）；
+  //   真正像人一样滚动的是 mouseWheel（BrowserInputEvent 白名单已支持 deltaY）。
+  //   ⛔ 参数只认固定方向 + 有界 step（最大 2400 CSS px），模型不能自造任意事件。
+  if (action === 'scroll') {
+    const direction = typeof args.direction === 'string' ? args.direction : 'down';
+    if (direction !== 'down' && direction !== 'up') {
+      return { status: 'error', error: 'scroll 只支持 direction=down / up（收到 "' + direction + '"）' };
+    }
+    const rawAmount = typeof args.amount === 'number' ? args.amount : 800;
+    if (!Number.isFinite(rawAmount) || rawAmount < 1) {
+      return { status: 'error', error: 'scroll 的 amount 必须是正数（默认 800 CSS px）' };
+    }
+    const amount = Math.min(Math.round(rawAmount), 2400);
+    const deltaY = direction === 'down' ? amount : -amount;
+    // 先拿滚动前位置（失败也没关系，still 返回 before=null）
+    let before: { sx?: number; sy?: number } | null = null;
+    try { before = await pool.evalInTab(tabId, VIEWPORT_INFO_SCRIPT) as { sx?: number; sy?: number }; } catch { /* 页面可能正在导航 */ }
+    // 滚轮前确保 view 顶层 + focus（main.ts 对 mouseWheel 也要 setTopBrowserView）
+    pool.input(tabId, { type: 'mouseMove', x: 0, y: 0 });
+    pool.input(tabId, { type: 'mouseWheel', x: 0, y: 0, deltaY });
+    return {
+      status: 'ok',
+      exitCode: 0,
+      stdout: JSON.stringify({
+        tool: 'pc_browser_act', action: 'scroll', tabId,
+        direction, amount, deltaY,
+        before: before ? { x: before.sx, y: before.sy } : null,
+        next: 'call pc_browser_snapshot to read the newly visible content and verify scroll.y changed',
+      }),
     };
   }
 
   // ★ [2026-11-17] press —— trusted keyDown/keyUp（浏览器页面内），用于：
   //   · Escape     关闭遮罩 / 弹窗（够不着按钮时优先，不用盲点坐标）
   //   · Enter/Tab  表单与焦点推进
-  //   · PageDown/PageUp/ArrowUp/ArrowDown/Home/End  页面滚动（别去猜看不到区域的坐标）
+  //   · PageDown/PageUp/ArrowUp/ArrowDown/Home/End  页面滚动（兜底；无限流优先 scroll）
   //   ⛔ 不含 Ctrl/Alt/Meta/F5/Cmd+R 之类 —— 不许刷新、开地址栏、切标签、触发系统热键。
   if (action === 'press') {
     const key = typeof args.key === 'string' ? args.key : typeof args.target === 'string' ? args.target : '';
@@ -1207,12 +1309,27 @@ export async function pcBrowserShot(
     const sx = Number(info?.sx) || 0;
     const sy = Number(info?.sy) || 0;
 
+    // ★ [T-054] 截图前先主动 focus（不依赖用户先在 UI 上切到那个 tab）——
+    //   Cody 实测：pc_browser_focus 返回成功，但紧接着 pc_browser_shot 仍报
+    //   「标签页不可见」⇒ 根因是 capturePage() 对未真正绘制的 BrowserView
+    //   返回空图；这里靠 activate + 主进程 capture 内部的等帧/重试来兜住。
+    try {
+      const activated = pool.activate?.(tabId);
+      if (activated !== true) pool.focus?.(tabId);
+    } catch { /* ignore */ }
+
     // ② 截**视口**（capturePage 抓的就是 webContents 的可视区）
-    const shot = await pool.capture(tabId);
+    let shot = await pool.capture(tabId);
+    if (!shot?.png?.length || !shot?.width || !shot?.height) {
+      // ★ [T-054] 第一次可能还没画完首帧 ⇒ 再 focus 一次 + 重试一次
+      try { pool.focus?.(tabId); } catch { /* ignore */ }
+      await new Promise((r) => setTimeout(r, 120));
+      shot = await pool.capture(tabId);
+    }
     const imageW = Number(shot?.width) || 0;
     const imageH = Number(shot?.height) || 0;
-    if (!shot?.png || !imageW || !imageH) {
-      // ⛔ 视图当前不可见（用户不在 `/browser` 页 / tab 被停泊）⇒ 如实说
+    if (!shot?.png?.length || !imageW || !imageH) {
+      // ⛔ 两次都空 ⇒ 真的截不到（如实报错，不假装截到了）
       return {
         status: 'error',
         error: '截不到图：当前这个标签页不可见（用户可能不在浏览器页）。先用 pc_browser_focus 切回它再试。',

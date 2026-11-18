@@ -622,16 +622,40 @@ function registerBrowserTabIpc(): void {
     focus: (tabId) => browserPool.focus(tabId),
     // ★ [2026-11-17 · T-027-d0ck] agent 写操作前调用（停靠 + 置顶 + 聚焦）
     activate: (tabId) => browserPool.activate(tabId),
-    // ★ [T-028] 截**视口** ⇒ PNG（物理像素 = CSS px × devicePixelRatio）
-    //   ⚠️ 视图不可见（被停泊 / 用户不在浏览器页）⇒ 抓到的是**空图**
-    //      ⇒ 返回 0×0，端侧据此如实报错，不假装截到了。
+    // ★ [T-054] 截**视口** ⇒ PNG（物理像素 = CSS px × devicePixelRatio）
+    //   ⚠️ 原实现直接 `capturePage()`：tab 被停泊（用户不在浏览器页）时
+    //      `focus()` 只置顶 + focus（渲染层矩形可能没报上来 ⇒ 没 dock），
+    //      页面没真正绘制 ⇒ capturePage() 返回 0×0 ⇒ pc_browser_shot 误报
+    //      「标签页不可见」，focus→retry 仍然失败（Cody 实测）。
+    //   ⇒ 截图前**强制激活**：dock（有矩形时）+ 置顶 + focus + 等两帧绘制。
+    //     即使渲染层没报矩形（dock 不了），`setTopBrowserView` + `webContents.focus`
+    //     也足以让 capturePage 拿到真实像素。
     capture: async (tabId) => {
       const entry = browserPool.get(tabId);
       if (!entry || entry.view.webContents.isDestroyed()) {
         throw new Error(`tab ${tabId} 已关闭`);
       }
+      // ★ T-054：截图前强制激活（不依赖用户先在 UI 上点 tab）
+      try { browserPool.activate(tabId); } catch { /* ignore */ }
+      try {
+        if (!mainWindow?.isDestroyed()) mainWindow?.setTopBrowserView(entry.view);
+      } catch { /* ignore */ }
+      try { entry.view.webContents.focus?.(); } catch { /* ignore */ }
+      // 等两帧（rAF 通常 16ms/帧 ⇒ 32ms 足够页面把首帧画出来）
+      await new Promise((r) => setTimeout(r, 64));
+
       const img = await entry.view.webContents.capturePage();
-      const size = img.getSize();
+      let size = img.getSize();
+      if (!size.width || !size.height) {
+        // ★ T-054 兜底：先重新 dock + 再等一帧，再试一次（偶发的「刚 focus 还没完成首帧」）
+        try { browserPool.focus(tabId); } catch { /* ignore */ }
+        await new Promise((r) => setTimeout(r, 120));
+        const retry = await entry.view.webContents.capturePage();
+        size = retry.getSize();
+        if (size.width && size.height) {
+          return { png: retry.toPNG(), width: size.width, height: size.height };
+        }
+      }
       if (!size.width || !size.height) {
         return { png: Buffer.alloc(0), width: 0, height: 0 };
       }
@@ -645,6 +669,21 @@ function registerBrowserTabIpc(): void {
     },
     // 当前 active 的 tab（渲染层切 tab 时更新）
     activeTabId: () => browserPool.getActiveTabId(),
+    // ★ [T-060] 浏览器截图/操作前：把最小化的 Gacode 主窗口拉到前台
+    bringToFront: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      try {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+        return true;
+      } catch { return false; }
+    },
+    // ★ [T-060] 浏览器工具用完后：最小化回后台（不影响用户其他窗口）
+    minimize: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return false;
+      try { mainWindow.minimize(); return true; } catch { return false; }
+    },
     // M1：跑本模块生成的**固定只读脚本**（⛔ 模型参数不进 JS）
     evalInTab: async (tabId, script) => {
       const entry = browserPool.get(tabId);
@@ -661,8 +700,8 @@ function registerBrowserTabIpc(): void {
       const entry = browserPool.get(tabId);
       if (!entry || entry.view.webContents.isDestroyed()) return;
       try {
-        // 点击前确保这个 view 是顶层可交互的（setTopBrowserView 不够 —— 还要 focus）
-        if (ev.type === 'mouseMove' || ev.type === 'mouseDown') {
+        // 点击/滚轮/按键盘前确保这个 view 是顶层可交互的（setTopBrowserView 不够 —— 还要 focus）
+        if (ev.type === 'mouseMove' || ev.type === 'mouseDown' || ev.type === 'mouseWheel') {
           mainWindow?.setTopBrowserView(entry.view);
           entry.view.webContents.focus();
         }
