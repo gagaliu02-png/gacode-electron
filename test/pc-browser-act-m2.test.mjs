@@ -180,3 +180,47 @@ test('GC-P31-33 CSS 选择器白名单：简单 class/id/attr 放行，复杂表
   }
   setBrowserTabPool(null);
 });
+
+
+// ===========================================================================
+// T-060 · scroll 必须验证真的滚动；小红书这类内部容器也可滚
+// ===========================================================================
+
+test('T-060 scroll：window 不动时，自动把 wheel 打到最大可滚动容器并验证 scrollTop 变化', async () => {
+  const entries = new Map([['t', fakeEntry('https://www.xiaohongshu.com/explore', 1)]]);
+  let evalCount = 0;
+  const inputs = [];
+  setBrowserTabPool({
+    open: async () => ({ tabId: 'x', title: '' }),
+    entries: () => entries,
+    evalInTab: async () => {
+      evalCount++;
+      // 第一次（before）：发现一个内部容器可滚；第二次（after 第一次 wheel）：仍未动；第三次（容器 wheel 后）：scrollTop=800
+      if (evalCount === 1) return { winY: 0, count: 1, top: [{ tag: 'div', id: 'feed', cls: 'note-container', top: 0, max: 5000, x: 640, y: 400 }] };
+      if (evalCount === 2) return { winY: 0, count: 1, top: [{ tag: 'div', id: 'feed', cls: 'note-container', top: 0, max: 5000, x: 640, y: 400 }] };
+      return { winY: 0, count: 1, top: [{ tag: 'div', id: 'feed', cls: 'note-container', top: 800, max: 5000, x: 640, y: 400 }] };
+    },
+    input: (_tabId, ev) => inputs.push(ev),
+  });
+  const r = await pcBrowserAct({ tabId: 't', action: 'scroll', direction: 'down', amount: 800 });
+  assert.equal(r.status, 'ok', r.error || '');
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.scrolled, true);
+  assert.equal(out.method, 'container-wheel');
+  assert.ok(inputs.some(i => i.type === 'mouseWheel' && i.x === 640 && i.y === 400 && i.deltaY === 800));
+  setBrowserTabPool(null);
+});
+
+test('T-060 scroll：滚动完全没发生 ⇒ 如实报错，不假装成功', async () => {
+  const entries = new Map([['t', fakeEntry('https://www.xiaohongshu.com/explore', 1)]]);
+  setBrowserTabPool({
+    open: async () => ({ tabId: 'x', title: '' }),
+    entries: () => entries,
+    evalInTab: async () => ({ winY: 0, count: 0, top: [] }),
+    input: () => {},
+  });
+  const r = await pcBrowserAct({ tabId: 't', action: 'scroll', direction: 'down', amount: 800 });
+  assert.equal(r.status, 'error');
+  assert.match(r.error, /没有让页面或任何可滚动容器移动/);
+  setBrowserTabPool(null);
+});

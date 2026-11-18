@@ -461,6 +461,36 @@ export const VIEWPORT_INFO_SCRIPT = `(() => ({
   dpr: window.devicePixelRatio || 1,
 }))()`;
 
+/**
+ * [T-060] 只读地找「真正能滚的元素」+ 当前滚动位置。
+ * 小红书这类站点常见：window.scrollY 恒为 0，真正的内容在某个 overflow:auto 容器里。
+ * ⛔ 固定常量，模型参数不进 JS。
+ */
+export const SCROLL_DIAGNOSE_SCRIPT = `(() => {
+  const winY = Math.round(scrollY || 0);
+  const candidates = [];
+  const all = document.querySelectorAll('*');
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i];
+    const st = el.scrollTop || 0;
+    const sh = el.scrollHeight || 0;
+    const ch = el.clientHeight || 0;
+    if (sh > ch + 2) {
+      const r = el.getBoundingClientRect();
+      candidates.push({
+        tag: (el.tagName || '').toLowerCase(),
+        id: el.id || '', cls: String(el.className || '').slice(0, 60),
+        top: Math.round(st), max: Math.round(sh - ch),
+        x: Math.round(Math.max(0, Math.min(innerWidth - 1, r.left + r.width / 2))),
+        y: Math.round(Math.max(0, Math.min(innerHeight - 1, r.top + r.height / 2))),
+      });
+    }
+  }
+  // prefer large scrollable containers with real content, not tiny inner widgets
+  candidates.sort((a,b) => (b.max - a.max) || (b.top - a.top));
+  return { winY, count: candidates.length, top: candidates.slice(0, 8) };
+})()`;
+
 /** 注入脚本返回的原始形状。 */
 export interface RawSnapshot {
   title?: unknown;
@@ -868,20 +898,54 @@ export async function pcBrowserAct(
     }
     const amount = Math.min(Math.round(rawAmount), 2400);
     const deltaY = direction === 'down' ? amount : -amount;
-    // 先拿滚动前位置（失败也没关系，still 返回 before=null）
-    let before: { sx?: number; sy?: number } | null = null;
-    try { before = await pool.evalInTab(tabId, VIEWPORT_INFO_SCRIPT) as { sx?: number; sy?: number }; } catch { /* 页面可能正在导航 */ }
-    // 滚轮前确保 view 顶层 + focus（main.ts 对 mouseWheel 也要 setTopBrowserView）
-    pool.input(tabId, { type: 'mouseMove', x: 0, y: 0 });
-    pool.input(tabId, { type: 'mouseWheel', x: 0, y: 0, deltaY });
+
+    type ScrollDiag = { winY: number; count: number; top: Array<{ tag: string; id: string; cls: string; top: number; max: number; x: number; y: number }> };
+    let before: ScrollDiag | null = null;
+    try { before = await pool.evalInTab(tabId, SCROLL_DIAGNOSE_SCRIPT) as ScrollDiag; } catch { /* 页面可能正在导航 */ }
+
+    const totalTop = (d: ScrollDiag | null) =>
+      d ? d.winY + (d.top || []).reduce((n, e) => n + (e.top || 0), 0) : 0;
+    const beforeTotal = totalTop(before);
+
+    // ① 先在视口中心发一次 trusted wheel（正常页面这样就能滚）
+    pool.input(tabId, { type: 'mouseMove', x: 640, y: 360 });
+    pool.input(tabId, { type: 'mouseWheel', x: 640, y: 360, deltaY });
+    await new Promise((r) => setTimeout(r, 180));
+
+    let after: ScrollDiag | null = null;
+    try { after = await pool.evalInTab(tabId, SCROLL_DIAGNOSE_SCRIPT) as ScrollDiag; } catch { /* ignore */ }
+    let method = 'viewport-wheel';
+
+    // ② 关键修复：小红书等站点 window.scrollY 恒为 0，真正内容在内部 overflow 容器。
+    //    wheel 没动任何容器 ⇒ 把 wheel 打到最大可滚动容器的中心再试一次。
+    let scrolled = totalTop(after) > beforeTotal;
+    if (!scrolled && after && after.top && after.top.length) {
+      const target = after.top[0];
+      pool.input(tabId, { type: 'mouseMove', x: target.x, y: target.y });
+      pool.input(tabId, { type: 'mouseWheel', x: target.x, y: target.y, deltaY });
+      await new Promise((r) => setTimeout(r, 180));
+      try { after = await pool.evalInTab(tabId, SCROLL_DIAGNOSE_SCRIPT) as ScrollDiag; } catch { /* ignore */ }
+      scrolled = totalTop(after) > beforeTotal;
+      method = 'container-wheel';
+    }
+
+    if (!scrolled) {
+      return {
+        status: 'error',
+        error: 'scroll 没有让页面或任何可滚动容器移动（window.scrollY 与所有 scrollTop 均未变化）—— 页面可能被登录遮罩/固定层挡住，或用自定义手势滚动。请 pc_browser_snapshot 看是否有遮罩按钮需先关闭。',
+      };
+    }
+
     return {
       status: 'ok',
       exitCode: 0,
       stdout: JSON.stringify({
         tool: 'pc_browser_act', action: 'scroll', tabId,
-        direction, amount, deltaY,
-        before: before ? { x: before.sx, y: before.sy } : null,
-        next: 'call pc_browser_snapshot to read the newly visible content and verify scroll.y changed',
+        direction, amount, deltaY, method,
+        before: before ? { window: before.winY, containers: (before.top || []).map(e => e.top) } : null,
+        after: after ? { window: after.winY, containers: (after.top || []).map(e => e.top) } : null,
+        scrolled: true,
+        next: 'call pc_browser_snapshot to read newly visible content',
       }),
     };
   }
