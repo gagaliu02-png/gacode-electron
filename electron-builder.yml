@@ -146,7 +146,8 @@ directories:
   # 0.7.33: 作业进程退出后 pc_job_status 立刻说真话（T-035）
   # 0.7.38: client_msg_id 消息身份 + 「⏫」插队/降级分文案 (T-040/T-041)
   # 0.7.39: 停止键只停当前轮 + 认亲透传 client_msg_id + 渲染层诊断日志 (T-044)
-  output: release-c36-v46
+  # 0.7.39-fix1: 能力头竞态 ⇒ 不再「LLM 找不到 Claude Code 工具」
+  output: release-c37-v47
 
 files:
   - dist/**/*
