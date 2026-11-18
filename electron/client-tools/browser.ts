@@ -1404,9 +1404,11 @@ export async function pcBrowserShot(
     const fs = await import('node:fs');
     const os = await import('node:os');
     const path = await import('node:path');
+    const { randomUUID } = await import('node:crypto');
+    const shotId = randomUUID();
     const target = typeof args.save_path === 'string' && args.save_path.trim()
       ? path.resolve(args.save_path.trim())
-      : path.join(os.tmpdir(), `gacode-browser-shot-${Date.now()}.png`);
+      : path.join(os.tmpdir(), `gacode-browser-shot-${Date.now()}-${shotId}.png`);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, shot.png);
 
@@ -1430,7 +1432,11 @@ export async function pcBrowserShot(
       stdout: JSON.stringify({
         tool: 'pc_browser_shot',
         tabId,
-        url: typeof args.url === 'string' ? args.url : '',
+        shotId,
+        // T-062: `url` used to be the PAGE url (often '') and was mistaken for the screenshot URL.
+        // The real screenshot URL is filled by deviceClient.uploadArtifacts into `upload.url`.
+        page_url: typeof args.url === 'string' ? args.url : '',
+        upload: { shotId, status: 'pending', url: '', saved: target },
         coordinate_system: 'viewport',
         viewport: { w: vw, h: vh },
         scroll: { x: sx, y: sy },

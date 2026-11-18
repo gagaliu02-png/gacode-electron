@@ -1091,6 +1091,7 @@ class DeviceClient {
     // ★ [2026-11-17 · T-028] 图片产物上传失败 ⇒ **如实说**
     //   （铁律 3：不许假装成功 —— 模型看不到这张图，就得让它知道）。
     const imageFailures: string[] = [];
+    const shotUrls: string[] = [];
     for (const a of artifacts) {
       if (!a || a.kind !== 'file') {
         if (a) out.push(a);
@@ -1142,9 +1143,13 @@ class DeviceClient {
           size?: number;
           mimeType?: string;
         };
+        const uploadedUrl = body.url || a.url || '';
+        if (String(a.mimeType || '').startsWith('image/') && uploadedUrl) {
+          shotUrls.push(uploadedUrl);
+        }
         out.push({
           ...a,
-          url: body.url || a.url,
+          url: uploadedUrl,
           size: body.size ?? a.size,
           mimeType: body.mimeType || a.mimeType,
         });
@@ -1156,14 +1161,45 @@ class DeviceClient {
         out.push(a);
       }
     }
-    if (imageFailures.length) {
-      const note =
-        `[artifact_upload_failed] 图片未能上传（${imageFailures.join(', ')}）` +
-        ` ⇒ 模型看不到这张图；请改用 pc_browser_snapshot 读页面内容。`;
-      return { ...result, stdout: result.stdout ? `${result.stdout}
-${note}` : note, artifacts: out };
+    // ★ [T-062] 把截图上传结果写回 stdout 的 `upload` 三态，坐标块原样保留。
+    //   端侧不是拼模型上下文，只是补自己产生的结构化数据；image_understand 指令仍由服务端折叠。
+    let stdout = result.stdout;
+    if (stdout && shotUrls.length) {
+      try {
+        const parsed = JSON.parse(stdout);
+        if (parsed && parsed.tool === 'pc_browser_shot' && parsed.upload) {
+          parsed.upload = {
+            ...parsed.upload,
+            status: 'ready',
+            url: shotUrls[0],
+            error: '',
+          };
+          stdout = JSON.stringify(parsed);
+        }
+      } catch { /* stdout 不是 JSON（不该发生）⇒ 保持原样 */ }
     }
-    return { ...result, artifacts: out };
+    if (imageFailures.length) {
+      const errorMessage = `图片未能上传（${imageFailures.join(', ')}）⇒ 模型看不到这张图`;
+      if (stdout) {
+        try {
+          const parsed = JSON.parse(stdout);
+          if (parsed && parsed.tool === 'pc_browser_shot' && parsed.upload) {
+            parsed.upload = { ...parsed.upload, status: 'failed', url: '', error: errorMessage };
+            stdout = JSON.stringify(parsed);
+          }
+        } catch { /* ignore */ }
+      }
+      const note = `[artifact_upload_failed] ${errorMessage}; 请改用 pc_browser_snapshot 读页面内容。`;
+      return {
+        ...result,
+        status: 'error',
+        error: result.error || errorMessage,
+        stdout: stdout ? `${stdout}
+${note}` : note,
+        artifacts: out,
+      };
+    }
+    return { ...result, stdout, artifacts: out };
   }
 
   /** 跑一次派单（闸门 → 执行 → 审计）。 */

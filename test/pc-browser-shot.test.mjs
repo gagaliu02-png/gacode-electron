@@ -46,11 +46,13 @@ function fakeEntry(url = 'https://x.test/') {
  * @param {object} opts { capture, viewport, pos }
  */
 function installPool(opts = {}) {
-  const calls = { inputs: [], scripts: [], captured: 0 };
+  const calls = { inputs: [], scripts: [], captured: 0, focused: 0, activated: 0 };
   setBrowserTabPool({
     open: async () => ({ tabId: 'x', title: '' }),
     entries: () => [['t1', fakeEntry()]],
     titleOf: () => 'T',
+    focus: () => { calls.focused += 1; return true; },
+    activate: () => { calls.activated += 1; return true; },
     evalInTab: async (_tabId, script) => {
       calls.scripts.push(script);
       if (script.includes('devicePixelRatio')) {
@@ -61,6 +63,7 @@ function installPool(opts = {}) {
     input: (_tabId, ev) => { calls.inputs.push(ev); },
     capture: async (_tabId) => {
       calls.captured += 1;
+      if (typeof opts.capture === 'function') return opts.capture(_tabId, calls.captured);
       if (opts.capture === null) return { png: Buffer.alloc(0), width: 0, height: 0 };
       return opts.capture ?? { png: Buffer.from('PNGDATA'), width: 1600, height: 1200 };
     },
@@ -112,12 +115,32 @@ test('SHOT-2 ⛔ stdout 里没有 base64（只给本机路径 + 尺寸）', asyn
   setBrowserTabPool(null);
 });
 
-test('SHOT-3 视图不可见（空图）⇒ 如实报错，不假装截到了', async () => {
-  installPool({ capture: null });
+test('SHOT-3 视图不可见（两次都空图）⇒ 如实报错，不假装截到了', async () => {
+  const calls = installPool({ capture: null });
   const r = await pcBrowserShot({ tabId: 't1' }, { sessionId: 'S1' });
   assert.equal(r.status, 'error');
   assert.match(r.error, /不可见|截不到/, '要说清楚为什么');
+  assert.equal(calls.captured, 2, 'T-054：第一次空图要再试一次');
   assert.equal(r.artifacts, undefined, '⛔ 截不到就不该报产物');
+  setBrowserTabPool(null);
+});
+
+test('SHOT-3b T-054：首次空图 + focus 后重试成功 ⇒ 正常回图（不再误报不可见）', async () => {
+  let attempt = 0;
+  const calls = installPool({
+    capture: () => {
+      attempt += 1;
+      if (attempt === 1) return { png: Buffer.alloc(0), width: 0, height: 0 };
+      return { png: Buffer.from('PNGDATA'), width: 1600, height: 1200 };
+    },
+  });
+  const r = await pcBrowserShot({ tabId: 't1' }, { sessionId: 'S1' });
+  assert.equal(r.status, 'ok', `不应误报不可见: ${r.error}`);
+  assert.equal(calls.captured, 2);
+  assert.ok(calls.activated >= 1 && calls.focused >= 1, '截图前/重试时要主动激活');
+  assert.equal(r.artifacts.length, 1);
+  fs.unlinkSync(r.artifacts[0].path);
+  clearShotMeta('t1');
   setBrowserTabPool(null);
 });
 
@@ -214,4 +237,27 @@ test('SHOT-8b 视口信息脚本是**固定常量**（模型参数不进 JS）',
   assert.ok(VIEWPORT_INFO_SCRIPT.includes('devicePixelRatio'));
   assert.ok(VIEWPORT_INFO_SCRIPT.includes('innerWidth'));
   assert.ok(!/\$\{|%s/.test(VIEWPORT_INFO_SCRIPT), '⛔ 不能有模板占位（那意味着模型参数会拼进 JS）');
+});
+
+
+// ===========================================================================
+// T-062 · 截图 stdout 的 upload 三态字段（坐标块保持原样）
+// ===========================================================================
+test('SHOT-T061 stdout 含 shotId + upload pending，且不再用 url 冒充截图 URL', async () => {
+  const calls = installPool();
+  const r = await pcBrowserShot({ tabId: 't1' }, { sessionId: 'S1' });
+  assert.equal(r.status, 'ok');
+  const out = JSON.parse(r.stdout);
+  assert.ok(out.shotId, '每次截图要有 shotId');
+  assert.equal(out.upload.shotId, out.shotId);
+  assert.equal(out.upload.status, 'pending');
+  assert.equal(out.upload.url, '');
+  assert.equal(out.page_url, '');
+  assert.equal('url' in out, false, '⛔ 顶层 url 不再是含糊的页面/截图 URL');
+  // 坐标块逐字保持
+  assert.deepEqual(out.viewport, { w: 800, h: 600 });
+  assert.deepEqual(out.scroll, { x: 10, y: 20 });
+  assert.equal(out.scale, 2);
+  assert.deepEqual(out.image, { w: 1600, h: 1200 });
+  fs.unlinkSync(r.artifacts[0].path);
 });
