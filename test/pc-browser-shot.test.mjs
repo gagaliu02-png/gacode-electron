@@ -243,7 +243,7 @@ test('SHOT-8b 视口信息脚本是**固定常量**（模型参数不进 JS）',
 // ===========================================================================
 // T-062 · 截图 stdout 的 upload 三态字段（坐标块保持原样）
 // ===========================================================================
-test('SHOT-T061 stdout 含 shotId + upload pending，且不再用 url 冒充截图 URL', async () => {
+test('SHOT-T062 stdout 含 shotId + upload pending，且不再用 url 冒充截图 URL', async () => {
   const calls = installPool();
   const r = await pcBrowserShot({ tabId: 't1' }, { sessionId: 'S1' });
   assert.equal(r.status, 'ok');
