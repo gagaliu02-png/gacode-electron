@@ -72,7 +72,7 @@ import {
 //   (与 web 的 `src/lib/sse/client-id.ts` 逐字节相同)。
 import { buildChatStreamHeaders, CLIENT_ID_PC } from "./sse/client-id";
 // ★ [P3 · 2026-11-12] 端侧能力声明 (契约附录 订正 24 §3)。
-import { clientCapabilityHeader } from "./client-capabilities";
+import { clientCapabilityHeader, initClientCapabilities } from "./client-capabilities";
 import { createSseBackoff, createSseWatchdog } from "./sse-reconnect";
 // ★ [P2-1/P2-2 · 2026-11-17] 服务端「消息去向」+「会话级 ack」的**唯一判据**
 //   （零依赖模块 ⇒ `node --test` 能直接跑；判据只写一遍）。
@@ -457,6 +457,10 @@ export function useChatStream(): ChatStreamHandle {
         // ★ 发起 / 续传两条路的请求头 —— 共享构造器 (RC-13 · 契约 L-28 / D3 / L-36)。
         //   续传模式没有 body ⇒ 不带 Content-Type (契约 L-36);
         //   三条路**恒带** `X-Client-Id: pc` (服务端日志里的 clientId 不再是 unknown)。
+        // ★ [T-044] **发请求前确保能力探测已完成**（幂等：探过就立即返回）——
+        //   否则 App 刚启动的头几秒发的消息**不带**能力头 ⇒ 服务端不下发 pc_* ⇒
+        //   「LLM 找不到 Claude Code 工具」（真机 2026-11-18 · PC 重启后立刻发消息）。
+        await initClientCapabilities();
         const headers = buildChatStreamHeaders({
           path: opts.resume ? "resume" : "start",
           clientId: CLIENT_ID_PC,
@@ -1009,6 +1013,10 @@ export function useChatStream(): ChatStreamHandle {
           accessToken: string | null,
         ): Promise<Response> => {
           // ★ 只读接入路 (attach) 的请求头 —— 共享构造器 (RC-13 · 契约 L-28 / D3)。
+          // ★ [T-044] **发请求前确保能力探测已完成**（幂等：探过就立即返回）——
+          //   否则 App 刚启动的头几秒发的消息**不带**能力头 ⇒ 服务端不下发 pc_* ⇒
+          //   「LLM 找不到 Claude Code 工具」（真机 2026-11-18 · PC 重启后立刻发消息）。
+          await initClientCapabilities();
           const headers = buildChatStreamHeaders({
             path: "attach",
             clientId: CLIENT_ID_PC,
@@ -1151,6 +1159,10 @@ export function useChatStream(): ChatStreamHandle {
       }
 
       const doFetch = async (token: string | null): Promise<Response> => {
+        // ★ [T-044] **发请求前确保能力探测已完成**（幂等：探过就立即返回）——
+        //   否则 App 刚启动的头几秒发的消息**不带**能力头 ⇒ 服务端不下发 pc_* ⇒
+        //   「LLM 找不到 Claude Code 工具」（真机 2026-11-18 · PC 重启后立刻发消息）。
+        await initClientCapabilities();
         const headers = buildChatStreamHeaders({
           path: "start",
           clientId: CLIENT_ID_PC,
