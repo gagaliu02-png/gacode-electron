@@ -355,6 +355,21 @@ export interface RunningClientTask {
 type RequestListener = (req: ClientToolRequest) => void;
 type TasksListener = (tasks: RunningClientTask[]) => void;
 
+/**
+ * ★ [2026-11-18 · T-042] **「结果晚到型工具」清单** ——
+ * 这些工具的**执行本身就是结果**（不是「起一个后台作业」）。
+ *
+ *   典型 = `pc_cc_send`：投递一条消息给本机那个 Claude Code 会话 ⇒ 等它处理完 ⇒ 拿到结果。
+ *   ⇒ 服务端按 **background 模式**派单（派单即返回 ⇒ 主 agent 不被阻塞）；
+ *     端侧**执行完**把真结果走**后台回传通道**送回 ⇒ 服务端**另起一轮** agent 汇报。
+ *
+ * ⚠️ ⛔ **只列这一个**，别泛化：
+ *   `pc_shell` 之类走的是 **detached 作业**（runRequest 立即返回「已启动」）
+ *   ⇒ 它的结果由 **巡检**在作业真跑完时回传 ⇒ 提前把「已启动」当结果报出去
+ *   ⇒ 用户会立刻收到一条「作业已完成」（订正 27 的老坑，别踩回去）。
+ */
+const LATE_RESULT_TOOLS = new Set<string>(['pc_cc_send']);
+
 class DeviceClient {
   private accessToken: string | null = null;
   private deviceId: string = '';
@@ -1015,6 +1030,17 @@ class DeviceClient {
     // ④ 起作业（**立即返回**：detached 进程，输出落文件）。
     const result = await this.runRequest(req);
     if (result.status === 'ok') {
+      // ★ [T-042] **结果晚到型工具**（pc_cc_send）：执行本身就是结果 ⇒ 直接回传，
+      //   ⇒ 服务端**另起一轮** agent 汇报（落回本会话）⇒ **主 agent 这一轮不被阻塞**。
+      //   ⚠️ 其余工具（detached 作业）行为**逐字不变**：只标 running，结果由巡检回传。
+      if (LATE_RESULT_TOOLS.has(req.tool || '')) {
+        await this.reportJobResult(pendingId, {
+          status: 'ok',
+          stdout: result.stdout,
+          error: result.error || undefined,
+        });
+        return;
+      }
       markDispatch(pendingId, { state: 'running' });
       emitJobsChanged();
       return;
