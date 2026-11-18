@@ -356,6 +356,13 @@ interface ActiveStream {
   sessionId: string;
   /** 本端是否**拥有**这一轮 (attach 只读 ⇒ 不拥有 ⇒ 收尾 ACK 走别的路径)。 */
   ownsTurn: boolean;
+  /**
+   * ★ [2026-11-18 · T-040] 这条流被**新流取代**了（本地残留 ⇒ 收掉）。
+   *
+   *   ⇒ 它 abort 时**不要**抛 `UserAbortError`（那是「用户按了停止」的语义）
+   *   ⇒ 否则上一条流的收尾会被当成「用户停掉了当前轮」⇒ UI 误报「生成中断」。
+   */
+  superseded?: boolean;
 }
 
 export function useChatStream(): ChatStreamHandle {
@@ -588,13 +595,45 @@ export function useChatStream(): ChatStreamHandle {
     [],
   );
 
+  /**
+   * ★ [2026-11-18 · T-040] **本地残留的流不许把用户挡在门外**。
+   *
+   *   ## 现象（真机，用户原话）
+   *     「还是出现生成失败 已有流在进行中，可是我已经没有流了啊」
+   *     ⇒ banner 文案 = `生成失败: 已有流在进行中, 请先停止或等待`
+   *     ⇒ **这句话是端侧自己抛的**（`start()` / `attach()` 的守卫），**不是**服务端 409。
+   *     ⇒ 而且「退出 session 重进才好」⇒ 本地 ref 残留（hook 实例活着，ref 没复位）。
+   *
+   *   ## 为什么该收掉而不是拦下
+   *     服务端口径：**同一 session 同一时刻只有一轮，新的一轮会 pre-abort 旧的一轮**
+   *     （unified 的 pre-abort）⇒ 端侧本地残留的流**不是冲突**，只是**上一条流的尾巴**
+   *     ⇒ 直接本地收掉（**不发 USER_STOP**：服务端那一轮由 pre-abort 收，客户端不要越权）。
+   *   ⛔ 保留「拦下」只有一种场合：同一端**同时**要接两条流（attach 又 attach）。
+   */
+  const supersedeLocalStreams = useCallback(() => {
+    const a = activeRef.current;
+    const b = attachRef.current;
+    if (a) {
+      console.warn(
+        "[gacode-sse] 本地还有上一条流 ⇒ 先收掉再继续（服务端那一轮由 pre-abort 收）",
+      );
+      a.superseded = true;
+      try { a.ac.abort(); } catch { /* ignore */ }
+      activeRef.current = null;
+    }
+    if (b) {
+      b.superseded = true;
+      try { b.ac.abort(); } catch { /* ignore */ }
+      attachRef.current = null;
+    }
+  }, []);
+
   const start = useCallback(
     async (opts: UseChatStreamOptions): Promise<void> => {
-      if (activeRef.current || attachRef.current) {
-        // 上一个流还没结束 → 直接拒, 防止双发叠加
-        //   (只读接入流期间同样不许另起一轮 —— 服务端那一轮还在跑)
-        throw new Error("已有流在进行中, 请先停止或等待");
-      }
+      // ★ [T-040] 上一个流还没结束 ⇒ **收掉它**（不是拒绝用户）。
+      //   旧行为：直接 throw「已有流在进行中」⇒ 用户被本地状态锁死，
+      //   而服务端其实允许新轮次 pre-abort 旧轮次 ⇒ 用户只能退出重进。
+      supersedeLocalStreams();
 
       const ac = new AbortController();
       const turnState = { userStopped: false };
@@ -838,6 +877,9 @@ export function useChatStream(): ChatStreamHandle {
       } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         if (ac.signal.aborted) {
+          // ★ [T-040] 被**新流取代**（不是用户按停止）⇒ 安静退出，
+          //   绝不抛 UserAbortError（那会让上层以为「用户停了这一轮」⇒ UI 误报生成中断）。
+          if (active.superseded) return;
           // 主动 abort → 抛 UserAbortError sentinel, 让上层用 isUserAbortError 唯它判
           throw new UserAbortError();
         } else {
@@ -913,9 +955,9 @@ export function useChatStream(): ChatStreamHandle {
    */
   const attach = useCallback(
     async (opts: AttachChatStreamOptions): Promise<void> => {
-      if (activeRef.current) {
-        throw new Error("已有流在进行中, 请先停止或等待");
-      }
+      // ★ [T-040] 同 start()：本地残留的流**收掉**，不拦用户
+      //   （服务端口径 = 新轮次 pre-abort 旧轮次 ⇒ 本地尾巴不算冲突）。
+      supersedeLocalStreams();
       const ac = new AbortController();
       const active: ActiveStream = {
         ac,
@@ -1038,6 +1080,8 @@ export function useChatStream(): ChatStreamHandle {
         });
       } catch (err) {
         if (ac.signal.aborted) {
+          // ★ [T-040] 被新流取代 ⇒ 安静退出（不抛 UserAbortError）
+          if (active.superseded) return;
           throw new UserAbortError();
         }
         const e = err instanceof Error ? err : new Error(String(err));
