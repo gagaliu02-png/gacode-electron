@@ -74,6 +74,13 @@ export interface InboxAttachments {
 
 /** 队列里的一条（「一封信」）。 */
 export interface InboxItem {
+  /**
+   * ★ [T-041 · 2026-11-18] 服务端**明说**这一条去了哪：
+   *  · `true`  ⇒ **插队**（并入正在跑的那一轮 ⇒ 下一个工具边界就并入）
+   *  · `false` ⇒ **降级**（那一刻没有活跃轮 ⇒ 已起新轮）
+   *  · 老服务端没有这个键 ⇒ undefined ⇒ 落回老行为（按「插队」显示）
+   */
+  inserted?: boolean;
   /** 收件箱行的 id（字符串形式的 BigInt）。 */
   id: string;
   /** 会话内序号（单调递增）。 */
@@ -110,6 +117,12 @@ export interface InboxItem {
    *   · `true`  ⇒ 插队投递 ⇒ agent 在**下一个工具边界**就并入当前这一轮。
    */
   injectable: boolean;
+  /**
+   * ★ [T-040 · 2026-11-18] **客户端身份**（ULID）—— 服务端原样存进收件箱行.
+   *   ⇒ 泵队列把它当普通消息发出去时**原样带回** ⇒ 服务端认出「同一条」
+   *   ⇒ **不写第二条 user 行** ⇒ 不出两个气泡、不跑两轮.
+   */
+  client_msg_id?: string | null;
   /** 投递时刻（ISO）。 */
   createdAt: string | null;
 }
@@ -138,6 +151,12 @@ export interface EnqueueMessageBody {
    *      `knowledgeRefs` **不是**同一个字段名。
    */
   knowledge_refs?: string[];
+  /**
+   * ★ [T-040 · 2026-11-18] **客户端身份**（ULID）—— 服务端原样存进收件箱行.
+   *   ⇒ 后面「⏫ 插队」/「泵队列」把它当普通消息再发时, 服务端认出「同一条」
+   *   ⇒ **不写第二条 user 行** ⇒ 不出两个气泡、不跑两轮.
+   */
+  client_msg_id?: string;
 }
 
 /** 入队的结果。 */export interface EnqueueResult {

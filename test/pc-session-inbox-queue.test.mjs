@@ -348,15 +348,28 @@ test("GC-P28-10 轮次自然结束 ⇒ 把队首那条当**普通消息**发出�
   );
 });
 
-test("GC-P28-10b 泵队列**跳过**已被插队的那条（否则一条消息发两遍）", () => {
+test("GC-P28-10b 泵队列**不再**跳过 injectable 的那条（T-041 插队语义 ⇒ 跳过 = 把消息搁浅）", () => {
   const detail = repoCode(DETAIL);
   const pump = detail.slice(
     detail.indexOf("const pumpQueue = useCallback"),
     detail.indexOf("pumpQueueRef.current = "),
   );
+  // ★ [T-041 · 2026-11-18] **语义变了** ——
+  //   老语义（插话）：flush 会把收件箱行**领走**（state=delivered）⇒ 它**根本不在列表里**
+  //     ⇒ 「跳过 injectable」是多余的保险。
+  //   ★ 新语义（插队）：flush **只**置 injectable=true、state 仍是 held ⇒ 它**仍在列表里**
+  //     ⇒ 再跳过它 ⇒ 万一它落在「gaclaw 收尾心跳之后」的窄窗口里（那一轮没取走它）
+  //     ⇒ **这条消息被永久搁浅**（用户的话丢了）。
+  //   ⇒ **照常泵它**：已被并进去过（delivered）⇒ 不在列表里 ⇒ 泵不到；
+  //     还没被并进去 ⇒ 泵它 = 真的发出去（兜底）⇒ 不丢。
+  //     两边同时动 ⇒ 服务端按 client_msg_id **幂等去重** ⇒ 只写一条 user 行。
   assert.ok(
-    /find\(\(it\) => !it\.injectable\)/.test(pump),
-    "★ 泵队列要跳过 injectable 的那些（⏫ 插队的那条由正在跑的那一轮自己并入）",
+    !/find\(\(it\) => !it\.injectable\)/.test(pump),
+    "⛔ 泵队列**不许**跳过 injectable 的那条（T-041 新语义下 ⇒ 跳过 = 把消息搁浅）",
+  );
+  assert.ok(
+    /const head = items\[0\]/.test(pump),
+    "★ 泵队列取队首那条（服务端已按 priority desc, seq asc 排好）",
   );
 });
 
@@ -513,10 +526,15 @@ test("GC-P28-16 入队时把 knowledge_refs 一起带上（同款字段名）", 
 test("GC-P28-17 泵队列时把 knowledgeRefs **一起重发**", () => {
   const detail = repoCode(DETAIL);
   assert.ok(
-    /void startStream\(\s*head\.content,\s*pendingAttachmentsOf\(head\),\s*head\.knowledgeRefs,?\s*\)/.test(
+    /void startStream\(\s*head\.content,\s*pendingAttachmentsOf\(head\),\s*head\.knowledgeRefs,[\s\S]{0,300}?head\.client_msg_id,[\s\S]{0,120}?\)/.test(
       detail,
     ),
-    "★ 泵队列要把该项的知识库引用一起发出去",
+    "★ 泵队列要把该项的知识库引用**和客户端身份**（client_msg_id）一起发出去",
+  );
+  // ★ [T-040 · 2026-11-18] 客户端身份 ⇒ 服务端认出「同一条」⇒ 不写第二条 user 行.
+  assert.ok(
+    /client_msg_id\?: string \| null/.test(repoCode(INBOX_LIB)),
+    "★ 收件箱项的 DTO 要有 client_msg_id（服务端 GET inbox 的出参）",
   );
   assert.ok(
     /function collectKnowledgeRefs\(/.test(detail),

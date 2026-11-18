@@ -123,6 +123,16 @@ export interface UseChatStreamOptions {
    * (存的是**实际生效**的 atom id), 端侧再从 metadata 读回来渲染折叠条.
    */
   knowledgeRefs?: string[];
+  /**
+   * ★ [T-040 · 2026-11-18] **这条消息的客户端身份**（ULID，26 字符）。
+   *
+   * 服务端按 `(user_id, client_msg_id)` **幂等去重** ⇒ 重发 / 网络抖动重试
+   * **不新建** ⇒ 服务端那边**只有一条** user 行 ⇒ 不会出两个气泡。
+   *
+   * ⛔ **续传时必须清空** —— 续传 body 整个是空的（见下面 `opts.resume ? undefined : ...`）
+   *   ⇒ 天然不带 ⇒ 不会被服务端判成「重复」⇒ 这一轮接不回来。
+   */
+  clientMsgId?: string;
   /** 主动中止回调 (取消按钮 / 组件卸载) */
   signal?: AbortSignal;
   /**
@@ -712,6 +722,14 @@ export function useChatStream(): ChatStreamHandle {
         body.knowledge_refs = opts.knowledgeRefs;
       }
 
+      // ★ [T-040 · 2026-11-18] **客户端身份** ⇒ 服务端按 (user_id, client_msg_id) 幂等去重
+      //   ⇒ 重发 / 网络抖动重试**不新建** ⇒ 服务端那边**只有一条** user 行.
+      //   ⚠️ 续传那条路 body 是 undefined ⇒ **天然不带** ⇒ 不会被服务端判成「重复」
+      //      （续传接的是上一轮 ⇒ 命中就回 200 ⇒ 那一轮永远接不回来）.
+      if (opts.clientMsgId) {
+        body.client_msg_id = opts.clientMsgId;
+      }
+
       // ── 断线重连 (契约 P2 / 任务书 P-7) ─────────────────────────────
       //   退避算术 + watchdog 判据在 `lib/sse-reconnect.ts` (通知流同一份)。
       //   重连走**续传模式**: 空 body + 续传头 ⇒ 不建新轮次、不重复投喂消息。
@@ -1118,6 +1136,14 @@ export function useChatStream(): ChatStreamHandle {
       }
       if (opts.knowledgeRefs && opts.knowledgeRefs.length > 0) {
         body.knowledge_refs = opts.knowledgeRefs;
+      }
+
+      // ★ [T-040 · 2026-11-18] **客户端身份** ⇒ 服务端按 (user_id, client_msg_id) 幂等去重
+      //   ⇒ 重发 / 网络抖动重试**不新建** ⇒ 服务端那边**只有一条** user 行.
+      //   ⚠️ 续传那条路 body 是 undefined ⇒ **天然不带** ⇒ 不会被服务端判成「重复」
+      //      （续传接的是上一轮 ⇒ 命中就回 200 ⇒ 那一轮永远接不回来）.
+      if (opts.clientMsgId) {
+        body.client_msg_id = opts.clientMsgId;
       }
 
       const doFetch = async (token: string | null): Promise<Response> => {

@@ -280,6 +280,8 @@ import { MoreIcon, PlusIcon } from "../components/ui/Glyphs";
 
 // 0.7.5 ChatDetail P1 增量 — 新组件
 import { ChatTopBanner } from "../components/chat/ChatTopBanner";
+// ★ [T-040 · 2026-11-18] **消息的客户端身份**（ULID）—— 随请求发给服务端 ⇒ 服务端幂等去重.
+import { generateClientMsgId } from "../lib/client-msg-id";
 import type { CallTreeNode } from "../components/chat/CallTreeCard";
 import type { ExecutionPhase } from "../components/chat/ExecutionTimeline";
 import type { SlashCommand } from "../components/chat/SlashMenu";
@@ -1012,6 +1014,8 @@ export function ChatDetail() {
   const [pendingUserMsg, setPendingUserMsg] = useState<{
     id: string;
     content: string;
+    /** ★ [T-040 · 2026-11-18] **客户端身份**（ULID）—— 跟服务端那一行的 client_msg_id 对上. */
+    clientMsgId?: string;
     imageUrls?: string[];
     attachedFileIds?: string[];
     attachedFileNames?: Array<{ fileId: string; name: string }>;
@@ -1266,13 +1270,22 @@ export function ChatDetail() {
       if (cutSupplementIds.size > 0 && cutSupplementIds.has(m.id)) return false;
       return true;
     });
-    // ★ [批 G8] 乐观上屏的用户行 —— 服务端那一行到了就自动撤掉临时行 (同内容判据)。
-    //   ⛔ 判据用**内容**而不是 id: 服务端的 user 行 id 客户端还不知道 (认亲靠 history 重拉)。
+    // ★ [批 G8] 乐观上屏的用户行 —— 服务端那一行到了就自动撤掉临时行.
+    //
+    // ★ [T-040 · 2026-11-18] **判据换成 client_msg_id（精确）** ——
+    //   老的「**同内容**」判据是**猜**: 用户问**两遍同一句**时, 服务端先回来的那一行会把
+    //   乐观行**提前撤掉** ⇒ 用户自己那条话在屏幕上「闪一下就没了」, 直到服务端第二行回来.
+    //   ⇒ 有 client_msg_id ⇒ **逐字相等**才是同一条（物理同一条, 不是「看着像」）.
+    //   ⇒ 没有 client_msg_id（老服务端 / 老数据）⇒ **原样落回**老的内容判据（行为不变）.
     const historyHasSameUser =
       !!pendingUserMsg &&
-      baseWithoutSplitTurn.some(
-        (m) => m.role === "user" && m.content === pendingUserMsg.content,
-      );
+      baseWithoutSplitTurn.some((m) => {
+        if (m.role !== "user") return false;
+        if (pendingUserMsg.clientMsgId) {
+          return !!m.clientMsgId && m.clientMsgId === pendingUserMsg.clientMsgId;
+        }
+        return m.content === pendingUserMsg.content;
+      });
     const withPendingUser: ChatMessageModel[] =
       pendingUserMsg && !historyHasSameUser
         ? [
@@ -2043,6 +2056,12 @@ export function ChatDetail() {
        *   （泵队列时 = 排队期间挂的引用 ⇒ 出队那一刻要跟着发，服务端 `1bb8cd3`）。
        */
       extraKnowledgeRefs?: string[] | null,
+      /**
+       * ★ [T-040 · 2026-11-18] **这一轮消息的客户端身份**（ULID）.
+       *   · 普通发送 ⇒ 现场生成一个；
+       *   · **泵队列** ⇒ **沿用队列项那一个** ⇒ 服务端认出「同一条」⇒ 不写第二条 user 行.
+       */
+      clientMsgIdOverride?: string | null,
     ) => {
       if (!chatId) return;
       // ★ [2026-11-14 · 订正 28] 这一轮是**本端发起**的 ⇒ 轮次结束后由本端**泵队列**。
@@ -2099,11 +2118,17 @@ export function ChatDetail() {
         });
       }
 
+      // ★ [T-040 · 2026-11-18] **这一轮消息的客户端身份**（ULID）.
+      //   服务端按 (user_id, client_msg_id) 幂等去重 ⇒ 重发不新建 ⇒ 服务端**只有一条**.
+      //   乐观行**带着**它 ⇒ history 回来时能**精确**认亲（不用再靠「同内容」猜）.
+      //   ⚠️ 泵队列 ⇒ **沿用队列项那一个**（不然服务端认不出「同一条」⇒ 写第二条 user 行）.
+      const clientMsgId = clientMsgIdOverride || generateClientMsgId();
       // ★ [批 G8] 乐观上屏 —— 立刻把**本轮用户消息**插进列表 (不等服务端 history)。
       //   附件名从 attachments 里取 (与 web 的 attachedFileNames 同口径)。
       setPendingUserMsg({
         id: `pending-user-${Date.now()}`,
         content: text,
+        clientMsgId,
         imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
         attachedFileIds: fileIds.length > 0 ? fileIds : undefined,
         attachedFileNames:
@@ -2146,6 +2171,8 @@ export function ChatDetail() {
             imageUrls,
             attachedFileIds: fileIds,
             knowledgeRefs,
+            // ★ [T-040] 客户端身份 ⇒ 服务端幂等去重.
+            clientMsgId,
             onChunk: () => {}, // 帧走常驻流，这里不收
           });
           // ★ [2026-11-16] **记下「这一轮是我发起的」** ——
@@ -2324,6 +2351,9 @@ export function ChatDetail() {
               imageUrls,
               attachedFileIds: fileIds,
               knowledgeRefs,
+              // ★ [T-040] 客户端身份 ⇒ 服务端幂等去重 ⇒ 重发不新建.
+              //   ⚠️ 续传那条路（resumeMode）body 是空的 ⇒ 天然不带 ⇒ 不会被判成「重复」.
+              clientMsgId: resumeMode ? undefined : clientMsgId,
               // ★ RC-7: 这一轮的叫停开关 (用户按停止 ⇒ 这条流 + 后续重连一起收手)。
               signal: turnAc.signal,
               // ★ 重连模式 ⇒ **空 body + 续传头** (契约 L-35 / L-36):
@@ -3278,8 +3308,19 @@ export function ChatDetail() {
       } catch (_) {
         /* 读不到就用本地那份 */
       }
-      // ③ 队首那条**没被插队**的（插队的那条由正在跑的那一轮自己并入）。
-      const head = items.find((it) => !it.injectable);
+      // ③ 队首那条。
+      //
+      // ★ [T-041 · 2026-11-18] **不再跳过 `injectable` 的那条** ——
+      //   老注释说「插队的那条由正在跑的那一轮自己并入 ⇒ 本端跳过（否则一条消息发两遍）」，
+      //   那在**旧语义**（插话）下是对的：服务端把行领走了（state=delivered）⇒ 根本不在列表里。
+      //   ★ **新语义（T-041 插队）下服务端只置 `injectable=true`、state 仍是 held** ⇒
+      //     它**仍在列表里** ⇒ 这里再跳过它 ⇒ 万一它落在「gaclaw 收尾心跳之后」的窄窗口里
+      //     （那一轮没取走它）⇒ **这条消息被永久搁浅**（用户的话丢了）。
+      //   ⇒ **照常泵它**：
+      //     · 它已被并进去过（state=delivered）⇒ **不在列表里** ⇒ 泵不到 ⇒ 不会发两遍；
+      //     · 它还没被并进去 ⇒ 泵它 = 真的把它发出去（兜底）⇒ 不丢；
+      //     · 两边同时动（泵 + 取件）⇒ 服务端按 client_msg_id **幂等去重** ⇒ 只写一条 user 行。
+      const head = items[0];
       if (!head) return;
       // ④ 当**普通消息**发出去（正常建轮 ⇒ 服务端写 user 行 ⇒ 气泡出现）。
       //    ★ **附件一起重发**（服务端 `bb46bd4` 把它们原样存进了收件箱行）
@@ -3291,6 +3332,8 @@ export function ChatDetail() {
         head.content,
         pendingAttachmentsOf(head),
         head.knowledgeRefs,
+        // ★ [T-040] **沿用队列项的客户端身份** ⇒ 服务端认出「同一条」.
+        head.client_msg_id,
       );
     } finally {
       pumpBusyRef.current = false;
@@ -3383,6 +3426,10 @@ export function ChatDetail() {
         },
       ]);
       // ③ 发给服务端（它负责排队）。
+      //   ★ [T-040 · 2026-11-18] **带上客户端身份** ⇒ 服务端原样存进收件箱行
+      //   ⇒ 后面「⏫ 插队」/「泵队列」把它当普通消息再发时, 服务端认出「同一条」
+      //   ⇒ **不写第二条 user 行** ⇒ 不出两个气泡、不跑两轮。
+      const enqueueClientMsgId = generateClientMsgId();
       const res = await enqueueUserMessage(chatId, {
         message: content,
         ...(imageUrls.length ? { image_urls: imageUrls } : {}),
@@ -3390,6 +3437,7 @@ export function ChatDetail() {
         ...(knowledgeRefs && knowledgeRefs.length
           ? { knowledge_refs: knowledgeRefs }
           : {}),
+        client_msg_id: enqueueClientMsgId,
       });
       if (!res.ok) {
         // 没排上 ⇒ 收掉乐观项 + **把文字退回输入框** + 如实说。
@@ -3411,6 +3459,8 @@ export function ChatDetail() {
         setPendingUserMsg({
           id: `pending-user-${Date.now()}`,
           content: text,
+          // ★ [T-040] 这条消息的客户端身份（跟服务端那一行对上 ⇒ 精确认亲）.
+          clientMsgId: enqueueClientMsgId,
           imageUrls: imageUrls.length ? imageUrls : undefined,
           attachedFileIds: fileIds.length ? fileIds : undefined,
           attachedFileNames: attachments.length
@@ -3455,9 +3505,16 @@ export function ChatDetail() {
       if (id.startsWith("local:")) return;
       setFlushingId(id);
       try {
-        await flushInboxMessage(chatId, id);
+        const flushed = await flushInboxMessage(chatId, id);
+        // ★ [T-041 · 2026-11-18] 服务端**明说**这一条去了哪 ——
+        //   · inserted=true  ⇒ 插队（并入当前这一轮）
+        //   · inserted=false ⇒ 那一刻没有活跃轮 ⇒ 已降级起新轮
+        //   ⛔ 降级那条**绝不能**也说「已插队」（那是在撒谎：用户会等一个不会来的并入）。
         toast({
-          message: "已插队：agent 会在下一个工具边界就并入当前这一轮",
+          message:
+            flushed?.inserted === false
+              ? "当前没有正在跑的对话，已直接发出并开始新一轮"
+              : "已插队：agent 会在下一个工具边界就并入当前这一轮",
           variant: "default",
         });
         void refreshInbox();

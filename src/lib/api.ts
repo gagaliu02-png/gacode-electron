@@ -365,6 +365,16 @@ export interface ChatMessage {
    */
   turnKey?: string | null;
   /**
+   * ★ [T-040 · 2026-11-18] **客户端生成的消息身份**（ULID）—— 服务端把这一行落库时原样带回.
+   *
+   *  · 端侧发消息时生成的 ULID ⇒ 随请求发给服务端 ⇒ 服务端原样存进
+   *    `yinian_chat_messages.client_msg_id` ⇒ 历史接口原样带回.
+   *  · 端侧拿它跟本地乐观行的**同一个** id 对上 ⇒ **精确**认亲（不用再靠
+   *    「正文相同 + 时间窗」猜）⇒ 就地更新 `server_id` ⇒ 屏幕上**一个气泡**.
+   *  · 老服务端 / 老数据 ⇒ null ⇒ 端侧退回老启发式（行为逐字不变）.
+   */
+  clientMsgId?: string | null;
+  /**
    * ★ [2026-11-16] **这一行是不是「服务端投递的系统注记」**（不是用户说的话）。
    *
    *   服务端起轮（订正 30）时落了一条 `role='user'` 的消息行 ⇒ 光看 role
@@ -683,6 +693,8 @@ export async function getHistory(chatId: string): Promise<{
     //   「补充」那条 (服务端 flush 时写的 user 行) ⇒ 端侧算合成 id
     //   `supplement:<inbox_id>` ⇒ 跟直播时插的那条**是同一条** (不重复显示)。
     let inboxId: string | null | undefined;
+    // ★ [T-040 · 2026-11-18] **客户端身份**（顶层字段 + metadata 两处都取）.
+    let clientMsgId: string | null | undefined;
     if (m.metadata) {
       try {
         const meta = typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata;
@@ -696,6 +708,9 @@ export async function getHistory(chatId: string): Promise<{
         isSystemNotice = isSystemNoticeMetadata(meta);
         if (meta?.inbox_id != null && meta.inbox_id !== "") {
           inboxId = String(meta.inbox_id);
+        }
+        if (typeof meta?.client_msg_id === "string" && meta.client_msg_id) {
+          clientMsgId = meta.client_msg_id;
         }
         if (Array.isArray(meta?.attached_files)) {
           attachedFileNames = (
@@ -728,6 +743,8 @@ export async function getHistory(chatId: string): Promise<{
       isSystemNotice,
       // ★ [订正 28 · L-28r] 这一行是「补充」(会话收件箱) ⇒ 端侧按它算合成 id。
       inboxId,
+      // ★ [T-040 · 2026-11-18] 客户端身份（顶层优先，metadata 兜底）.
+      clientMsgId: clientMsgId ?? (typeof m.client_msg_id === "string" ? m.client_msg_id : null),
       // 阶段 8: 撤回态 — server listChatMessages 已过滤 deletedAt,
       //   recalled 这条可选字段透传到 client, 用于 MessageBubble 占位 + 关闭菜单.
       recalled: m.recalled ?? false,

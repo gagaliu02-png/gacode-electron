@@ -232,9 +232,21 @@ test("GC-G8-3 发送即插本地 user 行 (乐观上屏, 对标安卓 sendIntern
     /pendingUserMsg/.test(messagesMemo),
     "★ messages 列表必须把乐观上屏那一行拼进去"
   );
+  // ★ [T-040 · 2026-11-18] 判据从「同内容」升级为「**client_msg_id 精确**」+「内容兜底」。
+  //   老判据（同内容）是**猜** ⇒ 用户问**两遍同一句**时, 服务端先回来的那一行会把乐观行
+  //   **提前撤掉** ⇒ 用户自己那条话在屏幕上「闪一下就没了」。
+  //   ⇒ 有 client_msg_id ⇒ **逐字相等**才是同一条（物理同一条, 不是「看着像」）。
   assert.ok(
-    /role === "user" && m\.content === pendingUserMsg\.content/.test(messagesMemo),
-    "★ 服务端那一行到了要**自动撤掉**临时行 (同内容判据) ⇒ 不能出现两行一样的 user 消息"
+    /pendingUserMsg\.clientMsgId/.test(messagesMemo),
+    "★ 撤掉临时行要用 **client_msg_id 精确匹配**（不是「同内容」猜）",
+  );
+  assert.ok(
+    /m\.clientMsgId === pendingUserMsg\.clientMsgId/.test(messagesMemo),
+    "★ 精确匹配 = 两个 client_msg_id 逐字相等",
+  );
+  assert.ok(
+    /m\.content === pendingUserMsg\.content/.test(messagesMemo),
+    "★ 老服务端 / 老数据（没有 client_msg_id）⇒ **原样落回**「同内容」判据（行为不变）",
   );
 });
 
