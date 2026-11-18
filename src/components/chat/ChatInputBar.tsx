@@ -51,6 +51,8 @@ import { extractSingleImage } from "../../lib/clipboard";
 // ★ [2026-11-14 · 订正 28 · W5] 按钮状态机 —— 纯函数（可单测）。
 //   判据 = ① 主 agent 轮次在不在跑 ② 本会话有没有未完成的后台活 ③ 输入框有没有字。
 import { resolveChatAction } from "../../lib/chat-action";
+// ★ [T-044] 渲染层诊断日志（落盘）—— 打包版没有 devtools.
+import { diagLog } from "../../lib/diag";
 import {
   ArrowUpIcon,
   PaperclipIcon,
@@ -583,6 +585,19 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
       hasText: hasContent,
     });
 
+    // ★ [T-044 · 2026-11-18] **落盘**这条判据（打包版没有 devtools ⇒ console.log 看不到）。
+    //   只在**形态变了**时记一条 ⇒ 不刷屏。
+    const actionSig = `${action.action}/${action.effect}/${action.reason}`;
+    const lastActionSigRef = useRef<string>("");
+    useEffect(() => {
+      if (lastActionSigRef.current === actionSig) return;
+      lastActionSigRef.current = actionSig;
+      diagLog(
+        "inputbar",
+        `按钮=${action.action} effect=${action.effect} streaming=${isStreaming} pending=${hasPendingWork} hasText=${hasContent} :: ${action.reason}`,
+      );
+    }, [actionSig, action.action, action.effect, action.reason, isStreaming, hasPendingWork, hasContent]);
+
     // chat-id-25: 检测 "/" 开头 → 开 slash 菜单; 检测 "/cmd " → 自动触发.
     // 注意 setText 是 React state 同步, 但触发回调要按状态派生, 不能直接调.
     // 这里用一个 effect 监测 text 变化.
@@ -809,7 +824,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
               <button
                 type="button"
                 aria-label="停止生成"
-                title="停止本会话的一切（轮次 + 后台活）"
+                title="停止当前这一轮（后台任务不受影响）"
                 onClick={onStop}
                 className="shrink-0 h-9 w-9 inline-flex items-center justify-center rounded-full bg-danger text-white hover:bg-danger/90 transition-colors duration-150"
               >
@@ -850,7 +865,7 @@ export const ChatInputBar = forwardRef<ChatInputBarHandle, ChatInputBarProps>(
             <span>
               {action.effect === "queue"
                 ? `${isStreaming ? "生成中" : "后台任务进行中"} · 消息会排进队列（清空输入框可停止）`
-                : action.effect === "stop-everything"
+                : action.effect === "stop-turn"
                 ? `${isStreaming ? "生成中" : "后台任务进行中"} · 点击停止按钮中断`
                 : caption}
             </span>

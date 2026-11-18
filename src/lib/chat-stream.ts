@@ -406,7 +406,8 @@ export function useChatStream(): ChatStreamHandle {
       } else {
         // ★ 只读接入流 (attach): 没有收尾路径 ⇒ **这里直接发** USER_STOP
         //   (契约 L-54 / L-55 —— 任何在线端都能中止, 且中止必须掐上游那一轮)。
-        sendCancelDelete(active.sessionId, "USER_STOP");
+        // ★ [T-044 · 2026-11-18] **STOP_TURN**（只停当前这一轮）—— 理由同上。
+        sendCancelDelete(active.sessionId, "STOP_TURN");
       }
     }
     // 立即 abort fetch + reader.read()
@@ -918,7 +919,10 @@ export function useChatStream(): ChatStreamHandle {
         //     ② 收到终态 + 没收到 cancel 帧 → 发 ACK_DONE (收尾 ack)
         //     ③ 其他情况 → 不发 (凭猜发任何一种都误杀)
         if (ac.signal.aborted && turnState.userStopped) {
-          sendCancelDelete(opts.sessionId, "USER_STOP");
+          // ★ [T-044 · 2026-11-18] **STOP_TURN**（只停当前这一轮）—— 不是 USER_STOP。
+          //   USER_STOP ① 会武装 pending cancel ⇒ 掐死队列里排着的下一条（v1.2.61 同款故障）；
+          //   ② **连带**停后台活 ⇒ 用户只想停当前这一轮，却把后台调研全杀了（真机 session 1050）。
+          sendCancelDelete(opts.sessionId, "STOP_TURN");
         } else if (!ac.signal.aborted && sawDone && !sawCancel) {
           // ★ [批 G8] 兜底: 终态帧那一路已经发过 ACK ⇒ 这里不会重发 (闸口在
           //   sendAckDoneOnce 里)。留这条是为了「终态帧在 flush 路径才到」的场合。

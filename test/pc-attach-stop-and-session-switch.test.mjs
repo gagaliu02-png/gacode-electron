@@ -138,12 +138,15 @@ test("①c 切会话必须复位 stalled / turnKey / turnMeta (漏一个就复�
 // ② 接入态按「停止」必须掐上游那一轮 (契约 L-54 / L-55)
 // ---------------------------------------------------------------------------
 
-test("② 只读接入流按停止 ⇒ 发 DELETE intent=USER_STOP (掐上游那一轮)", () => {
+test("② 只读接入流按停止 ⇒ 发 DELETE intent=STOP_TURN (只停当前那一轮)", () => {
   const code = repoCode(STREAM);
+  // ★ [T-044 · 2026-11-18] 意图从 USER_STOP 改成 **STOP_TURN**（PM 口径①）：
+  //   只 abort 读流停不掉服务端那一轮（界面骗人）⇒ 照样要发 DELETE；
+  //   但**只停当前这一轮** ⇒ 后台活 / 队列 / 后续轮次都不受影响。
   assert.match(
     code,
-    /sendCancelDelete\(\s*active\.sessionId\s*,\s*"USER_STOP"\s*\)/,
-    "⛔ 接入态中止必须发 USER_STOP —— 只 abort 读流停不掉服务端那一轮 (界面骗人)",
+    /sendCancelDelete\(\s*active\.sessionId\s*,\s*"STOP_TURN"\s*\)/,
+    "⛔ 接入态中止必须发 STOP_TURN —— 只 abort 读流停不掉服务端那一轮 (界面骗人)",
   );
 });
 

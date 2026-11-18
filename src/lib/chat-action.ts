@@ -31,8 +31,11 @@ export type ChatActionKind = "stop" | "send";
 
 /** 点击之后会发生什么（给调用方分流用）。 */
 export type ChatActionEffect =
-  /** 停本会话的一切（轮次 + 所有后台活）⇒ 彻底丢弃产出。 */
-  | "stop-everything"
+  /**
+   * ★ [T-044 · 2026-11-18] **只停当前这一轮**（PM 口径①）。
+   *   ⇒ 后台活 / 队列 / 后续轮次**都不受影响**。
+   */
+  | "stop-turn"
   /** 消息进队列（不打断、不立即发）。 */
   | "queue"
   /** 直接发（起新轮）。 */
@@ -69,30 +72,45 @@ export function resolveChatAction(input: ChatActionInput): ChatActionDecision {
   const pendingWork = !!input.pendingWork;
   const hasText = !!input.hasText;
 
-  // 「这个会话还有东西在跑」= 主 agent 轮次 **或** 后台工作单元。
-  const busy = turnRunning || pendingWork;
-
-  if (busy && !hasText) {
-    return {
-      action: "stop",
-      effect: "stop-everything",
-      reason: turnRunning
-        ? "主 agent 轮次在跑 + 输入框为空 ⇒ 停止（停本会话的一切）"
-        : "后台活还在跑 + 输入框为空 ⇒ 停止（停本会话的一切）",
-    };
-  }
-  if (busy && hasText) {
+  // ★ [T-044 · 2026-11-18] **「排队」与「忙」是两件事**（对齐安卓端 `ComposerPolicy`）——
+  //
+  //   · **停止键只看「轮次在不在跑」** ⇒ 红色停止键 = **只停当前这一轮**（PM 口径①）。
+  //     ⇒ **只有后台活在跑时，这个键不出现** —— 没有「当前轮」可停，
+  //       给他一个「停一切」的键 = 一点就把后台调研全杀了（真机 session 1050 · 11:10:24）。
+  //     ⇒ 停后台活 = 「等待后台任务」横幅上那个**独立**按钮（`stopBackgroundWork`）。
+  //   · **有字时**：轮次在跑 ⇒ 进队列（不打断当前轮）；
+  //     **只有后台活在跑 ⇒ 直接发**（后台活是派单即返回的 ⇒ agent 其实是空闲的
+  //     ⇒ 用户新发的消息**应该直接起新轮**，不该干等）。
+  if (turnRunning) {
+    if (!hasText) {
+      return {
+        action: "stop",
+        effect: "stop-turn",
+        reason: "主 agent 轮次在跑 + 输入框为空 ⇒ 停止（**只停当前这一轮**）",
+      };
+    }
     return {
       action: "send",
       effect: "queue",
-      reason: turnRunning
-        ? "主 agent 轮次在跑 + 输入框有字 ⇒ 发送（进队列，不打断）"
-        : "后台活还在跑 + 输入框有字 ⇒ 发送（进队列）",
+      reason: "主 agent 轮次在跑 + 输入框有字 ⇒ 发送（进队列，不打断）",
     };
   }
+  if (hasText) {
+    return {
+      action: "send",
+      effect: "send-now",
+      reason: pendingWork
+        ? "后台活在跑 + 输入框有字 ⇒ 发送（**直接发**，不排队 —— 后台活不占着 agent）"
+        : "没有东西在跑 ⇒ 发送（直接发，起新轮）",
+    };
+  }
+  // 没有轮次 + 只有后台活 + 输入框空 ⇒ **没有「当前轮」可停** ⇒ 不给停止键
+  //   ⇒ 渲染成**置灰的发送键**（`ChatInputBar` 的 `disabled` 已有那个判据）。
   return {
     action: "send",
     effect: "send-now",
-    reason: "没有东西在跑 ⇒ 发送（直接发，起新轮）",
+    reason: pendingWork
+      ? "只有后台活在跑（没有当前轮）⇒ **不给停止键**（停后台活走横幅上的独立按钮）"
+      : "没有东西在跑 ⇒ 发送（直接发，起新轮）",
   };
 }

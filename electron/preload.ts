@@ -55,6 +55,16 @@ contextBridge.exposeInMainWorld('gacode', {
   notify: (title: string, body: string): Promise<boolean> =>
     ipcRenderer.invoke('gacode:notify', { title, body }),
 
+  // ★ [T-044 · 2026-11-18] 渲染层诊断日志（落盘）—— 打包版没有 devtools ⇒ console.log 看不到。
+  //   用 `send`（不 `invoke`）⇒ 渲染层不等结果 ⇒ 不拖慢 UI。
+  diagLog: (tag: string, msg: string): void => {
+    try {
+      ipcRenderer.send('gacode:diag-log', { tag, msg });
+    } catch (_) {
+      /* ignore */
+    }
+  },
+
   // 阶段 4: 监听 deep-link (gacode://chat/123 这种 protocol 唤起)
   onDeepLink: (callback: (path: string) => void): (() => void) =>
     listenMain<DeepLinkEvent>('gacode:deep-link', (e) => {

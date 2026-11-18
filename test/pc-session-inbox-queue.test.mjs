@@ -157,12 +157,16 @@ test("GC-P28-4 按钮状态机 = 主 agent 轮次 × 后台活 × 输入框有�
   const { resolveChatAction } = await import("../src/lib/chat-action.ts");
   const cases = [
     // [turnRunning, pendingWork, hasText] ⇒ [action, effect]
-    [true, false, false, "stop", "stop-everything"],
-    [true, true, false, "stop", "stop-everything"],
+    // ★ [T-044 · 2026-11-18] 停止键 = **只停当前这一轮**（PM 口径①）：
+    //   · 有轮次在跑 ⇒ 红色停止键（effect=stop-turn）
+    //   · **没有**轮次（只有后台活）⇒ **不给停止键**（渲染成置灰的发送键）
+    //   · 有字 + 只有后台活 ⇒ **直接发**（不排队）—— 对齐安卓端「排队与忙是两件事」
+    [true, false, false, "stop", "stop-turn"],
+    [true, true, false, "stop", "stop-turn"],
     [true, false, true, "send", "queue"],
     [true, true, true, "send", "queue"],
-    [false, true, false, "stop", "stop-everything"],
-    [false, true, true, "send", "queue"],
+    [false, true, false, "send", "send-now"],
+    [false, true, true, "send", "send-now"],
     [false, false, true, "send", "send-now"],
   ];
   for (const [turnRunning, pendingWork, hasText, action, effect] of cases) {

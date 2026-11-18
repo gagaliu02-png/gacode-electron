@@ -62,6 +62,15 @@ export interface JobReportPayload {
   stdout?: string;
   error?: string;
   exitCode?: number;
+  /**
+   * ★ [T-030 · 2026-11-17] **用户喊停的作业** ⇒ 服务端据此**静默结算**
+   *   （不投收件箱、不起轮、不产生任何 assistant 消息）。
+   *
+   *   ⚠️ **T-044 · 2026-11-18 订正**：服务端不再「静默结算」了 ⇒ 改成**回报「已停止」**
+   *   （主 agent 得知道用户停了 ⇒ `status='stopped'` 的 work_unit_result）。
+   *   ⇒ 这个标记**照样要带**（服务端仍靠它区分「用户喊停」与「作业自己失败」）。
+   */
+  cancelledByUser?: boolean;
 }
 
 /**

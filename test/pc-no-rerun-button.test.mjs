@@ -128,25 +128,29 @@ test("GC-G10-3 输入框右侧按钮只有 stop / send 两态", () => {
 test("GC-G10-3b 按钮状态机按 §3.7 那张表判 (纯函数)", async () => {
   const { resolveChatAction } = await import("../src/lib/chat-action.ts");
 
-  // 在跑 + 空 ⇒ 停止（停本会话的一切）
+  // 在跑 + 空 ⇒ 停止（**只停当前这一轮**）
   let d = resolveChatAction({ turnRunning: true, pendingWork: false, hasText: false });
   assert.equal(d.action, "stop");
-  assert.equal(d.effect, "stop-everything");
+  assert.equal(d.effect, "stop-turn");
 
   // 在跑 + 有字 ⇒ 发送（进队列，不打断）
   d = resolveChatAction({ turnRunning: true, pendingWork: true, hasText: true });
   assert.equal(d.action, "send");
   assert.equal(d.effect, "queue");
 
-  // 不在跑 + 后台活还在跑 + 空 ⇒ 停止（只停后台活）
+  // ★ [T-044 · 2026-11-18] **不在跑 + 后台活还在跑 + 空 ⇒ 不给停止键**（PM 口径①）
+  //   ⇒ 没有「当前轮」可停 ⇒ 给个「停一切」的键 = 一点就把后台调研全杀了
+  //     （真机 session 1050 · 11:10:24 · 服务端 stopped: 2）。
+  //   ⇒ 渲染成**置灰的发送键**（ChatInputBar 的 disabled 已有那个判据）。
   d = resolveChatAction({ turnRunning: false, pendingWork: true, hasText: false });
-  assert.equal(d.action, "stop");
-  assert.equal(d.effect, "stop-everything");
+  assert.equal(d.action, "send");
+  assert.equal(d.effect, "send-now");
 
-  // 不在跑 + 后台活还在跑 + 有字 ⇒ 发送（进队列）
+  // ★ [T-044] 不在跑 + 后台活还在跑 + 有字 ⇒ **直接发**（不排队）
+  //   （对齐安卓端「排队与忙是两件事」：后台活是派单即返回的 ⇒ agent 其实是空闲的）
   d = resolveChatAction({ turnRunning: false, pendingWork: true, hasText: true });
   assert.equal(d.action, "send");
-  assert.equal(d.effect, "queue");
+  assert.equal(d.effect, "send-now");
 
   // 不在跑 + 全停 + 有字 ⇒ 发送（直接发，起新轮）
   d = resolveChatAction({ turnRunning: false, pendingWork: false, hasText: true });

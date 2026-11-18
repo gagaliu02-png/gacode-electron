@@ -122,6 +122,8 @@ import {
 //   ⚠️ 「停止」恒发 USER_STOP（PM 拍板：停止 = 硬打断）⇒ `safeStop` 只作插话预留位；
 //   ④ 看门狗三个开关默认全开；判据只有这一份。
 import { readP2Flags, resolveStopIntent } from "../lib/p2-features";
+// ★ [T-044] 渲染层诊断日志（落盘）.
+import { diagLog } from "../lib/diag";
 // ★ [P2-2 · 2026-11-17] 会话级 ack（「那条排队消息已被处理」）的形状。
 import type { UserMessageProcessedEvent } from "../lib/session-events";
 import {
@@ -870,6 +872,12 @@ export function ChatDetail() {
         // chat-id-9: 知识库引用 id — api.getHistory 已从 metadata.knowledge_refs
         //   解析出来 (存的是 server 侧实际生效的 atom id).
         knowledgeRefs: m.knowledgeRefs,
+        // ★ [T-044 · 2026-11-18] **客户端身份必须透传** ⇒ 认亲才精确（否则重复 user 气泡）。
+        //   服务端 history 的 user 行带 `client_msg_id`（`yinian.service.js`），
+        //   端侧 `api.getHistory` **已经**解析成 `m.clientMsgId`（`api.ts`）⇒ 只差这一段映射。
+        //   ⚠️ 不带 ⇒ `historyHasSameUser` 里的 `m.clientMsgId` 永远是 undefined
+        //      ⇒ 乐观行**永远撤不掉** ⇒ 屏幕上**两个 user 气泡**（PM 2026-11-18 报的）。
+        clientMsgId: m.clientMsgId ?? null,
         createdAt: m.createdAt,
         recalled: m.recalled ?? false,
         recalledAt: m.recalledAt ?? null,
@@ -1286,6 +1294,14 @@ export function ChatDetail() {
         }
         return m.content === pendingUserMsg.content;
       });
+    // ★ [T-044 · 2026-11-18] **认亲结果落盘**（打包版没有 devtools ⇒ 看不到 console.log）——
+    //   重复用户气泡的根因就在这条判据上（client_msg_id 没透传 ⇒ 乐观行撤不掉）。
+    diagLog(
+      'merge',
+      `认亲 same=${historyHasSameUser} optimistic=${pendingUserMsg?.id ?? '-'} ` +
+        `optCid=${pendingUserMsg?.clientMsgId ?? '-'} ` +
+        `histCid=${baseWithoutSplitTurn.find((m) => m.role === 'user')?.clientMsgId ?? '-'}`,
+    );
     const withPendingUser: ChatMessageModel[] =
       pendingUserMsg && !historyHasSameUser
         ? [
@@ -1294,6 +1310,7 @@ export function ChatDetail() {
               id: pendingUserMsg.id,
               role: "user",
               content: pendingUserMsg.content,
+              clientMsgId: pendingUserMsg.clientMsgId ?? null,
               imageUrls: pendingUserMsg.imageUrls,
               attachedFileIds: pendingUserMsg.attachedFileIds,
               attachedFileNames: pendingUserMsg.attachedFileNames,
@@ -3593,6 +3610,9 @@ export function ChatDetail() {
   const stopBackgroundWork = useCallback(async () => {
     // ⚠️ 先看「有没有活要停」—— 没有就**静默**返回（⛔ 别每次按停止都弹一句「停不掉」）。
     if (sessionBackgroundWork.length === 0) return;
+    // ★ [T-044 · 2026-11-18] `chatId` 是可选的（会话 id 还没拿到时是 undefined）
+    //   ⇒ 发 DELETE 前必须有守卫（否则 `sendCancelDelete` 拿到 undefined ⇒ 打到错的路径）。
+    if (!chatId) return;
     // ★ [T-030 · 2026-11-17] **通知服务端停后台活** ——
     //   本机桥 `stopJob` 只能停**这台电脑上**的作业；**服务端自己跑的后台子 agent**
     //   （`cloud_agent`）停不掉 ⇒ 必须发一条带 `stop_background` 意图的 DELETE，
@@ -3756,14 +3776,29 @@ export function ChatDetail() {
     }
     // ★ RC-7: 用户按了停止 ⇒ 这一轮的叫停开关也要断 (否则重连状态机会接着跑)。
     turnAcRef.current?.abort();
-    // ★ [2026-11-14 · 订正 28 · W5] 「停止」的作用域 = **本会话的一切**（§3.8）：
-    //   ① 主 agent 轮次（abort + USER_STOP ⇒ **彻底丢弃**产出，硬掐 = 老行为）；
-    //   ② **所有**后台工作单元（本机的作业 + 服务端 pending-work 报的）—— 一视同仁。
-    //   ⚠️ 主 agent 已经结束（按钮还在是因为后台活没停）⇒ ① 那路什么也不做，
-    //      真正干活的是 ②。
+    // ★ [T-044 · 2026-11-18] **红色停止键 = 只停当前这一轮**（PM 口径①，对齐安卓端）。
+    //
+    //   ## 改了什么
+    //
+    //   · `stream.abort("user")` ⇒ 内部发 `DELETE ?intent=STOP_TURN`（**不是** USER_STOP）
+    //     ⇒ 服务端**只**掐当前这一轮（打取消标记 ⇒ 这一轮产出丢弃 = 硬打断的老语义 ✔）
+    //     ⇒ **不**武装 pending cancel ⇒ 队列里排着的下一条**不被**误杀（v1.2.61 同款故障）✔
+    //   · ⛔ **不再**调 `stopBackgroundWork()` ⇒ **后台活不动**。
+    //     旧实现在这里连带停后台活 ⇒ 用户只想停当前这一轮，却把后台调研全杀了
+    //     （真机 session 1050 · 11:10:24 · 服务端 `stopped: 2` ⇒ 两个后台调研被杀、结果不回来）。
+    //   · 停后台活 = **「等待后台任务」横幅上那个独立按钮**（`stopBackgroundWork`）——
+    //     它发 `origin=STOP_BACKGROUND` ⇒ 服务端只停后台活、**不碰当前轮**（T-044 服务端侧）。
+    //
+    //   ⚠️ 「只有后台活在跑、**没有**当前轮」时，**红色停止键根本不出现**
+    //     （`resolveChatAction` 只看 `turnRunning`）⇒ 那个按钮是**置灰的发送键**。
     stream.abort("user");
-    void stopBackgroundWork();
-  }, [chatId, stream, stopBackgroundWork, stopLocalClientTools, toast]);
+    // ★ [T-044 · 2026-11-18] 落盘：红色停止键发了什么、后端还有几件后台活。
+    diagLog(
+      'stop',
+      `红色停止键 ⇒ intent=STOP_TURN（只停当前轮）pendingWork=${sessionBackgroundWork.length} ` +
+        `streaming=${turnAcRef.current != null}`,
+    );
+  }, [chatId, stream, stopLocalClientTools, toast]);
 
   const handleRetry = useCallback(() => {
     if (!streamError) return;

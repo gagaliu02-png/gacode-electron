@@ -14,6 +14,8 @@ import * as crypto from 'crypto';
 import { createTray } from './tray';
 import { createAppMenu } from './menu';
 import { registerNotificationIpc } from './notifications';
+// ★ [T-044 · 2026-11-18] 渲染层诊断日志（落盘）—— 打包版没有 devtools ⇒ console.log 看不到.
+import { registerDiagIpc } from './diag-log';
 // [P3/P4 · 2026-11-12] 端侧执行（`pc_*`）—— 主进程那半：执行器 + 闸门 + 设备通道。
 import { registerClientToolIpc, setClientToolWindow } from './client-tools/ipc';
 // [2026-11-15 · 订正 31 · M0] 浏览器端侧工具 —— 把**现有** tab 池注给执行器
@@ -1124,6 +1126,8 @@ app.whenReady().then(() => {
   createAppMenu(() => mainWindow);
   createTray(() => mainWindow);
   registerNotificationIpc(() => mainWindow);
+  // ★ [T-044] 渲染层诊断日志通道.
+  registerDiagIpc();
   registerBrowserTabIpc();
   registerBrowserCacheIpc();
   registerTaskbarProgressIpc();

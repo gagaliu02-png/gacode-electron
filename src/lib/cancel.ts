@@ -89,7 +89,17 @@ export type CancelIntent =
    *   ⇒ 队列里排着的下一条消息被 pre-abort（v1.2.61 同款故障）。
    * ⚠️ 为什么不能复用 `INTERRUPT`：那是「软停」（跑到安全边界才停、要保住产出）。
    */
-  | "STOP_BACKGROUND";
+  | "STOP_BACKGROUND"
+  /**
+   * ★ [T-044 · 2026-11-18] **停当前这一轮**（红色停止键）—— PM 口径①。
+   *
+   * 语义 = **只**停当前这一轮（`intent=stop_turn`）⇒ **后台活 / 队列 / 后续轮次都不动**。
+   *
+   * ⚠️ 为什么不能复用 `USER_STOP`：它在 gaclaw 侧会**武装 pending cancel**
+   *   ⇒ 队列里排着的下一条消息被 pre-abort（v1.2.61 同款故障）。
+   * ⚠️ 为什么不能复用 `INTERRUPT`：那是「软停」（跑到安全边界才停、要保住产出）。
+   */
+  | "STOP_TURN";
 
 /**
  * 意图 → **线上字节**的映射（query 与 header 用**同一个**值）。
@@ -100,12 +110,15 @@ export type CancelIntent =
  *   归一化时 trim + 转小写 ⇒ 小写最稳）。
  * ⚠️ STOP_BACKGROUND 用**小写** `stop_background`（服务端别名集
  *   `STOP_BACKGROUND_INTENT_ALIASES` = {stop_background}，同样小写最稳）。
+ * ⚠️ STOP_TURN 用**小写** `stop_turn`（服务端别名集
+ *   `STOP_TURN_INTENT_ALIASES` = {stop_turn}，同样小写最稳）。
  */
 const CANCEL_INTENT_WIRE: Record<CancelIntent, string> = {
   ACK_DONE: "ACK_DONE",
   USER_STOP: "USER_STOP",
   INTERRUPT: "interrupt",
   STOP_BACKGROUND: "stop_background",
+  STOP_TURN: "stop_turn",
 };
 
 /**

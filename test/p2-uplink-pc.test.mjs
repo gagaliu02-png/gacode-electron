@@ -408,25 +408,28 @@ test("P2-3b intent **双带**（query + header），且走 PC 既有的那条 DE
   );
 });
 
-test("P2-3c 「停止」**恒发 USER_STOP**（PM 2026-11-17：停止 = 硬打断 ⇒ 产出全丢）", () => {
-  // ★ 口径变更（PM 新拍板 ⇒ 期望值从 INTERRUPT 改成 USER_STOP）：
-  //   旧期望「默认发 interrupt（软停 ⇒ 产出保留）」**已作废** ——
-  //   「用户侧的停止按钮，应该和之前一样，就是直接打断。」
+test("P2-3c 「停止」**恒发 STOP_TURN**（T-044 · 2026-11-18：只停当前这一轮）", () => {
+  // ★ 口径变更（T-044 · PM 口径①）：
+  //   旧期望「恒发 USER_STOP」（2026-11-17：停止 = 直接打断）**已作废** ——
+  //   USER_STOP ① 会武装 pending cancel ⇒ 掐死队列里排着的下一条（v1.2.61 同款故障）；
+  //   ② **连带**停后台活 ⇒ 用户只想停当前这一轮，却把后台调研全杀了（真机 session 1050 · 11:10:24）。
+  //   ⇒ 现在「停止」= `stop_turn` = **只停当前这一轮**（对齐安卓端）。
+  //   ⚠️ 产出**照样丢弃**（服务端 stop_turn 打取消标记）⇒ 「硬打断」的用户体感不变。
   assert.equal(P2_FLAG_DEFAULTS.safeStop, true, "safeStop 字段保留（= 插话路径的预留位）");
   assert.equal(
     resolveStopIntent(P2_FLAG_DEFAULTS),
-    "USER_STOP",
-    "★ 「停止」恒发 USER_STOP（硬掐 ⇒ 产出全丢）",
+    "STOP_TURN",
+    "★ 「停止」恒发 STOP_TURN（只停当前这一轮）",
   );
   assert.equal(
     resolveStopIntent({ ...P2_FLAG_DEFAULTS, safeStop: false }),
-    "USER_STOP",
-    "★ 关掉 safeStop 也一样是 USER_STOP（该开关不再作用于「停止」）",
+    "STOP_TURN",
+    "★ 关掉 safeStop 也一样是 STOP_TURN（该开关不作用于「停止」）",
   );
   assert.equal(
     resolveStopIntent({ ...P2_FLAG_DEFAULTS, safeStop: true }),
-    "USER_STOP",
-    "★ 打开 safeStop 也一样是 USER_STOP（同上）",
+    "STOP_TURN",
+    "★ 打开 safeStop 也一样是 STOP_TURN（同上）",
   );
 });
 
@@ -444,14 +447,19 @@ test("P2-3d 停止键恒走**老路（硬掐）**：掐本地流 + 断叫停开�
   assert.match(
     stop,
     /stream\.abort\("user"\)/,
-    "★ 停止 ⇒ 掐本地流 + 发 DELETE intent=USER_STOP（老行为）",
+    "★ 停止 ⇒ 掐本地流（内部发 DELETE intent=STOP_TURN ⇒ 只停当前这一轮）",
   );
-  assert.match(
-    stop,
-    /void stopBackgroundWork\(\)/,
-    "★ 停止 ⇒ 本会话的后台活一视同仁（§3.8）",
+  // ★ [T-044 · 2026-11-18] **不再**连带停后台活 ⇒ 红色键 = 只停当前轮（PM 口径①）。
+  //   ⚠️ 只看**硬掐那条路**（`stream.abort("user")` 那一行往后）——
+  //   上面的 INTERRUPT 保险丝分支里**仍然**停后台活（那是软停路径，语义不同）。
+  const hardStopIdx = stop.indexOf('stream.abort("user")');
+  assert.ok(hardStopIdx > 0, "★ 找不到硬掐那条路");
+  const hardStop = stop.slice(hardStopIdx);
+  assert.ok(
+    !/void stopBackgroundWork\(\)/.test(hardStop),
+    "★ 红色停止键**不许**连带停后台活（停后台活 = 横幅上的独立按钮）",
   );
-  // 软停分支 = **保险丝**（当前不可达 —— resolveStopIntent 恒 USER_STOP，见 P2-3c）
+  // 软停分支 = **保险丝**（当前不可达 —— resolveStopIntent 恒 STOP_TURN，见 P2-3c）
   //   ⇒ 必须保留（将来插话路径要从这儿发）⇒ 断言它在、且它在硬掐那条路**之前**。
   const iBranch = stop.indexOf('intent === "INTERRUPT"');
   assert.ok(iBranch > 0, "★ 软停分支保留做保险丝（将来插话要用）");
@@ -534,8 +542,8 @@ test("P2-3f 开关仍可读可写（localStorage ⇒ 应急退路不用等一次
   assert.equal(after.safeStop, false, "★ 开关字段仍可读可写（= 插话路径的预留位）");
   assert.equal(
     resolveStopIntent(after),
-    "USER_STOP",
-    "★ 翻 safeStop **不会**改变「停止」发什么（恒 USER_STOP）",
+    "STOP_TURN",
+    "★ 翻 safeStop **不会**改变「停止」发什么（恒 STOP_TURN）",
   );
   assert.equal(after.watchdogGraded, true, "★ 没写的键回落代码常量");
   // 坏 JSON ⇒ 忽略

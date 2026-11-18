@@ -21,6 +21,18 @@ export interface GacodeBridge {
   notify: (title: string, body: string) => Promise<boolean>;
 
   /**
+   * ★ [T-044 · 2026-11-18] **渲染层诊断日志（落盘）**。
+   *
+   *   PC 端跑的是**打包版** ⇒ 没有 devtools ⇒ 渲染层的 `console.log` 看不到
+   *   ⇒ 端侧关键决策（停止键显隐 / 认亲 / 发了哪个 intent）必须落盘。
+   *
+   *   落点：`%APPDATA%/Gacode/diag.log`。
+   *
+   *   ⚠️ 只记**决策**，**绝不**把用户消息正文 / 模型回复写进来。
+   */
+  diagLog?: (tag: string, msg: string) => void;
+
+  /**
    * 监听 deep link (gacode://chat/123 这种 custom protocol 唤起时推到渲染层)。
    * 返回的函数调用 = 取消订阅 (避免内存泄漏)。
    */

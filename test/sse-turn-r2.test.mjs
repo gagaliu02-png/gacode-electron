@@ -495,15 +495,16 @@ test("B8 退出页面 ⇒ 不发 DELETE (只停订阅, 不删轮次记录)", () 
     "★ 离场必须 abort 本地读流 (只掐读流, 不掐服务端那一轮)",
   );
 
-  // ② DELETE 只有两条合法路径: USER_STOP / ACK_DONE。
+  // ② DELETE 只有三条合法路径: STOP_TURN / USER_STOP / ACK_DONE。
+  //    ★ [T-044 · 2026-11-18] 加了 **STOP_TURN**（红色停止键 = 只停当前这一轮，PM 口径①）。
   //    ⚠️ 只认**调用点** (实参里带意图标记) —— 声明处没有实参, 不算调用。
   const delCalls = [
-    ...streamCode.matchAll(/sendCancelDelete\([^)]*"(USER_STOP|ACK_DONE)"\)/g),
+    ...streamCode.matchAll(/sendCancelDelete\([^)]*"(STOP_TURN|USER_STOP|ACK_DONE)"\)/g),
   ].map((m) => m[0]);
-  assert.ok(delCalls.length >= 2, "没找到 DELETE 的两处调用点");
+  assert.ok(delCalls.length >= 2, "没找到 DELETE 的调用点");
   for (const call of delCalls) {
     assert.ok(
-      /USER_STOP|ACK_DONE/.test(call),
+      /STOP_TURN|USER_STOP|ACK_DONE/.test(call),
       `DELETE 的调用必须带意图标记: ${call}`
     );
   }

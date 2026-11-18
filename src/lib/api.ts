@@ -672,6 +672,12 @@ export async function getHistory(chatId: string): Promise<{
       metadata?: string | Record<string, unknown> | null;
       recalled?: boolean;
       recalled_at?: string | null;
+      /**
+       * ★ [T-040 · 2026-11-18] **客户端身份**（ULID）—— 跟端侧乐观行对上。
+       *   服务端 `yinian.service.js` 在 history 的 user 行里回这个字段（顶层）。
+       *   ⇒ 端侧认亲靠它**逐字相等**（不是「同内容」猜）⇒ 问两遍同一句也不会认错。
+       */
+      client_msg_id?: string | null;
     }>;
     next_cursor: string | null;
   }>(`/yinian/sessions/${chatId}/messages`);
