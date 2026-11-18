@@ -130,7 +130,7 @@
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.33
+buildVersion: 0.7.34
 copyright: Copyright © 2026 gaga
 
 afterPack: scripts/after-pack-rcedit.cjs
@@ -144,7 +144,7 @@ directories:
   #      —— 那个锁也是 rcedit 写不进版本资源（"Unable to commit changes"）的元凶之一。
   # 0.7.32: 修「模型看不到图」—— 端侧在途去重 + 上传重试
   # 0.7.33: 作业进程退出后 pc_job_status 立刻说真话（T-035）
-  output: release-c34-v40
+  output: release-c34-v41
 
 files:
   - dist/**/*
