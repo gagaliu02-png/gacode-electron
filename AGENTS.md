@@ -572,3 +572,65 @@ data: {"events":[{"type":"user_message_processed","inboxId":"123","processedAt":
 > | `electron/client-tools/deviceClient.ts` | 上传失败 ⇒ 往 stdout 追加「模型看不到这张图」 |
 > | `test/pc-browser-shot.test.mjs`（新） | 9 例（坐标块形状 / ⛔无 base64 / 不可见如实报错 / `@shot:` 换算 / 无截图记录报错 / 屏幕外拒 / 纯函数 / snapshot 补字段） |
 > | `test/e2e-browser-dock.mjs` | 真机 9 条判据（含 PNG 魔数 + 尺寸 = 视口 × dpr + `@shot:` 点中第二个按钮） |
+---
+
+## 订正 35 · T-038 · 执行器实例锁（端侧单实例，防「两个 Gacode 抢同一个结算位」）
+
+> [2026-11-18] 事故复盘见根目录 `TASK_BOARD.md` 的 `T-038-ccdup`。
+> 本节是 **PC 端的落点与判据**（跨端口径在 `../gacode-web/AGENTS.md` 同名章节）。
+
+### 事故（一句话）
+
+同一台电脑上同时跑着 **dev 实例**（`electron .`）与 **安装/便携版**：
+两个进程**共用同一份 userData**（同一登录态 / 同一 device id / 同一审计文件）
+⇒ 同一条 `pc_*` 派单被**两个进程同时执行** ⇒ 旧代码那个 400ms 就回 `{status:'sent'}`
+**抢先结算** ⇒ 新代码那个等 205s 拿到真结果再上传 ⇒ **409「结果已结过」⇒ 真结果被丢弃**。
+
+### 根因（两处）
+
+1. **Electron 内建锁的锁键 = 调用它那一刻的 userData 路径**，
+   而本仓把 userData 改到 `%APPDATA%\Gacode` 是在 **`app.whenReady()` 里**做的
+   ⇒ 锁在改路径之前就拿好了 ⇒ 锁键 ≠ 最终身份。
+2. 端侧的去重（`deviceClient` 的 `loadDone` + `inflight`）是**进程内**的
+   ⇒ **跨进程完全无效**。
+
+### 三条铁律
+
+1. ⛔ **userData 必须在拿锁之前定下来** —— `app.setPath('userData', …)` 提到 module level，
+   再 `app.requestSingleInstanceLock()` ⇒ 锁键 = 最终 userData。
+   （实测 Electron 32 在 ready 前 `setPath('userData')` 生效。）
+2. ⛔ **再加一把显式的、带身份的锁**（`electron/instance-guard.ts`）：
+   锁文件 `%APPDATA%\Gacode\instance.lock`，记 `{pid, instanceId, startedAt, heartbeatAt}`；
+   抢锁时判活（**心跳新鲜 或 pid 还活着**）⇒ 活着就让位，死了就接管（崩溃残留自动清理）。
+   心跳 30s / 判活窗口 90s。
+3. ⛔ **后启动者让位，不静默抢单**：拿不到锁 ⇒ 写「聚焦请求」文件 ⇒ **让已有实例把窗口拉到前台**
+   ⇒ 自己 `app.quit()` + `process.exit(0)` ⇒ **绝不接管设备通道**（否则又是一轮抢结算）。
+
+### 合法多实例（PM 要求「dev 与 release 不能互相锁死」）
+
+| 场景 | userData | 锁 | device id | 结论 |
+|---|---|---|---|---|
+| 默认（dev 与 release 同 profile） | `%APPDATA%\Gacode` | **同一把** | 同一个 | **互斥**：只活一个 ⇒ 结构上不可能抢结算 |
+| `GACODE_INSTANCE_PROFILE=dev` | `%APPDATA%\Gacode-dev` | 独立 | 独立（要重新登录） | **可以并存** ⇒ 两个 device ⇒ 服务端按 device 分发 ⇒ 不抢结算 |
+
+⚠️ **共存 ⇒ 两个 device id** ⇒ 服务端可能把先登的那个顶掉（`device_replaced`）⇒ UI 上要说清楚。
+⚠️ **老版本客户端没有这把锁** ⇒ 与新版共存期间**仍可能抢结算** ⇒ 服务端兜底（能力串 `ccresult=1`）**必须保留**。
+
+### 落点
+
+| 文件 | 改动 |
+|---|---|
+| `electron/instance-guard.ts`（新） | 纯逻辑（零 electron import）：`resolveProfile` / `readOwner` / `isOwnerAlive` / `acquireInstanceLock` / `heartbeatInstanceLock` / `releaseInstanceLock` / `requestFocus` / `consumeFocusRequest` |
+| `electron/main.ts` | ① `setPath('userData')` 提到 module level（拿锁之前）② 显式锁 + 让位退出 ③ 心跳定时器（30s：续锁 + 消费聚焦请求 ⇒ 拉窗口到前台）④ `will-quit` 释放锁 + `deviceClient.disconnect()`（SSE 优雅关闭） |
+| `test/pc-instance-guard.test.mjs`（新） | 11 例：首获锁 / 二次拿不到 / 心跳过期可接管 / 心跳过期但 pid 活仍算活 / 只删自己的锁 / 只有 owner 能续 / 坏锁当无主 / **默认 profile 下 dev 与 release 同锁（事故根因场景）** / profile 隔离 / 聚焦请求一次一消费 |
+| `test/e2e-single-instance.mjs`（新） | 真机双实例：A 拿锁 ⇒ B 让位退出（code 0）⇒ 聚焦请求被 A 消费 ⇒ A 存活。隔离 profile，不碰真实 userData |
+
+### 验证（已跑）
+
+- `node --test test/pc-instance-guard.test.mjs` ⇒ **11/11**
+- `npm test` ⇒ **615/615**
+- `npx tsc --noEmit -p tsconfig.node.json --composite false` ⇒ 仅剩 **1 个与本次无关的既有错误**
+  （`client-tools/jobReporter.ts:139` `cancelledByUser` 不在 `JobReportPayload` —— T-030 遗留，非本次引入）
+- `npm run build` ⇒ 三段通过
+- ★ **真机** `node test/e2e-single-instance.mjs` ⇒ **PASS**
+  （A 拿锁 / B 让位退出 code=0 / 聚焦请求被消费 / A 存活）

@@ -21,6 +21,17 @@ import { registerClientToolIpc, setClientToolWindow } from './client-tools/ipc';
 import { setBrowserTabPool, clearElementIndex, clearShotMeta } from './client-tools/browser';
 import { BrowserViewPool, normalizeDockRect, type TabOrigin } from './browser-views';
 import { executeClientTool } from './client-tools/executor';
+// [2026-11-18 · T-038 方案 A] 执行器实例锁（锁键 = 最终 userData ⇒ dev/release 互斥）
+import {
+  resolveProfile,
+  acquireInstanceLock,
+  heartbeatInstanceLock,
+  releaseInstanceLock,
+  requestFocus,
+  consumeFocusRequest,
+  INSTANCE_HEARTBEAT_MS,
+} from './instance-guard';
+import { deviceClient } from './client-tools/deviceClient';
 import { getAppIcon, logIconStatus } from './icon';
 
 // CommonJS 下 __dirname 已有,这里只是为了类型注释
@@ -109,7 +120,59 @@ if (process.platform === 'win32') {
 // 副作用 (Windows 注册表等): second instance 不会开新进程, 也不会重复弹窗,
 // 当前已开的 instance 会被拉到前台 + 解析 argv 里的 gacode:// 协议 URL,
 // 用 `gacode:deep-link` 事件推到渲染层。
+//
+// ★★ [2026-11-18 · T-038 方案 A] **内建锁不能依赖** —— 它的锁键 = **调用那一刻的 userData 路径**，
+//   而本仓把 userData 改到 `%APPDATA%\Gacode` 是在 **whenReady 里**做的 ⇒ 锁在改路径之前就拿好了
+//   ⇒ 锁键 = **默认** userData（装好版与 dev 同为 `%APPDATA%\gacode-electron`，探针实测）。
+//
+//   实测（2026-11-18）：
+//   · 装好版 v0.7.33 在跑时，用**旧代码**起 dev ⇒ 被内建锁挡住（"Another instance is already running"）；
+//   · 但 11-17 当天 **dev(18:47) 与装好版(22:48) 同时在跑**，且两者后来共用同一份
+//     `%APPDATA%\Gacode`（同一登录态 / 同一 device id / 同一审计文件）
+//     ⇒ **内建锁那次没拦住**（具体触发条件未复现，与 dev 的启动方式有关）。
+//
+//   ⇒ 结论：**不能依赖内建锁**。必须有自己的、带身份的锁，且 **userData 必须在拿锁之前定下来**
+//   ⇒ 锁键 = 最终身份（`electron/instance-guard.ts`）：
+//     · 默认 profile ⇒ dev 与装好版 **共用一把** ⇒ 结构上不可能并存 ⇒ 不可能抢结算；
+//     · `GACODE_INSTANCE_PROFILE=<name>` ⇒ userData / 锁 / device id 全独立（要重登）⇒ 可合法并存。
 // =========================================================================
+const INSTANCE_PROFILE = process.env.GACODE_INSTANCE_PROFILE || '';
+const INSTANCE_ID = crypto.randomUUID();
+const instanceProfile = resolveProfile(app.getPath('appData'), INSTANCE_PROFILE);
+
+// ★ [T-038] **userData 必须在拿锁之前定下来** ——
+//   Electron 内建锁（`requestSingleInstanceLock`）的锁键 = **调用那一刻的 userData 路径**
+//   （探针实测：先 setPath 再拿锁 ⇒ 键随 setPath 变；反过来 ⇒ 是默认路径 `%APPDATA%\gacode-electron`）。
+//   之前 userData 是在 whenReady 里才 setPath 的 ⇒ 锁键与真实身份**不同源** ⇒ 不能拿它当执行器身份。
+//   ⇒ 现在：**先 setPath，再拿锁** ⇒ 锁键 = 最终 userData ⇒ 身份与锁永远同源。
+//   ⚠️ 实测：Electron 32 在 ready 前 `app.setPath('userData', …)` 生效（探针脚本已验）。
+try {
+  app.setPath('userData', instanceProfile.userDataDir);
+  console.log(`[gacode-electron] userData = ${instanceProfile.userDataDir}`);
+} catch (err) {
+  console.warn('[gacode-electron] setPath userData failed', err);
+}
+
+const guardResult = acquireInstanceLock(instanceProfile.lockFile, { instanceId: INSTANCE_ID });
+if (!guardResult.ok) {
+  // ⇒ 有一个**活着**的实例已经占着这个执行器身份 ⇒ 本实例让位。
+  //   动作：① 通知它把窗口拉到前台；② 自己退出（**不接管设备通道**）。
+  console.log(
+    '[gacode-electron] 已有实例在执行端侧任务（pid=%d, since=%s）⇒ 本实例让位并退出',
+    guardResult.owner.pid,
+    new Date(guardResult.owner.startedAt).toISOString(),
+  );
+  requestFocus(instanceProfile.focusRequestFile, { fromPid: process.pid });
+  app.quit();
+  process.exit(0);
+} else {
+  console.log(
+    '[gacode-electron] 实例锁已获取：%s（profile=%s）',
+    instanceProfile.lockFile,
+    INSTANCE_PROFILE || 'default',
+  );
+}
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   console.log('[gacode-electron] Another instance is already running, quit');
@@ -1016,16 +1079,38 @@ app.whenReady().then(() => {
   // PR1 遗留修复:GPU/cache stderr 噪声。
   // Electron 默认 userData 是 %APPDATA%/Electron,多账户/多 app 共享容易冲突。
   // 切到 %APPDATA%/Gacode 后,Windows 权限 OK + 不再和别的 Electron app 抢 cache 目录。
-  // 必须在 app.whenReady() 内调用,module top-level 不生效。
-  if (process.platform === 'win32') {
-    try {
-      const userDataDir = path.join(app.getPath('appData'), 'Gacode');
-      app.setPath('userData', userDataDir);
-      console.log(`[gacode-electron] userData = ${userDataDir}`);
-    } catch (err) {
-      console.warn('[gacode-electron] setPath userData failed', err);
+  // ★ [T-038] **userData 已在 module level（拿锁之前）setPath 好了** ⇒ 这里不再重复设，
+  //   保证「锁键」与「实际 userData」永远同源（单一真源 = instanceProfile.userDataDir）。
+  console.log(`[gacode-electron] userData 生效 = ${app.getPath('userData')}`);
+
+  // ★ [2026-11-18 · T-038 方案 A] **实例心跳 + 聚焦请求消费**。
+  //   ① 每 30s 续一次锁 ⇒ 崩溃残留的锁会被下一个实例判死并接管；
+  //   ② 后启动者让位时会写「聚焦请求」⇒ 这里把它拉起来。
+  const instanceTimer = setInterval(() => {
+    const alive = heartbeatInstanceLock(instanceProfile.lockFile, INSTANCE_ID);
+    if (!alive) {
+      console.warn('[gacode-electron] 实例锁已不属于本进程（被接管？）⇒ 交还执行权');
+      try { deviceClient.disconnect(); } catch { /* ignore */ }
+      return;
     }
-  }
+    if (consumeFocusRequest(instanceProfile.focusRequestFile)) {
+      console.log('[gacode-electron] 收到让位请求 ⇒ 把窗口拉到前台');
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    }
+  }, INSTANCE_HEARTBEAT_MS);
+  try { (instanceTimer as any).unref?.(); } catch { /* ignore */ }
+
+  // ★ [T-038] 退出时**交还锁 + 断开设备通道** ⇒
+  //   ① 下一个实例能干净接管（不会看到「幽灵 owner」）；
+  //   ② 服务端能立刻知道本机离线（不留残余 SSE 连接）。
+  app.on('will-quit', () => {
+    try { deviceClient.disconnect(); } catch { /* ignore */ }
+    try { releaseInstanceLock(instanceProfile.lockFile, INSTANCE_ID); } catch { /* ignore */ }
+  });
 
   // 图标状态日志（PM 靠这行验证窗口 / 托盘图标，不靠截图）
   logIconStatus();
