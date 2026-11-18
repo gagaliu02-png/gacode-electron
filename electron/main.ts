@@ -29,6 +29,7 @@ import {
   releaseInstanceLock,
   requestFocus,
   consumeFocusRequest,
+  appendYieldLog,
   INSTANCE_HEARTBEAT_MS,
 } from './instance-guard';
 import { deviceClient } from './client-tools/deviceClient';
@@ -161,6 +162,10 @@ if (!guardResult.ok) {
     '[gacode-electron] 已有实例在执行端侧任务（pid=%d, since=%s）⇒ 本实例让位并退出',
     guardResult.owner.pid,
     new Date(guardResult.owner.startedAt).toISOString(),
+  );
+  appendYieldLog(
+    instanceProfile.userDataDir,
+    `让位退出：已有实例 pid=${guardResult.owner.pid} 存活（instanceId=${guardResult.owner.instanceId}）`,
   );
   requestFocus(instanceProfile.focusRequestFile, { fromPid: process.pid });
   app.quit();

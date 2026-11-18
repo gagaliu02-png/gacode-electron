@@ -138,9 +138,12 @@ export function defaultPidAlive(pid: number): boolean {
 /**
  * owner 还活着吗？
  *
- * 判据（两条都算活）：
- *   ① **心跳新鲜**（`now - heartbeatAt <= staleMs`）—— 主口径，跨平台、简单；
- *   ② **pid 还活着** —— 心跳可能因为事件循环被堵而迟到，pid 是硬证据。
+ * ★ [2026-11-18 修正] **主判据 = pid 还在不在**（不是心跳）。
+ *   原来写的是「心跳新鲜 **或** pid 活着 ⇒ 算活」⇒ **刚被 kill 掉的实例心跳还在
+ *   90 秒窗口内** ⇒ 被判成「活着」⇒ **用户「关掉 App 马上重开」会被拒**
+ *   （第二个实例让位退出 ⇒ App 看起来「打不开」；实测踩到了：v0.7.35 起不来就是这个原因）。
+ *   ⇒ 现在：**pid 活着 ⇒ 活着；pid 不在 ⇒ 死了（可被接管）**；
+ *     心跳只作**诊断**（看 owner 是否还活着在刷心跳），不参与判活。
  */
 export function isOwnerAlive(
   owner: LockOwner | null,
@@ -148,10 +151,13 @@ export function isOwnerAlive(
   opts: { staleMs?: number; pidAlive?: (pid: number) => boolean } = {},
 ): boolean {
   if (!owner) return false;
-  const staleMs = opts.staleMs ?? INSTANCE_STALE_MS;
   const pidAlive = opts.pidAlive ?? defaultPidAlive;
-  if (now - owner.heartbeatAt <= staleMs) return true;
-  return pidAlive(owner.pid);
+  // 进程还在 ⇒ 活着（不管心跳多旧）。
+  if (pidAlive(owner.pid)) return true;
+  // 进程不在 ⇒ 死了 ⇒ 可被接管（**心跳新鲜也不算活** —— 见上面的修正说明）。
+  void now;
+  void opts.staleMs;
+  return false;
 }
 
 /** 抢锁的结果。 */
@@ -232,6 +238,25 @@ export function releaseInstanceLock(lockFile: string, instanceId: string): boole
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * 把「让位原因」落盘（**portable launcher 会吞掉子进程 stdout** ⇒ 光打 console 查不到）。
+ *
+ * 落点 = 锁文件旁边：`%APPDATA%\Gacode\instance-yield.log`（一行一条，带时间戳）。
+ */
+export function appendYieldLog(dir: string, line: string): void {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(
+      path.join(dir, "instance-yield.log"),
+      `${new Date().toISOString()} ${line}
+`,
+      "utf8",
+    );
+  } catch {
+    /* ignore —— 诊断用，失败不影响让位 */
   }
 }
 

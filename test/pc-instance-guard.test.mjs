@@ -93,6 +93,23 @@ test('IG-4 owner 心跳过期但 pid 还活着 ⇒ 仍算活（心跳迟到 ≠ 
   assert.equal(b.owner.instanceId, 'inst-A');
 });
 
+test('IG-4b ★ pid 不在了但心跳还新鲜 ⇒ 判死可接管（关掉 App 马上重开不能被拒）', () => {
+  // ★ 2026-11-18 踩坑修正：原来判活是「心跳新鲜 **或** pid 活着」
+  //   ⇒ 刚被 kill 的实例心跳还在 90s 窗口内 ⇒ 被判成活着
+  //   ⇒ 用户「关掉 App 马上重开」时第二个实例让位退出 ⇒ **App 看起来打不开**。
+  // ⇒ 现在主判据 = **pid 还在不在**；心跳只作诊断。
+  const dir = tmpDir();
+  const p = resolveProfile(dir, null);
+  const now = 1_000_000;
+  acquireInstanceLock(p.lockFile, { instanceId: 'inst-A', pid: 111, now });
+  // 心跳**很新鲜**（刚刚才写过），但进程已经不在了
+  const b = acquireInstanceLock(p.lockFile, {
+    instanceId: 'inst-B', pid: 222, now: now + 1_000, pidAlive: () => false,
+  });
+  assert.equal(b.ok, true, 'pid 不在 ⇒ 死了 ⇒ 必须能接管（否则重开 App 会被拒）');
+  assert.equal(readOwner(p.lockFile).instanceId, 'inst-B');
+});
+
 // ── IG-5 / IG-6 ──────────────────────────────────────────────────────────
 test('IG-5 release 只删自己的锁', () => {
   const dir = tmpDir();
@@ -167,10 +184,12 @@ test('IG-10 聚焦请求：写一次消费一次，消费后文件消失', () =>
 });
 
 // ── 判活函数本身 ──────────────────────────────────────────────────────────
-test('isOwnerAlive：null / 心跳新鲜 / 心跳过期+pid死 / 心跳过期+pid活', () => {
+test('isOwnerAlive：★ 主判据 = pid 还在不在（心跳只作诊断）', () => {
   assert.equal(isOwnerAlive(null, 1000), false);
   const owner = { version: 1, pid: 7, instanceId: 'x', startedAt: 0, heartbeatAt: 1000 };
-  assert.equal(isOwnerAlive(owner, 1000 + INSTANCE_STALE_MS - 1, { pidAlive: () => false }), true);
-  assert.equal(isOwnerAlive(owner, 1000 + INSTANCE_STALE_MS + 1, { pidAlive: () => false }), false);
+  // pid 活着 ⇒ 活（不管心跳多旧）
   assert.equal(isOwnerAlive(owner, 1000 + INSTANCE_STALE_MS + 1, { pidAlive: () => true }), true);
+  // pid 不在 ⇒ 死（**心跳新鲜也不算活** —— 刚 kill 掉的那种）
+  assert.equal(isOwnerAlive(owner, 1000, { pidAlive: () => false }), false);
+  assert.equal(isOwnerAlive(owner, 1000 + INSTANCE_STALE_MS + 1, { pidAlive: () => false }), false);
 });
