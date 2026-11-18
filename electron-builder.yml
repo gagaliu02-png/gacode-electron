@@ -147,7 +147,8 @@ directories:
   # 0.7.38: client_msg_id 消息身份 + 「⏫」插队/降级分文案 (T-040/T-041)
   # 0.7.39: 停止键只停当前轮 + 认亲透传 client_msg_id + 渲染层诊断日志 (T-044)
   # 0.7.39-fix1: 能力头竞态 ⇒ 不再「LLM 找不到 Claude Code 工具」
-  output: release-c37-v47
+  # 0.7.41: 能力头用主进程那份 ⇒ pc_cc_* 下发
+  output: release-c38-v48
 
 files:
   - dist/**/*
