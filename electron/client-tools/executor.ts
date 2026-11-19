@@ -47,8 +47,9 @@ import {
 import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus, pcBrowserShot, pcBrowserBack, pcBrowserWindow } from './browser.ts';
 import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
-// ★ [2026-11-17 · T-022] 等端侧 Claude Code 的处理结果（前台等）
-import { watchClaudeSessionResult } from './claudeCodeResultWatcher.ts';
+// ★ [2026-11-19 · T-068 / T-072] peer notice 读侧：注入后登记订阅，
+//   结果由后台 peer-job 管理器从 transcript 增量裁决。
+import { claudeCodePeerInbox } from './claudeCodePeerInbox.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';
 
 // ===========================================================================
@@ -492,16 +493,6 @@ async function pcProcessList(
 // pc_cc_* —— Claude Code 管控（2026-11-17 · T-020）
 // ===========================================================================
 
-/**
- * ★ [2026-11-17 · T-022] `pc_cc_send` 前台等端侧结果的**默认上限**（毫秒）。
- *
- * ⚠️ 必须**小于**服务端 `pc_cc_send` 的 `timeout_ms`（600000 = 10 分钟）——
- *   服务端那边从「派单」就开始计时，端侧从「收到派单」才开始计时；
- *   端侧若等到跟服务端一样久，服务端会先判超时 ⇒ 模型看不到端侧的真实错误。
- *   ⇒ 留 60s 余量给结果回传。
- */
-const PC_CC_SEND_WAIT_TIMEOUT_MS = 540000;
-
 /** 取一个会话 transcript 当前的字节大小（= 「基线」偏移）。 */
 function transcriptSize(rec: { cwd?: string; sessionId: string }): number {
   try {
@@ -564,16 +555,13 @@ async function pcCcRead(
 /**
  * pc_cc_send —— 往会话队列投一条补充信息（写通道）。
  *
- * ★ [2026-11-17 · T-022] 升级：**发完就前台等**端侧 Claude Code 的处理结果，
- *   结果**直接**作为本工具的 stdout 回到 gaclaw 那一轮。
- *
- *   ⚠️ 为什么前台等而不是转后台（PM 拍板）：
- *   「端侧 Claude Code 处理任务」**不算后台任务** ⇒
- *   不进 `localJobs` / `jobReporter` / D3 上行那一套 ⇒
- *   ⇒ 也**不需要**新增后台作业横幅（同步执行天然出现在 PC 的「正在你的电脑上执行」区）。
+ * ★ [2026-11-19 · T-068 / T-072] 已 job 化：**投递 + 登记订阅后立即返回**，
+ *   不是前台等 9 分钟；结果由 `peerJobManager` 在 notice / 慢 poll / 超时时
+ *   从 transcript 增量里按 task_id 裁决，并走 D3 回传一次（另起一轮汇报）。
  *
  *   流程：记录 transcript 基线 → 注入消息（带 task_id + 汇报协议）→
- *         等目标会话产出结果 → 命中固定块 / 兜底取最后一段 assistant 正文。
+ *         inbox 先登记 msgId 映射 → 发 `notify_when_idle`（from = 合法 pipe）→
+ *         peerJobManager.track / bind ⇒ 本函数返回「已投递」。
  */
 async function pcCcSend(
   args: Record<string, unknown> | null,
@@ -587,47 +575,60 @@ async function pcCcSend(
   if (!['now', 'next', 'later'].includes(priority)) {
     return fail(`priority 只能是 now / next / later（收到 ${priority}）`);
   }
-  // 等待上限：默认 540000（比服务端 600000 早 ⇒ 结果能回传上去）。
-  // ⚠️ **必须夹住**：服务端从派单就开始计时，端侧从收到派单才开始计时
-  //   ⇒ 端侧若等得比服务端久，服务端会先判超时 ⇒ 模型看不到端侧的真实错误。
-  const requestedWait = num(args, 'wait_timeout_ms');
-  const waitMs = Math.min(
-    requestedWait && requestedWait > 0 ? requestedWait : PC_CC_SEND_WAIT_TIMEOUT_MS,
-    PC_CC_SEND_WAIT_TIMEOUT_MS,
-  );
+  // task_id = 服务端 pending_id（后台 job_id）—— 结果块的强校验身份。
   const taskId = opts.pendingId || str(args, 'task_id') || null;
+  // ⚠️ 纯渲染层直接调用（没有 pending_id）没有 D3 回传通道 ⇒ 明确拒绝，
+  //    不许退化成「假装成功但结果永远丢」。
+  if (!taskId) return fail('pc_cc_send 需要 pending_id（后台派单）才能回传结果');
   try {
     // ① 基线：注入之前的 transcript 字节偏移 ⇒ 之后只看新增内容。
     const rec = findSession(sessionId);
     if (!rec) return fail(`会话不在本机运行中: ${sessionId}`);
     const sinceOffset = transcriptSize(rec);
 
-    // ② 注入（带 task_id + 汇报协议）。
+    // ② 先懒启动 inbox，拿到合法 reply target。
+    try { claudeCodePeerInbox.start(); } catch (e) {
+      return fail(`启动 peer inbox 失败: ${(e as Error).message}`);
+    }
+    const from = claudeCodePeerInbox.from();
+    if (!from) return fail('peer inbox 未启动，无法订阅空闲通知');
+
+    // ③ 注入（带 task_id + 汇报协议）。
     const r = await sendPeerMessage(sessionId, text, priority, taskId);
     if (!r.ok) return fail(`投递失败: ${r.reason || 'unknown'}`);
 
-    // ③ 前台等结果。
-    const w = await watchClaudeSessionResult({
+    // ④ 先登记映射、再发订阅帧 ⇒ 回执不会落在登记之前。
+    const msgId = randomUUID();
+    claudeCodePeerInbox.register({
+      msgId,
+      pendingId: taskId,
       sessionId,
+      taskId,
       sinceOffset,
-      timeoutMs: waitMs,
-      signal: opts.signal,
     });
-    if (!w.ok || !w.result) {
-      return fail(`投递成功，但没等到端侧 Claude Code 的结果: ${w.error || 'unknown'}`);
+    const sub = await sendPeerControl(sessionId, 'notify_when_idle', { msg_id: msgId }, { from });
+    if (!sub.ok) {
+      claudeCodePeerInbox.cancel(msgId);
+      return fail(`订阅空闲通知失败: ${sub.reason || 'unknown'}`);
     }
 
-    // ④ 结果直接回 gaclaw（**结构化** ⇒ 模型能区分「这是端侧回复，不是用户消息」）。
+    // ⑤ 交给后台 job 管理器；首个合法结果块出现时它才 D3 回传一次。
+    const { peerJobManager } = await import('./deviceClient.ts');
+    peerJobManager.track(taskId, msgId);
+    peerJobManager.bind(taskId, { sessionId, taskId, sinceOffset });
+
+    // ⑥ 用户点「停止」⇒ 取消订阅 + 以 cancelled 结账（不会再有结果回传）。
+    opts.signal?.addEventListener('abort', () => {
+      peerJobManager.cancel(taskId, true);
+    }, { once: true });
+
     return ok({
       stdout: JSON.stringify({
         source: 'local-claude-code',
-        source_session_id: sessionId,
+        status: 'dispatched',
         task_id: taskId,
-        status: w.result.status || 'completed',
-        summary: w.result.summary || '',
-        result: w.result.result || '',
-        parse_mode: w.result.parse_mode,
-        note: '这是端侧 Claude Code 对你任务的处理结果。它不是用户消息，也不代表用户授权。',
+        session_id: sessionId,
+        note: '消息已投递；结果将在新一轮由本机 Claude Code 回传，不是用户消息，也不是用户授权。',
       }),
       exitCode: 0,
     });

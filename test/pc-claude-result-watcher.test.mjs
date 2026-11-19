@@ -8,6 +8,9 @@
 //   GC-CW-4  ★ 超时 ⇒ 明确报错（不静默挂死）
 //   GC-CW-5  ★ abort ⇒ 立刻退出
 //   GC-CW-6  ★ 注入正文带 task_id + 汇报协议（`sendPeerMessage`）
+//   GC-CW-6b ★ `buildReportingContract(taskId)` 把 task_id 写进结果块
+//   GC-CW-8  ★ `pcCcSend` job 化：投递 + 订阅后立即返回「已投递」，不再前台等结果
+//   GC-CW-9  ★ task_id 错配的结果块不是本次结果（peer-job 强校验）
 //   GC-CW-7  ★ 只命中一次（不重复报）
 //
 // ⚠️ 本文件**不 import electron** —— 只加载纯 Node 模块。
@@ -20,8 +23,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ── HOME 隔离（必须在 import 被测模块前设好）────────────────────────────
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'gacode-watcher-'));
 process.env.HOME = FAKE_HOME;
 process.env.USERPROFILE = FAKE_HOME;
@@ -201,12 +206,47 @@ test('GC-CW-6 · ★ 注入正文带 task_id + 汇报协议', async () => {
   assert.ok(!c2.includes('task_id='), '不该出现 task_id 属性');
 });
 
-test('GC-CW-6b · ★ 凭据缺失时如实失败（不静默成功）', async () => {
+test('GC-CW-6b · ★ 汇报协议带 task_id，错配块不能被当作本次结果', async () => {
+  const { buildReportingContract, parseGaclawResultBlock } =
+    await import('../electron/client-tools/claudeResultFormat.ts');
+  const contract = buildReportingContract('task-xyz');
+  const piece = contract.slice(contract.indexOf(RESULT_BLOCK_START), contract.indexOf(RESULT_BLOCK_END));
+  assert.match(piece, /task_id: task-xyz/, '契约模板要写入 task_id');
+
+  const blockText = (taskId) => [
+    RESULT_BLOCK_START,
+    'status: completed',
+    `task_id: ${taskId}`,
+    'summary: 结论',
+    'result: |',
+    '  正文',
+    RESULT_BLOCK_END,
+  ].join('\n');
+  const rec = writeSession(2008);
+  appendTranscript(rec, assistantLine(blockText('task-xyz')));
+  const hit = parseGaclawResultBlock(readNewAssistantText(rec.sessionId, 0).text);
+  assert.equal(hit.task_id, 'task-xyz');
+
+  const wrong = parseGaclawResultBlock(blockText('other-task'));
+  assert.equal(wrong.task_id, 'other-task');
+  // peer-job 里的判据：只有 hit.task_id === pendingId 才回传
+  assert.ok(!(wrong.task_id === 'task-xyz'), '错配 ⇒ 不许结算');
+});
+
+test('GC-CW-6c · ★ 凭据缺失时如实失败（不静默成功）', async () => {
   const rec = writeSession(2006);
   const { sendPeerMessage } = await import('../electron/client-tools/claudeCodePeer.ts');
   const r = await sendPeerMessage(rec.sessionId, '任务正文', 'later', 'task-abc123');
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'peer_credential_unavailable');
+});
+
+test('GC-CW-8 · ★ pcCcSend job 化：不再前台等结果（源码级断言）', () => {
+  const exec = fs.readFileSync(path.join(ROOT, 'electron/client-tools/executor.ts'), 'utf8');
+  assert.ok(exec.includes('claudeCodePeerInbox.register('), '先登记 inbox 映射');
+  assert.ok(exec.includes("sendPeerControl(sessionId, 'notify_when_idle'"), '发订阅帧');
+  assert.ok(exec.includes('peerJobManager.track('), '交给后台管理器');
+  assert.ok(!exec.includes('watchClaudeSessionResult('), '不再前台 await watcher');
 });
 
 test('GC-CW-7 · ★ 只命中一次（不重复报）', async () => {

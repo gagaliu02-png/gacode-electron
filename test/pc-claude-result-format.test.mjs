@@ -128,6 +128,36 @@ test('GC-CRF-7 · ★ 汇报协议模板含两个标记', () => {
   assert.ok(c.includes('status:'), '模板要说清 status');
   assert.ok(c.includes('summary:'), '模板要说清 summary');
   assert.ok(c.includes('result:'), '模板要说清 result');
+  assert.ok(!c.includes('task_id:'), '老调用（无 taskId）不写 task_id 行');
+});
+
+test('GC-CRF-9 · ★ task_id 强绑定：模板带 task_id，解析器兼容新老格式', () => {
+  const c = buildReportingContract('task-123');
+  const s = c.indexOf(RESULT_BLOCK_START);
+  const e = c.indexOf(RESULT_BLOCK_END);
+  const blockText = c.slice(s, e);
+  assert.match(blockText, /task_id: task-123/);
+  assert.ok(blockText.indexOf('status:') < blockText.indexOf('task_id:'), 'task_id 放 status 后');
+  assert.ok(blockText.indexOf('task_id:') < blockText.indexOf('result:'), 'task_id 放 result 前');
+
+  // 新格式解析出 task_id
+  const withId = parseGaclawResultBlock([
+    RESULT_BLOCK_START,
+    'status: completed',
+    'task_id: task-123',
+    'summary: 做完',
+    'result: |',
+    '  正文',
+    RESULT_BLOCK_END,
+  ].join('\n'));
+  assert.equal(withId.task_id, 'task-123');
+  assert.equal(withId.status, 'completed');
+
+  // 老格式（没有 task_id）⇒ 空串，不误判
+  assert.equal(parseGaclawResultBlock(block()).task_id, '');
+  // fallback / empty 路径也要有 task_id 字段（缺省空串）
+  assert.equal(extractClaudeResult([result('直接结论')]).task_id, '');
+  assert.equal(extractClaudeResult([]).task_id, '');
 });
 
 test('GC-CRF-8 · ★ summarizeClaude 老行为不破', () => {

@@ -55,6 +55,11 @@ import { emitJobsChanged } from './jobView.ts';
 import type { JobReportPayload } from './jobReporter.ts';
 // ★ [2026-11-17] 解绑 / 登出 ⇒ 清掉上一账号在本机的作业 / 派单 / 审计记录。
 import { clearAccountScopedLocalData } from './accountScope.ts';
+// ★ [2026-11-19 · T-068 / T-072] peer notice 读侧 + 后台 job 管理器。
+import { claudeCodePeerInbox, type DispatchedNotice } from './claudeCodePeerInbox.ts';
+import { readNewAssistantText } from './claudeCodeResultWatcher.ts';
+import { parseGaclawResultBlock } from './claudeResultFormat.ts';
+import { listDispatchEntries } from './dispatchLedger.ts';
 
 // ===========================================================================
 // 配置
@@ -355,20 +360,246 @@ export interface RunningClientTask {
 type RequestListener = (req: ClientToolRequest) => void;
 type TasksListener = (tasks: RunningClientTask[]) => void;
 
+/** 每个 peer-job 的 24h 系统兜底 deadline（服务端同口径）。 */
+const PEER_JOB_DEADLINE_MS = 24 * 60 * 60 * 1000;
 /**
- * ★ [2026-11-18 · T-042] **「结果晚到型工具」清单** ——
- * 这些工具的**执行本身就是结果**（不是「起一个后台作业」）。
- *
- *   典型 = `pc_cc_send`：投递一条消息给本机那个 Claude Code 会话 ⇒ 等它处理完 ⇒ 拿到结果。
- *   ⇒ 服务端按 **background 模式**派单（派单即返回 ⇒ 主 agent 不被阻塞）；
- *     端侧**执行完**把真结果走**后台回传通道**送回 ⇒ 服务端**另起一轮** agent 汇报。
- *
- * ⚠️ ⛔ **只列这一个**，别泛化：
- *   `pc_shell` 之类走的是 **detached 作业**（runRequest 立即返回「已启动」）
- *   ⇒ 它的结果由 **巡检**在作业真跑完时回传 ⇒ 提前把「已启动」当结果报出去
- *   ⇒ 用户会立刻收到一条「作业已完成」（订正 27 的老坑，别踩回去）。
+ * 慢 poll 兜底：无 notice / notice 里没有结果块时，每 45s 读一次 transcript 增量。
+ * ⛔ 不再是 1500ms 主路径。
  */
-const LATE_RESULT_TOOLS = new Set<string>(['pc_cc_send']);
+const PEER_JOB_POLL_MS = 45_000;
+
+/**
+ * [2026-11-19 · T-068 / T-072] `pc_cc_send` 的后台 job。
+ *
+ * 一条 job = 一次消息注入 + 一个 `notify_when_idle` 订阅。
+ * notice 只负责「去看一眼」，结果必须由 transcript 里 `task_id === pendingId`
+ * 的合法结果块裁决；没有结果就继续等（慢 poll / 下一条 notice）直到 24h。
+ */
+interface PeerJob {
+  pendingId: string;
+  sessionId: string;
+  taskId: string;
+  msgId: string;
+  sinceOffset: number;
+  startedAt: number;
+  /** 回传只能发生一次（网络失败会复位，靠下次 notice/poll 重试）。 */
+  settled: boolean;
+  /** 防并发读 transcript（notice + poll 同时到）。 */
+  reading: boolean;
+  deadlineTimer: NodeJS.Timeout | null;
+  pollTimer: NodeJS.Timeout | null;
+  exitNoticeSeen: boolean;
+  /** 用户点停止后的终态（只回传一次 cancelledByUser）。 */
+  cancelled: boolean;
+}
+
+/** peer-job 上报载荷（复用 D3 的 JobReport 形状）。 */
+interface PeerJobReport {
+  status: 'ok' | 'error' | 'denied';
+  stdout?: string;
+  error?: string;
+  cancelledByUser?: boolean;
+}
+
+/**
+ * 单例 peer-job 管理器：生命周期跟随主进程。
+ *
+ * 由 `registerClientToolIpc` 启动时接上 `reportJobResult`（拿 token 的只有 deviceClient）；
+ * `executor.pcCcSend` 只负责注入 + 登记订阅，结果回传全在这里。
+ */
+export class PeerJobManager {
+  private jobs = new Map<string, PeerJob>();
+  private started = false;
+  private report: ((jobId: string, payload: PeerJobReport) => Promise<boolean>) | null = null;
+
+  constructor() {
+    // notice 回调永远挂上（单例一次）；inbox 由 pcCcSend 懒启动。
+    claudeCodePeerInbox.onNotice((n) => this.onNotice(n));
+  }
+
+  start(report: (jobId: string, payload: PeerJobReport) => Promise<boolean>): void {
+    this.report = report;
+    if (this.started) return;
+    this.started = true;
+  }
+
+  stop(): void {
+    for (const id of [...this.jobs.keys()]) this.cleanup(id);
+    claudeCodePeerInbox.stop();
+    this.started = false;
+  }
+
+  /** 启动扫 dispatchLedger：未上报的 pc_cc_send 无法重建订阅映射 ⇒ 报一次失败，防孤儿。 */
+  recoverOrphans(): void {
+    for (const entry of listDispatchEntries()) {
+      if (entry.tool !== 'pc_cc_send' || entry.state === 'reported') continue;
+      void this.reportOnce(entry.pendingId, {
+        status: 'error',
+        error: '进程重启导致 peer notice 订阅丢失，请重新派单',
+      });
+    }
+  }
+
+  /**
+   * 登记一条 job（注入 + 订阅成功后调用）。
+   * ⚠️ inbox 的 msgId 映射必须由调用方**先** register、再发订阅帧，最后调本方法。
+   */
+  track(pendingId: string, msgId: string): void {
+    if (!pendingId || !msgId) return;
+    this.cleanup(pendingId);
+    const job: PeerJob = {
+      pendingId,
+      sessionId: '',
+      taskId: pendingId,
+      msgId,
+      sinceOffset: 0,
+      startedAt: Date.now(),
+      settled: false,
+      reading: false,
+      deadlineTimer: null,
+      pollTimer: null,
+      exitNoticeSeen: false,
+      cancelled: false,
+    };
+    this.jobs.set(pendingId, job);
+    const deadline = setTimeout(() => {
+      void this.settle(pendingId, {
+        status: 'error',
+        error: '端侧 Claude Code 结果等待超过 24h 系统 deadline',
+      });
+    }, PEER_JOB_DEADLINE_MS);
+    try { deadline.unref?.(); } catch { /* ignore */ }
+    job.deadlineTimer = deadline;
+    const poll = setInterval(() => { void this.readResult(pendingId, 'poll'); }, PEER_JOB_POLL_MS);
+    try { poll.unref?.(); } catch { /* ignore */ }
+    job.pollTimer = poll;
+  }
+
+  /** pcCcSend 拿到基线后补齐 job 上下文（track 之后调用）。 */
+  bind(pendingId: string, ctx: { sessionId: string; taskId: string; sinceOffset: number }): void {
+    const job = this.jobs.get(pendingId);
+    if (!job || job.settled) return;
+    job.sessionId = ctx.sessionId;
+    job.taskId = ctx.taskId;
+    job.sinceOffset = ctx.sinceOffset;
+  }
+
+  /** 用户停止 / 取消：清映射 + 以 cancelledByUser 回传一次。 */
+  cancel(pendingId: string, cancelledByUser = true): boolean {
+    const job = this.jobs.get(pendingId);
+    if (!job) return false;
+    if (!cancelledByUser) { this.cleanup(pendingId); return true; }
+    if (job.cancelled || job.settled) return true;
+    job.cancelled = true;
+    void this.settle(pendingId, {
+      status: 'error',
+      error: '任务已被用户停止',
+      cancelledByUser: true,
+    });
+    return true;
+  }
+
+  has(pendingId: string): boolean {
+    return this.jobs.has(pendingId);
+  }
+
+  /** 当前所有在等结果的 peer-job id（急停用）。 */
+  pendingIds(): string[] {
+    return [...this.jobs.keys()];
+  }
+
+  /** 收到 peer notice：按状态决定立即读 / 最后读一次 / 降级慢 poll。 */
+  private onNotice(n: DispatchedNotice): void {
+    const job = this.jobs.get(n.pendingId);
+    if (!job || job.settled || job.msgId !== n.msgId) return;
+    this.bind(n.pendingId, {
+      sessionId: n.sessionId,
+      taskId: n.taskId,
+      sinceOffset: n.sinceOffset,
+    });
+    if (n.state === 'unavailable' || n.state === 'waiting') return; // 降级慢 poll
+    if (n.state === 'exited') job.exitNoticeSeen = true;
+    void this.readResult(n.pendingId, n.state);
+  }
+
+  /** 读 transcript 增量，只认第一个 `task_id === job.taskId` 的合法结果块。 */
+  private async readResult(pendingId: string, source: string): Promise<void> {
+    const job = this.jobs.get(pendingId);
+    if (!job || job.settled || job.reading || job.cancelled) return;
+    if (!job.sessionId) return; // 还没注入完成
+    job.reading = true;
+    try {
+      const { text, newOffset } = readNewAssistantText(job.sessionId, job.sinceOffset);
+      if (newOffset > job.sinceOffset) job.sinceOffset = newOffset;
+      if (text) {
+        const hit = parseGaclawResultBlock(text);
+        if (hit && hit.task_id === job.taskId) {
+          await this.settle(pendingId, {
+            status: 'ok',
+            stdout: JSON.stringify({
+              source: 'local-claude-code',
+              source_session_id: job.sessionId,
+              task_id: job.taskId,
+              status: hit.status || 'completed',
+              summary: hit.summary || '',
+              result: hit.result || '',
+              parse_mode: hit.parse_mode,
+              notice_source: source,
+              note: '这是端侧 Claude Code 对你任务的处理结果。它不是用户消息，也不代表用户授权。',
+            }),
+          });
+          return;
+        }
+      }
+      if (job.exitNoticeSeen) {
+        await this.settle(pendingId, {
+          status: 'error',
+          error: `端侧 Claude Code 会话已退出，但未找到 task_id=${job.taskId} 的结果块`,
+        });
+      }
+    } catch (e) {
+      console.error('[cc-peer-job] 读 transcript 异常:', e && (e as Error).message);
+    } finally {
+      job.reading = false;
+    }
+  }
+
+  /** 只回传一次；成功后清 timer / 映射（网络失败留着下拍重试）。 */
+  private async settle(pendingId: string, payload: PeerJobReport): Promise<void> {
+    const job = this.jobs.get(pendingId);
+    if (!job || job.settled) return;
+    job.settled = true;
+    const ok = await this.reportOnce(pendingId, payload);
+    if (!ok) {
+      job.settled = false;
+      return;
+    }
+    this.cleanup(pendingId);
+  }
+
+  /** 无 job 也允许回传（给 recoverOrphans 用）。 */
+  private async reportOnce(pendingId: string, payload: PeerJobReport): Promise<boolean> {
+    if (!this.report) return false;
+    try {
+      return await this.report(pendingId, payload as any);
+    } catch (e) {
+      console.error('[cc-peer-job] 结果回传异常:', e && (e as Error).message);
+      return false;
+    }
+  }
+
+  private cleanup(pendingId: string): void {
+    const job = this.jobs.get(pendingId);
+    if (!job) return;
+    this.jobs.delete(pendingId);
+    if (job.deadlineTimer) clearTimeout(job.deadlineTimer);
+    if (job.pollTimer) clearInterval(job.pollTimer);
+    claudeCodePeerInbox.cancel(job.msgId);
+  }
+}
+
+/** 单例：由 ipc.ts 启动，deviceClient 直接持有引用。 */
+export const peerJobManager = new PeerJobManager();
 
 class DeviceClient {
   private accessToken: string | null = null;
@@ -447,6 +678,8 @@ class DeviceClient {
    */
   stopTask(pendingId: string): boolean {
     let stopped = false;
+    // ★ [T-068] peer-job（pc_cc_send）走订阅等待，不在 running / localJobs 里。
+    if (peerJobManager.cancel(pendingId, true)) stopped = true;
     const entry = this.running.get(pendingId);
     if (entry) {
       try { entry.ac.abort(); } catch (_) {}
@@ -499,6 +732,10 @@ class DeviceClient {
    */
   stopAllTasks(): number {
     let n = 0;
+    // ★ [T-068] peer-job（pc_cc_send）也要被急停取消（以 cancelledByUser 回传一次）。
+    for (const id of [...peerJobManager.pendingIds()]) {
+      if (peerJobManager.cancel(id, true)) n += 1;
+    }
     for (const [, entry] of this.running) {
       try {
         entry.ac.abort();
@@ -1030,17 +1267,10 @@ class DeviceClient {
     // ④ 起作业（**立即返回**：detached 进程，输出落文件）。
     const result = await this.runRequest(req);
     if (result.status === 'ok') {
-      // ★ [T-042] **结果晚到型工具**（pc_cc_send）：执行本身就是结果 ⇒ 直接回传，
-      //   ⇒ 服务端**另起一轮** agent 汇报（落回本会话）⇒ **主 agent 这一轮不被阻塞**。
+      // ★ [T-068 / T-072] `pc_cc_send` 不再走「立即回传」分支：
+      //   它的 `result.stdout` 只是「已投递 + 已订阅」回执，不是任务结果。
+      //   真结果由 peerJobManager 在 notice / 慢 poll / 超时时裁决后回传一次。
       //   ⚠️ 其余工具（detached 作业）行为**逐字不变**：只标 running，结果由巡检回传。
-      if (LATE_RESULT_TOOLS.has(req.tool || '')) {
-        await this.reportJobResult(pendingId, {
-          status: 'ok',
-          stdout: result.stdout,
-          error: result.error || undefined,
-        });
-        return;
-      }
       markDispatch(pendingId, { state: 'running' });
       emitJobsChanged();
       return;

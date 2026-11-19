@@ -54,13 +54,26 @@
 export const TURN_STARTED_HINT_TITLE_FALLBACK = "新对话";
 
 /**
- * 提示正文（系统通知 / 提示条都用这一句）。
+ * 提示正文（系统通知 / 提示条都用这一句；F-fix 按 reason 分流）。
  *
  * ⚠️ **不是**聊天气泡 ⇒ 不进消息流、不进历史 ⇒ 刷新后不会重复。
  *   ⛔ 也**不是**「（后台任务XXX已完成）」那种本地插入的气泡（服务端已经写了
  *      user 行 ⇒ 本地再插 ⇒ 刷新后重复）。
  */
-export const TURN_STARTED_HINT_BODY = "后台任务回报已到达，正在继续处理";
+export const TURN_STARTED_HINT_BODY_WORK_UNIT = "后台任务回报已到达，正在继续处理";
+export const TURN_STARTED_HINT_BODY_AGENT_MESSAGE = "Agent 消息已到达，正在继续处理";
+export const TURN_STARTED_HINT_BODY_CRON = "定时任务已触发，正在继续处理";
+
+/** `agent_message` ⛔ 不说「后台任务回报已到达」。 */
+export function turnStartedHintBody(reason?: string | null): string {
+  if (reason === "agent_message") return TURN_STARTED_HINT_BODY_AGENT_MESSAGE;
+  if (reason === "cron") return TURN_STARTED_HINT_BODY_CRON;
+  if (reason === "work_unit_result") return TURN_STARTED_HINT_BODY_WORK_UNIT;
+  return "有新消息到达，正在继续处理"; // 未知 reason 兼容
+}
+
+/** 老名字保留（兼容既有引用）。 */
+export const TURN_STARTED_HINT_BODY = TURN_STARTED_HINT_BODY_WORK_UNIT;
 
 /** `turn_started` 帧里本模块用得上的那部分载荷（其余字段原样带过，不碰）。 */
 export interface TurnStartedHintInput {
@@ -70,7 +83,7 @@ export interface TurnStartedHintInput {
   inboxId?: string | null;
   /** 后台作业 id —— 本模块**不用**。 */
   jobId?: string | null;
-  /** 起轮原因 —— 当前固定 `"work_unit_result"`。 */
+  /** 起轮原因 —— `work_unit_result` / `agent_message` / `cron`（F-fix 按 reason 分流文案）。 */
   reason?: string | null;
 }
 
@@ -140,7 +153,7 @@ export function buildTurnStartedHint(
   return {
     sessionId,
     title,
-    body: TURN_STARTED_HINT_BODY,
+    body: turnStartedHintBody(input?.reason),
     target: turnStartedHintTarget(sessionId),
   };
 }

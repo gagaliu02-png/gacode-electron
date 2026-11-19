@@ -138,6 +138,36 @@ test("GC-P30-S1c normalizeTurnStarted: 缺 sessionId ⇒ null（没法路由 ⇒
   assert.equal(normalizeTurnStarted({ sessionId: 123 }), null);
 });
 
+test("[T-073] parseNotificationEvent 能解出 reason=agent_message (不按 reason 过滤)", () => {
+  const ev = parseNotificationEvent(
+    JSON.stringify({
+      type: "turn_started",
+      turnStarted: {
+        sessionId: "sess-agent",
+        inboxId: "inbox-agent",
+        jobId: "",
+        reason: "agent_message",
+      },
+    }),
+  );
+  assert.equal(ev.type, "turn_started", "agent_message 也必须解成 turn_started");
+  assert.equal(ev.turnStarted.reason, "agent_message");
+  assert.equal(ev.turnStarted.sessionId, "sess-agent");
+});
+
+test("[T-073] 未知 reason 仍兼容 (原样透传, 不阻断帧)", () => {
+  for (const reason of ["cron", "some_future_kind", ""]) {
+    const ev = parseNotificationEvent(
+      JSON.stringify({
+        type: "turn_started",
+        turnStarted: { sessionId: "s", reason },
+      }),
+    );
+    assert.equal(ev.type, "turn_started", `reason=${reason} 不能阻断帧解析`);
+    assert.equal(ev.turnStarted.reason, reason);
+  }
+});
+
 // ===========================================================================
 // GC-P30-S2 · 未知 type 仍返回 unknown（老端不崩）
 // ===========================================================================

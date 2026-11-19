@@ -24,6 +24,7 @@
  *     ```text
  *     ===GACLAW_RESULT_START===
  *     status: completed|partial|failed
+ *     task_id: <可选的裁决身份>
  *     summary: 一句话结论
  *     result: |
  *       最终结果正文，可多行
@@ -54,6 +55,8 @@ export type ResultParseMode =
 export interface ExtractedClaudeResult {
   /** 抓到了吗？ */
   found: boolean;
+  /** 结果块里的 task_id（老格式没有 ⇒ 空串）。 */
+  task_id: string;
   /** 结果块里的 status（没有则空串）。 */
   status: 'completed' | 'partial' | 'failed' | '';
   /** 结果块里的 summary（没有则空串）。 */
@@ -65,7 +68,8 @@ export interface ExtractedClaudeResult {
 }
 
 /** 汇报协议模板（工具层自动追加到任务末尾）。 */
-export function buildReportingContract(): string {
+export function buildReportingContract(taskId?: string | null): string {
+  const taskIdLine = taskId ? `task_id: ${String(taskId)}` : null;
   return [
     '',
     '',
@@ -74,12 +78,13 @@ export function buildReportingContract(): string {
     '',
     RESULT_BLOCK_START,
     'status: completed|partial|failed',
+    ...(taskIdLine ? [taskIdLine] : []),
     'summary: 一句话结论（不超过 100 字）',
     'result: |',
     '  最终结果正文，可多行。写清楚做了什么、结论是什么、用户还需要做什么。',
     RESULT_BLOCK_END,
     '',
-    '⚠️ 上面三行 `status:` / `summary:` / `result:` 的缩进与冒号请照抄；',
+    '⚠️ 上面几行 `status:`' + (taskIdLine ? ' / `task_id:`' : '') + ' / `summary:` / `result:` 的缩进与冒号请照抄；',
     '⚠️ 不要在结果块之外再重复一遍结论。',
   ].join('\n');
 }
@@ -96,6 +101,7 @@ export function parseGaclawResultBlock(text: string): ExtractedClaudeResult | nu
   const lines = body.split(/\r?\n/);
 
   let status = '';
+  let taskId = '';
   let summary = '';
   const resultLines: string[] = [];
   let inResult = false;
@@ -108,6 +114,10 @@ export function parseGaclawResultBlock(text: string): ExtractedClaudeResult | nu
         if (status === 'ok' || status === 'success' || status === 'done') status = 'completed';
         if (status === 'partial_success' || status === 'partial') status = 'partial';
         if (status === 'error' || status === 'failure' || status === 'fail') status = 'failed';
+        continue;
+      }
+      if (/^task_id\s*[:：]/i.test(t)) {
+        taskId = t.replace(/^task_id\s*[:：]\s*/i, '').trim();
         continue;
       }
       if (/^summary\s*[:：]/i.test(t)) {
@@ -133,6 +143,7 @@ export function parseGaclawResultBlock(text: string): ExtractedClaudeResult | nu
 
   return {
     found: true,
+    task_id: taskId,
     status: status === 'partial' || status === 'failed' ? status : 'completed',
     summary,
     result: result || summary,
@@ -188,6 +199,7 @@ export function extractClaudeResult(
     if (t) {
       return {
         found: true,
+        task_id: '',
         status: (resultEvent as any).isError ? 'failed' : 'completed',
         summary: '',
         result: t.length > maxChars ? t.slice(0, maxChars - 1) + '…' : t,
@@ -205,6 +217,7 @@ export function extractClaudeResult(
     const last = assistantTexts[assistantTexts.length - 1].trim();
     return {
       found: true,
+      task_id: '',
       status: 'completed',
       summary: '',
       result: last.length > maxChars ? last.slice(0, maxChars - 1) + '…' : last,
@@ -215,6 +228,7 @@ export function extractClaudeResult(
   // ④ 什么都没有
   return {
     found: false,
+    task_id: '',
     status: '',
     summary: '',
     result: '',

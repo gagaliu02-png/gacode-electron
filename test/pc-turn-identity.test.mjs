@@ -90,10 +90,38 @@ test("A3 帧不是对象 / null ⇒ 读出空值 (不抛)", () => {
   assert.equal(readFrameOrigin("nope"), null);
 });
 
-test("A4 origin 只认服务端约定的两个值 ⇒ 别的值一律 null (端侧不猜)", () => {
+test("A4 origin 只认服务端约定的三个值 ⇒ 别的值一律 null (端侧不猜)", () => {
   assert.equal(readFrameOrigin({ origin: "user" }), "user");
   assert.equal(readFrameOrigin({ origin: "work_unit_result" }), "work_unit_result");
+  assert.equal(readFrameOrigin({ origin: "agent_message" }), "agent_message");
+  assert.equal(readFrameOrigin({ origin: "cron" }), null); // cron 是 reason 值，不是帧 origin
   assert.equal(readFrameOrigin({ origin: "whatever" }), null);
+});
+
+test("A5 [T-073] agent_message ⇒ 机器起轮但不是后台任务", () => {
+  const { isMachineTurnOrigin } = TI;
+  assert.equal(isMachineTurnOrigin("work_unit_result"), true);
+  assert.equal(isMachineTurnOrigin("agent_message"), true);
+  assert.equal(isMachineTurnOrigin("cron"), true);
+  assert.equal(isMachineTurnOrigin("user"), false);
+  assert.equal(isMachineTurnOrigin(null), false);
+  assert.equal(isMachineTurnOrigin(undefined), false);
+});
+
+test("A6 [T-073] ⛔ agent_message 不得触发后台任务横幅 (横幅只由 pending-work 驱动)", () => {
+  const code = repoCode("src/routes/ChatDetail.tsx");
+  assert.ok(
+    /count=\{sessionBackgroundWork\.length\}/.test(code),
+    "后台横幅的 count 必须来自 sessionBackgroundWork (server pending-work + 本机作业)",
+  );
+  assert.ok(
+    !/agent_message[\s\S]{0,80}(setPendingWork|localJobs|BackgroundWorkBanner)/.test(code),
+    "⛔ agent_message 不许出现在任何后台任务状态/横幅的赋值路径上",
+  );
+  assert.ok(
+    code.includes("isMachineTurnOrigin(claim.origin)"),
+    "机器起轮刷 history 必须走 isMachineTurnOrigin (含 agent_message)",
+  );
 });
 
 // ===========================================================================
@@ -233,6 +261,17 @@ test("D1 metadata.source === 'work_unit_result' ⇒ 系统注记 (老服务端�
 
 test("D2 metadata.skip_transcript === true ⇒ 系统注记 (新服务端两个都有)", () => {
   assert.equal(isSystemNoticeMetadata({ skip_transcript: true }), true);
+});
+
+test("D2b [F-fix] 所有机器来源都是系统注记", () => {
+  for (const source of ["work_unit_result", "agent_message", "cron"]) {
+    assert.equal(isSystemNoticeMetadata({ source }), true, `source=${source}`);
+    assert.equal(
+      isSystemNoticeMetadata(JSON.stringify({ source })),
+      true,
+      `JSON 字符串 source=${source}`,
+    );
+  }
 });
 
 test("D3 两个都有 ⇒ 系统注记 (或关系)", () => {

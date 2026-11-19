@@ -181,7 +181,12 @@ export interface TurnStartedInfo {
   inboxId: string;
   /** 后台作业 id —— 未知时是**空字符串**（不是 null/undefined）。 */
   jobId: string;
-  /** 起轮原因 —— 当前固定 `"work_unit_result"`（将来可能有别的起轮原因）。 */
+  /**
+   * 起轮原因 —— 服务端下发实际 kind：
+   *   `work_unit_result` / `agent_message` / `cron` / 未知(兼容保留)。
+   *
+   * ⛔ `agent_message` 是普通 agent 协作/失败提示，**不触发**后台任务横幅。
+   */
   reason: string;
 }
 

@@ -104,6 +104,7 @@ import { usePersistentSubscribe } from "../lib/chat-subscribe";
 import {
   claimPersistentFrame,
   emptyPersistentTurnState,
+  isMachineTurnOrigin,
   type PersistentTurnState,
 } from "../lib/sse/turn-identity";
 import { notifyAiReplyArrived } from "../lib/chat-notifications";
@@ -2669,10 +2670,11 @@ export function ChatDetail() {
             streamingTurnKeyRef.current = claim.state.turnKey;
             setStreamingTurnKey(claim.state.turnKey);
           }
-          // 机器起的一轮（后台作业回报）⇒ 服务端**自己写了**一条 user 行
-          //   （系统注记）⇒ 刷一次历史让那行立刻出现。
+          // 服务端起的一轮（后台作业回报 / agent 消息 / 定时任务）⇒ 服务端**自己写了**
+          //   一条 user 行（系统注记）⇒ 刷一次历史让那行立刻出现。
           //   ⛔ 端侧**不合成**它（契约 §4.2 · 只渲染服务端写的那行）。
-          if (claim.origin === "work_unit_result") {
+          //   ⛔ `agent_message` **不触发**后台任务横幅 / 计数（那是 pending-work API 驱动的）。
+          if (isMachineTurnOrigin(claim.origin)) {
             queryClient.invalidateQueries({ queryKey: ["history", chatId] });
           }
         }

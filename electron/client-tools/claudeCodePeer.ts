@@ -204,7 +204,7 @@ export function buildPeerMessageContent(text: string, taskId?: string | null): s
   return (
     `<cross-session-message from="uds:gaclaw"${attrs}>\n` +
     `${body}\n` +
-    `${buildReportingContract()}\n` +
+    `${buildReportingContract(taskId)}\n` +
     `</cross-session-message>`
   );
 }
@@ -244,13 +244,16 @@ export async function sendPeerControl(
   sessionId: string,
   action: PeerControlAction,
   extra: Record<string, unknown> = {},
+  opts: { from?: string | null } = {},
 ): Promise<{ ok: boolean; reason?: string; session_id?: string }> {
   if (!CONTROL_ACTIONS.has(action)) {
     return { ok: false, reason: 'unsupported_action:' + String(action) };
   }
   const rec = findSession(sessionId);
   if (!rec) return { ok: false, reason: 'session_not_live' };
-  const frame = { type: 'control', action, ...extra };
+  const frame: Record<string, unknown> = { type: 'control', action, ...extra };
+  // ★ [T-068] notify_when_idle 必须带合法 reply target；其余控制动作维持原状（不带 from）。
+  if (opts.from !== undefined && opts.from !== null) frame.from = opts.from;
   const r = await sendFrame(rec, frame);
   return { ...r, session_id: sessionId };
 }
