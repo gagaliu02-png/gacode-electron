@@ -1167,7 +1167,7 @@ class DeviceClient {
     if (stdout && shotUrls.length) {
       try {
         const parsed = JSON.parse(stdout);
-        if (parsed && parsed.tool === 'pc_browser_shot' && parsed.upload) {
+        if (parsed && (parsed.tool === 'pc_browser_shot' || parsed.tool === 'pc_screenshot') && parsed.upload) {
           const t = Date.now();
           const timings = {
             ...(parsed.upload.timings || {}),
@@ -1192,7 +1192,7 @@ class DeviceClient {
       if (stdout) {
         try {
           const parsed = JSON.parse(stdout);
-          if (parsed && parsed.tool === 'pc_browser_shot' && parsed.upload) {
+          if (parsed && (parsed.tool === 'pc_browser_shot' || parsed.tool === 'pc_screenshot') && parsed.upload) {
             const t = Date.now();
             parsed.upload = {
               ...parsed.upload, status: 'failed', url: '', error: errorMessage,

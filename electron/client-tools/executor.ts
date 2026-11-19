@@ -316,6 +316,7 @@ async function pcScreenshot(
 ): Promise<ClientToolResult> {
   const savePath = str(args, 'save_path');
   const display = str(args, 'display');
+  const shotId = randomUUID();
   try {
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
@@ -330,7 +331,7 @@ async function pcScreenshot(
     const png = src.thumbnail.toPNG();
     const target = savePath
       ? path.resolve(cwd || '', savePath)
-      : path.join(cwd || os.tmpdir(), `gacode-screenshot-${Date.now()}.png`);
+      : path.join(cwd || os.tmpdir(), `gacode-screenshot-${Date.now()}-${shotId}.png`);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, png);
     const artifact: ClientToolArtifact = {
@@ -348,6 +349,13 @@ async function pcScreenshot(
     return ok({
       stdout: JSON.stringify({
         tool: 'pc_screenshot',
+        shotId,
+        // T-063: full-screen screenshots use the same upload tri-state as pc_browser_shot.
+        // deviceClient.uploadArtifacts fills status/url after the PNG is uploaded.
+        upload: {
+          shotId, status: 'pending', url: '', saved: target,
+          timings: { t_capture: Date.now() },
+        },
         coordinate_system: 'screen',
         display: {
           index: displayIndex,
