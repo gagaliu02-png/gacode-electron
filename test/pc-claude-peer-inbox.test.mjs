@@ -157,3 +157,61 @@ test('PI-5 · auth 错误 ⇒ 立刻关连接；stop 关 server + 删 key + 清�
   assert.equal(real.from(), null);
   assert.equal(real.size, 0);
 });
+
+// ── [T-069] 诊断订阅 ─────────────────────────────────────────────────
+
+test('PI-6 · registerDiagnostic / getDiagnostic：诊断映射可查、taskId/pendingId 固定', () => {
+  const { box } = makeInbox();
+  const reg = box.registerDiagnostic('diag-1', 'sess-x', 123);
+  assert.deepEqual(reg, {
+    msgId: 'diag-1', sessionId: 'sess-x', taskId: 'diagnostic', pendingId: 'diagnostic', sinceOffset: 123,
+  });
+  assert.deepEqual(box.getDiagnostic('diag-1'), reg);
+  assert.deepEqual(box.getRegistration('diag-1'), reg);
+  assert.equal(box.getDiagnostic('nope'), null);
+  assert.equal(box.size, 1);
+  box.cancel('diag-1');
+  assert.equal(box.getDiagnostic('diag-1'), null);
+});
+
+test('PI-7 · 诊断 notice 只记日志、不回传 D3；普通 job 映射照常分派', () => {
+  const keys = [];
+  const { box, server, socket } = makeInbox({ writeKeyFile: (_f, c) => keys.push(c) });
+  const notices = [];
+  box.onNotice((n) => notices.push(n));
+
+  // 诊断订阅
+  box.registerDiagnostic('diag-1', 'sess-diag', 0);
+  // 普通 job 订阅
+  box.register({ msgId: 'job-1', pendingId: 'task-1', sessionId: 'sess-job', taskId: 'task-1', sinceOffset: 50 });
+
+  // 捕获 console.log
+  const logs = [];
+  const origLog = console.log;
+  console.log = (...args) => { logs.push(args.join(' ')); };
+  try {
+    server.emit('connection', socket);
+    const token = JSON.parse(keys[0]).peerToken;
+    feed(socket, JSON.stringify({ type: 'auth', token }) + '\n');
+    feed(socket, JSON.stringify({
+      action: 'peer_idle_notice', orig_msg_id: 'diag-1', state: 'idle', detail: 'probe',
+    }) + '\n');
+    feed(socket, JSON.stringify({
+      action: 'peer_idle_notice', orig_msg_id: 'job-1', state: 'idle', detail: 'work',
+    }) + '\n');
+  } finally {
+    console.log = origLog;
+  }
+
+  // 诊断 notice 不触发 noticeHandler；普通 job 触发一次
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].pendingId, 'task-1');
+  assert.equal(notices[0].taskId, 'task-1');
+
+  // 诊断日志含 orig_msg_id / state / detail
+  const diagLog = logs.find((l) => l.includes('[cc-peer-inbox] diagnostic notice'));
+  assert.ok(diagLog, '必须打印诊断 notice 日志');
+  assert.match(diagLog, /"orig_msg_id":"diag-1"/);
+  assert.match(diagLog, /"state":"idle"/);
+  assert.match(diagLog, /"detail":"probe"/);
+});

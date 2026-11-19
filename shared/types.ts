@@ -314,6 +314,44 @@ export interface RunningClientTask {
 }
 
 /**
+ * ★ [T-088] 后台工作单元的**统一状态机**（与 unified `background-work-status.js` 逐字对齐）。
+ *
+ *   · 活跃态（横幅可显示）：`queued` / `running` / `result_ready` / `returning`；
+ *   · 终态（横幅必须消失）：`succeeded` / `failed` / `return_failed` /
+ *     `cancelled_by_user` / `lost` / `settled`。
+ *
+ * ⚠️ 本机作业表（`localJobs.ts`）历史上只有 `queued/running/reported/failed/cancelled`，
+ *   这里把 `return_failed` / `lost` / `settled` 也纳入 `LocalJobInfo.status`，
+ *   渲染层据此把失败/断链/被打断的作业从「还在跑」里剔掉（历史列表仍可见）。
+ */
+export type BackgroundWorkStatus =
+  | 'queued'
+  | 'running'
+  | 'result_ready'
+  | 'returning'
+  | 'succeeded'
+  | 'failed'
+  | 'return_failed'
+  | 'cancelled_by_user'
+  | 'lost'
+  | 'settled';
+
+/** 终态集合（唯一真值 —— 渲染层 / 巡检 / 停止路径共用）。 */
+export const TERMINAL_BACKGROUND_STATUSES: ReadonlySet<string> = new Set([
+  'succeeded',
+  'failed',
+  'return_failed',
+  'cancelled_by_user',
+  'lost',
+  'settled',
+]);
+
+/** 判一个状态是不是终态（横幅必须消失）。 */
+export function isTerminalBackgroundStatus(status: unknown): boolean {
+  return typeof status === 'string' && TERMINAL_BACKGROUND_STATUSES.has(status);
+}
+
+/**
  * ★ [2026-11-13 · 订正 27 · B5] 一条**本机后台作业**（给 UI 看）。
  *
  * ⚠️ 与 `RunningClientTask` 是**两回事**：
@@ -327,8 +365,28 @@ export interface LocalJobInfo {
   serviceId: string;
   /** 人类可读名字（`Claude Code` / `普通命令`）。 */
   title: string;
-  /** 三态：`running`（在跑）/ `reported`（已回传，完事）/ `cancelled`（被用户停了）/ `failed`。 */
-  status: 'queued' | 'running' | 'reported' | 'failed' | 'cancelled';
+  /**
+   * 状态（★ [T-088] 统一状态机）。
+   *   · 活跃：`queued` / `running` / `result_ready` / `returning`
+   *   · 终态：`reported`(=succeeded) / `failed` / `return_failed` /
+   *     `cancelled`(=cancelled_by_user) / `lost` / `settled`
+   *
+   * ⚠️ 老字段 `reported` / `cancelled` 是本机作业的旧名字，仍保留给历史记录；
+   *   `isTerminalBackgroundStatus()` 只认统一名字 ⇒ 视图层先把旧名归一。
+   */
+  status:
+    | 'queued'
+    | 'running'
+    | 'result_ready'
+    | 'returning'
+    | 'reported'
+    | 'succeeded'
+    | 'failed'
+    | 'return_failed'
+    | 'cancelled'
+    | 'cancelled_by_user'
+    | 'lost'
+    | 'settled';
   /** 开始跑的时刻（epoch ms）。 */
   startedAt: number;
   /** 结束时刻（没结束为 null）。 */

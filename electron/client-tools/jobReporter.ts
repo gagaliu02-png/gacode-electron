@@ -37,7 +37,7 @@
 import * as fs from 'fs';
 import { getCliService } from './cliService.ts';
 import type { CliEvent, CliService } from './cliService.ts';
-import { listJobs, markJobReported, updateJob } from './localJobs.ts';
+import { listJobs, markJobReported, updateJob, isTerminalJobStatus } from './localJobs.ts';
 import type { LocalJob } from './localJobs.ts';
 import { pollJob } from './jobRunner.ts';
 import { markDispatchReported } from './dispatchLedger.ts';
@@ -182,9 +182,18 @@ export function buildJobReport(
  *    「用户喊停」的作业状态是 `cancelled`（不是 `reported`），
  *    但它已经被回传过了（`stopTask` 报的是「作业已被用户停止」）
  *    ⇒ 用 `reportedAt` 兜住，**免得报两遍**。
+ *
+ * ★ [T-088] 终态（`return_failed` / `cancelled_by_user` / `lost` / `settled` /
+ *    `succeeded` / `failed`）一律不再巡检 —— 横幅消失、巡检也不再重试。
  */
 export function jobsPendingReport(): LocalJob[] {
-  return listJobs().filter((j) => j && j.status !== 'reported' && !j.reportedAt);
+  return listJobs().filter(
+    (j) =>
+      j &&
+      !isTerminalJobStatus(j.status) &&
+      j.status !== 'reported' &&
+      !j.reportedAt,
+  );
 }
 
 // ===========================================================================

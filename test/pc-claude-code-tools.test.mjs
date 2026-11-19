@@ -190,6 +190,16 @@ test('GC-CC-09b · 会话不在本机运行 ⇒ 如实报 session_not_live', asy
   assert.equal(r.reason, 'session_not_live');
 });
 
+test('GC-CC-09c · [T-069] sendPeerControl 支持显式 from 覆盖（源码级断言）', () => {
+  const src = fs.readFileSync(path.join(process.cwd(), 'electron/client-tools/claudeCodePeer.ts'), 'utf8');
+  // opts.from 参数存在
+  assert.match(src, /opts:\s*\{\s*from\?:/);
+  // 显式设置到 frame.from（不破坏 rename/peer_message_status：只在有值时才设）
+  assert.match(src, /if \(opts\.from !== undefined && opts\.from !== null\) frame\.from = opts\.from/);
+  // from 只在显式传入时设置 ⇒ rename/peer_message_status 默认不带 from
+  assert.match(src, /const frame: Record<string, unknown> = \{ type: 'control', action, \.\.\.extra \}/);
+});
+
 test('GC-CC-10 · 能力串：声明 claude-code=1 才多一个键（老串逐字不变）', () => {
   assert.equal(
     buildCapabilityString({ pty: true, job: true, browser: true }),

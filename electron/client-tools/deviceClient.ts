@@ -39,12 +39,13 @@ import type {
 import { assertAllowed, appendAudit, summarizeCommand } from './gate';
 import { executeClientTool } from './executor';
 import { stopAllJobs, stopJobById } from './jobRunner.ts';
-import { getJob, listUnreportedJobs, markJobReported, updateJob } from './localJobs.ts';
+import { getJob, listUnreportedJobs, markJobReported, markJobTerminal, updateJob } from './localJobs.ts';
 import {
   decideBackgroundDispatch,
   getDispatchEntry,
   markDispatch,
   markDispatchReported,
+  listDispatchEntries,
 } from './dispatchLedger.ts';
 import { buildCapabilityString, probeJobExecutor } from './jobCapability.ts';
 // [2026-11-15 · 订正 31 · M0.5] 浏览器池接线状态 ⇒ 决定要不要声明 browser=1
@@ -59,7 +60,12 @@ import { clearAccountScopedLocalData } from './accountScope.ts';
 import { claudeCodePeerInbox, type DispatchedNotice } from './claudeCodePeerInbox.ts';
 import { readNewAssistantText } from './claudeCodeResultWatcher.ts';
 import { parseGaclawResultBlock } from './claudeResultFormat.ts';
-import { listDispatchEntries } from './dispatchLedger.ts';
+// ★ [T-088] 后台任务失败/断链/用户打断 ⇒ 统一机器事件出口。
+import {
+  emitMachineEvent,
+  type MachineEventContext,
+  type MachineEventDeps,
+} from './machineEvents.ts';
 
 // ===========================================================================
 // 配置
@@ -368,6 +374,97 @@ const PEER_JOB_DEADLINE_MS = 24 * 60 * 60 * 1000;
  */
 const PEER_JOB_POLL_MS = 45_000;
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ★ [T-088] 机器事件统一出口（session-inbox + channel-status + 本机 outbox）
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** 主进程的机器事件依赖（token / deviceId / fetch 都从 deviceClient 单例拿）。 */
+function machineEventDeps(client: DeviceClient): MachineEventDeps {
+  return {
+    apiBase,
+    accessToken: () => client.getAccessToken(),
+    deviceId: () => getDeviceId(),
+    // ★ reply_to 可用时把 channel-status 注记也写进目标 CC 会话（best-effort）。
+    writeChannelStatus: async (sessionId, notice) => {
+      // 延迟 import 避免顶层循环（claudeCodePeer → deviceClient 在 executor 里用）。
+      try {
+        const peer = await import('./claudeCodePeer.ts');
+        const r = await peer.sendPeerMessage(sessionId, notice, 'later', null);
+        return r.ok;
+      } catch (e) {
+        console.warn('[t088] 写 channel-status 失败:', e && (e as Error).message);
+        return false;
+      }
+    },
+  };
+}
+
+/**
+ * 从派单 / 作业记录里取机器事件上下文。
+ * ⚠️ `sessionId` 缺失 ⇒ 不发（`buildMachineEvent` 会返回 null）—— 宁可少发，不发错会话。
+ */
+function eventContextFromDispatch(
+  pendingId: string,
+  reason: string | null,
+): MachineEventContext {
+  const entry = getDispatchEntry(pendingId);
+  const job = getJob(pendingId);
+  return {
+    sessionId: job?.sessionId || null,
+    pendingId,
+    tool: entry?.tool || job?.serviceId || null,
+    title: null,
+    reason,
+  };
+}
+
+/**
+ * ★ 终态落账 + 机器事件（横幅立刻消失）。
+ *
+ * · `return_failed` / `cancelled_by_user` 是终态 ⇒ 本机作业 + 派单账一起推到终态；
+ * · `emitJobsChanged()` 通知渲染层重画（不等轮询）；
+ * · 机器事件经 `/devices/cc/messages` 投进 session-inbox（固定身份、不冒用户）；
+ * · outbox 落盘 ⇒ 重连后可补发。
+ */
+async function settleWithMachineEvent(
+  client: DeviceClient,
+  pendingId: string,
+  kind: 'return_failed' | 'cancelled_by_user',
+  reason: string | null,
+  ctx?: MachineEventContext,
+): Promise<void> {
+  // ① 清本机账（横幅立即消失，历史列表保留）。
+  markJobTerminal(pendingId, kind, reason || undefined);
+  markDispatch(pendingId, { state: 'reported', error: reason || kind });
+  emitJobsChanged();
+  // ② 机器事件（会话缺失 ⇒ 静默跳过，只落本机账）。
+  const context = ctx || eventContextFromDispatch(pendingId, reason);
+  try {
+    await emitMachineEvent(machineEventDeps(client), kind, context);
+  } catch (e) {
+    console.warn('[t088] 机器事件投递异常:', e && (e as Error).message);
+  }
+}
+
+/** D3 失败的**稳定**分类（给日志 / 说明句一个不变的 reason 字符串）。 */
+type ResultFailureReason =
+  | 'HTTP_401'
+  | 'HTTP_404'
+  | 'TASK_NOT_FOUND'
+  | 'HTTP_5xx'
+  | 'HTTP_OTHER'
+  | 'NETWORK_ERROR';
+
+function classifyD3Failure(status: number, bodyText: string): ResultFailureReason {
+  if (status === 401) return 'HTTP_401';
+  if (status === 404) {
+    return /TASK_NOT_FOUND/i.test(bodyText) ? 'TASK_NOT_FOUND' : 'HTTP_404';
+  }
+  if (status >= 500) return 'HTTP_5xx';
+  if (status > 0) return 'HTTP_OTHER';
+  return 'NETWORK_ERROR';
+}
+
 /**
  * [2026-11-19 · T-068 / T-072] `pc_cc_send` 的后台 job。
  *
@@ -391,6 +488,10 @@ interface PeerJob {
   exitNoticeSeen: boolean;
   /** 用户点停止后的终态（只回传一次 cancelledByUser）。 */
   cancelled: boolean;
+  /** ★ [T-088] 业务会话（机器事件投递目标）。 */
+  businessSessionId: string | null;
+  /** ★ [T-088] 回复目标（用于 channel-status 注记 / 主动补回）。 */
+  replyTo: MachineEventContext['replyTo'] | null;
 }
 
 /** peer-job 上报载荷（复用 D3 的 JobReport 形状）。 */
@@ -436,6 +537,13 @@ export class PeerJobManager {
       void this.reportOnce(entry.pendingId, {
         status: 'error',
         error: '进程重启导致 peer notice 订阅丢失，请重新派单',
+      }).then((ok) => {
+        // 无 reporter（未接线）⇒ reportJobResult 不会跑 ⇒ 本地补终态 + 机器事件；
+        // 有 reporter 但失败时它已经发过（同 idempotencyKey 幂等）。
+        if (!ok && !this.report) {
+          void settleWithMachineEvent(deviceClient, entry.pendingId, 'return_failed',
+            '进程重启导致 peer notice 订阅丢失，回传失败');
+        }
       });
     }
   }
@@ -460,6 +568,8 @@ export class PeerJobManager {
       pollTimer: null,
       exitNoticeSeen: false,
       cancelled: false,
+      businessSessionId: null,
+      replyTo: null,
     };
     this.jobs.set(pendingId, job);
     const deadline = setTimeout(() => {
@@ -484,13 +594,41 @@ export class PeerJobManager {
     job.sinceOffset = ctx.sinceOffset;
   }
 
-  /** 用户停止 / 取消：清映射 + 以 cancelledByUser 回传一次。 */
+  /**
+   * ★ [T-088] 补上业务会话 + reply_to（pcCcSend 拿到派单 args 后调用）。
+   * ⚠️ 可多次调用：后来的非空值覆盖前面的空值（bind notice 先到时不会丢）。
+   */
+  bindBusinessContext(
+    pendingId: string,
+    ctx: { sessionId?: string | null; replyTo?: MachineEventContext['replyTo'] | null },
+  ): void {
+    const job = this.jobs.get(pendingId);
+    if (!job || job.settled) return;
+    if (ctx.sessionId) job.businessSessionId = String(ctx.sessionId);
+    if (ctx.replyTo) job.replyTo = ctx.replyTo;
+  }
+
+  /** 用户停止 / 取消：清映射 + 以 cancelledByUser 回传一次 + 发机器事件。 */
   cancel(pendingId: string, cancelledByUser = true): boolean {
     const job = this.jobs.get(pendingId);
     if (!job) return false;
     if (!cancelledByUser) { this.cleanup(pendingId); return true; }
     if (job.cancelled || job.settled) return true;
     job.cancelled = true;
+    // ★ [T-088] 用户打断 ⇒ 机器事件（cancelled_by_user），清横幅。
+    void emitMachineEvent(machineEventDeps(deviceClient), 'cancelled_by_user', {
+      sessionId: job.businessSessionId || eventContextFromDispatch(pendingId, null).sessionId,
+      pendingId,
+      tool: 'pc_cc_send',
+      reason: '用户停止了端侧 Claude Code 任务',
+      replyTo: job.replyTo,
+    }).catch((e) => {
+      console.warn('[t088] cancelled_by_user 事件失败:', e && (e as Error).message);
+    });
+    // 本机账也推到终态（横幅立即消失，历史列表保留）。
+    markJobTerminal(pendingId, 'cancelled_by_user', '任务已被用户停止');
+    markDispatch(pendingId, { state: 'reported', error: '任务已被用户停止' });
+    emitJobsChanged();
     void this.settle(pendingId, {
       status: 'error',
       error: '任务已被用户停止',
@@ -572,6 +710,26 @@ export class PeerJobManager {
     const ok = await this.reportOnce(pendingId, payload);
     if (!ok) {
       job.settled = false;
+      // ★ [T-088] 无 reporter（未接线）⇒ 本地补一次终态 + 机器事件；
+      //   有 reporter 但回传失败时 reportJobResult 已发过（同 idempotencyKey 幂等）。
+      if (!this.report) {
+        const reason = payload.cancelledByUser
+          ? '用户停止了端侧 Claude Code 任务'
+          : (payload.error || '端侧 Claude Code 结果回传失败');
+        await settleWithMachineEvent(
+          deviceClient,
+          pendingId,
+          payload.cancelledByUser ? 'cancelled_by_user' : 'return_failed',
+          reason,
+          {
+            sessionId: job.businessSessionId || eventContextFromDispatch(pendingId, reason).sessionId,
+            pendingId,
+            tool: 'pc_cc_send',
+            reason,
+            replyTo: job.replyTo,
+          },
+        );
+      }
       return;
     }
     this.cleanup(pendingId);
@@ -679,16 +837,28 @@ class DeviceClient {
   stopTask(pendingId: string): boolean {
     let stopped = false;
     // ★ [T-068] peer-job（pc_cc_send）走订阅等待，不在 running / localJobs 里。
+    //   ⚠️ PeerJobManager.cancel 内部已发 cancelled_by_user 机器事件 ⇒ 不重复发。
     if (peerJobManager.cancel(pendingId, true)) stopped = true;
     const entry = this.running.get(pendingId);
     if (entry) {
       try { entry.ac.abort(); } catch (_) {}
       stopped = true;
+      // ★ [T-088] 同步任务被用户打断 ⇒ 发机器事件（有 sessionId 才发）。
+      void emitMachineEvent(machineEventDeps(this), 'cancelled_by_user', {
+        sessionId: entry.task.sessionId,
+        pendingId,
+        tool: entry.task.tool,
+        reason: '用户停止了正在执行的任务',
+      }).catch((e) => {
+        console.warn('[t088] cancelled_by_user 事件失败:', e && (e as Error).message);
+      });
     }
     // ★ 后台作业：按 pid 杀进程树。
     const job = stopJobById(pendingId);
     if (job.stopped) {
       stopped = true;
+      // ★ [T-088] 用户打断后台作业 ⇒ 终态 + 机器事件（横幅立刻消失，不自动重派）。
+      void settleWithMachineEvent(this, pendingId, 'cancelled_by_user', '作业已被用户停止');
       // 打断的结果**要回传** —— 否则服务端要等 24h 超时才知道作业没了。
       // ⚠️ 已经回传过的不许再回传（服务端会回 409 ⇒ 制造噪音）。
       if (!job.job || !job.job.reportedAt) {
@@ -708,12 +878,16 @@ class DeviceClient {
    *   服务端据此**只结账、不起轮汇报**（否则用户点了停止、任务却「还在回报」）。
    */
   private async reportJobStopped(jobId: string, message: string): Promise<void> {
-    const ok = await this.uploadResult(jobId, {
+    const upload = await this.uploadResult(jobId, {
       status: 'error',
       error: message,
       cancelledByUser: true,
     });
-    if (!ok) return;
+    if (!upload.ok) {
+      // ★ [T-088] 用户已停但回传失败 ⇒ 终态仍是 cancelled_by_user（横幅立刻消失）。
+      await settleWithMachineEvent(this, jobId, 'cancelled_by_user', `${upload.reason || 'D3_FAILED'}: ${message}`);
+      return;
+    }
     updateJob(jobId, { reportedAt: Date.now(), summary: message });
     markDispatchReported(jobId, message);
   }
@@ -740,6 +914,15 @@ class DeviceClient {
       try {
         entry.ac.abort();
         n += 1;
+        // ★ [T-088] 用户急停 ⇒ 每条同步任务都发 cancelled_by_user 机器事件。
+        void emitMachineEvent(machineEventDeps(this), 'cancelled_by_user', {
+          sessionId: entry.task.sessionId,
+          pendingId: entry.task.pendingId,
+          tool: entry.task.tool,
+          reason: '用户急停了所有任务',
+        }).catch((e) => {
+          console.warn('[t088] cancelled_by_user 事件失败:', e && (e as Error).message);
+        });
       } catch (_) { /* 杀不掉就算了 —— 闸门已经挡住后续派单 */ }
     }
     // ★ 后台作业（detached）—— 不在 this.running 里 ⇒ 单独杀。
@@ -750,6 +933,8 @@ class DeviceClient {
       const r = stopJobById(job.id);
       if (r.stopped) {
         n += 1;
+        // ★ [T-088] 终态 + 机器事件（横幅立刻消失，不自动重派）。
+        void settleWithMachineEvent(this, job.id, 'cancelled_by_user', '作业已被用户停止（急停）');
         void this.reportJobStopped(job.id, '作业已被用户停止（急停）');
       }
     }
@@ -1290,16 +1475,29 @@ class DeviceClient {
   /**
    * ★ [2026-11-13 · 订正 27 · B6] 把一个后台作业的**结果**回传给服务端（D3）。
    *
-   * @returns 服务端收下了吗（`false` = 还没收下 ⇒ 巡检下一拍再试）
+   * ★ [T-088] 回传失败（非 200/409/404、网络异常、401、TASK_NOT_FOUND）：
+   *   · 标记 `return_failed` 终态（横幅立刻消失，历史列表保留）；
+   *   · 清本机 dispatch/running 账；
+   *   · 经 session-inbox 发 `return_failed` 机器事件（不冒用户气泡）；
+   *   · 若 reply_to 可用，写 `<channel-status state="broken">` + 本机 outbox。
+   *
+   * @returns 服务端收下了吗（`false` = 本次未收下）
    */
   async reportJobResult(jobId: string, payload: JobReportPayload): Promise<boolean> {
-    const ok = await this.uploadResult(jobId, {
+    const upload = await this.uploadResult(jobId, {
       status: payload.status,
       stdout: payload.stdout,
       error: payload.error,
       exitCode: payload.exitCode,
     });
-    if (!ok) return false;
+    if (!upload.ok) {
+      // ★ [T-088] 用户主动停止的作业回传失败 ⇒ 终态仍是 cancelled_by_user（不是 return_failed）。
+      const kind = payload.cancelledByUser ? 'cancelled_by_user' : 'return_failed';
+      const reason = `${upload.reason || 'D3_FAILED'}: ${payload.error || '结果未能送达服务端'}`;
+      logDevice(`[T-088] 作业结果回传失败: ${jobId}（${reason}）⇒ ${kind}`);
+      await settleWithMachineEvent(this, jobId, kind, reason);
+      return false;
+    }
     // 「已上报」⇒ 这条派单彻底完事（重连补推不会再起一个）。
     markJobReported(jobId, payload.stdout || payload.error || undefined);
     markDispatchReported(jobId, payload.error || null);
@@ -1535,12 +1733,15 @@ ${note}` : note,
   /**
    * D3 结果上行。
    *
-   * @returns 服务端收下了吗
-   *   · `true`  = 200（已送达）
-   *   · `true`  = **409**（这条派单已经结过 ⇒ 幂等，不必再试）
-   *   · `false` = 其它错误（网络 / 5xx）⇒ **可以重试**
+   * ★ [T-088] 返回结构化结果（不再只 boolean）—— 失败分类由 `classifyD3Failure` 给出：
+   *   · `ok:true`  = 200（已送达）或 409（已结过，幂等成功）
+   *   · `ok:false` = 其它（网络 / 401 / 404 / TASK_NOT_FOUND / 5xx）
+   *     ⇒ 调用方统一标 `return_failed` + 发机器事件 + 清横幅。
    */
-  private async uploadResult(pendingId: string, result: ClientToolResult): Promise<boolean> {
+  private async uploadResult(
+    pendingId: string,
+    result: ClientToolResult,
+  ): Promise<{ ok: boolean; reason?: string }> {
     try {
       const res = await fetch(`${apiBase()}/devices/tasks/${encodeURIComponent(pendingId)}/result`, {
         method: 'POST',
@@ -1551,21 +1752,22 @@ ${note}` : note,
         },
         body: JSON.stringify({ deviceId: this.deviceId, ...result }),
       });
-      if (res.ok) return true;
+      if (res.ok) return { ok: true };
       // 409 = 别人已经结过了（L-25n）⇒ 收工，不重试。
       if (res.status === 409) {
         logDevice(`结果已结过（409），收工: ${pendingId}`);
-        return true;
+        return { ok: true };
       }
-      // 其它错误 ⇒ 记一条，靠去重表防止重复执行（但结果没回去 —— 下次重连会补推）。
+      // 其它错误 ⇒ 分类后交调用方标终态（横幅不许残留）。
       const text = await res.text().catch(() => '');
-      this.lastError = `结果上行失败 ${res.status}: ${text.slice(0, 200)}`;
+      const reason = classifyD3Failure(res.status, text);
+      this.lastError = `结果上行失败 ${res.status} (${reason}): ${text.slice(0, 200)}`;
       console.warn('[client-tools/device] 结果上行失败:', this.lastError);
-      return false;
+      return { ok: false, reason };
     } catch (e) {
       this.lastError = (e as Error).message;
       console.warn('[client-tools/device] 结果上行异常:', this.lastError);
-      return false;
+      return { ok: false, reason: 'NETWORK_ERROR' };
     }
   }
 }

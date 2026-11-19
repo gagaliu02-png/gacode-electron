@@ -47,9 +47,12 @@ import {
 import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus, pcBrowserShot, pcBrowserBack, pcBrowserWindow } from './browser.ts';
 import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
+import type { PeerReplyTo } from './claudeResultFormat.ts';
 // ★ [2026-11-19 · T-068 / T-072] peer notice 读侧：注入后登记订阅，
 //   结果由后台 peer-job 管理器从 transcript 增量裁决。
 import { claudeCodePeerInbox } from './claudeCodePeerInbox.ts';
+// [T-069] 诊断日志：走 peerLog ⇒ 生产落 client-tools.log，单测只 console。
+import { peerLog } from './peerLog.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';
 
 // ===========================================================================
@@ -553,19 +556,53 @@ async function pcCcRead(
 }
 
 /**
+ * [T-086] 从 args 读 reply-to（字段名以服务端为准，带容错别名）。
+ * 服务端契约字段：`reply_to_business_session_id` / `reply_to_cc_session_id` / `reply_channel`。
+ * 容错：camelCase、嵌套 `reply_to` 对象、`session_id` 简写。
+ */
+function readPeerReplyTo(args: Record<string, unknown> | null): PeerReplyTo | null {
+  if (!args) return null;
+  const nested = args.reply_to && typeof args.reply_to === 'object' && !Array.isArray(args.reply_to)
+    ? args.reply_to as Record<string, unknown>
+    : null;
+  const pick = (...keys: string[]): string => {
+    for (const key of keys) {
+      const direct = str(args, key);
+      if (direct) return direct;
+      if (nested) {
+        const inner = str(nested, key);
+        if (inner) return inner;
+      }
+    }
+    return '';
+  };
+  const business_session_id = pick(
+    'reply_to_business_session_id', 'replyToBusinessSessionId',
+    'business_session_id', 'businessSessionId',
+  );
+  const cc_session_id = pick(
+    'reply_to_cc_session_id', 'replyToCcSessionId',
+    'cc_session_id', 'ccSessionId',
+  );
+  const channel = pick('reply_channel', 'replyChannel');
+  if (!business_session_id && !cc_session_id && !channel) return null;
+  return { business_session_id, cc_session_id, channel };
+}
+
+/**
  * pc_cc_send —— 往会话队列投一条补充信息（写通道）。
  *
  * ★ [2026-11-19 · T-068 / T-072] 已 job 化：**投递 + 登记订阅后立即返回**，
  *   不是前台等 9 分钟；结果由 `peerJobManager` 在 notice / 慢 poll / 超时时
  *   从 transcript 增量里按 task_id 裁决，并走 D3 回传一次（另起一轮汇报）。
  *
- *   流程：记录 transcript 基线 → 注入消息（带 task_id + 汇报协议）→
+ *   流程：记录 transcript 基线 → 注入消息（带 task_id + reply-to + 汇报协议）→
  *         inbox 先登记 msgId 映射 → 发 `notify_when_idle`（from = 合法 pipe）→
  *         peerJobManager.track / bind ⇒ 本函数返回「已投递」。
  */
 async function pcCcSend(
   args: Record<string, unknown> | null,
-  opts: { signal?: AbortSignal; pendingId?: string | null } = {},
+  opts: { signal?: AbortSignal; pendingId?: string | null; sessionId?: string | null } = {},
 ): Promise<ClientToolResult> {
   const sessionId = str(args, 'session_id');
   const text = str(args, 'text');
@@ -580,6 +617,8 @@ async function pcCcSend(
   // ⚠️ 纯渲染层直接调用（没有 pending_id）没有 D3 回传通道 ⇒ 明确拒绝，
   //    不许退化成「假装成功但结果永远丢」。
   if (!taskId) return fail('pc_cc_send 需要 pending_id（后台派单）才能回传结果');
+  // [T-086] reply-to：服务端透传的回信地址，写进注入消息供端侧主动回信使用。
+  const replyTo = readPeerReplyTo(args);
   try {
     // ① 基线：注入之前的 transcript 字节偏移 ⇒ 之后只看新增内容。
     const rec = findSession(sessionId);
@@ -593,8 +632,8 @@ async function pcCcSend(
     const from = claudeCodePeerInbox.from();
     if (!from) return fail('peer inbox 未启动，无法订阅空闲通知');
 
-    // ③ 注入（带 task_id + 汇报协议）。
-    const r = await sendPeerMessage(sessionId, text, priority, taskId);
+    // ③ 注入（带 task_id + reply-to + 汇报协议）。
+    const r = await sendPeerMessage(sessionId, text, priority, taskId, replyTo);
     if (!r.ok) return fail(`投递失败: ${r.reason || 'unknown'}`);
 
     // ④ 先登记映射、再发订阅帧 ⇒ 回执不会落在登记之前。
@@ -616,6 +655,20 @@ async function pcCcSend(
     const { peerJobManager } = await import('./deviceClient.ts');
     peerJobManager.track(taskId, msgId);
     peerJobManager.bind(taskId, { sessionId, taskId, sinceOffset });
+    // ★ [T-088] 补上业务会话 + reply_to（用于断链时写 channel-status / 主动补回）。
+    const replyArgs = args?.reply_to || args?.replyTo;
+    const machineReplyTo = replyArgs && typeof replyArgs === 'object'
+      ? {
+          taskId: typeof (replyArgs as any).task_id === 'string' ? (replyArgs as any).task_id : null,
+          ccSessionId: typeof (replyArgs as any).cc_session_id === 'string' ? (replyArgs as any).cc_session_id : null,
+          businessSessionId: typeof (replyArgs as any).business_session_id === 'string' ? (replyArgs as any).business_session_id : null,
+          channel: typeof (replyArgs as any).channel === 'string' ? (replyArgs as any).channel : null,
+        }
+      : null;
+    peerJobManager.bindBusinessContext(taskId, {
+      sessionId: opts.sessionId || null, // ★ 业务会话（= 发起这次派单的 gacode session）
+      replyTo: machineReplyTo,
+    });
 
     // ⑥ 用户点「停止」⇒ 取消订阅 + 以 cancelled 结账（不会再有结果回传）。
     opts.signal?.addEventListener('abort', () => {
@@ -653,17 +706,46 @@ async function pcCcControl(
     return ok({ stdout: JSON.stringify({ status: 'renamed', session_id: sessionId, name }), exitCode: 0 });
   }
   if (action === 'notify_when_idle') {
-    // 订阅「我空闲时通知你」—— 回执地址用本会话的 inbox
+    // [T-069] 订阅「我空闲时通知你」—— 登记诊断映射到 inbox，拿合法 reply target。
+    let from: string;
+    const msgId = randomUUID();
+    try {
+      claudeCodePeerInbox.start();
+      const replyTarget = claudeCodePeerInbox.from();
+      if (!replyTarget) return fail('peer inbox 未启动，无法订阅空闲通知');
+      from = replyTarget;
+    } catch (e) {
+      return fail(`启动 peer inbox 失败: ${(e as Error).message}`);
+    }
+    // 先登记诊断映射（notice 只记日志，不回传 D3），再发订阅帧。
+    const sinceOffset = (() => {
+      try {
+        const rec = findSession(sessionId);
+        return rec ? transcriptSize(rec) : 0;
+      } catch { return 0; }
+    })();
+    const diag = claudeCodePeerInbox.registerDiagnostic(msgId, sessionId, sinceOffset);
+    peerLog('cc-control', 'notify_when_idle subscribe ' + JSON.stringify({
+      msg_id: msgId,
+      from,
+      session_id: sessionId,
+      task_id: diag.taskId,
+    }));
     const r = await sendPeerControl(sessionId, 'notify_when_idle', {
-      from: 'uds:gaclaw',
-      msg_id: randomUUID(),
-    });
-    if (!r.ok) return fail(`订阅空闲通知失败: ${r.reason || 'unknown'}`);
+      from,
+      msg_id: msgId,
+    }, { from });
+    if (!r.ok) {
+      claudeCodePeerInbox.cancel(msgId);
+      return fail(`订阅空闲通知失败: ${r.reason || 'unknown'}`);
+    }
     return ok({
       stdout: JSON.stringify({
         status: 'subscribed',
         session_id: sessionId,
-        note: '已请求该会话在空闲时回notice；回执走它自己的 peer 通道。',
+        msg_id: msgId,
+        from,
+        note: '已登记诊断订阅；该会话空闲时回的 notice 只记日志、不触发 D3 回传。合成 notice 可用 msg_id 定向注入。',
       }),
       exitCode: 0,
     });
@@ -703,10 +785,8 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   // [2026-11-17 · T-020] Claude Code 管控端侧工具
   pc_cc_sessions: 30000,
   pc_cc_read: 60000,
-  // ★ [2026-11-17 · T-022] `pc_cc_send` 现在**前台等**端侧 Claude Code 的结果
-  //   ⇒ 端侧默认值 540000（比服务端 600000 早 60s ⇒ 结果能回传上去，
-  //   模型看到的是端侧的真实错误而不是「没回话」）。
-  pc_cc_send: 540000,
+  // [T-086] reply-to 只写进注入消息；不另起一轮汇报 ⇒ 工作队列需覆盖整个 24h 等待窗口。
+  pc_cc_send: 24 * 60 * 60 * 1000,
   pc_cc_control: 30000,
 };
 
@@ -781,7 +861,7 @@ export async function executeClientTool(
     // [2026-11-17 · T-020] Claude Code 管控
     case 'pc_cc_sessions': return pcCcSessions(args);
     case 'pc_cc_read': return pcCcRead(args);
-    case 'pc_cc_send': return pcCcSend(args, { signal, pendingId: opts?.pendingId ?? null });
+    case 'pc_cc_send': return pcCcSend(args, { signal, pendingId: opts?.pendingId ?? null, sessionId: opts?.sessionId ?? null });
     case 'pc_cc_control': return pcCcControl(args);
     default:
       return fail(`未知的端侧工具: ${tool}`);

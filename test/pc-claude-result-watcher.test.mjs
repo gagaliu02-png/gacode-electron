@@ -206,6 +206,41 @@ test('GC-CW-6 · ★ 注入正文带 task_id + 汇报协议', async () => {
   assert.ok(!c2.includes('task_id='), '不该出现 task_id 属性');
 });
 
+test('GC-CW-6d · ★ [T-086] reply-to 写进 cross-session-message 属性 + 汇报协议', async () => {
+  const { buildPeerMessageContent } = await import('../electron/client-tools/claudeCodePeer.ts');
+  const c = buildPeerMessageContent('任务正文', 'task-abc123', {
+    business_session_id: 'biz-sess-42',
+    cc_session_id: 'cc-sess-77',
+    channel: 'pc',
+  });
+  assert.match(c, /<cross-session-message from="uds:gaclaw" task_id="task-abc123" reply_to_business_session_id="biz-sess-42" reply_to_cc_session_id="cc-sess-77" reply_channel="pc">/,
+    '三个 reply-to 属性必须按顺序写进注入消息');
+  assert.ok(c.includes('使用 reply_to 提供的 session_id / channel') && c.includes('不要猜 session_id'),
+    '汇报协议要明确使用 reply_to、不许猜 session_id');
+  assert.ok(c.includes(RESULT_BLOCK_START) && c.includes(RESULT_BLOCK_END), '结果块协议仍在');
+  assert.match(c, /<\/cross-session-message>$/, '仍要闭合');
+
+  // 老调用（无 replyTo）兼容：属性与文案都不出现
+  const old = buildPeerMessageContent('任务正文', 'task-abc123');
+  assert.ok(!old.includes('reply_to_'), '老格式不带 reply-to 属性');
+  assert.ok(!old.includes('reply_to 提供'), '老格式不带 reply-to 指引');
+  assert.match(old, /<cross-session-message from="uds:gaclaw" task_id="task-abc123">/, '老格式 tag 不变');
+});
+
+test('GC-CW-6e · ★ [T-086] reply-to 部分字段也安全（转义 + 无空属性）', async () => {
+  const { buildPeerMessageContent } = await import('../electron/client-tools/claudeCodePeer.ts');
+  const c = buildPeerMessageContent('任务正文', null, {
+    business_session_id: 'biz "<>&\n inject',
+  });
+  assert.match(c, /<cross-session-message from="uds:gaclaw" reply_to_business_session_id="bizinject">/,
+    '危险字符被清洗，不破坏 XML 属性');
+  assert.ok(!c.includes('reply_to_cc_session_id='), '未给的字段不写空属性');
+  assert.ok(!c.includes('reply_channel='), '未给的字段不写空属性');
+
+  const empty = buildPeerMessageContent('任务正文', null, {});
+  assert.match(empty, /<cross-session-message from="uds:gaclaw">/, '空 replyTo ⇒ 老格式');
+});
+
 test('GC-CW-6b · ★ 汇报协议带 task_id，错配块不能被当作本次结果', async () => {
   const { buildReportingContract, parseGaclawResultBlock } =
     await import('../electron/client-tools/claudeResultFormat.ts');

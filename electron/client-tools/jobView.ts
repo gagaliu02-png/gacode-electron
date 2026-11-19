@@ -19,7 +19,7 @@
 
 import type { LocalJobInfo } from '../../shared/types';
 import { getCliService } from './cliService.ts';
-import { listJobs } from './localJobs.ts';
+import { listJobs, normalizeJobStatus } from './localJobs.ts';
 import type { LocalJob } from './localJobs.ts';
 
 /** 内部形状 → 界面形状。 */
@@ -30,7 +30,9 @@ export function toJobInfo(job: LocalJob): LocalJobInfo {
     serviceId: job.serviceId,
     // 人话名字（`Claude Code` / `普通命令`）；服务没注册就退回 id（不瞎猜）。
     title: svc ? svc.title : job.serviceId,
-    status: job.status,
+    // ★ [T-088] 老名字归一成统一状态机（`reported` → `succeeded`、
+    //   `cancelled` → `cancelled_by_user`）⇒ 渲染层只认一份判据。
+    status: normalizeJobStatus(job.status) as LocalJobInfo['status'],
     startedAt: job.startedAt,
     settledAt: job.settledAt ?? null,
     pid: job.pid ?? null,

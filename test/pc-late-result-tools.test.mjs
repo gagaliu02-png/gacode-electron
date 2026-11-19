@@ -66,6 +66,19 @@ test('T068-P3 ★ peer-job 管理器：notice/poll/超时只回传一次；取�
   assert.match(src, /if \(!job \|\| job\.settled\) return;/, '回传只能一次');
 });
 
+test('T086-P5 ★ [T-086] pcCcSend 从 args 读 reply-to（含容错别名）并传给 sendPeerMessage', () => {
+  assert.match(exec, /function readPeerReplyTo\(/, '必须有 reply-to 读取函数');
+  assert.match(exec, /reply_to_business_session_id/, '服务端字段名 business');
+  assert.match(exec, /reply_to_cc_session_id/, '服务端字段名 cc');
+  assert.match(exec, /reply_channel/, '服务端字段名 channel');
+  assert.match(exec, /replyToBusinessSessionId/, 'camelCase 别名 business');
+  assert.match(exec, /replyToCcSessionId/, 'camelCase 别名 cc');
+  assert.match(exec, /replyChannel/, 'camelCase 别名 channel');
+  assert.match(exec, /args\.reply_to/, '嵌套 reply_to 对象容错');
+  assert.match(exec, /sendPeerMessage\(sessionId, text, priority, taskId, replyTo\)/, 'reply-to 传给 sendPeerMessage');
+  assert.match(exec, /task_id: taskId/, '结果块回执仍带 task_id');
+});
+
 test('T068-P4 ★ stopTask / stopAllTasks 接上 peer-job 取消；IPC 启动接线', () => {
   assert.match(src, /stopTask\(pendingId: string\): boolean \{[\s\S]{0,200}peerJobManager\.cancel/,
     'stopTask 必须取消 peer-job');
@@ -73,4 +86,32 @@ test('T068-P4 ★ stopTask / stopAllTasks 接上 peer-job 取消；IPC 启动接
     '急停必须取消 peer-job');
   assert.match(ipc, /peerJobManager\.start\(/, 'IPC 启动时接 reportJobResult');
   assert.match(ipc, /peerJobManager\.recoverOrphans\(\)/, 'IPC 启动时扫孤儿');
+});
+
+// ── [T-069] pc_cc_control(notify_when_idle) 可观测性 ───────────────────
+
+test('T069-P1 ★ pcCcControl notify_when_idle 分支：合法 from + 诊断映射 + msg_id 回传', () => {
+  // claudeCodePeerInbox.start() 被调用（拿合法 reply target）
+  assert.match(exec, /if \(action === 'notify_when_idle'\) \{[\s\S]{0,400}claudeCodePeerInbox\.start\(\)/);
+  // from 来自 inbox.from()，不再硬编码 uds:gaclaw
+  assert.match(exec, /claudeCodePeerInbox\.from\(\)/);
+  assert.ok(!exec.includes("from: 'uds:gaclaw'"), '不许继续用硬编码 uds:gaclaw');
+  // 登记诊断映射
+  assert.match(exec, /claudeCodePeerInbox\.registerDiagnostic\(msgId, sessionId/);
+  // stdout 回传 msg_id 与 from
+  assert.match(exec, /status: 'subscribed',[\s\S]{0,200}msg_id: msgId,[\s\S]{0,80}from,/);
+  // 发送时带 msg_id + 显式 from
+  assert.match(exec, /sendPeerControl\(sessionId, 'notify_when_idle', \{[\s\S]{0,100}msg_id: msgId[\s\S]{0,100}\}, \{ from \}\)/);
+});
+
+test('T069-P2 ★ inbox 诊断 notice 不回传 D3，只记日志', () => {
+  const inboxSrc = fs.readFileSync(path.join(ROOT, 'electron/client-tools/claudeCodePeerInbox.ts'), 'utf8');
+  assert.match(inboxSrc, /registerDiagnostic\(msgId: string, sessionId: string/);
+  assert.match(inboxSrc, /getDiagnostic\(msgId: string\)/);
+  assert.match(inboxSrc, /if \(entry\.diagnostic\) \{[\s\S]{0,300}peerLog\('cc-peer-inbox', 'diagnostic notice '/);
+  // diagnostic 分支在 noticeHandler 之前 return（不触发 D3）
+  const dispatch = inboxSrc.slice(inboxSrc.indexOf('private dispatch('), inboxSrc.indexOf('private dispatch(') + 1000);
+  const diagReturn = dispatch.indexOf('if (entry.diagnostic)');
+  const handlerCall = dispatch.indexOf('this.noticeHandler?.(');
+  assert.ok(diagReturn > 0 && handlerCall > diagReturn, '诊断分支必须在 noticeHandler 之前 return');
 });

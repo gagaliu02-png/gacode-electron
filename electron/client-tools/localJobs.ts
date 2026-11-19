@@ -36,6 +36,45 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+/**
+ * 后台作业状态（★ [T-088] 统一状态机）。
+ *
+ * ⚠️ 老账本里的 `reported` / `cancelled` 仍保留可读（历史记录不能因为升级就消失），
+ *    新写入的终态用统一名字 `succeeded` / `cancelled_by_user` / `return_failed` /
+ *    `lost` / `settled`（跟 unified `background-work-status.js` 逐字对齐）。
+ */
+export type LocalJobStatus =
+  | 'queued'
+  | 'running'
+  | 'result_ready'
+  | 'returning'
+  | 'reported'
+  | 'succeeded'
+  | 'failed'
+  | 'return_failed'
+  | 'cancelled'
+  | 'cancelled_by_user'
+  | 'lost'
+  | 'settled';
+
+/** 老名字 → 统一状态名（判横幅 / 判终态前先归一，⛔ 不改磁盘上的历史行）。 */
+export function normalizeJobStatus(status: unknown): string {
+  const s = String(status == null ? '' : status);
+  if (s === 'reported') return 'succeeded';
+  if (s === 'cancelled') return 'cancelled_by_user';
+  return s;
+}
+
+/** 终态（横幅必须消失）—— 判据跟 unified 单一真源一致。 */
+const TERMINAL_JOB_STATUSES = new Set([
+  'succeeded', 'failed', 'return_failed', 'cancelled_by_user', 'lost', 'settled',
+]);
+
+/** 判一条本机作业是否处于终态（历史列表仍可见，只是不计横幅）。 */
+export function isTerminalJobStatus(status: unknown): boolean {
+  return TERMINAL_JOB_STATUSES.has(normalizeJobStatus(status));
+}
+
 /** 一条本机作业。 */
 export interface LocalJob {
   /** = 服务端的 `pending_id`（裁决身份）。 */
@@ -52,8 +91,8 @@ export interface LocalJob {
   sessionId: string | null;
   /** 输出日志文件。 */
   outputFile: string | null;
-  /** 三态 + 终态：`queued` → `running` → `reported`（= 已回传，完事）/ `failed` / `cancelled`。 */
-  status: 'queued' | 'running' | 'reported' | 'failed' | 'cancelled';
+  /** 状态（见 `LocalJobStatus`；终态一律不计横幅，历史列表仍可见）。 */
+  status: LocalJobStatus;
   /** 起跑时刻。 */
   startedAt: number;
   /** 结束时刻。 */
@@ -211,6 +250,26 @@ export function markJobReported(id: string, summary?: string): LocalJob | null {
     ...(summary === undefined ? {} : { summary }),
   });
 }
+
+/**
+ * ★ [T-088] 标终态（横幅立即消失，历史列表仍可见）。
+ *
+ * ⚠️ 只有这几类才会写：`return_failed`（D3/result 上行失败）/ `cancelled_by_user`
+ *    （用户打断）/ `lost`（断链放弃）/ `settled`（服务端已结）。
+ *    正常成功仍走 `markJobReported`（保留老的 `reported` 语义，视图层归一成 succeeded）。
+ */
+export function markJobTerminal(
+  id: string,
+  status: Extract<LocalJobStatus, 'return_failed' | 'cancelled_by_user' | 'lost' | 'settled' | 'failed'>,
+  summary?: string,
+): LocalJob | null {
+  return updateJob(id, {
+    status,
+    settledAt: Date.now(),
+    ...(summary === undefined ? {} : { summary }),
+  });
+}
+
 
 /** 还没上报的作业（重连后要补回传的就是它们）。 */
 export function listUnreportedJobs(): LocalJob[] {

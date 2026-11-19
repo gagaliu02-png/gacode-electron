@@ -61,6 +61,15 @@ type FetchLike = (url: string, init: {
   signal?: AbortSignal;
 }) => Promise<{ ok: boolean; status: number; json(): Promise<any>; text(): Promise<string> }>;
 
+/** CC 工具路由（Claude Code 侧 list/read/send）。 */
+export type CcToolRoute = 'list' | 'read' | 'send';
+
+/** 一个 CC 工具请求的处理函数（主进程接线）。 */
+export type CcToolHandler = (route: CcToolRoute, body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+/** 单条 CC 工具请求的上限（content 上限另在工具层校验）。 */
+export const CC_TOOL_BODY_LIMIT = 64 * 1024;
+
 export interface HookBridgeOptions {
   /** gaclaw 侧转发端点（服务间）。 */
   endpoint: string;
@@ -76,6 +85,8 @@ export interface HookBridgeOptions {
   token?: string;
   /** 每次请求的额外字段（userId / channelId 等）。 */
   context?: Record<string, unknown>;
+  /** [T-087] Claude Code 会话工具处理器；不传则 /cc-tools/* 返回 404。 */
+  ccTools?: CcToolHandler;
 }
 
 export interface HookBridgeHandle {
@@ -128,15 +139,51 @@ export function startHookBridge(opts: HookBridgeOptions): Promise<HookBridgeHand
 
       let body = '';
       let tooBig = false;
+      let isCcTool = false;
+      let ccRoute: CcToolRoute | null = null;
+      try {
+        const u = new URL(req.url || '', 'http://127.0.0.1');
+        const m = /^\/cc-tools\/(list|read|send)\/?$/.exec(u.pathname);
+        if (m) { isCcTool = true; ccRoute = m[1] as CcToolRoute; }
+      } catch (_) { /* 非法 URL ⇒ 按普通 hook 走 */ }
+
       req.on('data', (c) => {
         body += c;
-        // ⛔ 请求体上限（hook 输入很小；防有人拿这个口灌数据）
-        if (body.length > 256 * 1024) { tooBig = true; req.destroy(); }
+        // ⛔ 请求体上限（hook 输入很小；CC 工具 bodies 也不应超过 64KB）
+        const limit = isCcTool ? CC_TOOL_BODY_LIMIT : 256 * 1024;
+        if (body.length > limit) { tooBig = true; req.destroy(); }
       });
       req.on('end', async () => {
         if (tooBig) return;
         let payload: any = {};
         try { payload = JSON.parse(body || '{}'); } catch (_) { payload = {}; }
+
+        // ★ [T-087] /cc-tools/list|read|send —— 复用本地 token，但不转发 hook 上游。
+        //   身份（userId/role/kind/fromKind）由主进程注入，客户端请求里不接受这些字段。
+        if (isCcTool && ccRoute) {
+          if (!opts.ccTools) {
+            res.writeHead(404, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'cc_tools_not_configured' }));
+            return;
+          }
+          try {
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+              throw new Error('请求体必须是 JSON 对象');
+            }
+            const result = await opts.ccTools(ccRoute, payload as Record<string, unknown>);
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(result));
+          } catch (e: any) {
+            const status = typeof e?.status === 'number' && e.status >= 400 && e.status < 600 ? e.status : 400;
+            res.writeHead(status, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({
+              ok: false,
+              error: String(e?.code || 'cc_tool_failed'),
+              message: String(e?.message || e),
+            }));
+          }
+          return;
+        }
 
         const ac = new AbortController();
         const timer = setTimeout(() => ac.abort(), FORWARD_TIMEOUT_MS);

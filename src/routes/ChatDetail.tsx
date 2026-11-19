@@ -105,6 +105,7 @@ import {
   claimPersistentFrame,
   emptyPersistentTurnState,
   isMachineTurnOrigin,
+  readFrameOrigin,
   type PersistentTurnState,
 } from "../lib/sse/turn-identity";
 import { notifyAiReplyArrived } from "../lib/chat-notifications";
@@ -153,6 +154,7 @@ import {
 import { QueueBar, type QueueEntry } from "../components/chat/QueueBar";
 import { BackgroundWorkBanner } from "../components/chat/BackgroundWorkBanner";
 import type { LocalJobInfo } from "../../shared/types";
+import { TERMINAL_BACKGROUND_STATUSES } from "../../shared/types";
 import {
   PlusActionsSheet,
   type PlusActionKind,
@@ -740,6 +742,16 @@ export function ChatDetail() {
   const persistentTurnRef = useRef<PersistentTurnState>(
     emptyPersistentTurnState(),
   );
+  /**
+   * ★ [T-089] 常驻流「机器起轮 ⇒ 刷一次 history」的**同轮去重**表。
+   *
+   *   键：`${chatId}|${turnKey}` —— 手机端普通用户轮在常驻流里被反推判成
+   *   `work_unit_result` 时，旧逻辑切轮刷一次、done 终态又刷一次 ⇒ 两次 history
+   *   invalidate 叠在一起（用户看到整轮列表闪两次 / 顺序错乱）。
+   *   ⚠️ 只在这里记「机器切轮刷新」这一路；终态帧那次刷新是必需路径，照常走。
+   *   ⚠️ 切 chatId ⇒ 整表清空（跨会话身份不能复用）。
+   */
+  const machineHistoryRefreshRef = useRef<Set<string>>(new Set());
 
   // ══════════════════════════════════════════════════════════════════
   // ★ [2026-11-14 · 订正 28 · W5] **会话收件箱（队列）** + **按钮状态机**
@@ -1187,11 +1199,14 @@ export function ChatDetail() {
   // 是否处于"等待首帧" 的状态 — 用来显示"正在思考" 占位
   const [waitingFirstFrame, setWaitingFirstFrame] = useState(false);
 
-  // 切 chat → 换 session ⇒ 待审批列表也跟着换 (旧 session 的 pending 不带到新 session).
+  // ★ [T-083/T-088 · 2026-11-20] chatId 变化 = 换 session ⇒ 清掉**所有**本轮 / 本会话内存态。
+  //   ⚠️ ChatDetail 在 /chat/:id 路由间不重挂载 ⇒ 任何漏掉的 state/ref 都会串到下一个 session。
+  //   典型事故: 上个 session 的 pendingUserMsg / cutRows 被 messages useMemo 无条件拼进去
+  //   ⇒ 新 session 的 history 里根本没有那条 user 行, 却显示出旧用户的乐观气泡。
   //
-  // ⚠️ 任务书 P-6: 本 session 的 pending 要从**本机落盘**里 hydrate 回来 ——
-  //   不是清空。刷新页面后正在等裁决的工具调用必须还在 banner 上,
-  //   否则用户永远不知道自己还有一条没批。
+  //   ⛔ 落盘数据不在这里清:
+  //     · pendingApprovals 按 chatId 从 localStorage hydrate (刷新后仍可裁决);
+  //     · sse-turn-record 是 per-session localStorage, 由 followController/turnRecordStore 自己管。
   useEffect(() => {
     setPendingApprovals(chatId ? loadPendingApprovals(chatId) : []);
     setStreamingAssistantId(null);
@@ -1200,23 +1215,53 @@ export function ChatDetail() {
     setStreamingPhases([]);
     setStreamError(null);
     setWaitingFirstFrame(false);
-    // ★ [批 G13-4 · 2026-11-08] **轮次身份 + stalled 标记也必须复位** (原来漏了这两个)。
-    //
-    //   ① `streamingStalled` 漏复位 ⇒ 新会话的流式行带着上一个会话的「未收到服务端回复」标记
-    //      ⇒ `isStreaming = !!streamingAssistantId && !streamingStalled`
-    //      ⇒ **停止键不亮** (gaga 2026-11-08 报障: 「暂停按钮状态都不会变」)。
-    //      ⚠️ 只有「上一个会话续传接不回来」过才会置 true ⇒ 所以是**偶发**,
-    //         第一次点会话是好的 —— 跟「只有第一次」那个症状长得一样, 但根因不同。
-    //   ② `streamingTurnKey` 漏复位 ⇒ 新会话建行时带上**上一个会话的轮次身份**
-    //      ⇒ 历史合并把这一行配到**别的轮次**上 ⇒ 空气泡 (web 端同款根因)。
-    //
-    //   ⚠️ state 与 ref 镜像**一起**复位 (跟 [clearLocalRow] 同一口径) ——
-    //      只复位 state ⇒ 下一帧的 ref 镜像还是旧值 ⇒ 旧身份又冒回来了。
     setStreamingStalled(false);
     setStreamingTurnKey(null);
     streamingTurnKeyRef.current = null;
     setStreamingTurnMeta(EMPTY_STREAMING_TURN_META);
     streamingTurnMetaRef.current = EMPTY_STREAMING_TURN_META;
+
+    // ── 本轮「切开」气泡 + 补充幂等 ──
+    setCutRows([]);
+    turnWasSplitRef.current = false;
+    handledSupplementIdsRef.current.clear();
+
+    // ── 乐观上屏 / 队列 / 重试上下文: 只属于当前会话 ──
+    setPendingUserMsg(null);
+    setPendingUserImageUrls([]);
+    setLocalQueue([]);
+    setProcessedInboxIds(new Set());
+    setInboxItems([]);
+    setPendingWork([]);
+    setFlushingId(null);
+    setDeletingId(null);
+    setStoppingBackground(false);
+    lastUserTextRef.current = "";
+    lastUserAttachmentsRef.current = [];
+
+    // ── 本轮计时 + 本机流式行身份 ──
+    setStreamingTiming(null);
+    streamingTimingRef.current = null;
+    localRowIdRef.current = null;
+    streamingContentRef.current = "";
+    streamingPhasesRef.current = [];
+    streamingEventsRef.current = [];
+    turnTimingRef.current.clear();
+    lastTurnTimingRef.current = null;
+
+    // ── 队列泵 / 流占用信号灯: 旧会话的在跑标志不能带进新会话 ──
+    streamBusyRef.current = false;
+    myTurnRef.current = false;
+    pumpBusyRef.current = false;
+    pumpedItemIdRef.current = null;
+    ownTurnKeysRef.current.clear();
+    // ownTurnSessionIdRef 是 session-scoped 的: 换 session 后旧归属必须失效。
+    ownTurnSessionIdRef.current = null;
+    attachLiveRef.current = false;
+
+    // ── 常驻订阅的轮次身份 ──
+    persistentTurnRef.current = emptyPersistentTurnState();
+    machineHistoryRefreshRef.current.clear();
     return () => {
       // 卸载时只清**内存态** —— 本机落盘的那份要留着 (跨刷新存活, 任务书 P-6)。
       setPendingApprovals([]);
@@ -1536,47 +1581,8 @@ export function ChatDetail() {
     lastTurnTimingRef.current = { chatId: chatId ?? null, timing };
   }, [chatId]);
 
-  /**
-   * ★ [批 G13-4 · 2026-11-08] **切会话 ⇒ 本机的「流式行 id」必须复位**。
-   *
-   * ## 病根 (gaga 2026-11-08 真机报障)
-   *
-   * > 「PC端则是只有第一次点击 session 会加载 SSE 内容，后面的 SSE 内容进来了不会变」
-   * > 「PC端和 web 端的暂停按钮状态都不会变」
-   *
-   * `localRowIdRef` 是**组件级 ref** —— 上面的 chatId effect (:792-804) 复位了 6 个
-   * useState, 却**没复位这个 ref**。而 `ensureRow()` (:1099-1104) 第一行就是
-   * `if (localRowIdRef.current) return;` ⇒
-   *
-   *   切到**第二个**会话时, ref 还是上个会话的 `attach-<旧id>` ⇒
-   *   `ensureRow()` 永远早退 ⇒ **`setStreamingAssistantId` 永远不调**
-   *   ⇒ 内容写进了 state 却**没有行可挂** (:853 `if (!streamingAssistantId) return`)
-   *   ⇒ 界面纹丝不动;
-   *   ⇒ `isStreaming` (:2153 `!!streamingAssistantId && !streamingStalled`) 恒 false
-   *   ⇒ **停止按钮永远不亮**。
-   *
-   * ⇒ **两个症状是同一个 bug**。
-   *
-   * ⚠️ 为什么「只有第一次」会中招: 侧栏点会话走 `navigate('/chat/'+id)`,
-   *   `/chat/:id` 那条路由**没有 key** ⇒ ChatDetail **不重挂载** ⇒ ref 跨会话存活。
-   *   (web 没这个 bug: 它把行 id 收在 attach effect 每轮重建的局部对象里。)
-   */
-  useEffect(() => {
-    localRowIdRef.current = null;
-    // ⚠️ 这两个 ref 同样跨会话存活 ⇒ 新会话的正文会**接在旧会话的正文后面**。
-    streamingContentRef.current = "";
-    streamingPhasesRef.current = [];
-    // ★ [订正 28 · L-28r] 切会话 ⇒ 「切开的气泡」也复位（否则上一会话的气泡
-    //   会挂在新会话下面）。新会话的内容由历史重拉给出。
-    setCutRows([]);
-    turnWasSplitRef.current = false;
-    handledSupplementIdsRef.current = new Set();
-    streamingEventsRef.current = [];
-    // ★ [2026-11-16] 切会话 ⇒ **常驻流的轮次身份也要复位**（它跨会话存活）。
-    //   不复位 ⇒ 新会话的第一帧会被判成「切轮」（turnKey 与上一会话的不同）
-    //   ⇒ 认领状态带着上一会话的 seq ⇒ 落点行 id 不唯一。
-    persistentTurnRef.current = emptyPersistentTurnState();
-  }, [chatId]);
+  // [T-083/T-088] 原「第二个 chatId effect」的 localRowIdRef / cutRows / ref 镜像复位
+  // 已合并进上面的统一 reset effect；这里不再重复，避免多 effect 的执行顺序决定结果。
 
   /**
    * ★ 渲染「接入流」那一行的**快照内容** (架构 §5.2 / G-4 / 缺陷 D-1)。
@@ -2674,8 +2680,20 @@ export function ChatDetail() {
           //   一条 user 行（系统注记）⇒ 刷一次历史让那行立刻出现。
           //   ⛔ 端侧**不合成**它（契约 §4.2 · 只渲染服务端写的那行）。
           //   ⛔ `agent_message` **不触发**后台任务横幅 / 计数（那是 pending-work API 驱动的）。
-          if (isMachineTurnOrigin(claim.origin)) {
-            queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+          //
+          // ★ [T-089] ⛔ **只认帧顶层显式 `origin`**（服务端权威）——
+          //   手机端普通用户轮在常驻流里没带帧 origin，反推会把它判成
+          //   `work_unit_result` ⇒ 误刷 history；再叠加上 done 终态那次 ⇒ 整轮闪两遍。
+          //   判据：`isMachineTurnOrigin(claim.origin)` 保留共享层口径（含 agent_message / cron），
+          //   但**必须**同时 `readFrameOrigin(chunk) !== null`（帧显式给了 origin ⇒ 不是反推）。
+          //   帧没带 origin（老服务端 / 手机端普通轮）⇒ 一律不在这里刷 history。
+          const explicitOrigin = readFrameOrigin(chunk);
+          if (isMachineTurnOrigin(claim.origin) && explicitOrigin !== null) {
+            const refreshKey = `${chatId}|${claim.state.turnKey}`;
+            if (!machineHistoryRefreshRef.current.has(refreshKey)) {
+              machineHistoryRefreshRef.current.add(refreshKey);
+              queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+            }
           }
         }
         // ⛔ 常驻观众不拥有轮次 ⇒ 用 "attach" 渲染语义（不建发起方本地行）。
@@ -3250,6 +3268,17 @@ export function ChatDetail() {
     }
     for (const j of localJobs) {
       if (!j || !j.id) continue;
+      // ★ [T-088] 已结束 / 终态（failed/return_failed/cancelled_by_user/lost/settled/
+      //   succeeded）一律不计横幅 —— 历史作业列表仍可见，但"还在跑"里必须消失。
+      //   ⚠️ 老账本里 `reported`/`cancelled` 也是终态（统一状态机里归一成
+      //      succeeded / cancelled_by_user），这里兼容两种名字。
+      const normalizedStatus =
+        j.status === "reported"
+          ? "succeeded"
+          : j.status === "cancelled"
+            ? "cancelled_by_user"
+            : j.status;
+      if (TERMINAL_BACKGROUND_STATUSES.has(normalizedStatus)) continue;
       if (j.status !== "running" && j.status !== "queued") continue;
       // ⚠️ 只算**本会话**的（老作业没有 sessionId ⇒ 不算）。
       if (!j.sessionId || j.sessionId !== chatId) continue;

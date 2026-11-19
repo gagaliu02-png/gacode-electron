@@ -23,6 +23,8 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { createHash, randomBytes } from 'crypto';
+// [T-069] 诊断日志：走 peerLog ⇒ 生产落 client-tools.log，单测只 console。
+import { peerLog } from './peerLog.ts';
 
 /** notice 状态（对齐 CLI 的 `peer_idle_notice`）。 */
 export type PeerNoticeState = 'idle' | 'exited' | 'unavailable' | 'waiting';
@@ -40,13 +42,22 @@ export interface PeerNotice {
 export interface InboxRegistration {
   /** `notify_when_idle` 帧里的 msg_id（回执在 `orig_msg_id` 里带回）。 */
   msgId: string;
-  /** 派单 id（= 服务端 pending_id）。 */
+  /** 派单 id（= 服务端 pending_id）。诊断订阅固定为 'diagnostic'。 */
   pendingId: string;
   /** 目标 Claude Code 会话 id。 */
   sessionId: string;
   /** 本轮结果要匹配的 task_id（通常就是 pendingId）。 */
   taskId: string;
   /** 注入消息那一刻的 transcript 字节偏移。 */
+  sinceOffset: number;
+}
+
+/** 诊断订阅（只记日志，不走 D3 回传）。 */
+export interface DiagnosticRegistration {
+  msgId: string;
+  sessionId: string;
+  taskId: 'diagnostic';
+  pendingId: 'diagnostic';
   sinceOffset: number;
 }
 
@@ -133,6 +144,8 @@ interface InboxEntry extends InboxRegistration {
   createdAt: number;
   /** 已分派过的 notice state（一次性：重复同态丢弃）。 */
   delivered: Set<string>;
+  /** 诊断订阅：notice 只记日志，不走 noticeHandler（不触发 D3）。 */
+  diagnostic?: boolean;
 }
 
 /** 默认 key 写入：临时文件 + rename（原子），0600。 */
@@ -184,6 +197,58 @@ export class ClaudeCodePeerInbox {
   /** 取消一条映射（任务停止 / 完成时调用）。 */
   cancel(msgId: string): void {
     if (msgId) this.registrations.delete(msgId);
+  }
+
+  /**
+   * [T-069] 登记一条「诊断订阅」——`pc_cc_control(notify_when_idle)` 专用。
+   *
+   * notice 到达时只打印 `[cc-peer-inbox] diagnostic notice ...` 日志，
+   * **不**调用 noticeHandler（⇒ peerJobManager 收不到 ⇒ 不会误报 D3）。
+   *
+   * @returns 登记后的完整条目（含 msgId / from / sinceOffset），供工具结果回传。
+   */
+  registerDiagnostic(msgId: string, sessionId: string, sinceOffset = 0): DiagnosticRegistration {
+    const reg: DiagnosticRegistration = {
+      msgId,
+      sessionId,
+      taskId: 'diagnostic',
+      pendingId: 'diagnostic',
+      sinceOffset,
+    };
+    this.pruneExpired();
+    this.registrations.set(msgId, {
+      ...reg,
+      createdAt: Date.now(),
+      delivered: new Set<string>(),
+      diagnostic: true,
+    });
+    return reg;
+  }
+
+  /** [T-069] 查询诊断映射（合成 smoke 用；未登记返回 null）。 */
+  getDiagnostic(msgId: string): DiagnosticRegistration | null {
+    const entry = this.registrations.get(msgId);
+    if (!entry || !entry.diagnostic) return null;
+    return {
+      msgId: entry.msgId,
+      sessionId: entry.sessionId,
+      taskId: 'diagnostic',
+      pendingId: 'diagnostic',
+      sinceOffset: entry.sinceOffset,
+    };
+  }
+
+  /** [T-069] 查询任意映射（含普通 job），用于诊断 smoke/测试。 */
+  getRegistration(msgId: string): InboxRegistration | null {
+    const entry = this.registrations.get(msgId);
+    if (!entry) return null;
+    return {
+      msgId: entry.msgId,
+      pendingId: entry.pendingId,
+      sessionId: entry.sessionId,
+      taskId: entry.taskId,
+      sinceOffset: entry.sinceOffset,
+    };
   }
 
   /** 订阅 notice 分派（单次设置；后设覆盖先设）。 */
@@ -287,8 +352,13 @@ export class ClaudeCodePeerInbox {
         if (!line) continue;
         if (!authenticated) {
           let auth: any = null;
-          try { auth = JSON.parse(line); } catch { /* ignore */ }
+          try { auth = JSON.parse(line); } catch {
+            peerLog('cc-peer-inbox', 'auth 失败: 非法 JSON 帧');
+            close();
+            return;
+          }
           if (!auth || auth.type !== 'auth' || auth.token !== this.peerToken) {
+            peerLog('cc-peer-inbox', 'auth 失败: token 不匹配或帧类型错误');
             close();
             return;
           }
@@ -298,6 +368,7 @@ export class ClaudeCodePeerInbox {
         }
         const notice = parseInboxLine(line);
         if (notice) this.dispatch(notice);
+        else peerLog('cc-peer-inbox', '非法帧: 丢弃非 notice 行');
       }
       // 单行超长：直接丢，防爆内存。
       if (buffer.length > 64 * 1024) buffer = '';
@@ -311,6 +382,16 @@ export class ClaudeCodePeerInbox {
     if (entry.delivered.has(notice.state)) return; // 同态重复 ⇒ 丢
     // idle 先到、exited 后到：不同态仍要分派（让 job 做最后一次读取）。
     entry.delivered.add(notice.state);
+    if (entry.diagnostic) {
+      peerLog('cc-peer-inbox', 'diagnostic notice ' + JSON.stringify({
+        orig_msg_id: notice.orig_msg_id,
+        state: notice.state,
+        detail: notice.detail ?? null,
+        session_id: entry.sessionId,
+        task_id: entry.taskId,
+      }));
+      return; // 诊断订阅不回传 D3
+    }
     try {
       this.noticeHandler?.({
         msgId: entry.msgId,
