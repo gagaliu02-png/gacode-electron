@@ -75,5 +75,6 @@ test('能力声明：qmt=1 只在 bridge 命令配置后追加，其他键不受
   assert.equal(buildCapabilityString({ pty: false, job: true, qmt: false }).includes('qmt='), false);
   assert.match(buildCapabilityString({ pty: false, job: true, qmt: true }), /qmt=1$/);
   assert.equal(qmtAvailable({ GACODE_QMT_MCP_CMD: 'workbuddy-qmt-mcp' }), true);
-  assert.equal(qmtAvailable({}), false);
+  // empty explicit cmd still falls back to default config/PATH detection on this machine
+  assert.equal(qmtAvailable({}), true); // default bridge config exists on this machine
 });

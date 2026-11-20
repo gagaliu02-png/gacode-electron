@@ -11,6 +11,8 @@
  *    本文件不直接 POST、不碰服务端。
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { spawn } from 'child_process';
 import type { ChildProcessWithoutNullStreams } from 'child_process';
 import type { ClientToolResult } from './types';
@@ -258,8 +260,30 @@ export async function executeQmtTool(
 }
 
 /** 本机是否具备 QMT 能力（bridge 可执行/配置存在才声明 qmt=1）。 */
+const DEFAULT_QMT_CONFIG = 'D:/国金证券QMT交易端2/python/wbqmt_runtime/config/bridge.json';
+
+function commandExists(cmd: string): boolean {
+  const pathValue = process.env.PATH || '';
+  for (const dir of pathValue.split(/[;:]/)) {
+    const clean = dir.trim().replace(/^"|"$/g, '');
+    if (!clean) continue;
+    for (const candidate of [cmd, cmd + '.cmd', cmd + '.exe']) {
+      try {
+        if (fs.existsSync(path.join(clean, candidate))) return true;
+      } catch { /* ignore invalid path entries */ }
+    }
+  }
+  return false;
+}
+
 export function qmtAvailable(env: Record<string, string | undefined> = process.env): boolean {
-  return Boolean((env.GACODE_QMT_MCP_CMD || '').trim());
+  const explicitCmd = Boolean((env.GACODE_QMT_MCP_CMD || '').trim());
+  const explicitConfig = Boolean((env.WORKBUDDY_QMT_CONFIG || '').trim());
+  if (explicitCmd || explicitConfig) return true;
+  try {
+    if (fs.existsSync(DEFAULT_QMT_CONFIG)) return true;
+  } catch { /* ignore fs errors */ }
+  return commandExists('workbuddy-qmt-mcp');
 }
 
 export { TOOL_MAP, APPROVAL_TTL_SECONDS };
