@@ -911,7 +911,16 @@ export async function executeClientTool(
     case 'pc_qmt_trades':
     case 'pc_qmt_prepare':
     case 'pc_qmt_preview':
-    case 'pc_qmt_submit': return executeQmtTool(tool, args);
+    case 'pc_qmt_submit':
+    case 'pc_qmt_auto_status':
+    case 'pc_qmt_auto_authorize':
+    case 'pc_qmt_auto_order':
+    case 'pc_qmt_auto_revoke':
+    case 'pc_qmt_cancel_order':
+    case 'pc_qmt_intent_wait':
+    case 'pc_qmt_intent_get':
+    case 'pc_qmt_intent_list':
+    case 'pc_qmt_risk_limits': return executeQmtTool(tool, args);
     default:
       return fail(`未知的端侧工具: ${tool}`);
   }
