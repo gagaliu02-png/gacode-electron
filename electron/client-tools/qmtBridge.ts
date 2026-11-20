@@ -18,7 +18,7 @@ import type { ChildProcessWithoutNullStreams } from 'child_process';
 import type { ClientToolResult } from './types';
 
 /** 默认 bridge 命令（可用 env 覆盖，与 gaclaw provider 同口径）。 */
-const DEFAULT_CMD = 'workbuddy-qmt-mcp';
+const DEFAULT_CMD = 'C:/Users/gaga/AppData/Roaming/Python/Python314/Scripts/workbuddy-qmt-mcp.exe';
 
 /** 端侧允许的工具名（pc_* → bridge 工具名）。 */
 const TOOL_MAP: Record<string, string> = {
@@ -242,7 +242,7 @@ export async function executeQmtTool(
 
   const client = opts?.clientFactory ? opts.clientFactory() : new QmtStdioClient(
     process.env.GACODE_QMT_MCP_CMD || DEFAULT_CMD,
-    (() => { try { return JSON.parse(process.env.GACODE_QMT_MCP_ARGS || '[]'); } catch { return []; } })(),
+    (() => { try { return JSON.parse(process.env.GACODE_QMT_MCP_ARGS || '["--config","D:/国金证券QMT交易端2/python/wbqmt_runtime/config/bridge.json","--endpoint","http://127.0.0.1:17642"]'); } catch { return []; } })(),
   );
   try {
     await client.start();
