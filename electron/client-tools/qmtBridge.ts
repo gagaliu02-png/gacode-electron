@@ -100,7 +100,14 @@ export class QmtStdioClient {
 
   async start(): Promise<void> {
     if (this.child) return;
-    const child = spawn(this.cmd, this.args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    // [T-086 修复] bridge 的 config 默认按 cwd 解析（config/bridge.json），
+    // 而 PC 主进程 cwd 不是 QMT 目录 ⇒ bridge 立刻 FileNotFoundError 退出。
+    // 显式把 config 路径注入子进程 env（优先继承进程 env，兜底本机实际路径）。
+    const env = { ...process.env };
+    if (!env.WORKBUDDY_QMT_CONFIG) {
+      env.WORKBUDDY_QMT_CONFIG = 'D:\\国金证券QMT交易端2\\python\\wbqmt_runtime\\config\\bridge.json';
+    }
+    const child = spawn(this.cmd, this.args, { stdio: ['pipe', 'pipe', 'pipe'], env });
     this.child = child;
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
