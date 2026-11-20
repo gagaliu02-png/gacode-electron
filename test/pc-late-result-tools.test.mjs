@@ -92,7 +92,7 @@ test('T068-P4 ★ stopTask / stopAllTasks 接上 peer-job 取消；IPC 启动接
 
 test('T069-P1 ★ pcCcControl notify_when_idle 分支：合法 from + 诊断映射 + msg_id 回传', () => {
   // claudeCodePeerInbox.start() 被调用（拿合法 reply target）
-  assert.match(exec, /if \(action === 'notify_when_idle'\) \{[\s\S]{0,400}claudeCodePeerInbox\.start\(\)/);
+  assert.match(exec, /if \(action === 'notify_when_idle'\) \{[\s\S]{0,1200}claudeCodePeerInbox\.start\(\)/);
   // from 来自 inbox.from()，不再硬编码 uds:gaclaw
   assert.match(exec, /claudeCodePeerInbox\.from\(\)/);
   assert.ok(!exec.includes("from: 'uds:gaclaw'"), '不许继续用硬编码 uds:gaclaw');
@@ -114,4 +114,44 @@ test('T069-P2 ★ inbox 诊断 notice 不回传 D3，只记日志', () => {
   const diagReturn = dispatch.indexOf('if (entry.diagnostic)');
   const handlerCall = dispatch.indexOf('this.noticeHandler?.(');
   assert.ok(diagReturn > 0 && handlerCall > diagReturn, '诊断分支必须在 noticeHandler 之前 return');
+});
+
+// ── [T-092] notify_when_idle 与主动回报合成契约 ────────────────────────
+
+test('T092-P1 ★ pcCcControl notify_when_idle：先注入 report_when_idle peer message，再发 control', () => {
+  const start = exec.indexOf("if (action === 'notify_when_idle') {");
+  const end = exec.indexOf("return fail(`不支持的 action", start);
+  const branch = exec.slice(start, end > 0 ? end : start + 3000);
+
+  assert.match(branch, /sendPeerMessage\(\s*sessionId,\s*text,\s*'later',\s*msgId,\s*normalizedReplyTo,\s*'report_when_idle',?\s*\)/, '必须先发带 report_when_idle 的 peer user message');
+  assert.match(branch, /sendPeerControl\(sessionId, 'notify_when_idle', \{[\s\S]{0,120}msg_id: msgId/, '随后仍发原 control 帧');
+  const injectAt = branch.indexOf('sendPeerMessage(');
+  const controlAt = branch.indexOf("sendPeerControl(sessionId, 'notify_when_idle'");
+  assert.ok(injectAt > 0 && controlAt > injectAt, '注入必须在 control 之前（先契约后门铃）');
+  assert.match(branch, /claudeCodePeerInbox\.registerDiagnostic\(msgId, sessionId/, '诊断映射保留');
+  assert.match(branch, /claudeCodePeerInbox\.from\(\)/, '合法 from 保留');
+  assert.match(branch, /status: 'subscribed',[\s\S]{0,200}msg_id: msgId,[\s\S]{0,80}from,/, 'msg_id/from 回参保留');
+});
+
+test('T092-P2 ★ reply_to 缺失 fail-closed：不发消息、不发 control、不挂空契约', () => {
+  const start = exec.indexOf("if (action === 'notify_when_idle') {");
+  const end = exec.indexOf("return fail(`不支持的 action", start);
+  const branch = exec.slice(start, end > 0 ? end : start + 3000);
+  assert.match(branch, /if \(!replyTo\?\.business_session_id\) \{[\s\S]{0,160}return fail\('notify_when_idle 需要 reply_to_business_session_id/, '缺 business reply_to 必须直接拒绝');
+  const rejectAt = branch.indexOf('if (!replyTo?.business_session_id)');
+  const injectAt = branch.indexOf('sendPeerMessage(');
+  const controlAt = branch.indexOf("sendPeerControl(sessionId, 'notify_when_idle'");
+  const diagAt = branch.indexOf('claudeCodePeerInbox.registerDiagnostic(');
+  assert.ok(rejectAt > 0 && rejectAt < injectAt && rejectAt < controlAt && rejectAt < diagAt,
+    'fail-closed 必须发生在任何注入 / 订阅 / 诊断登记之前');
+});
+
+test('T092-P3 ★ reply_channel 固定 inbox；诊断 notice 仍只记日志、不另起后台 job', () => {
+  const start = exec.indexOf("if (action === 'notify_when_idle') {");
+  const end = exec.indexOf("return fail(`不支持的 action", start);
+  const branch = exec.slice(start, end > 0 ? end : start + 3000);
+  assert.match(branch, /channel: 'inbox'/, '契约通道强制 inbox');
+  assert.ok(!branch.includes('peerJobManager.track('), 'notify 不创建后台 job 横幅');
+  assert.ok(!branch.includes('reportJobResult('), 'notify 不直接 D3 回传');
+  assert.match(branch, /notice 本身只记日志、不触发 D3/, '回参说明保留诊断语义');
 });

@@ -43,7 +43,7 @@ import { randomUUID, createHash } from 'crypto';
 
 import { listClaudeSessions, type ClaudeSessionRecord } from './claudeCodeSession.ts';
 // ★ [2026-11-17 · T-022] 汇报协议模板（注入正文里带 ⇒ 端侧按格式回结果）
-import { buildReportingContract, formatReplyToAttr, type PeerReplyTo } from './claudeResultFormat.ts';
+import { buildReportingContract, buildNotifyPeerMessageContent, formatReplyToAttr, type PeerReplyTo } from './claudeResultFormat.ts';
 // [T-069] 诊断日志：走 peerLog ⇒ 生产落 client-tools.log，单测只 console。
 import { peerLog } from './peerLog.ts';
 
@@ -237,7 +237,12 @@ export function buildPeerMessageContent(
   text: string,
   taskId?: string | null,
   replyTo?: PeerReplyTo | null,
+  notifyIntent?: 'report_when_idle' | null,
 ): string {
+  // [T-092] 专用 notify 形状：显式 notify_intent + reply_to + task_id（顺序固定）。
+  if (notifyIntent === 'report_when_idle' && taskId && replyTo) {
+    return buildNotifyPeerMessageContent(text, String(taskId), replyTo, { value: notifyIntent });
+  }
   const body = neutralize(String(text ?? '').slice(0, 4000));
   const taskAttr = taskId ? ` task_id="${neutralize(String(taskId))}"` : '';
   const replyAttr = formatReplyToAttr(replyTo) || '';
@@ -266,10 +271,11 @@ export async function sendPeerMessage(
   priority: PeerPriority = 'later',
   taskId?: string | null,
   replyTo?: PeerReplyTo | null,
+  notifyIntent?: 'report_when_idle' | null,
 ): Promise<{ ok: boolean; reason?: string; session_id?: string }> {
   const rec = findSession(sessionId);
   if (!rec) return { ok: false, reason: 'session_not_live' };
-  const content = buildPeerMessageContent(text, taskId, replyTo);
+  const content = buildPeerMessageContent(text, taskId, replyTo, notifyIntent);
   const frame = {
     type: 'user',
     message: { role: 'user', content },

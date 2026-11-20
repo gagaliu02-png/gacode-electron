@@ -706,9 +706,25 @@ async function pcCcControl(
     return ok({ stdout: JSON.stringify({ status: 'renamed', session_id: sessionId, name }), exitCode: 0 });
   }
   if (action === 'notify_when_idle') {
+    // [T-092] 合成契约：notify 必须带 reply_to，否则 fail-closed（不挂空契约）。
+    const requestedMsgId = str(args, 'msg_id');
+    const msgId = requestedMsgId || randomUUID();
+    const replyTo = readPeerReplyTo(args);
+    if (!replyTo?.business_session_id) {
+      return fail('notify_when_idle 需要 reply_to_business_session_id（缺少则不挂回报契约）');
+    }
+    const replyChannel = str(args, 'reply_channel');
+    if (replyChannel && replyChannel !== 'inbox') {
+      return fail(`notify_when_idle 只支持 reply_channel=inbox（收到 ${replyChannel}）`);
+    }
+    const normalizedReplyTo: PeerReplyTo = {
+      ...replyTo,
+      channel: 'inbox',
+    };
+    const text = str(args, 'text')
+      || '你有一项 gaclaw 通知：完成当前工作后，必须使用 gaclaw-msg send 按 reply_to 主动回报结论；不要猜 session_id；notify 本身不代表已回报。';
     // [T-069] 订阅「我空闲时通知你」—— 登记诊断映射到 inbox，拿合法 reply target。
     let from: string;
-    const msgId = randomUUID();
     try {
       claudeCodePeerInbox.start();
       const replyTarget = claudeCodePeerInbox.from();
@@ -731,6 +747,27 @@ async function pcCcControl(
       session_id: sessionId,
       task_id: diag.taskId,
     }));
+    // [T-092] 第一步：先注入契约消息（priority=later，不打断当前轮）。
+    // task_id = msg_id（合成 notice 可用它定向注入），control 继续用同一个 msg_id。
+    const injected = await sendPeerMessage(
+      sessionId,
+      text,
+      'later',
+      msgId,
+      normalizedReplyTo,
+      'report_when_idle',
+    );
+    if (!injected.ok) {
+      claudeCodePeerInbox.cancel(msgId);
+      return fail(`注入 notify 回报契约失败: ${injected.reason || 'unknown'}`);
+    }
+    peerLog('cc-control', 'notify_when_idle report contract injected ' + JSON.stringify({
+      msg_id: msgId,
+      session_id: sessionId,
+      reply_to_business_session_id: normalizedReplyTo.business_session_id,
+      reply_to_cc_session_id: normalizedReplyTo.cc_session_id || null,
+    }));
+    // [T-069] 第二步：再发订阅帧（notice 仍只记日志、不触发 D3）。
     const r = await sendPeerControl(sessionId, 'notify_when_idle', {
       from,
       msg_id: msgId,
@@ -745,7 +782,7 @@ async function pcCcControl(
         session_id: sessionId,
         msg_id: msgId,
         from,
-        note: '已登记诊断订阅；该会话空闲时回的 notice 只记日志、不触发 D3 回传。合成 notice 可用 msg_id 定向注入。',
+        note: '已注入 report_when_idle 回报契约并发诊断订阅；完成当前工作后 CC 必须用 gaclaw-msg send 按 reply_to 主动回报；notice 本身只记日志、不触发 D3。',
       }),
       exitCode: 0,
     });

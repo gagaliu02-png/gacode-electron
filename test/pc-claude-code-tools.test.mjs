@@ -220,6 +220,19 @@ test('GC-CC-11 · 能力判据：有会话登记目录才声明 claude-code', ()
   assert.equal(hasClaudeCodeSessions(), true, '夹具建了目录 ⇒ 应为 true');
 });
 
+// ── [T-092] CLI help 指引 ───────────────────────────────────────────────
+
+test('T092-CC-1 ★ gaclaw-msg help 含 report_when_idle 主动回报指引，不新增通道', () => {
+  const cli = fs.readFileSync(path.join(process.cwd(), 'electron/client-tools/gaclaw-msg.mjs'), 'utf8');
+  const usage = cli.slice(cli.indexOf('const USAGE'), cli.indexOf('function fail'));
+  assert.match(usage, /notify_intent="report_when_idle"/);
+  assert.match(usage, /\*\*必须\*\*调用 gaclaw-msg send 按 reply_to 主动回报结论/);
+  assert.match(usage, /不要猜 session_id/);
+  assert.match(usage, /notify 本身不代表已回报/);
+  assert.match(usage, /--to-session \/ --reply-to/, '复用已有 send 参数，不新增通道');
+  assert.match(usage, /gaclaw-msg -> \/devices\/cc\/messages -> session-inbox/, '业务回传链路写清');
+});
+
 // ── 工具 ───────────────────────────────────────────────────────────────
 function snapshotTree(root) {
   const out = [];

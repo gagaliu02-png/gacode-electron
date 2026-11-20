@@ -215,3 +215,16 @@ test('PI-7 · 诊断 notice 只记日志、不回传 D3；普通 job 映射照�
   assert.match(diagLog, /"state":"idle"/);
   assert.match(diagLog, /"detail":"probe"/);
 });
+
+// ── [T-092] notify 与主动回报合成契约 ──────────────────────────────────
+
+test('PI-8 · T092 · cc-peer-inbox 诊断 notice 仍只记日志、不回传 D3（回归）', () => {
+  const inboxSrc = fs.readFileSync(path.join(process.cwd(), 'electron/client-tools/claudeCodePeerInbox.ts'), 'utf8');
+  // 诊断分支必须在 noticeHandler 之前 return（不会触发后台 job / D3）。
+  const dispatchAt = inboxSrc.indexOf('private dispatch(');
+  const dispatch = inboxSrc.slice(dispatchAt, dispatchAt + 1400);
+  const diagReturn = dispatch.indexOf('if (entry.diagnostic)');
+  const handlerCall = dispatch.indexOf('this.noticeHandler?.(');
+  assert.ok(diagReturn > 0 && handlerCall > diagReturn, '诊断分支必须先 return，不能进 D3 handler');
+  assert.match(inboxSrc, /peerLog\('cc-peer-inbox', 'diagnostic notice '/);
+});
