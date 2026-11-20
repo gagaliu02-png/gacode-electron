@@ -91,7 +91,7 @@ export function probeJobExecutor(): JobCapabilityProbe {
  *              `claudeCode` = 本机 Claude Code 会话可被管控（`claudeCodeSession.ts` 接线了，订正 T-020）。
  */
 export function buildCapabilityString(
-  flags: { pty: boolean; job: boolean; browser?: boolean; claudeCode?: boolean },
+  flags: { pty: boolean; job: boolean; browser?: boolean; claudeCode?: boolean; qmt?: boolean },
 ): string {
   const parts = ['client-tools=1'];
   if (flags.pty) parts.push('pty=1');
@@ -104,5 +104,7 @@ export function buildCapabilityString(
   // ★ [2026-11-17 · T-020] Claude Code 管控接线了才声明 `claude-code=1`。
   //   ⚠️ 服务端 spec 认这个键 ⇒ 声明它才下发 pc_cc_*。
   if (flags.claudeCode) parts.push('claude-code=1');
+  // ★ [T-086] QMT bridge 本机可用（bridge 命令/配置存在）才声明 `qmt=1`。
+  if (flags.qmt) parts.push('qmt=1');
   return parts.join(',');
 }

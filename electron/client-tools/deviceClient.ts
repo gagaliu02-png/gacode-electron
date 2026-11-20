@@ -51,6 +51,8 @@ import { buildCapabilityString, probeJobExecutor } from './jobCapability.ts';
 import { hasBrowserTabPool } from './browser.ts';
 // [2026-11-17 · T-020] Claude Code 管控能力判据
 import { hasClaudeCodeSessions } from './claudeCodeSession.ts';
+// [T-086] QMT bridge 本机可用性（只声明能力，不下单、不连服务端）
+import { qmtAvailable } from './qmtBridge.ts';
 import { emitJobsChanged } from './jobView.ts';
 import type { JobReportPayload } from './jobReporter.ts';
 // ★ [2026-11-17] 解绑 / 登出 ⇒ 清掉上一账号在本机的作业 / 派单 / 审计记录。
@@ -249,7 +251,9 @@ export function deviceCapabilities(): string {
   //   （跟 `job` 键同款口径）⇒ 判据用「目录在不在」这种**真接线**信号，
   //   而不是「有没有活会话」（没活会话时也该能下发，否则永远学不会用）。
   const claudeCode = hasClaudeCodeSessions();
-  _capabilitiesCache = buildCapabilityString({ pty, job: true, browser, claudeCode });
+  // ★ [T-086] QMT bridge 命令/配置存在才声明 qmt=1（安全降级；能力头不做鉴权，闸门在 qmtBridge/gate）
+  const qmt = qmtAvailable();
+  _capabilitiesCache = buildCapabilityString({ pty, job: true, browser, claudeCode, qmt });
   if (browser) {
     logDevice('浏览器池已接线 ⇒ 能力表声明 browser=1（pc_browser_* 可下发）');
   }

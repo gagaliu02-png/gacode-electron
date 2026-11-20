@@ -49,6 +49,8 @@ import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPat
 import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
 // ★ [2026-11-17 · T-022] 等端侧 Claude Code 的处理结果（前台等）
 import { watchClaudeSessionResult } from './claudeCodeResultWatcher.ts';
+// [T-086] QMT WorkBuddy 本机 stdio bridge（受控只读 + 审核门下单）
+import { executeQmtTool } from './qmtBridge.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';
 
 // ===========================================================================
@@ -782,6 +784,16 @@ export async function executeClientTool(
     case 'pc_cc_read': return pcCcRead(args);
     case 'pc_cc_send': return pcCcSend(args, { signal, pendingId: opts?.pendingId ?? null });
     case 'pc_cc_control': return pcCcControl(args);
+    // [T-086] QMT：只读 + 受控下单（submit 内置逐笔审核门，fail-closed）
+    case 'pc_qmt_health':
+    case 'pc_qmt_account':
+    case 'pc_qmt_quote':
+    case 'pc_qmt_positions':
+    case 'pc_qmt_orders':
+    case 'pc_qmt_trades':
+    case 'pc_qmt_prepare':
+    case 'pc_qmt_preview':
+    case 'pc_qmt_submit': return executeQmtTool(tool, args);
     default:
       return fail(`未知的端侧工具: ${tool}`);
   }
