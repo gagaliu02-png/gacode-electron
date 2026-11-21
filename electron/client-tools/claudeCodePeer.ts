@@ -197,10 +197,15 @@ async function sendFrame(
  *
  * @param text    原始任务正文
  * @param taskId  可选：裁决身份（= 服务端 `pending_id`）
+ * @param deliveryId 可选：统一回执幂等键（= peer.mjs send 的 delivery_id，notice 凭它对号）
  */
-export function buildPeerMessageContent(text: string, taskId?: string | null): string {
+export function buildPeerMessageContent(text: string, taskId?: string | null, deliveryId?: string | null): string {
   const body = neutralize(String(text ?? '').slice(0, 4000));
-  const attrs = taskId ? ` task_id="${neutralize(String(taskId))}"` : '';
+  // ★ [T-103-b · 统一 envelope] 带 delivery_id ⇒ 与 peer.mjs send / receipt 状态机同一套幂等键，
+  //   peer_idle_notice 回来时凭 delivery_id 对上具体那次投递。
+  const attrs =
+    (taskId ? ` task_id="${neutralize(String(taskId))}"` : '') +
+    (deliveryId ? ` delivery_id="${neutralize(String(deliveryId))}"` : '');
   return (
     `<cross-session-message from="uds:gaclaw"${attrs}>\n` +
     `${body}\n` +
