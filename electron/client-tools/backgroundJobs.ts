@@ -57,7 +57,7 @@ export interface BackgroundStartInput {
 export function startBackgroundJob(input: BackgroundStartInput): ClientToolResult {
   const tool = input.tool;
   const service: CliService | null =
-    tool === 'pc_claude' ? claudeService : tool === 'pc_job_start' ? rawService : null;
+    tool === 'pc_claude' || tool === 'pc_cc_new' ? claudeService : tool === 'pc_job_start' ? rawService : null;
   if (!service) {
     return { status: 'error', error: `未知的后台作业工具: ${tool}` };
   }
@@ -75,10 +75,10 @@ export function startBackgroundJob(input: BackgroundStartInput): ClientToolResul
     jobId,
   });
   if (!invocation) {
-    if (tool === 'pc_claude') {
+    if (tool === 'pc_claude' || tool === 'pc_cc_new') {
       const task = strArg(args, 'task');
       if (!task) {
-        return { status: 'error', error: 'pc_claude 缺 task' };
+        return { status: 'error', error: `${tool} 缺 task` };
       }
       return {
         status: 'error',

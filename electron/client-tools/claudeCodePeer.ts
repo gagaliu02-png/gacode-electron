@@ -231,7 +231,7 @@ export async function sendPeerMessage(
 ): Promise<{ ok: boolean; reason?: string; session_id?: string }> {
   const rec = findSession(sessionId);
   if (!rec) return { ok: false, reason: 'session_not_live' };
-  const content = buildPeerMessageContent(text, taskId);
+  const content = buildPeerMessageContent(text, taskId, taskId);
   const frame = {
     type: 'user',
     message: { role: 'user', content },
