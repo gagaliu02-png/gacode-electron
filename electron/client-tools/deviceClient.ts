@@ -966,6 +966,9 @@ class DeviceClient {
       //   （L-24o：目录产物不进交付中心，只报本机路径）。
       const withUrls = await this.uploadArtifacts(result);
       await this.uploadResult(pendingId, withUrls);
+      // ★ [T-108] pc_cc_* 可见性回执：设备只持有自己的 Bearer + deviceId，
+      //   internal token 留在服务器；unified 窄端点校验派单归属后内部转发 peer-ack。
+      await this.reportCcReceiptSafe(req, { status: 'visible', result });
     } finally {
       this.inflight.delete(pendingId);
     }
@@ -1030,6 +1033,8 @@ class DeviceClient {
     // ④ 起作业（**立即返回**：detached 进程，输出落文件）。
     const result = await this.runRequest(req);
     if (result.status === 'ok') {
+      // ★ [T-108] 后台 pc_cc_* 也回填 visible（turn_acked 由结果回报/新轮承担）。
+      await this.reportCcReceiptSafe(req, { status: 'visible', result });
       // ★ [T-042] **结果晚到型工具**（pc_cc_send）：执行本身就是结果 ⇒ 直接回传，
       //   ⇒ 服务端**另起一轮** agent 汇报（落回本会话）⇒ **主 agent 这一轮不被阻塞**。
       //   ⚠️ 其余工具（detached 作业）行为**逐字不变**：只标 running，结果由巡检回传。
@@ -1299,6 +1304,55 @@ ${note}` : note,
         durationMs: Date.now() - t0,
       });
       return { status: 'error', error: `端侧执行异常: ${(e as Error).message}` };
+    }
+  }
+
+  /**
+   * [T-108] 上报 pc_cc_* 可见性/完成回执到 unified 窄端点。
+   *
+   * 失败只记日志：回执是旁路增强，不能因为 ack 网络抖动把真正工具结果丢掉。
+   */
+  private async reportCcReceiptSafe(
+    req: ClientToolRequest,
+    opts: { status: 'visible' | 'turn_acked'; result?: ClientToolResult },
+  ): Promise<void> {
+    const tool = req.tool || '';
+    if (!(tool.startsWith('pc_cc_') || tool === 'pc_claude')) return;
+    const deliveryId = req.pending_id || '';
+    const sessionId = String(req.session_id || '');
+    if (!deliveryId || !sessionId) return;
+    let stdout = opts.result?.stdout || '';
+    let reportSessionId = sessionId;
+    if (stdout) {
+      try {
+        const parsed = JSON.parse(stdout);
+        reportSessionId = String(parsed.session_id || parsed.source_session_id || parsed.to_session || sessionId);
+      } catch (_) { /* 非 JSON stdout 用派单 session */ }
+    }
+    try {
+      const res = await fetch(`${apiBase()}/devices/cc/receipts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.accessToken}`,
+          'X-Device-Id': this.deviceId,
+        },
+        body: JSON.stringify({
+          pending_id: deliveryId,
+          delivery_id: deliveryId,
+          session_id: reportSessionId,
+          status: opts.status,
+          origin: 'pc_cc',
+          from_id: `pc:${tool}`,
+          note: opts.status === 'turn_acked' ? 'turn acked' : 'visible on pc',
+        }),
+      });
+      if (!res.ok && res.status !== 409 && res.status !== 404) {
+        const text = await res.text().catch(() => '');
+        console.warn('[client-tools/device] cc receipt 回执失败:', res.status, text.slice(0, 160));
+      }
+    } catch (e) {
+      console.warn('[client-tools/device] cc receipt 回执异常:', (e as Error).message);
     }
   }
 
