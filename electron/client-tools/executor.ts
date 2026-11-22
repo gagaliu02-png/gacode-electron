@@ -48,6 +48,7 @@ import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrows
 import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
 import { buildCcReceipt, deliveryIdFromArgs } from './ccReceipt.ts';
+import { validateClientToolArgs } from './clientToolArgs.ts';
 // ★ [2026-11-17 · T-022] 等端侧 Claude Code 的处理结果（前台等）
 import { watchClaudeSessionResult } from './claudeCodeResultWatcher.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';
@@ -758,6 +759,18 @@ export async function executeClientTool(
   opts?: ExecuteClientToolOptions,
 ): Promise<ClientToolResult> {
   const t = timeoutMs || DEFAULT_TIMEOUT_MS[tool] || 120000;
+
+  // ★ [T-111] 端侧统一参数 fail-fast：任何副作用前先拒绝错参/内部字段。
+  const argCheck = validateClientToolArgs(tool, args);
+  if (!argCheck.ok) {
+    return fail(argCheck.message || 'invalid tool arguments', {
+      error_type: 'invalid_input',
+      missing: argCheck.missing,
+      unknown: argCheck.unknown,
+      invalid: argCheck.invalid,
+      hint: argCheck.hint,
+    } as any);
+  }
 
   // ★ [2026-11-13 · 订正 27] 后台作业四个分支（L-27a）。
   //   「起作业」**立即返回**（不 await 端侧回传）⇒ 模型这一轮不被堵住。
