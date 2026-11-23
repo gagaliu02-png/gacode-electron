@@ -384,11 +384,21 @@ test("GC-P28-S6b 切开的补充气泡插在**流式气泡之前**（顺序 = [A
   const memo = code.slice(memoIdx, memoIdx + 4000);
   const cutIdx = memo.indexOf("...cutRows.map(");
   assert.ok(cutIdx > 0, "★ 切开的气泡必须拼进 messages 列表");
-  const streamIdx = memo.indexOf("return [...withCutRows, streamingMsg]");
+  // ⚠️ [T-114 · 2026-11-23] 这条断言从「**源码字面量**」改成「**语义形状**」：
+  //   段序归位（`orderByTurnSegment`）包在了最终返回外面 ⇒ 字面量变成
+  //   `orderByTurnSegment([...withCutRows, streamingMsg])`。
+  //   ⇒ 判据改成「withCutRows 在前、streamingMsg 在后」的**相对顺序**（语义不变）。
+  const streamIdx = memo.search(/withCutRows[^\]]*streamingMsg/);
   assert.ok(streamIdx > 0, "★ 流式行必须拼在切开的气泡**之后**（= 续答进新气泡）");
   assert.ok(
     cutIdx < streamIdx,
     "★ 顺序必须是 [A1][补充][A2] —— 补充插在当前流式气泡**之前**",
+  );
+  // ★ [T-114] 段序归位必须作用在最终输出上（跨轮保持原顺序 · 同一轮内按段号排）。
+  assert.match(
+    code,
+    /orderByTurnSegment\(\[\.\.\.withCutRows, streamingMsg\]\)/,
+    "★ 最终列表必须走段序归位（orderByTurnSegment）",
   );
 });
 

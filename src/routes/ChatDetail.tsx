@@ -108,6 +108,11 @@ import {
   readFrameOrigin,
   type PersistentTurnState,
 } from "../lib/sse/turn-identity";
+// ★ [T-052 · T-114] **按段序归位**（判据住在共享层 · web 是原件端 ⇒ PC 端逐字抄那一份）。
+//   本机「切开」出来的段用**本机时钟**、服务端补写的注入行用**服务端时钟**
+//   ⇒ 同毫秒谁大谁小看运气 ⇒ 「LLM 气泡跑到用户气泡上面」。
+//   服务端给注入行写 `metadata.turnKey = tk_xxx#N`（段号锚点）⇒ 按段号定序。
+import { orderByTurnSegment } from "../lib/sse/merge-history";
 import { notifyAiReplyArrived } from "../lib/chat-notifications";
 // ★ [订正 30 · 2026-11-15] 「服务端起轮了」的端内广播（观众侧）。
 import { subscribeTurnStarted } from "../lib/turn-started";
@@ -1462,7 +1467,9 @@ export function ChatDetail() {
             },
       ),
     ];
-    if (!streamingAssistantId) return withCutRows;
+    // ★ [T-052 · T-114] **按段序归位**（跨轮保持原顺序 · 同一轮内按段号排）。
+    //   ⛔ 稳定排序 ⇒ 不带段号锚点的行（老数据 / 老服务端）位置**逐字不变**。
+    if (!streamingAssistantId) return orderByTurnSegment(withCutRows);
     const streamingMsg: ChatMessageModel = {
       id: streamingAssistantId,
       role: "assistant",
@@ -1532,13 +1539,13 @@ export function ChatDetail() {
           (sameTurn.phases?.length ?? 0) > (streamingMsg.phases?.length ?? 0)
             ? sameTurn.phases
             : streamingMsg.phases;
-        return [
+        return orderByTurnSegment([
           ...withCutRows.filter((m) => m !== sameTurn),
           streamingMsg,
-        ];
+        ]);
       }
     }
-    return [...withCutRows, streamingMsg];
+    return orderByTurnSegment([...withCutRows, streamingMsg]);
   }, [
     baseMessages,
     streamingAssistantId,

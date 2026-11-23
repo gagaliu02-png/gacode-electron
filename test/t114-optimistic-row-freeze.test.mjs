@@ -135,3 +135,25 @@ test("C1 merge-history 必须含 T-052 段序归位（与 web 端对齐）", () 
     "C1 归位必须作用在最终列表上",
   );
 });
+
+// ---------------------------------------------------------------------------
+// C2 · PC 渲染层**真的**用上了段序归位（web 有、PC 原本没有 ⇒ 补上）
+//     —— 包里必须能看到 orderByTurnSegment（否则 PC 端段序仍是坏的）
+// ---------------------------------------------------------------------------
+test("C2 PC 渲染层必须调用段序归位（本机段 + 服务端注入行混排 ⇒ 同毫秒顺序会倒挂）", () => {
+  assert.match(
+    src,
+    /import \{ orderByTurnSegment \} from "\.\.\/lib\/sse\/merge-history"/,
+    "C2 PC 端必须从共享层引入段序归位（判据住在共享层 ⇒ 不许内联第二份）",
+  );
+  assert.match(
+    src,
+    /orderByTurnSegment\(\[\.\.\.withCutRows, streamingMsg\]\)/,
+    "C2 最终列表（带流式行）必须走段序归位",
+  );
+  assert.match(
+    src,
+    /orderByTurnSegment\(withCutRows\)/,
+    "C2 最终列表（无流式行）必须走段序归位",
+  );
+});
