@@ -88,6 +88,18 @@ export interface QueueBarProps {
   onToggle: () => void;
   /** 点「⏫」⇒ **立即发送**这一条（插队）。 */
   onFlush: (id: string) => void;
+  /**
+   * ★ [T-118 · 段二/段三 · 2026-11-23] 三段式的两个新动作。
+   *
+   *   · `onFold(id, "fold")`      —— **插入本轮**：不打断，把这条并进**当前轮**
+   *                                  （下一个工具边界取走 ⇒ 模型在当前轮里读到）
+   *   · `onFold(id, "interrupt")` —— **打断并发送**：**硬停**当前轮（秒级）+ 立刻起新轮带这条
+   */
+  onFold?: (id: string, action: "fold" | "interrupt") => void;
+  /** 正在「插入本轮」的那一条（防连点）。 */
+  foldingId?: string | null;
+  /** 正在「打断并发送」的那一条（防连点）。 */
+  interruptingId?: string | null;
   /** 删掉一条**没送达**的端侧乐观行（服务端行不许删 —— 那是服务端的东西）。 */
   onRemove?: (id: string) => void;
   /** 正在插队的那一条（防重复点）。 */
@@ -148,6 +160,58 @@ function FlushButton({
 }
 
 /**
+ * ★ [T-118 · 段二/段三 · 2026-11-23] 两个新动作 —— 三段式在端侧的落法。
+ *
+ * | 按钮 | 段 | 服务端 | 打不打断 | 图标 |
+ * |---|---|---|---|---|
+ * | ⏫ 立即发送（原有） | 插话 | `flush`（软停 + 起新轮） | 软停 | ⏫ |
+ * | **插入本轮** | **段二** | `fold`（只标记可注入） | **不打断** | ⤵ |
+ * | **打断并发送** | **段三** | `interrupt`（硬停 + 起新轮） | **硬停（秒级）** | ⏹ |
+ *
+ * ⚠️ 两个新按钮**不抢** ⏫ 的位置：⏫ 仍是「立即发送」（老语义，老用户肌肉记忆）。
+ */
+function ActionButton({
+  id,
+  action,
+  label,
+  glyph,
+  tone,
+  disabled,
+  onAction,
+}: {
+  id: string;
+  action: "fold" | "interrupt";
+  label: string;
+  glyph: string;
+  tone?: "danger";
+  disabled?: boolean;
+  onAction: (id: string, action: "fold" | "interrupt") => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-testid={`queue-${action}-${id}`}
+      disabled={disabled}
+      onClick={() => onAction(id, action)}
+      className={[
+        "shrink-0 w-6 h-6 inline-flex items-center justify-center rounded-full",
+        "text-xs transition-colors duration-150",
+        tone === "danger"
+          ? "bg-danger/15 text-danger hover:bg-danger/25"
+          : "bg-fg/10 text-fg hover:bg-fg/20",
+        "disabled:opacity-40 disabled:cursor-not-allowed",
+      ].join(" ")}
+    >
+      <span aria-hidden="true" className="leading-none">
+        {glyph}
+      </span>
+    </button>
+  );
+}
+
+/**
  * 「🗑」按钮 —— 删掉这一条排队消息（**还没发出去**的那条）。
  *
  * ⚠️ 删的是**队列项** ⇒ 它**再也不会被发出去**；⛔ 不动已经发出去的消息。
@@ -194,6 +258,9 @@ export function QueueBar({
   expanded,
   onToggle,
   onFlush,
+  onFold,
+  foldingId,
+  interruptingId,
   onRemove,
   flushingId,
   onDelete,
@@ -239,6 +306,28 @@ export function QueueBar({
             disabled={!canFlushHead || flushingId === head.id}
             onFlush={onFlush}
           />
+          {/* ★ [T-118] 三段式的两个新动作（队首也有一份） */}
+          {onFold ? (
+            <>
+              <ActionButton
+                id={head.id}
+                action="fold"
+                label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
+                glyph="⤵"
+                disabled={!canFlushHead || foldingId === head.id || interruptingId === head.id}
+                onAction={onFold}
+              />
+              <ActionButton
+                id={head.id}
+                action="interrupt"
+                label="打断并发送（立刻停掉当前这一轮，把这条发出去）"
+                glyph="⏹"
+                tone="danger"
+                disabled={!canFlushHead || interruptingId === head.id || foldingId === head.id}
+                onAction={onFold}
+              />
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -296,6 +385,28 @@ export function QueueBar({
                 disabled={!!it.local || flushingId === it.id}
                 onFlush={onFlush}
               />
+              {/* ★ [T-118] 三段式的两个新动作（每一条都有） */}
+              {onFold ? (
+                <>
+                  <ActionButton
+                    id={it.id}
+                    action="fold"
+                    label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
+                    glyph="⤵"
+                    disabled={!!it.local || foldingId === it.id || interruptingId === it.id}
+                    onAction={onFold}
+                  />
+                  <ActionButton
+                    id={it.id}
+                    action="interrupt"
+                    label="打断并发送（立刻停掉当前这一轮，把这条发出去）"
+                    glyph="⏹"
+                    tone="danger"
+                    disabled={!!it.local || interruptingId === it.id || foldingId === it.id}
+                    onAction={onFold}
+                  />
+                </>
+              ) : null}
               {/* ★ 删掉这一条（还没发出去的那条）⇒ 它再也不会被发出去。 */}
               {onDelete ? (
                 <DeleteButton

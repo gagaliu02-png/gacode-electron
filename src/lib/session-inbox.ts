@@ -224,6 +224,96 @@ export function flushInboxMessage(
 }
 
 /**
+ * ★ [T-118 · 段二 · 2026-11-23] **「插入本轮」（fold）** —— **不打断、不起新轮**。
+ *
+ * ## 语义（三段式的第二段）
+ *   服务端把这条标成**可注入**（`injectable=true` + priority 顶到最前）
+ *   ⇒ **正在跑的那一轮**在**工具边界 / 收尾心跳**取走它 ⇒ 并进**当前轮**的上下文
+ *   ⇒ 形态乙（独立一条 user 消息 + `<system-reminder>` 外壳）⇒ 模型读到并改口。
+ *
+ * ## 与 `flushInboxMessage`（插话）的区别
+ *   · flush  = **软停**旧轮 + **起新轮**（消息 = 新轮第一句）⇒ 旧轮产出保留，但当前工作被打断
+ *   · **fold** = **什么都不打断** ⇒ 消息并进**当前轮**（当前工作继续，模型会在下一个请求带上它）
+ *   ⇒ 「插一句」用 fold；「等不了了」用 `interruptAndSendInboxMessage`。
+ *
+ * ⚠️ 没有活跃轮 ⇒ 服务端**不标记**（`injectable=true` 的行没人会领 ⇒ 会搁浅）
+ *   ⇒ 返回 `folded:false, reason:'no_active_turn'` ⇒ 端侧要按「已排队」播报，**不能**说"已插入本轮"。
+ */
+export function foldInboxMessage(
+  sessionId: string,
+  messageId: string,
+): Promise<{ folded: boolean; reason: string | null }> {
+  return request<{ folded: boolean; reason: string | null }>(
+    `/yinian/sessions/${sessionId}/inbox/${encodeURIComponent(messageId)}/fold`,
+    { method: "POST" },
+  );
+}
+
+/**
+ * ★ [T-118 · 段三 · 2026-11-23] **「打断并发送」** —— **硬停**当前轮 + 立刻起新轮带这句话。
+ *
+ * ## 语义（三段式的第三段）
+ *   服务端发 `?intent=stop_turn` 给 gaclaw（**硬停** ⇒ 实测 1.97ms 生效）
+ *   ⇒ 等旧轮真停（上限 10s）⇒ 起新轮，被发的这条 = 新轮第一句（**user 角色**）。
+ *
+ * ## 与 `flushInboxMessage`（插话）的区别
+ *   · flush  = **软停**（跑到安全边界才停 ⇒ 长工具一卡就必然超时失败）
+ *   · **本函数** = **硬停**（秒级）⇒ 「我等不了了」用它。
+ *
+ * ⚠️ 老轮没在窗口内停下时，服务端**仍然起新轮**（消息一个都不能丢）但会报 `stopped:false`
+ *   ⇒ 端侧要**如实**告诉用户「上一轮还在收尾」，别说成"已打断"。
+ */
+export function interruptAndSendInboxMessage(
+  sessionId: string,
+  messageId: string,
+): Promise<{
+  interrupt?: {
+    softStop: boolean;
+    aborted: boolean;
+    stopped: boolean;
+    started: boolean;
+    reason: string | null;
+  };
+}> {
+  return request<{
+    interrupt?: {
+      softStop: boolean;
+      aborted: boolean;
+      stopped: boolean;
+      started: boolean;
+      reason: string | null;
+    };
+  }>(
+    `/yinian/sessions/${sessionId}/inbox/${encodeURIComponent(messageId)}/interrupt`,
+    { method: "POST" },
+  );
+}
+
+/**
+ * ★ [T-118 · N1 · 2026-11-23] **机器信**（后台回报 / 其他 agent 的来信 / 机器状态事件）。
+ *
+ * ## 为什么端侧也要挡一层
+ *   服务端的队列列表已经只返回用户自己的消息了（T-118 N1）⇒ 但**老服务端**不会挡
+ *   ⇒ 机器信会混进「N 条排队中」⇒ 用户点它的「⏫」⇒ **机器回报被当成用户的话发出去**
+ *   ⇒ 模型会把「另一个 agent 的回信」当成用户的新指令去执行。
+ * ⇒ ⇒ 端侧**再挡一层**（按 `kind` 判，**不**按 `fromKind` —— 后者可能是错的：
+ *   unified 的 `deliverMessage` 默认 `fromKind='user'`，机器信没显式传就标成 user）。
+ */
+export const MACHINE_LETTER_KINDS = new Set([
+  "work_unit_result",
+  "agent_message",
+  "channel_status",
+  "return_failed",
+  "cancelled_by_user",
+  "turn_interrupted",
+]);
+
+/** 这条信是不是**用户自己**的（⇒ 该出现在队列里、该有「插入本轮 / 打断并发送」）。 */
+export function isUserLetter(kind: string | null | undefined): boolean {
+  return !MACHINE_LETTER_KINDS.has(String(kind || ""));
+}
+
+/**
  * 标记队列项**已发出**（客户端把它当普通消息发出去之后调用）。
  *
  * ⇒ 出队触发点 = **持有那条 SSE 流**的客户端：轮次自然结束时，它把队列里的消息

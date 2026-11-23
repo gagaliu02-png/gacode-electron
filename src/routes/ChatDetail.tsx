@@ -148,10 +148,13 @@ import {
 import {
   listInbox,
   flushInboxMessage,
+  foldInboxMessage,
+  interruptAndSendInboxMessage,
   consumeInboxMessage,
   deleteInboxMessage,
   listPendingWork,
   enqueueUserMessage,
+  isUserLetter,
   type InboxAttachments,
   type InboxItem,
   type PendingWorkItem,
@@ -803,6 +806,9 @@ export function ChatDetail() {
   const [localJobs, setLocalJobs] = useState<LocalJobInfo[]>([]);
   /** 正在插队的那一条（防重复点）。 */
   const [flushingId, setFlushingId] = useState<string | null>(null);
+  // ★ [T-118 · 段二/段三] 两个新动作各自的在途标记（防连点）
+  const [foldingId, setFoldingId] = useState<string | null>(null);
+  const [interruptingId, setInterruptingId] = useState<string | null>(null);
   /** 正在删除的那一条（防重复点 —— 删除请求在飞时按钮转「处理中」）。 */
   const [deletingId, setDeletingId] = useState<string | null>(null);
   /** 正在停后台活（防重复点）。 */
@@ -3414,16 +3420,23 @@ export function ChatDetail() {
 
   /** 队列条要显示的条目（服务端行 + 端侧乐观行）。 */
   const queueEntries: QueueEntry[] = useMemo(() => {
-    const server: QueueEntry[] = inboxItems.map((it) => ({
-      id: it.id,
-      content: it.content || "",
-      createdAt: it.createdAt,
-      injectable: !!it.injectable,
-      local: null,
-      // ★ [P2-2] 服务端 ack 过的那条 ⇒ 标「已处理」（键 = **inboxId** = 服务端行 id）。
-      processed: processedInboxIds.has(it.id),
-      attachments: it.attachments ?? null,
-    }));
+    // ★ [T-118 · N1] **机器信不进「N 条排队中」**（老服务端不会挡 ⇒ 端侧再挡一层）。
+    //   判据用 `kind`（**不用** `fromKind` —— 后者可能是错的：unified 的 deliverMessage
+    //   默认 `fromKind='user'`，机器信没显式传就标成 user ⇒ 按 fromKind 判会漏）。
+    //   ⇒ 机器回报 / 其他 agent 的来信一旦混进来，用户点它的按钮就等于
+    //     **把机器的话当成自己的话发出去** ⇒ 模型会当成用户的新指令去执行。
+    const server: QueueEntry[] = inboxItems
+      .filter((it) => isUserLetter(it.kind))
+      .map((it) => ({
+        id: it.id,
+        content: it.content || "",
+        createdAt: it.createdAt,
+        injectable: !!it.injectable,
+        local: null,
+        // ★ [P2-2] 服务端 ack 过的那条 ⇒ 标「已处理」（键 = **inboxId** = 服务端行 id）。
+        processed: processedInboxIds.has(it.id),
+        attachments: it.attachments ?? null,
+      }));
     const local: QueueEntry[] = localQueue.map((l) => ({
       id: l.id,
       content: l.content,
@@ -3696,6 +3709,62 @@ export function ChatDetail() {
         });
       } finally {
         setFlushingId(null);
+      }
+    },
+    [chatId, refreshInbox, toast],
+  );
+
+  /**
+   * ★ [T-118 · 段二/段三 · 2026-11-23] 三段式的两个新动作。
+   *
+   *   · **插入本轮**（fold）—— **不打断**：服务端只把这条标成可注入
+   *     ⇒ 正在跑的那一轮在**下一个工具边界**取走它 ⇒ 并进**当前轮**（模型在当前轮里读到）。
+   *   · **打断并发送**（interrupt）—— **硬停**当前轮（秒级）+ 立刻起新轮带这条。
+   *
+   * ⚠️ **文案必须如实**（这是本条的重点）：
+   *   · fold 返回 `folded:false, reason:'no_active_turn'` ⇒ **不能说"已插入本轮"**
+   *     （那一刻没有轮在跑 ⇒ 它还排在队里）⇒ 要说"当前没有正在跑的对话，已按排队处理"。
+   *   · interrupt 返回 `stopped:false` ⇒ **不能说"已打断"**（旧轮还在收尾）⇒
+   *     要说"已发出，但上一轮还在收尾"。
+   */
+  const foldQueueItem = useCallback(
+    async (id: string, action: "fold" | "interrupt") => {
+      if (!chatId) return;
+      if (id.startsWith("local:")) return;   // 端侧乐观行没有服务端 id
+      if (action === "fold") setFoldingId(id);
+      else setInterruptingId(id);
+      try {
+        if (action === "fold") {
+          const r = await foldInboxMessage(chatId, id);
+          toast({
+            message:
+              r?.folded === false
+                ? "当前没有正在跑的对话，已按排队处理"
+                : "已插入本轮：agent 会在下一次工具调用时看到",
+            variant: "default",
+          });
+        } else {
+          const r = await interruptAndSendInboxMessage(chatId, id);
+          const it = r?.interrupt;
+          toast({
+            message:
+              it?.started === false
+                ? "打断失败，消息已退回队列"
+                : it?.stopped === false
+                  ? "已发出，但上一轮还在收尾"
+                  : "已打断并发出",
+            variant: "default",
+          });
+        }
+        void refreshInbox();
+      } catch (e) {
+        toast({
+          message: `${action === "fold" ? "插入本轮" : "打断并发送"}失败: ${e instanceof Error ? e.message : String(e)}`,
+          variant: "danger",
+        });
+      } finally {
+        if (action === "fold") setFoldingId(null);
+        else setInterruptingId(null);
       }
     },
     [chatId, refreshInbox, toast],
@@ -4529,6 +4598,14 @@ export function ChatDetail() {
           void deleteQueueItem(id);
         }}
         deletingId={deletingId}
+        // ★ [T-118 · 段二/段三] 三段式的两个新动作
+        //   ⚠️ 放在 onDelete/deletingId **之后**：既有断言「<QueueBar 之后 600 字符内要有
+        //   onDelete={」靠的是**位置** ⇒ 把新 props 插在前面会把那个窗口顶掉。
+        onFold={(id, action) => {
+          void foldQueueItem(id, action);
+        }}
+        foldingId={foldingId}
+        interruptingId={interruptingId}
       />
 
       {/* gagaOS §② — 知识库挂载 chip — 对齐 web chat/[id]/page.tsx:1311-1331:
