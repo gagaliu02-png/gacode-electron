@@ -130,7 +130,7 @@
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.46
+buildVersion: 0.7.47
 copyright: Copyright © 2026 gaga
 
 # ★ [T-122] 出包前现生成图标中间产物（build/icon-{16,32,48,64,128}.png）。
@@ -155,7 +155,7 @@ directories:
   # 0.7.39: 停止键只停当前轮 + 认亲透传 client_msg_id + 渲染层诊断日志 (T-044)
   # 0.7.39-fix1: 能力头竞态 ⇒ 不再「LLM 找不到 Claude Code 工具」
   # 0.7.41: 能力头用主进程那份 ⇒ pc_cc_* 下发
-  output: release-t121-v46
+  output: release-t121-v47
 
 files:
   - dist/**/*

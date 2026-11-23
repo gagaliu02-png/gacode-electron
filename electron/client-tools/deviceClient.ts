@@ -373,6 +373,23 @@ const PEER_JOB_DEADLINE_MS = 24 * 60 * 60 * 1000;
  * ⛔ 不再是 1500ms 主路径。
  */
 const PEER_JOB_POLL_MS = 45_000;
+/**
+ * ★ [T-121] 「目标会话已经回了话，但没按协议带结果块」的收口窗口。
+ *
+ * 病根（生产实证 · ping-pong）：Cody 用 `pc_cc_send` 发 PONG 给我，
+ * 我把它当**普通对话**回了「PONG #n」，没有输出带 `task_id` 的 `===GACLAW_RESULT_START===` 块。
+ * ⇒ `readResult()` 的 `hit.task_id === job.taskId` 永远不成立
+ * ⇒ 派单停在 `running` ⇒ **手机端「后台任务」横幅一直挂着**，直到用户手动停止。
+ *
+ * 修法：看到目标会话**确实产出了新正文**（`text` 非空）后给一个宽限窗口
+ * （`PEER_JOB_NO_BLOCK_GRACE_MS`）—— 窗口内还等不到合法结果块，就把这条派单
+ * 以「已送达、对方已回复、但没按协议回结果块」**结算掉**（status:'error'，如实说明），
+ * ⇒ D3 回传 ⇒ 服务端 settleDispatch ⇒ **横幅消失**。
+ *
+ * ⚠️ 只在「确实看到了新助手正文」之后才计时 ⇒ 对方还没开始干活时不会误结。
+ * ⚠️ 窗口取 2 分钟：足够一次正常的协议回执（几乎是即时的），又不会让横幅挂 24h。
+ */
+const PEER_JOB_NO_BLOCK_GRACE_MS = 2 * 60 * 1000;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ★ [T-088] 机器事件统一出口（session-inbox + channel-status + 本机 outbox）
@@ -492,6 +509,8 @@ interface PeerJob {
   businessSessionId: string | null;
   /** ★ [T-088] 回复目标（用于 channel-status 注记 / 主动补回）。 */
   replyTo: MachineEventContext['replyTo'] | null;
+  /** ★ [T-121] 第一次看到对方产出新正文的时刻（ms epoch）；没看到过 ⇒ null。 */
+  firstReplyTextAt: number | null;
 }
 
 /** peer-job 上报载荷（复用 D3 的 JobReport 形状）。 */
@@ -570,6 +589,7 @@ export class PeerJobManager {
       cancelled: false,
       businessSessionId: null,
       replyTo: null,
+      firstReplyTextAt: null,
     };
     this.jobs.set(pendingId, job);
     const deadline = setTimeout(() => {
@@ -670,6 +690,8 @@ export class PeerJobManager {
       const { text, newOffset } = readNewAssistantText(job.sessionId, job.sinceOffset);
       if (newOffset > job.sinceOffset) job.sinceOffset = newOffset;
       if (text) {
+        // ★ [T-121] 记住「对方确实回过话」这一事实 —— 它是下面「无结果块」收口的起点。
+        if (job.firstReplyTextAt === null) job.firstReplyTextAt = Date.now();
         const hit = parseGaclawResultBlock(text);
         if (hit && hit.task_id === job.taskId) {
           await this.settle(pendingId, {
@@ -688,6 +710,19 @@ export class PeerJobManager {
           });
           return;
         }
+      }
+      // ★ [T-121] 对方已经回过话，但迟迟没有合法结果块 ⇒ 宽限窗口后如实结算。
+      //   ⚠️ 不判成 'ok'（那会谎称拿到结构化结果）—— 用 'error' + 明确原因，
+      //      让服务端 settleDispatch ⇒ 手机/PC 的「后台任务」横幅消失。
+      if (
+        job.firstReplyTextAt !== null
+        && Date.now() - job.firstReplyTextAt >= PEER_JOB_NO_BLOCK_GRACE_MS
+      ) {
+        await this.settle(pendingId, {
+          status: 'error',
+          error: `目标会话已回复，但未找到 task_id=${job.taskId} 的协议结果块（已等待 ${PEER_JOB_NO_BLOCK_GRACE_MS / 1000}s）`,
+        });
+        return;
       }
       if (job.exitNoticeSeen) {
         await this.settle(pendingId, {
