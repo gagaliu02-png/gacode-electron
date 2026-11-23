@@ -2137,8 +2137,31 @@ export function ChatDetail() {
         //   ⇒ 上面那次 invalidate 拉回来的仍是旧列表 ⇒ 新会话不出现 (bug1)。
         //   ⇒ 再补一次**延迟**刷新 (等服务端落库完)。web 的同款做法是把 invalidate
         //   放在 auto-title 的 800ms 定时器里 (web chat/[id]/page.tsx:763)。
+        //
+        // ★★ [T-121 · 2026-11-23] **这里原来只刷 `["chats"]` ⇒ 漏了 `["history"]`**
+        //   ⇒ **用户气泡在流走完后消失，退出重进才出现**。
+        //
+        //   ## 病根（生产实证 · PC 端 diag.log 2026-11-23 22:11）
+        //
+        //     `认亲 same=true optimistic=pending-user-… optCid=8SJBB4000003VBBVXR4VCE0Q09`
+        //     ⇒ **乐观行认亲成功过一次** ⇒ `pendingUserAdopted=true`（T-114 的冻结标记）
+        //     ⇒ 乐观行**再也不加回**了（T-114 的设计：认亲成功后它就该退休）。
+        //
+        //     而**服务端那一行**此刻还**不在 PC 手上的 history 里**（终态帧那一刻
+        //     服务端还没落库 ⇒ 上面那次 invalidate 拉回的是旧列表）
+        //     ⇒ `historyHasSameUser` 变 false ⇒ 乐观行不加回、服务端行又没来
+        //     ⇒ **屏幕上那条气泡凭空消失**。
+        //     ⇒ 退出重进 ⇒ `getHistory` 重新拉全量 ⇒ 服务端行回来了 ⇒ 气泡出现。
+        //     **与用户现象逐字吻合。**
+        //
+        //   ## 修法
+        //     延迟刷新**必须也刷 `["history"]`** —— 上面的注释自己都写了「服务端还没落库」，
+        //     那这次延迟刷新就是**专门为等落库**准备的 ⇒ 只刷 chats 等于白等。
+        //     ⇒ 落库完成后再刷一次 history ⇒ 服务端行到位 ⇒ 气泡在（不用退出重进）。
         chatsRefreshTimerRef.current = window.setTimeout(() => {
           queryClient.invalidateQueries({ queryKey: ["chats"] });
+          // ★ [T-121] 一起刷 history（等服务端把这一轮落库完 ⇒ 服务端行到位）。
+          queryClient.invalidateQueries({ queryKey: ["history", chatId] });
         }, 2000);
         // ══════════════════════════════════════════════════════════════
         // ★ [2026-11-14 · 订正 28 · W5] **出队（泵队列）· 收掉已发出去的那条**
