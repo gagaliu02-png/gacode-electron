@@ -1309,6 +1309,8 @@ export function ChatDetail() {
   //     `historyHasSameUser`（认亲判定）原先是 `messages` useMemo 里的一个**局部变量**
   //     ⇒ 外面（effect）拿不到 ⇒ 「认亲成功 ⇒ 冻结乐观行」这个状态推进无处安放。
   //     ⇒ 提上来后：**判据只有一份**（messages 与 effect 共用）⇒ 不会两处漂移。
+
+  // 拼装最终 messages: 历史 + 流式那条占位
   const { baseWithoutSplitTurn, historyHasSameUser } = useMemo(() => {
     // ★ 任务书 P-8 · 旧协议双写去重 (契约 L-14 ~ L-18)。
     //   服务端同一次工具产出可能既推新协议 `file`/`image`, 又推旧协议
@@ -1383,7 +1385,6 @@ export function ChatDetail() {
     return { baseWithoutSplitTurn, historyHasSameUser };
   }, [baseMessages, cutRows, deletedDeliverableIds, pendingUserMsg]);
 
-  // 拼装最终 messages: 历史 + 流式那条占位
   const messages: ChatMessageModel[] = useMemo(() => {
     // ★ [T-114] 历史基底（去重 + 滤切开段）与认亲判定已提到**组件级**
     //   （见本组件上方的 useMemo）⇒ 这里直接用，不再内联第二份判据。
@@ -1558,6 +1559,7 @@ export function ChatDetail() {
     streamingTurnMeta,
     streamingTiming,
   ]);
+
 
   // ★ [T-114 · 2026-11-23] **认亲成功 ⇒ 冻结这条乐观行**（不再被加回列表）。
   //

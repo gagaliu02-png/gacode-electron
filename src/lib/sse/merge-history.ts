@@ -110,7 +110,56 @@ export function mergeHistoryRows<
   const finalServer = serverRows.filter(
     (m) => !(m.turnKey && mergedTurnKeys.has(m.turnKey) && serverByTurnKey.get(m.turnKey) === m)
   );
-  return [...finalServer, ...inflight];
+  // ★ [T-052] **按段序归位** —— 同一轮内 (基键相同) 按段号排，跨轮保持原顺序。
+  //   服务端现在给注入行（用户插话 / 后台回报）写 `metadata.turnKey = tk_xxx#N`（段号锚点）
+  //   ⇒ 「A1 / 这一行 / A2」在**同一轮内**的位置由段号决定，不再依赖墙钟
+  //   （注入行用服务端时钟、A2 用本机时钟 ⇒ 同毫秒谁大谁小看运气 ⇒ 倒挂）。
+  //   ⚠️ 没有段号锚点的行（老数据 / 老服务端）⇒ 段号解析失败 ⇒ 保持原顺序（老行为不变）。
+  return orderByTurnSegment([...finalServer, ...inflight]);
+}
+
+/**
+ * ★ [T-052] 从 `turnKey` 拆出**（基键, 段号）**。
+ * `tk_xxx` ⇒ (`tk_xxx`, 1)；`tk_xxx#2` ⇒ (`tk_xxx`, 2)。非法后缀当第 1 段。
+ */
+export function parseTurnSegment(turnKey: string | null | undefined): {
+  base: string;
+  index: number;
+} | null {
+  if (typeof turnKey !== "string" || !turnKey.trim()) return null;
+  const tk = turnKey.trim();
+  const hash = tk.lastIndexOf("#");
+  if (hash < 0 || hash === tk.length - 1) return { base: tk, index: 1 };
+  const suffix = tk.slice(hash + 1);
+  if (!/^\d+$/.test(suffix)) return { base: tk, index: 1 };
+  const index = Number(suffix);
+  if (!Number.isInteger(index) || index < 1) return { base: tk, index: 1 };
+  return { base: tk.slice(0, hash), index };
+}
+
+/**
+ * ★ [T-052] **同一轮内按段号排，跨轮才按墙钟**。
+ *
+ * 病根：注入行（用户插话 / 后台回报）的 `createdAt` 用服务端时钟，本机 A2 行用本机时钟
+ * ⇒ 同一毫秒谁大谁小看运气 ⇒ 「LLM 气泡跑到用户气泡上面」。
+ * 服务端现在给注入行的 `metadata.turnKey` 写段号锚点（`tk_xxx#N`），
+ * ⇒ 这里按段号定序，跨轮仍用原顺序（服务端历史本身有序）。
+ *
+ * ⚠️ 只有两条都带**同一基键**才交换位置；否则保持输入顺序（老行为逐字不变）。
+ */
+export function orderByTurnSegment<T extends MergeableRow>(
+  rows: readonly T[],
+): T[] {
+  if (rows.length < 2) return [...rows];
+  const out = rows.map((row, idx) => ({ row, idx, seg: parseTurnSegment(row.turnKey) }));
+  out.sort((a, b) => {
+    if (a.seg && b.seg && a.seg.base === b.seg.base && a.seg.index !== b.seg.index) {
+      return a.seg.index - b.seg.index;
+    }
+    // 同一段 / 跨轮 ⇒ 保持输入顺序（稳定排序，老行为不变）。
+    return a.idx - b.idx;
+  });
+  return out.map((x) => x.row);
 }
 
 /**

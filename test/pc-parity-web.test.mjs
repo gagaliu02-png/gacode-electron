@@ -230,23 +230,51 @@ test("GC-G8-3 发送即插本地 user 行 (乐观上屏, 对标安卓 sendIntern
   assert.ok(messagesMemo.length > 100, "抠不到 messages 列表");
   assert.ok(
     /pendingUserMsg/.test(messagesMemo),
-    "★ messages 列表必须把乐观上屏那一行拼进去"
+    "★ messages 列表必须把乐观上屏那一行拼进去",
+  );
+  // ★ [T-114 · 2026-11-23] 认亲判据提到**组件级**（messages 之前）——
+  //   它要同时喂给「渲染层组 messages」和「认亲成功 ⇒ 冻结乐观行」那个 effect
+  //   ⇒ 判据**只有一份**（不许两处漂移）⇒ 抠取范围要包含组件级那一块。
+  const adoptionMemo = src.slice(
+    src.indexOf("const { baseWithoutSplitTurn, historyHasSameUser }"),
+    src.indexOf("const { baseWithoutSplitTurn, historyHasSameUser }") + 6000,
+  );
+  assert.ok(
+    adoptionMemo.length > 100,
+    "抠不到组件级认亲判据（historyHasSameUser 的定义处）",
+  );
+  assert.ok(
+    /pendingUserMsg/.test(messagesMemo),
+    "★ messages 列表必须把乐观上屏那一行拼进去",
   );
   // ★ [T-040 · 2026-11-18] 判据从「同内容」升级为「**client_msg_id 精确**」+「内容兜底」。
   //   老判据（同内容）是**猜** ⇒ 用户问**两遍同一句**时, 服务端先回来的那一行会把乐观行
   //   **提前撤掉** ⇒ 用户自己那条话在屏幕上「闪一下就没了」。
   //   ⇒ 有 client_msg_id ⇒ **逐字相等**才是同一条（物理同一条, 不是「看着像」）。
+  const adoptSrc = adoptionMemo + messagesMemo;
   assert.ok(
-    /pendingUserMsg\.clientMsgId/.test(messagesMemo),
+    /pendingUserMsg\.clientMsgId/.test(adoptSrc),
     "★ 撤掉临时行要用 **client_msg_id 精确匹配**（不是「同内容」猜）",
   );
   assert.ok(
-    /m\.clientMsgId === pendingUserMsg\.clientMsgId/.test(messagesMemo),
+    /m\.clientMsgId === pendingUserMsg\.clientMsgId/.test(adoptSrc),
     "★ 精确匹配 = 两个 client_msg_id 逐字相等",
   );
   assert.ok(
-    /m\.content === pendingUserMsg\.content/.test(messagesMemo),
+    /m\.content === pendingUserMsg\.content/.test(adoptSrc),
     "★ 老服务端 / 老数据（没有 client_msg_id）⇒ **原样落回**「同内容」判据（行为不变）",
+  );
+  // ★ [T-114] 判据**只有一份**（组件级那一份是唯一真值 ⇒ 渲染层与 effect 不会漂移）。
+  const clientIdCompares = src.match(/m\.clientMsgId === pendingUserMsg\.clientMsgId/g) || [];
+  assert.equal(
+    clientIdCompares.length,
+    1,
+    "★ client_msg_id 认亲判据**只许有一份**（不许渲染层与 effect 各写一遍）",
+  );
+  // ★ [T-114] 认亲成功后**冻结**乐观行 —— 否则它会被反复加回/撤掉 ⇒「闪一下就没了」。
+  assert.ok(
+    /pendingUserAdopted/.test(src),
+    "★ 认亲成功后必须冻结乐观行（pendingUserAdopted）—— 不许反复加回",
   );
 });
 
