@@ -657,31 +657,76 @@ export function parsePhasesRichEvents(
   return events.length > 0 ? events : undefined;
 }
 
+export type HistoryPage<T> = {
+  items: T[];
+  next_cursor: string | null;
+};
+
+/**
+ * collectHistoryPages —— 分页拉全历史。
+ *
+ * ## 病根（生产实证 · session 1134）
+ *
+ *   PC 原来只请求一次 `/messages`（无 limit/cursor）⇒ 服务端默认返回第一页 100 条。
+ *   1134 共 300+ 条，用户看到的“PM 回执回来了…”正好是第 100 条 ⇒ 从这里之后整段消失；
+ *   新消息靠乐观/流式短暂出现，history refetch 又只拿第一页 ⇒ 闪一下就没了。
+ *
+ * ## 契约
+ *
+ *   · 每页带 `limit=200`（服务端 schema 上限）；
+ *   · `next_cursor` 非空 ⇒ 继续带 `cursor` 拉下一页；
+ *   · 顺序 = 服务端返回顺序（createdAt asc），逐页 append；
+ *   · 页数上限 100（20000 条，防脏 cursor 死循环）。
+ */
+export async function collectHistoryPages<T>(
+  fetchPage: (cursor: string | null) => Promise<HistoryPage<T>>,
+): Promise<T[]> {
+  const all: T[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+
+  for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+    const page = await fetchPage(cursor);
+    all.push(...(page.items ?? []));
+    const next = page.next_cursor;
+    if (!next || typeof next !== "string") return all;
+    // 防御：服务端误回同一个 cursor ⇒ 不许死循环。
+    if (seenCursors.has(next)) return all;
+    seenCursors.add(next);
+    cursor = next;
+  }
+  return all;
+}
+
 export async function getHistory(chatId: string): Promise<{
   messages: ChatMessage[];
   nextCursor: string | null;
 }> {
-  const r = await request<{
-    items: Array<{
-      id: string;
-      role: string;
-      content: string;
-      created_at: string;
-      /** A2-D4-02 · 思考 / 工具时间线原始数据 (JSON 字符串, 解析见 parsePhasesJson) */
-      phases_json?: string | null;
-      metadata?: string | Record<string, unknown> | null;
-      recalled?: boolean;
-      recalled_at?: string | null;
-      /**
-       * ★ [T-040 · 2026-11-18] **客户端身份**（ULID）—— 跟端侧乐观行对上。
-       *   服务端 `yinian.service.js` 在 history 的 user 行里回这个字段（顶层）。
-       *   ⇒ 端侧认亲靠它**逐字相等**（不是「同内容」猜）⇒ 问两遍同一句也不会认错。
-       */
-      client_msg_id?: string | null;
-    }>;
-    next_cursor: string | null;
-  }>(`/yinian/sessions/${chatId}/messages`);
-  const messages: ChatMessage[] = (r.items ?? []).map((m) => {
+  type HistoryRow = {
+    id: string;
+    role: string;
+    content: string;
+    created_at: string;
+    /** A2-D4-02 · 思考 / 工具时间线原始数据 (JSON 字符串, 解析见 parsePhasesJson) */
+    phases_json?: string | null;
+    metadata?: string | Record<string, unknown> | null;
+    recalled?: boolean;
+    recalled_at?: string | null;
+    /**
+     * ★ [T-040 · 2026-11-18] **客户端身份**（ULID）—— 跟端侧乐观行对上。
+     *   服务端 `yinian.service.js` 在 history 的 user 行里回这个字段（顶层）。
+     *   ⇒ 端侧认亲靠它**逐字相等**（不是「同内容」猜）⇒ 问两遍同一句也不会认错。
+     */
+    client_msg_id?: string | null;
+  };
+  const rawRows = await collectHistoryPages<HistoryRow>(async (cursor) => {
+    const qs = new URLSearchParams({ limit: "200" });
+    if (cursor) qs.set("cursor", cursor);
+    return request<HistoryPage<HistoryRow>>(
+      `/yinian/sessions/${chatId}/messages?${qs.toString()}`,
+    );
+  });
+  const messages: ChatMessage[] = rawRows.map((m) => {
     let imageUrls: string[] | undefined;
     let attachedFileIds: string[] | undefined;
     let attachedFileNames: Array<{ fileId: string; name: string }> | undefined;
@@ -763,7 +808,7 @@ export async function getHistory(chatId: string): Promise<{
       richEvents: parsePhasesRichEvents(m.phases_json),
     };
   });
-  return { messages, nextCursor: r.next_cursor };
+  return { messages, nextCursor: null };
 }
 
 // ─────────── ChatDetail P0 (阶段 8) — 单条消息 / approval 接口 ───────────
