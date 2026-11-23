@@ -39,6 +39,12 @@ const RULES: Record<string, Rule> = {
     enum: { priority: ['now', 'next', 'later'] }, minLength: { session_id: 1, text: 1 },
     maxLength: { session_id: 200, text: 100000, task_id: 200 },
   },
+  // [T-111] fire-and-forget；不接受 priority（固定 next），不接受内部字段。
+  pc_cc_append: {
+    required: ['session_id', 'text'], string: ['session_id', 'text', 'task_id'],
+    minLength: { session_id: 1, text: 1 },
+    maxLength: { session_id: 200, text: 100000, task_id: 200 },
+  },
   pc_cc_control: {
     required: ['session_id', 'action'], string: ['session_id', 'action', 'name'],
     enum: { action: ['rename', 'notify_when_idle'] }, minLength: { session_id: 1 },

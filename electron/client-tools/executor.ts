@@ -46,7 +46,7 @@ import {
 } from './backgroundJobs.ts';
 import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus, pcBrowserShot, pcBrowserBack, pcBrowserWindow } from './browser.ts';
 import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
-import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
+import { findSession, sendPeerMessage, sendPeerAppend, sendPeerControl } from './claudeCodePeer.ts';
 import { buildCcReceipt, deliveryIdFromArgs } from './ccReceipt.ts';
 import { validateClientToolArgs } from './clientToolArgs.ts';
 import type { PeerReplyTo } from './claudeResultFormat.ts';
@@ -705,6 +705,48 @@ async function pcCcSend(
   }
 }
 
+/**
+ * [T-111] pc_cc_append —— 轻量追加信息（fire-and-forget）。
+ *
+ * ⚠️ 只做「本机写通道投递」这一件事：
+ *   · 不订阅回报 / 不等 Claude Code 结果（没有 watcher）；
+ *   · 不创建 job / work_unit，不发 job_result（不另起一轮汇报）；
+ *   · 回执只到 queued（visible 需目标侧后验），**没有 turn_acked**。
+ */
+async function pcCcAppend(args: Record<string, unknown> | null): Promise<ClientToolResult> {
+  const sessionId = str(args, 'session_id');
+  const text = str(args, 'text');
+  if (!sessionId) return fail('缺少 session_id', { error_type: 'invalid_input' } as any);
+  if (!text) return fail('缺少 text', { error_type: 'invalid_input' } as any);
+  const taskId = str(args, 'task_id');
+  const deliveryId = taskId ? `pc_cc_append:${sessionId}:${taskId}` : `pc_cc_append:${sessionId}:${Date.now()}`;
+  try {
+    const r = await sendPeerAppend(sessionId, text, taskId);
+    if (!r.ok) {
+      if (r.reason === 'session_not_live') return fail(`会话不在本机运行中: ${sessionId}`);
+      return fail(`投递失败: ${r.reason || 'unknown'}`);
+    }
+    return ok({
+      stdout: JSON.stringify({
+        status: 'ok',
+        tool: 'pc_cc_append',
+        append_kind: 'pc_cc_append',
+        delivered: true,
+        accepted: true,
+        queued: true,
+        visible: false,
+        session_id: sessionId,
+        task_id: taskId,
+        delivery_id: deliveryId,
+        note: '已把补充信息追加到本机 Claude Code 会话；不代表它已处理，也没有订阅回报。',
+      }),
+      exitCode: 0,
+    });
+  } catch (e) {
+    return fail(`投递失败: ${(e as Error).message}`);
+  }
+}
+
 /** pc_cc_control —— 控制动作（改名 / 订阅空闲通知）。 */
 async function pcCcControl(
   args: Record<string, unknown> | null,
@@ -808,6 +850,8 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_cc_read: 60000,
   // [T-086] reply-to 只写进注入消息；不另起一轮汇报 ⇒ 工作队列需覆盖整个 24h 等待窗口。
   pc_cc_send: 24 * 60 * 60 * 1000,
+  // ★ [T-111] append 只等本机写通道回执，不等 Claude Code 的结果。
+  pc_cc_append: 30000,
   pc_cc_control: 30000,
 };
 
@@ -895,6 +939,8 @@ export async function executeClientTool(
     case 'pc_cc_sessions': return pcCcSessions(args);
     case 'pc_cc_read': return pcCcRead(args);
     case 'pc_cc_send': return pcCcSend(args, { signal, pendingId: opts?.pendingId ?? null, sessionId: opts?.sessionId ?? null });
+    // ★ [T-111] 轻量追加（fire-and-forget）—— 不建 work_unit、不等结果。
+    case 'pc_cc_append': return pcCcAppend(args);
     case 'pc_cc_control': return pcCcControl(args);
     default:
       return fail(`未知的端侧工具: ${tool}`);
