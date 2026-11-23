@@ -34,7 +34,7 @@ import {
   appendYieldLog,
   INSTANCE_HEARTBEAT_MS,
 } from './instance-guard';
-import { deviceClient } from './client-tools/deviceClient';
+import { deviceClient, peerJobManager } from './client-tools/deviceClient';
 import { getAppIcon, logIconStatus } from './icon';
 
 // CommonJS 下 __dirname 已有,这里只是为了类型注释
@@ -1155,6 +1155,8 @@ app.whenReady().then(() => {
   //   ② 服务端能立刻知道本机离线（不留残余 SSE 连接）。
   app.on('will-quit', () => {
     try { deviceClient.disconnect(); } catch { /* ignore */ }
+    // ★ [T-068] 关掉 peer inbox（删 key 文件）并清掉后台 job 的 timer。
+    try { peerJobManager.stop(); } catch { /* ignore */ }
     try { releaseInstanceLock(instanceProfile.lockFile, INSTANCE_ID); } catch { /* ignore */ }
   });
 

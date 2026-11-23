@@ -90,10 +90,38 @@ test("A3 帧不是对象 / null ⇒ 读出空值 (不抛)", () => {
   assert.equal(readFrameOrigin("nope"), null);
 });
 
-test("A4 origin 只认服务端约定的两个值 ⇒ 别的值一律 null (端侧不猜)", () => {
+test("A4 origin 只认服务端约定的三个值 ⇒ 别的值一律 null (端侧不猜)", () => {
   assert.equal(readFrameOrigin({ origin: "user" }), "user");
   assert.equal(readFrameOrigin({ origin: "work_unit_result" }), "work_unit_result");
+  assert.equal(readFrameOrigin({ origin: "agent_message" }), "agent_message");
+  assert.equal(readFrameOrigin({ origin: "cron" }), null); // cron 是 reason 值，不是帧 origin
   assert.equal(readFrameOrigin({ origin: "whatever" }), null);
+});
+
+test("A5 [T-073] agent_message ⇒ 机器起轮但不是后台任务", () => {
+  const { isMachineTurnOrigin } = TI;
+  assert.equal(isMachineTurnOrigin("work_unit_result"), true);
+  assert.equal(isMachineTurnOrigin("agent_message"), true);
+  assert.equal(isMachineTurnOrigin("cron"), true);
+  assert.equal(isMachineTurnOrigin("user"), false);
+  assert.equal(isMachineTurnOrigin(null), false);
+  assert.equal(isMachineTurnOrigin(undefined), false);
+});
+
+test("A6 [T-073] ⛔ agent_message 不得触发后台任务横幅 (横幅只由 pending-work 驱动)", () => {
+  const code = repoCode("src/routes/ChatDetail.tsx");
+  assert.ok(
+    /count=\{sessionBackgroundWork\.length\}/.test(code),
+    "后台横幅的 count 必须来自 sessionBackgroundWork (server pending-work + 本机作业)",
+  );
+  assert.ok(
+    !/agent_message[\s\S]{0,80}(setPendingWork|localJobs|BackgroundWorkBanner)/.test(code),
+    "⛔ agent_message 不许出现在任何后台任务状态/横幅的赋值路径上",
+  );
+  assert.ok(
+    code.includes("isMachineTurnOrigin(claim.origin)"),
+    "机器起轮刷 history 必须走 isMachineTurnOrigin (含 agent_message)",
+  );
 });
 
 // ===========================================================================
@@ -233,6 +261,17 @@ test("D1 metadata.source === 'work_unit_result' ⇒ 系统注记 (老服务端�
 
 test("D2 metadata.skip_transcript === true ⇒ 系统注记 (新服务端两个都有)", () => {
   assert.equal(isSystemNoticeMetadata({ skip_transcript: true }), true);
+});
+
+test("D2b [F-fix] 所有机器来源都是系统注记", () => {
+  for (const source of ["work_unit_result", "agent_message", "cron"]) {
+    assert.equal(isSystemNoticeMetadata({ source }), true, `source=${source}`);
+    assert.equal(
+      isSystemNoticeMetadata(JSON.stringify({ source })),
+      true,
+      `JSON 字符串 source=${source}`,
+    );
+  }
 });
 
 test("D3 两个都有 ⇒ 系统注记 (或关系)", () => {
@@ -452,5 +491,65 @@ test("F2 判据模块只有 metadata 的**键名**，没有那句文案（web / 
   assert.ok(
     !/已完成/.test(code),
     "⛔ 判据模块的**代码**里不许出现「已完成」字面量（那句话服务端写）",
+  );
+});
+
+// ===========================================================================
+// G 段 —— [T-089] 常驻切轮刷 history：不认反推 + 同轮一次去重
+// ---------------------------------------------------------------------------
+// 现象：手机端普通用户轮（帧顶层无 `origin`）被 `resolveTurnOrigin` 反推成
+//   `work_unit_result` ⇒ 常驻流切轮 invalidate history，再叠加 done 终态那次 ⇒
+//   同一轮刷两遍（ChatDetail.tsx:2675-2676 附近）。
+// 修法：只有帧顶层**显式** origin（服务端权威）才触发；按 `${chatId}|${turnKey}`
+//   做同一轮一次去重；切会话清表。
+// ===========================================================================
+
+test("G1 常驻切轮的机器刷新必须同时要求「帧顶层显式 origin」", () => {
+  const code = repoCode(DETAIL);
+  // 仍走共享层口径（A6 的约束不破），但加了显式 origin 守卫。
+  assert.ok(
+    /const explicitOrigin = readFrameOrigin\(chunk\);[\s\S]{0,200}isMachineTurnOrigin\(claim\.origin\)\s*&&\s*explicitOrigin\s*!==\s*null/.test(code),
+    "机器切轮刷 history 必须同时判 isMachineTurnOrigin(claim.origin) + 帧顶层显式 readFrameOrigin(chunk) !== null（⛔ 不许只凭反推刷）",
+  );
+  assert.ok(
+    code.includes("readFrameOrigin") && code.includes('from "../lib/sse/turn-identity"'),
+    "readFrameOrigin 必须从共享层 import（判据只有一份）",
+  );
+});
+
+test("G2 同一轮（chatId|turnKey）只刷一次 history，切 chatId 清去重表", () => {
+  const code = repoCode(DETAIL);
+  assert.ok(
+    /\$\{chatId\}\|\$\{claim\.state\.turnKey\}/.test(code),
+    "去重键必须是 `${chatId}|${turnKey}`",
+  );
+  assert.ok(
+    /machineHistoryRefreshRef\.current\.has\(refreshKey\)/.test(code),
+    "必须先查重再 invalidate",
+  );
+  assert.ok(
+    /machineHistoryRefreshRef\.current\.add\(refreshKey\)/.test(code),
+    "刷新后必须登记去重键",
+  );
+  assert.ok(
+    /machineHistoryRefreshRef\.current\.clear\(\)/.test(code),
+    "切 chatId 必须清掉去重表（跨会话身份不能复用）",
+  );
+});
+
+test("G3 帧没带显式 origin 时反推绝不触发 history invalidate（行为级）", () => {
+  // 反推函数本身仍给「这一轮是谁」用（见 B/C 段），但不许直接驱动机器刷新。
+  const own = new Set(["tk_mine"]);
+  const inferred = claimPersistentFrame(
+    emptyPersistentTurnState(),
+    { turnKey: "tk_phone_user", content: "你好" }, // 帧顶层没有 origin
+    own,
+  );
+  assert.equal(inferred.origin, "work_unit_result", "反推仍会误判（这是已知窄口子）");
+  // 守卫：帧顶层 origin 缺失 ⇒ readFrameOrigin === null ⇒ 刷新条件短路。
+  assert.equal(
+    readFrameOrigin({ turnKey: "tk_phone_user" }),
+    null,
+    "帧顶层显式 origin 是 null ⇒ 新守卫（G1）挡住这次误刷",
   );
 });

@@ -15,6 +15,11 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const {
   RESULT_BLOCK_START, RESULT_BLOCK_END,
@@ -128,6 +133,74 @@ test('GC-CRF-7 · ★ 汇报协议模板含两个标记', () => {
   assert.ok(c.includes('status:'), '模板要说清 status');
   assert.ok(c.includes('summary:'), '模板要说清 summary');
   assert.ok(c.includes('result:'), '模板要说清 result');
+  assert.ok(!c.includes('task_id:'), '老调用（无 taskId）不写 task_id 行');
+});
+
+test('GC-CRF-9 · ★ task_id 强绑定：模板带 task_id，解析器兼容新老格式', () => {
+  const c = buildReportingContract('task-123');
+  const s = c.indexOf(RESULT_BLOCK_START);
+  const e = c.indexOf(RESULT_BLOCK_END);
+  const blockText = c.slice(s, e);
+  assert.match(blockText, /task_id: task-123/);
+  assert.ok(blockText.indexOf('status:') < blockText.indexOf('task_id:'), 'task_id 放 status 后');
+  assert.ok(blockText.indexOf('task_id:') < blockText.indexOf('result:'), 'task_id 放 result 前');
+
+  // 新格式解析出 task_id
+  const withId = parseGaclawResultBlock([
+    RESULT_BLOCK_START,
+    'status: completed',
+    'task_id: task-123',
+    'summary: 做完',
+    'result: |',
+    '  正文',
+    RESULT_BLOCK_END,
+  ].join('\n'));
+  assert.equal(withId.task_id, 'task-123');
+  assert.equal(withId.status, 'completed');
+
+  // 老格式（没有 task_id）⇒ 空串，不误判
+  assert.equal(parseGaclawResultBlock(block()).task_id, '');
+  // fallback / empty 路径也要有 task_id 字段（缺省空串）
+  assert.equal(extractClaudeResult([result('直接结论')]).task_id, '');
+  assert.equal(extractClaudeResult([]).task_id, '');
+});
+
+test('GC-CRF-10 · ★ [T-086] 汇报协议带 reply-to 使用指引，老格式兼容', () => {
+  const withReply = buildReportingContract('task-123', {
+    business_session_id: 'biz-sess-1',
+    cc_session_id: 'cc-sess-2',
+    channel: 'pc',
+  });
+  assert.match(withReply, /使用 reply_to 提供的 session_id \/ channel/, '明确要求使用 reply_to');
+  assert.match(withReply, /不要猜 session_id/, '明确禁止猜 session_id');
+  assert.match(withReply, /reply_to_business_session_id="biz-sess-1"/);
+  assert.match(withReply, /reply_to_cc_session_id="cc-sess-2"/);
+  assert.match(withReply, /reply_channel="pc"/);
+  assert.ok(withReply.includes(RESULT_BLOCK_START) && withReply.includes(RESULT_BLOCK_END), '结果块协议不变');
+  assert.match(withReply, /task_id: task-123/, 'task_id 行仍在');
+
+  const noReply = buildReportingContract('task-123');
+  assert.ok(!noReply.includes('reply_to'), '老调用（无 replyTo）不带 reply-to 文案');
+  assert.match(noReply, /task_id: task-123/, '老调用兼容 task_id');
+  assert.strictEqual(
+    parseGaclawResultBlock([
+      RESULT_BLOCK_START, 'status: completed', 'task_id: task-123',
+      'summary: 结论', 'result: |', '  正文', RESULT_BLOCK_END,
+    ].join('\n')).task_id,
+    'task-123',
+    '带 reply-to 指引不影响结果块解析',
+  );
+});
+
+test('T086-24h · ★ pc_cc_send 工作队列窗口 = 24h（无 540000/10min 残留）', () => {
+  const exec = fs.readFileSync(path.join(ROOT, 'electron/client-tools/executor.ts'), 'utf8');
+  const codeOnly = exec.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  assert.match(codeOnly, /pc_cc_send:\s*24 \* 60 \* 60 \* 1000/, 'pc_cc_send 默认 24h');
+  assert.ok(!codeOnly.includes('540000'), '无 9 分钟残留');
+  assert.ok(!/pc_cc_send[\s\S]{0,200}600000/.test(codeOnly), 'pc_cc_send 无 10 分钟残留');
+  const dev = fs.readFileSync(path.join(ROOT, 'electron/client-tools/deviceClient.ts'), 'utf8');
+  const devCode = dev.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  assert.match(devCode, /const PEER_JOB_DEADLINE_MS = 24 \* 60 \* 60 \* 1000/, 'peer job 24h deadline');
 });
 
 test('GC-CRF-8 · ★ summarizeClaude 老行为不破', () => {

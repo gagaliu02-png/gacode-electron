@@ -45,7 +45,7 @@
 // =========================================================================
 
 /** 这一轮的发起方。 */
-export type TurnOrigin = "user" | "work_unit_result";
+export type TurnOrigin = "user" | "work_unit_result" | "agent_message" | "cron";
 
 /** 帧顶层的 `origin` 字段名 (服务端 unified-api `formatTurnFrame` 下发)。 */
 export const FRAME_ORIGIN_FIELD = "origin";
@@ -60,7 +60,18 @@ export const FRAME_TURN_KEY_FIELD = "turnKey";
  */
 export const WORK_UNIT_NOTICE_SOURCE = "work_unit_result";
 
-/** metadata 里的 `source` 键名 (与 {@link WORK_UNIT_NOTICE_SOURCE} 配套)。 */
+/** 服务端系统注记的其它机器来源（F-fix：所有机器来源都算系统注记）。 */
+export const AGENT_MESSAGE_NOTICE_SOURCE = "agent_message";
+export const CRON_NOTICE_SOURCE = "cron";
+
+/** 所有机器来源（常驻流 TurnOrigin + 系统注记判据共用）。 */
+export const MACHINE_TURN_SOURCES: readonly string[] = [
+  WORK_UNIT_NOTICE_SOURCE,
+  AGENT_MESSAGE_NOTICE_SOURCE,
+  CRON_NOTICE_SOURCE,
+];
+
+/** metadata 里的 `source` 键名 (与机器投递来源配套)。 */
 export const METADATA_SOURCE_KEY = "source";
 
 /**
@@ -101,15 +112,17 @@ export function readFrameTurn(frame: unknown): FrameTurn {
 /**
  * readFrameOrigin —— 读帧**顶层**的 `origin`。
  *
- * @returns `'user' | 'work_unit_result' | null`
+ * @returns `'user' | 'work_unit_result' | 'agent_message' | null`
  *   · `null` = 帧没带 (老服务端) 或形状不对 ⇒ 端侧**不知道** ⇒ 走反推。
  *
- * ⚠️ 只认**字符串**且值在这两个之内 ⇒ 别的值一律 null (端侧不猜)。
+ * ⚠️ 只认**字符串**且值在服务端允许的 origin 之内 ⇒ 别的值一律 null (端侧不猜)。
+ * ⛔ `cron` 是 `turn_started.reason` / 注记 source 的值，不是帧顶层 origin。
  */
 export function readFrameOrigin(frame: unknown): TurnOrigin | null {
   if (!frame || typeof frame !== "object") return null;
   const raw = (frame as Record<string, unknown>)[FRAME_ORIGIN_FIELD];
   if (raw === "work_unit_result") return "work_unit_result";
+  if (raw === "agent_message") return "agent_message";
   if (raw === "user") return "user";
   return null;
 }
@@ -146,6 +159,8 @@ export function resolveTurnOrigin(input: {
 }): TurnOrigin | null {
   // ① 帧自带 ⇒ 服务端权威, 直接用。
   if (input.frameOrigin === "work_unit_result") return "work_unit_result";
+  if (input.frameOrigin === "agent_message") return "agent_message";
+  if (input.frameOrigin === "cron") return "cron";
   if (input.frameOrigin === "user") return "user";
   // ② 帧没带 ⇒ 用「我发起过的轮」反推。
   const frameKey =
@@ -154,6 +169,16 @@ export function resolveTurnOrigin(input: {
   const own = input.ownTurnKeys;
   if (!own || own.size === 0) return null; // ③ 不知道 ⇒ 不敢断言。
   return own.has(frameKey) ? "user" : "work_unit_result";
+}
+
+/**
+ * isMachineTurnOrigin —— 这一轮是不是服务端起的（不是用户自己发起的）。
+ *
+ * 判据仅此一份。⛔ `agent_message` 算机器起轮，但不是后台任务：
+ * 后台任务横幅只由 pending-work/本机 running 驱动。
+ */
+export function isMachineTurnOrigin(origin: TurnOrigin | null | undefined): boolean {
+  return origin === "work_unit_result" || origin === "agent_message" || origin === "cron";
 }
 
 // =========================================================================
@@ -267,10 +292,10 @@ export function buildAttachRowId(chatId: string, turnSeq: number | null | undefi
  * isSystemNoticeMetadata —— 这一行是不是「服务端投递的**系统注记**」
  * (不是用户说的话)。
  *
- * ## 判据 (两个都是, 「或」关系)
+ * ## 判据 (机器来源 ∪ 通用标记, 「或」关系)
  *
- *   · `metadata.source === 'work_unit_result'` —— 老服务端;
- *   · `metadata.skip_transcript === true`      —— 新服务端 (通用标记)。
+ *   · `metadata.source ∈ {work_unit_result, agent_message, cron}` —— 机器来源;
+ *   · `metadata.skip_transcript === true`                         —— 通用标记。
  *
  * @param metadata 服务端落库那行的 `metadata` (对象 **或** JSON 字符串 **或** null)。
  * @returns true ⇒ 这一行该渲染成**系统注记** (不是用户气泡)。
@@ -281,7 +306,8 @@ export function buildAttachRowId(chatId: string, turnSeq: number | null | undefi
 export function isSystemNoticeMetadata(metadata: unknown): boolean {
   const meta = readMetadataObject(metadata);
   if (!meta) return false;
-  if (meta[METADATA_SOURCE_KEY] === WORK_UNIT_NOTICE_SOURCE) return true;
+  const source = meta[METADATA_SOURCE_KEY];
+  if (typeof source === "string" && MACHINE_TURN_SOURCES.includes(source)) return true;
   return meta[SKIP_TRANSCRIPT_FLAG] === true;
 }
 

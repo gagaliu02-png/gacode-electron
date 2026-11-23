@@ -8,6 +8,9 @@
 //   GC-CW-4  ★ 超时 ⇒ 明确报错（不静默挂死）
 //   GC-CW-5  ★ abort ⇒ 立刻退出
 //   GC-CW-6  ★ 注入正文带 task_id + 汇报协议（`sendPeerMessage`）
+//   GC-CW-6b ★ `buildReportingContract(taskId)` 把 task_id 写进结果块
+//   GC-CW-8  ★ `pcCcSend` job 化：投递 + 订阅后立即返回「已投递」，不再前台等结果
+//   GC-CW-9  ★ task_id 错配的结果块不是本次结果（peer-job 强校验）
 //   GC-CW-7  ★ 只命中一次（不重复报）
 //
 // ⚠️ 本文件**不 import electron** —— 只加载纯 Node 模块。
@@ -20,8 +23,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ── HOME 隔离（必须在 import 被测模块前设好）────────────────────────────
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'gacode-watcher-'));
 process.env.HOME = FAKE_HOME;
 process.env.USERPROFILE = FAKE_HOME;
@@ -201,12 +206,82 @@ test('GC-CW-6 · ★ 注入正文带 task_id + 汇报协议', async () => {
   assert.ok(!c2.includes('task_id='), '不该出现 task_id 属性');
 });
 
-test('GC-CW-6b · ★ 凭据缺失时如实失败（不静默成功）', async () => {
+test('GC-CW-6d · ★ [T-086] reply-to 写进 cross-session-message 属性 + 汇报协议', async () => {
+  const { buildPeerMessageContent } = await import('../electron/client-tools/claudeCodePeer.ts');
+  const c = buildPeerMessageContent('任务正文', 'task-abc123', {
+    business_session_id: 'biz-sess-42',
+    cc_session_id: 'cc-sess-77',
+    channel: 'pc',
+  });
+  assert.match(c, /<cross-session-message from="uds:gaclaw" task_id="task-abc123" reply_to_business_session_id="biz-sess-42" reply_to_cc_session_id="cc-sess-77" reply_channel="pc">/,
+    '三个 reply-to 属性必须按顺序写进注入消息');
+  assert.ok(c.includes('使用 reply_to 提供的 session_id / channel') && c.includes('不要猜 session_id'),
+    '汇报协议要明确使用 reply_to、不许猜 session_id');
+  assert.ok(c.includes(RESULT_BLOCK_START) && c.includes(RESULT_BLOCK_END), '结果块协议仍在');
+  assert.match(c, /<\/cross-session-message>$/, '仍要闭合');
+
+  // 老调用（无 replyTo）兼容：属性与文案都不出现
+  const old = buildPeerMessageContent('任务正文', 'task-abc123');
+  assert.ok(!old.includes('reply_to_'), '老格式不带 reply-to 属性');
+  assert.ok(!old.includes('reply_to 提供'), '老格式不带 reply-to 指引');
+  assert.match(old, /<cross-session-message from="uds:gaclaw" task_id="task-abc123">/, '老格式 tag 不变');
+});
+
+test('GC-CW-6e · ★ [T-086] reply-to 部分字段也安全（转义 + 无空属性）', async () => {
+  const { buildPeerMessageContent } = await import('../electron/client-tools/claudeCodePeer.ts');
+  const c = buildPeerMessageContent('任务正文', null, {
+    business_session_id: 'biz "<>&\n inject',
+  });
+  assert.match(c, /<cross-session-message from="uds:gaclaw" reply_to_business_session_id="bizinject">/,
+    '危险字符被清洗，不破坏 XML 属性');
+  assert.ok(!c.includes('reply_to_cc_session_id='), '未给的字段不写空属性');
+  assert.ok(!c.includes('reply_channel='), '未给的字段不写空属性');
+
+  const empty = buildPeerMessageContent('任务正文', null, {});
+  assert.match(empty, /<cross-session-message from="uds:gaclaw">/, '空 replyTo ⇒ 老格式');
+});
+
+test('GC-CW-6b · ★ 汇报协议带 task_id，错配块不能被当作本次结果', async () => {
+  const { buildReportingContract, parseGaclawResultBlock } =
+    await import('../electron/client-tools/claudeResultFormat.ts');
+  const contract = buildReportingContract('task-xyz');
+  const piece = contract.slice(contract.indexOf(RESULT_BLOCK_START), contract.indexOf(RESULT_BLOCK_END));
+  assert.match(piece, /task_id: task-xyz/, '契约模板要写入 task_id');
+
+  const blockText = (taskId) => [
+    RESULT_BLOCK_START,
+    'status: completed',
+    `task_id: ${taskId}`,
+    'summary: 结论',
+    'result: |',
+    '  正文',
+    RESULT_BLOCK_END,
+  ].join('\n');
+  const rec = writeSession(2008);
+  appendTranscript(rec, assistantLine(blockText('task-xyz')));
+  const hit = parseGaclawResultBlock(readNewAssistantText(rec.sessionId, 0).text);
+  assert.equal(hit.task_id, 'task-xyz');
+
+  const wrong = parseGaclawResultBlock(blockText('other-task'));
+  assert.equal(wrong.task_id, 'other-task');
+  // peer-job 里的判据：只有 hit.task_id === pendingId 才回传
+  assert.ok(!(wrong.task_id === 'task-xyz'), '错配 ⇒ 不许结算');
+});
+
+test('GC-CW-6c · ★ 凭据缺失时如实失败（不静默成功）', async () => {
   const rec = writeSession(2006);
   const { sendPeerMessage } = await import('../electron/client-tools/claudeCodePeer.ts');
   const r = await sendPeerMessage(rec.sessionId, '任务正文', 'later', 'task-abc123');
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'peer_credential_unavailable');
+});
+
+test('GC-CW-8 · ★ pcCcSend job 化：不再前台等结果（源码级断言）', () => {
+  const exec = fs.readFileSync(path.join(ROOT, 'electron/client-tools/executor.ts'), 'utf8');
+  assert.ok(exec.includes('claudeCodePeerInbox.register('), '先登记 inbox 映射');
+  assert.ok(exec.includes("sendPeerControl(sessionId, 'notify_when_idle'"), '发订阅帧');
+  assert.ok(exec.includes('peerJobManager.track('), '交给后台管理器');
+  assert.ok(!exec.includes('watchClaudeSessionResult('), '不再前台 await watcher');
 });
 
 test('GC-CW-7 · ★ 只命中一次（不重复报）', async () => {

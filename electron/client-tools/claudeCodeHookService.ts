@@ -32,6 +32,7 @@ import {
   HOOK_MARKER,
   type HookInstallResult,
 } from './claudeCodeHookInstall.ts';
+import { handleCcTool } from './ccSessionToolService.ts';
 import * as fs from 'fs';
 
 /** 本服务单例（主进程）。 */
@@ -95,6 +96,16 @@ export async function ensureStarted(): Promise<HookBridgeHandle> {
         // （deviceClient 在 token 变化时会重注册，deviceId 不变）。
         deviceId: getDeviceId(),
       },
+      // ★ [T-087] 复用同一本地服务提供 Claude Code 会话工具。
+      //   role/selfSessionId/parentSessionId 都在主进程侧决定：CLI 不能自报身份。
+      ccTools: async (route, body) => handleCcTool(route, body, {
+        apiBase,
+        accessToken: () => deviceClient.getAccessToken(),
+        deviceId: getDeviceId,
+        role: () => 'main',
+        selfSessionId: () => null,
+        parentSessionId: () => null,
+      }),
     });
     _handle = h;
     return h;

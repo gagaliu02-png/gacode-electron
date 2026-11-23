@@ -43,7 +43,9 @@ import { randomUUID, createHash } from 'crypto';
 
 import { listClaudeSessions, type ClaudeSessionRecord } from './claudeCodeSession.ts';
 // ★ [2026-11-17 · T-022] 汇报协议模板（注入正文里带 ⇒ 端侧按格式回结果）
-import { buildReportingContract } from './claudeResultFormat.ts';
+import { buildReportingContract, formatReplyToAttr, type PeerReplyTo } from './claudeResultFormat.ts';
+// [T-069] 诊断日志：走 peerLog ⇒ 生产落 client-tools.log，单测只 console。
+import { peerLog } from './peerLog.ts';
 
 /** 发消息的优先级。 */
 export type PeerPriority = 'now' | 'next' | 'later';
@@ -125,7 +127,12 @@ export function findSession(sessionId: string): ClaudeSessionRecord | null {
   return all.find((s) => s.sessionId === sessionId) || null;
 }
 
-/** 发一帧。返回 true = 服务端接收（连接未被立刻踢掉）。 */
+/**
+ * 发一帧。返回 true = 服务端接收（连接未被立刻踢掉）。
+ *
+ * ⚠️ [T-069] 脱敏规则：日志里**只**记 action / msg_id / 连接结果，
+ *    绝不打印 token / key / 消息正文（凭据不出进程是端侧硬规则）。
+ */
 function writeFrame(sock: net.Socket, frame: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
     const line = JSON.stringify(frame) + '\n';
@@ -152,6 +159,22 @@ async function sendFrame(
   if (!token) return { ok: false, reason: 'peer_credential_unavailable' };
 
   const holdMs = opts.holdMs ?? 400;
+  // [T-069] 只记非敏感元数据（frame.type / action / msg_id），不记 token / 内容。
+  const meta = frame && typeof frame === 'object'
+    ? {
+        frameType: String((frame as any).type || ''),
+        action: String((frame as any).action || ''),
+        msgId: String((frame as any).msg_id || ''),
+        from: String((frame as any).from || ''),
+      }
+    : { frameType: '', action: '', msgId: '', from: '' };
+  peerLog('cc-peer', 'send frame: ' + JSON.stringify({
+    pid: rec.pid,
+    type: meta.frameType,
+    action: meta.action,
+    msg_id: meta.msgId,
+    from: meta.from,
+  }));
   return new Promise((resolve) => {
     let settled = false;
     let timer: NodeJS.Timeout | null = null;
@@ -159,6 +182,13 @@ async function sendFrame(
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      peerLog('cc-peer', 'send result: ' + JSON.stringify({
+        type: meta.frameType,
+        action: meta.action,
+        msg_id: meta.msgId,
+        ok: r.ok,
+        reason: r.reason || null,
+      }));
       try { sock.destroy(); } catch { /* ignore */ }
       resolve(r);
     };
@@ -195,21 +225,35 @@ async function sendFrame(
  *   `<cross-session-message from="uds:gaclaw" task_id="…">` + 正文 + 汇报协议 + `</cross-session-message>`
  *   ⇒ 端侧知道「这是 gaclaw 的任务」+「回给哪个任务」+「怎么按格式汇报结果」。
  *
+ * ★ [T-086] 形状（带 reply-to 时）：
+ *   `<cross-session-message from="uds:gaclaw" task_id="…" reply_to_business_session_id="…" reply_to_cc_session_id="…" reply_channel="…">`
+ *   ⇒ 端侧既有 task_id（结果块强校验），也有回信地址（主动回信不再猜 session_id）。
+ *
  * @param text    原始任务正文
  * @param taskId  可选：裁决身份（= 服务端 `pending_id`）
+ * @param replyTo 可选：回信地址（服务端透传）；写入消息属性 + 汇报协议的指引。
  * @param deliveryId 可选：统一回执幂等键（= peer.mjs send 的 delivery_id，notice 凭它对号）
  */
-export function buildPeerMessageContent(text: string, taskId?: string | null, deliveryId?: string | null): string {
+export function buildPeerMessageContent(
+  text: string,
+  taskId?: string | null,
+  replyTo?: PeerReplyTo | null,
+  deliveryId?: string | null,
+): string {
   const body = neutralize(String(text ?? '').slice(0, 4000));
   // ★ [T-103-b · 统一 envelope] 带 delivery_id ⇒ 与 peer.mjs send / receipt 状态机同一套幂等键，
   //   peer_idle_notice 回来时凭 delivery_id 对上具体那次投递。
+  const taskAttr = taskId ? ` task_id="${neutralize(String(taskId))}"` : '';
+  const replyAttr = formatReplyToAttr(replyTo) || '';
+  const deliveryAttr = deliveryId ? ` delivery_id="${neutralize(String(deliveryId))}"` : '';
   const attrs =
-    (taskId ? ` task_id="${neutralize(String(taskId))}"` : '') +
-    (deliveryId ? ` delivery_id="${neutralize(String(deliveryId))}"` : '');
+    `${taskAttr}` +
+    `${replyAttr ? ` ${replyAttr}` : ''}` +
+    `${deliveryAttr ? ` ${deliveryAttr}` : ''}`;
   return (
     `<cross-session-message from="uds:gaclaw"${attrs}>\n` +
     `${body}\n` +
-    `${buildReportingContract()}\n` +
+    `${buildReportingContract(taskId, replyTo)}\n` +
     `</cross-session-message>`
   );
 }
@@ -222,16 +266,20 @@ export function buildPeerMessageContent(text: string, taskId?: string | null, de
  * @param priority  `now` 立刻插队 / `next` 下一轮 / `later` 等空闲（默认 safest）
  * @param taskId    可选：这次任务的裁决身份（= 服务端 `pending_id`）
  *   ⇒ 写进注入正文的 `task_id` 属性 ⇒ 端侧回信时能对上号（也便于日志定位）。
+ * @param replyTo   可选：回信地址 ⇒ 写进 `<cross-session-message>` 属性 + 汇报协议指引。
  */
 export async function sendPeerMessage(
   sessionId: string,
   text: string,
   priority: PeerPriority = 'later',
   taskId?: string | null,
+  replyTo?: PeerReplyTo | null,
+  deliveryId?: string | null,
 ): Promise<{ ok: boolean; reason?: string; session_id?: string }> {
   const rec = findSession(sessionId);
   if (!rec) return { ok: false, reason: 'session_not_live' };
-  const content = buildPeerMessageContent(text, taskId, taskId);
+  // ★ deliveryId 缺省退回 taskId ⇒ 老的调用方（只传 taskId）也能带上 delivery_id 属性。
+  const content = buildPeerMessageContent(text, taskId, replyTo, deliveryId ?? taskId);
   const frame = {
     type: 'user',
     message: { role: 'user', content },
@@ -249,13 +297,16 @@ export async function sendPeerControl(
   sessionId: string,
   action: PeerControlAction,
   extra: Record<string, unknown> = {},
+  opts: { from?: string | null } = {},
 ): Promise<{ ok: boolean; reason?: string; session_id?: string }> {
   if (!CONTROL_ACTIONS.has(action)) {
     return { ok: false, reason: 'unsupported_action:' + String(action) };
   }
   const rec = findSession(sessionId);
   if (!rec) return { ok: false, reason: 'session_not_live' };
-  const frame = { type: 'control', action, ...extra };
+  const frame: Record<string, unknown> = { type: 'control', action, ...extra };
+  // ★ [T-068] notify_when_idle 必须带合法 reply target；其余控制动作维持原状（不带 from）。
+  if (opts.from !== undefined && opts.from !== null) frame.from = opts.from;
   const r = await sendFrame(rec, frame);
   return { ...r, session_id: sessionId };
 }
