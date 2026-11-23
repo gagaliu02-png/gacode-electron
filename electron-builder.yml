@@ -133,6 +133,13 @@ productName: Gacode
 buildVersion: 0.7.37
 copyright: Copyright © 2026 gaga
 
+# ★ [T-122] 出包前现生成图标中间产物（build/icon-{16,32,48,64,128}.png）。
+#   这几个 PNG 是 **gitignore 的中间产物** ⇒ 新 clone / worktree 的 build/ 里本来就没有
+#   ⇒ extraResources 的 `from: build/icon-16.png` 缺源文件时 **electron-builder 只 warn 不 fail**
+#   ⇒ 历史上连着出了几个 **托盘图标是空的** 包（0.7.43 / 0.7.44 实测 resources/ 里都没有 icon-16.png）。
+#   ⇒ 改由构建链自己保证：beforePack 生成 + 生成失败直接打断出包（见 scripts/before-pack-icons.cjs）。
+beforePack: scripts/before-pack-icons.cjs
+
 afterPack: scripts/after-pack-rcedit.cjs
 
 directories:

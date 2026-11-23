@@ -48,6 +48,13 @@ scripts/*
 #   ⇒ 靠这个 afterPack 钩子自己写版本资源。
 #   ⚠️ 不入库 ⇒ clone 下来**出不了包** ⇒ 同款声明式例外 (不用 git add -f)。
 !scripts/after-pack-rcedit.cjs
+# 出包钩子 (T-122 · 2026-11-23): 托盘图标 —— build/icon-16.png 是 gitignore 的中间产物
+#   ⇒ 新 clone / worktree 里没有 ⇒ extraResources 缺源文件时 electron-builder **只 warn 不 fail**
+#   ⇒ 连着出了几个**托盘空图标**的包 (0.7.43 / 0.7.44 实测 resources/ 里都没有 icon-16.png)。
+#   ⇒ 改由 beforePack 钩子在**构建期**现生成 (源图 build/icon-source.png 已提交)。
+#   ⚠️ 不入库 ⇒ clone 下来照样出空托盘图标的包 ⇒ 同款声明式例外 (不用 git add -f)。
+!scripts/before-pack-icons.cjs
+!scripts/build-icon-pngs.mjs
 # SSE 接回批 (2026-10-28): 游标/续传头 + 进场接回 + 审批链路 + 富事件降级 四支断言,
 #   外加变异反证台 (每条断言必须有「改了它就转红」的证据)。
 #   同款声明式例外 —— 父目录已放行 + `scripts/*` 已重新忽略, 这里逐个豁免。
