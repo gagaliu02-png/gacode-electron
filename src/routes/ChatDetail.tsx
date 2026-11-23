@@ -1029,6 +1029,30 @@ export function ChatDetail() {
     attachedFileNames?: Array<{ fileId: string; name: string }>;
     createdAt: string;
   } | null>(null);
+  // ★ [T-114 · 2026-11-23] **乐观行的「已认亲」标记**（一次性）。
+  //
+  //   ## 病根（生产实证 · PC 端 diag.log 2026-11-23 00:51）
+  //
+  //     `认亲 same=true` → `same=false` → `same=true` **来回翻转**，
+  //     而 `optCid` 跨 8 小时**始终是同一条**（16:09 那条）⇒
+  //     **`pendingUserMsg` 这个 state 从来没被清过**（`setPendingUserMsg(null)` 全仓无结果）。
+  //
+  //   ## 为什么会「闪现一下然后消失」
+  //
+  //     `messages` 组装里 `withPendingUser` 的判据是「history 里**此刻**有没有那条 user 行」：
+  //       · 有 ⇒ 乐观行撤掉（显示服务端行）；
+  //       · 没有 ⇒ 乐观行被**加回**列表。
+  //     而「有没有」随 history 每次 refetch 而变（切会话 / 分页 / 过滤）：
+  //     ⇒ 同一条消息在屏幕上**反复出现又消失** = 用户看到的「闪一下就没了」。
+  //
+  //   ## 修法
+  //
+  //     乐观行的使命是「服务端那一行还没到时先占位」⇒ **一旦认亲成功就该退休**。
+  //     ⇒ 用一个**一次性标记**记住「它已经认过亲了」，之后无论 history 怎么变，
+  //       都**不再**把这条乐观行加回列表（服务端行才是真值）。
+  //     ⛔ 不是简单 `setPendingUserMsg(null)` —— 那会让「服务端行还没到」的窗口里
+  //       乐观行**提前消失**（消息看着像没发出去）⇒ 保留 state，只冻结「不再加回」。
+  const [pendingUserAdopted, setPendingUserAdopted] = useState(false);
   // 流式 error 状态 (network / sse / server). 仅在被动失败时显示; USER_STOP 不显示.
   const [streamError, setStreamError] = useState<{
     kind: StreamingErrorKind;
@@ -1216,14 +1240,37 @@ export function ChatDetail() {
     streamingTurnKeyRef.current = null;
     setStreamingTurnMeta(EMPTY_STREAMING_TURN_META);
     streamingTurnMetaRef.current = EMPTY_STREAMING_TURN_META;
+    // ★ [T-114 · 2026-11-23] **乐观行 + 它的冻结标记也要复位**（跨会话残留）。
+    //
+    //   ## 病根（生产实证 · PC 端 diag.log 2026-11-23 00:51）
+    //
+    //     切会话后 `pendingUserMsg` **仍是上一个会话那条**（`optCid` 跨会话不变）
+    //     ⇒ 新会话的 history 里没有那条 ⇒ 认亲判据 `same=false`
+    //     ⇒ **上一个会话的消息被加进新会话的列表** ⇒ 屏幕上「闪一下就没了」。
+    //
+    //   ## 为什么两样都要清
+    //
+    //     · `pendingUserMsg`     ⇒ 乐观行本身（换会话 ⇒ 上一会话的那条不该跟过来）；
+    //     · `pendingUserAdopted` ⇒ 冻结标记（换会话 ⇒ 上一条的认亲结果对新会话无意义）。
+    //
+    //   ⚠️ 冻结标记由下面的 effect 按 client_msg_id 复位；这里**也**清一次
+    //     ⇒ 两个复位点都覆盖（切会话 / 换乐观行）⇒ 任一路径都不会带着旧标记走。
+    setPendingUserMsg(null);
+    setPendingUserAdopted(false);
     return () => {
       // 卸载时只清**内存态** —— 本机落盘的那份要留着 (跨刷新存活, 任务书 P-6)。
       setPendingApprovals([]);
     };
   }, [chatId]);
 
-  // 拼装最终 messages: 历史 + 流式那条占位
-  const messages: ChatMessageModel[] = useMemo(() => {
+  // ★ [T-114 · 2026-11-23] **历史基底（去重 + 滤切开段）+ 认亲判定** —— 提到组件级。
+  //
+  //   ## 为什么要提上来
+  //
+  //     `historyHasSameUser`（认亲判定）原先是 `messages` useMemo 里的一个**局部变量**
+  //     ⇒ 外面（effect）拿不到 ⇒ 「认亲成功 ⇒ 冻结乐观行」这个状态推进无处安放。
+  //     ⇒ 提上来后：**判据只有一份**（messages 与 effect 共用）⇒ 不会两处漂移。
+  const { baseWithoutSplitTurn, historyHasSameUser } = useMemo(() => {
     // ★ 任务书 P-8 · 旧协议双写去重 (契约 L-14 ~ L-18)。
     //   服务端同一次工具产出可能既推新协议 `file`/`image`, 又推旧协议
     //   `tool_done[file]`/`tool_done[image]` ⇒ 同一张卡片渲两遍。
@@ -1294,6 +1341,37 @@ export function ChatDetail() {
         }
         return m.content === pendingUserMsg.content;
       });
+    return { baseWithoutSplitTurn, historyHasSameUser };
+  }, [baseMessages, cutRows, deletedDeliverableIds, pendingUserMsg]);
+
+  // 拼装最终 messages: 历史 + 流式那条占位
+  const messages: ChatMessageModel[] = useMemo(() => {
+    // ★ [T-114] 历史基底（去重 + 滤切开段）与认亲判定已提到**组件级**
+    //   （见本组件上方的 useMemo）⇒ 这里直接用，不再内联第二份判据。
+    // ★ [T-114 · 2026-11-23] 认亲判定提升到**组件级**（见下面的 `historyHasSameUser` useMemo）。
+    //   ⚠️ 这里不再内联判据 —— 判据**只有一份**（`historyHasSameUser`），避免两处漂移。
+    // ★ [T-114 · 2026-11-23] **认亲成功 ⇒ 这条乐观行退休**（冻结，不再被加回）。
+    //
+    //   ## 病根（生产实证 · PC 端 diag.log 2026-11-23 00:51:32–00:51:47）
+    //
+    //     `认亲 same=true` → `same=false` → `same=true` **来回翻转**，
+    //     而 `optCid=2ASA0200003KNQ4PY22HCBZZAR` 跨 8 小时**始终是同一条**
+    //     ⇒ `pendingUserMsg` 这个 state **从来没被清过**（`setPendingUserMsg(null)` 全仓无结果）。
+    //     `same=false` 的那几帧 `histCid=-`（history 里**一条 user 行都没有**）
+    //     ⇒ 乐观行被**加回**列表 ⇒ 同一条消息在屏幕上**闪一下就没了**。
+    //
+    //   ## 修法（为什么不是简单地 `setPendingUserMsg(null)`）
+    //
+    //     · 乐观行的使命 = 「服务端那一行**还没到**时先占位」⇒ 认亲成功 ⇒ 使命完成。
+    //     · ⛔ 直接置 null 会让「服务端行还没到」的窗口里乐观行**提前消失**
+    //       ⇒ 消息看着像「没发出去」（这正是它当初被加进来的原因）⇒ 不能那么做。
+    //     ⇒ **保留 state，只冻结「不再加回」**：`pendingUserAdopted` 一旦为 true，
+    //       无论 history 之后怎么变（切会话 / 分页 / 过滤）都**不再**把这条乐观行加回。
+    //       服务端行才是真值（它已经落库了）。
+    //
+    //   ⚠️ 「认亲成功」这个**事实**由 `pendingUserAdopted` 记住 ⇒ 它不随 history 抖动。
+    const pendingUserVisible =
+      !!pendingUserMsg && !historyHasSameUser && !pendingUserAdopted;
     // ★ [T-044 · 2026-11-18] **认亲结果落盘**（打包版没有 devtools ⇒ 看不到 console.log）——
     //   重复用户气泡的根因就在这条判据上（client_msg_id 没透传 ⇒ 乐观行撤不掉）。
     diagLog(
@@ -1303,18 +1381,18 @@ export function ChatDetail() {
         `histCid=${baseWithoutSplitTurn.find((m) => m.role === 'user')?.clientMsgId ?? '-'}`,
     );
     const withPendingUser: ChatMessageModel[] =
-      pendingUserMsg && !historyHasSameUser
+      pendingUserVisible
         ? [
             ...baseWithoutSplitTurn,
             {
-              id: pendingUserMsg.id,
+              id: pendingUserMsg!.id,
               role: "user",
-              content: pendingUserMsg.content,
-              clientMsgId: pendingUserMsg.clientMsgId ?? null,
-              imageUrls: pendingUserMsg.imageUrls,
-              attachedFileIds: pendingUserMsg.attachedFileIds,
-              attachedFileNames: pendingUserMsg.attachedFileNames,
-              createdAt: pendingUserMsg.createdAt,
+              content: pendingUserMsg!.content,
+              clientMsgId: pendingUserMsg!.clientMsgId ?? null,
+              imageUrls: pendingUserMsg!.imageUrls,
+              attachedFileIds: pendingUserMsg!.attachedFileIds,
+              attachedFileNames: pendingUserMsg!.attachedFileNames,
+              createdAt: pendingUserMsg!.createdAt,
             },
           ]
         : baseWithoutSplitTurn;
@@ -1432,6 +1510,8 @@ export function ChatDetail() {
     deletedDeliverableIds,
     // ★ [批 G8] 乐观上屏那一行
     pendingUserMsg,
+    // ★ [T-114] 认亲冻结标记（进了 deps ⇒ 冻结的那一刻会重算一次 messages）
+    pendingUserAdopted,
     // ★ [订正 28 · L-28r] 本轮被补充切开的那些气泡
     cutRows,
     // ★ [2026-11-13] 四要素 + 计时 —— 不进 deps 的话，气泡拿不到它们
@@ -1439,6 +1519,47 @@ export function ChatDetail() {
     streamingTurnMeta,
     streamingTiming,
   ]);
+
+  // ★ [T-114 · 2026-11-23] **认亲成功 ⇒ 冻结这条乐观行**（不再被加回列表）。
+  //
+  //   ## 为什么放 effect（不放 useMemo 里）
+  //
+  //     useMemo **不许有副作用**（React 可能重算它、StrictMode 会调两次）
+  //     ⇒ 状态推进放 effect，判据（`pendingUserVisible`）在 useMemo 里只读。
+  //
+  //   ## 触发时机
+  //
+  //     history 里出现了 client_msg_id **逐字相等**的那条 user 行 ⇒ 服务端那一行到了
+  //     ⇒ 乐观行使命完成 ⇒ 冻结（此后 history 再怎么变都不会把它加回）。
+  //     ⚠️ 只在「**真的认到亲**」时冻结 ⇒ 服务端行还没到的窗口里，乐观行照常占位。
+  // ★ [T-114 · 2026-11-23] **认亲成功 ⇒ 冻结这条乐观行**（不再被加回列表）。
+  //
+  //   ## 为什么放 effect（不放 useMemo 里）
+  //
+  //     useMemo **不许有副作用**（React 可能重算它、StrictMode 会调两次）
+  //     ⇒ 状态推进放 effect，判据（`pendingUserVisible`）在 useMemo 里只读。
+  //
+  //   ## 触发时机 + 复位（两件事在**同一个 effect**里做，顺序才是对的）
+  //
+  //     · **认亲成功** ⇒ 冻结（history 里出现了 client_msg_id 逐字相等的那条 user 行
+  //       ⇒ 服务端那一行到了 ⇒ 乐观行使命完成 ⇒ 此后 history 再怎么变都不再加回它）。
+  //     · **乐观行换了新的一条**（client_msg_id 变）⇒ 上一条的冻结标记对新条无意义
+  //       ⇒ 复位。
+  //     ⚠️ **必须同一个 effect**：分成两个 ⇒ 复位那个后执行 ⇒ 会把「刚冻结上」的标记又抹掉
+  //       ⇒ 新消息的乐观行在服务端行回来之前不显示 ⇒ 用户看着像「这条没发出去」。
+  //     ⚠️ 用 **client_msg_id** 做判据（不是整条乐观行对象）⇒ 同一轮里 history 抖动
+  //       不会误复位（老消息的乐观行仍保持冻结）。
+  const adoptedClientMsgIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const cid = pendingUserMsg?.clientMsgId ?? null;
+    // 换了新的一条 ⇒ 复位（上一条的冻结标记对新条无意义）。
+    if (adoptedClientMsgIdRef.current !== cid) {
+      adoptedClientMsgIdRef.current = cid;
+      setPendingUserAdopted(false);
+    }
+    // 认亲成功 ⇒ 冻结（服务端那一行已经落库 ⇒ 它才是真值）。
+    if (historyHasSameUser) setPendingUserAdopted(true);
+  }, [historyHasSameUser, pendingUserMsg?.clientMsgId]);
 
   // ★ [2026-11-04 · gaga 拍板删除] 原 chat-id-19 的 `canRerun`:
   //   「不在流式 + 最后一条是 assistant」⇒ 每轮答完就把输入框右侧的发送键顶成 ↺ 重试键,
