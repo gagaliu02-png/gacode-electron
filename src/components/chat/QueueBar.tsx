@@ -86,8 +86,7 @@ export interface QueueBarProps {
   expanded: boolean;
   /** 点「N 条排队中 ⌄」⇒ 展开/收起。 */
   onToggle: () => void;
-  /** 点「⏫」⇒ **立即发送**这一条（插队）。 */
-  onFlush: (id: string) => void;
+  // ★ [T-139] 「⏫ 立即发送」按钮已取消 ⇒ 不再有 onFlush.
   /**
    * ★ [T-118 · 段二/段三 · 2026-11-23] 三段式的两个新动作。
    *
@@ -124,39 +123,6 @@ function preview(content: string, max = 120): string {
   const s = (content || "").replace(/\s+/g, " ").trim();
   if (!s) return "（空消息）";
   return s.length > max ? `${s.slice(0, max)}…` : s;
-}
-
-/** 「⏫」按钮 —— 深色圆形（立即发送 = 插队）。 */
-function FlushButton({
-  id,
-  label,
-  disabled,
-  onFlush,
-}: {
-  id: string;
-  label: string;
-  disabled?: boolean;
-  onFlush: (id: string) => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      data-testid={`queue-flush-${id}`}
-      disabled={disabled}
-      onClick={() => onFlush(id)}
-      className={[
-        "shrink-0 w-7 h-7 inline-flex items-center justify-center rounded-full",
-        "bg-fg/15 text-fg hover:bg-fg/25 transition-colors duration-150",
-        "disabled:opacity-40 disabled:cursor-not-allowed",
-      ].join(" ")}
-    >
-      <span aria-hidden="true" className="text-[13px] leading-none">
-        ⏫
-      </span>
-    </button>
-  );
 }
 
 /**
@@ -257,7 +223,6 @@ export function QueueBar({
   items,
   expanded,
   onToggle,
-  onFlush,
   onFold,
   foldingId,
   interruptingId,
@@ -300,33 +265,18 @@ export function QueueBar({
           <span className="hidden sm:inline max-w-[280px] truncate text-xs text-fg-subtle">
             {preview(head.content)}
           </span>
-          <FlushButton
-            id={head.id}
-            label="立即发送（插队）"
-            disabled={!canFlushHead || flushingId === head.id}
-            onFlush={onFlush}
-          />
-          {/* ★ [T-118] 三段式的两个新动作（队首也有一份） */}
+          {/* ★ [T-139] **「⏫ 立即发送」按钮取消**（用户 2026-11-24 拍板，与安卓对齐）。
+              理由：它= 插话（软停 + 起新轮），与「插入本轮」语义重叠，且深色圆形最难认。
+              ⇒ 队列条上**只剩「插入本轮」**（发不出去时**服务端自动降级**第三段）。 */}
           {onFold ? (
-            <>
-              <ActionButton
-                id={head.id}
-                action="fold"
-                label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
-                glyph="⤵"
-                disabled={!canFlushHead || foldingId === head.id || interruptingId === head.id}
-                onAction={onFold}
-              />
-              <ActionButton
-                id={head.id}
-                action="interrupt"
-                label="打断并发送（立刻停掉当前这一轮，把这条发出去）"
-                glyph="⏹"
-                tone="danger"
-                disabled={!canFlushHead || interruptingId === head.id || foldingId === head.id}
-                onAction={onFold}
-              />
-            </>
+            <ActionButton
+              id={head.id}
+              action="fold"
+              label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
+              glyph="⤵"
+              disabled={!canFlushHead || foldingId === head.id || interruptingId === head.id}
+              onAction={onFold}
+            />
           ) : null}
         </div>
       </div>
@@ -379,33 +329,16 @@ export function QueueBar({
                   删掉
                 </button>
               ) : null}
-              <FlushButton
-                id={it.id}
-                label="立即发送这一条（插队）"
-                disabled={!!it.local || flushingId === it.id}
-                onFlush={onFlush}
-              />
-              {/* ★ [T-118] 三段式的两个新动作（每一条都有） */}
+              {/* ★ [T-139] 每条只剩「插入本轮」（+「删掉」）⇒「⏫ 立即发送」取消（与安卓对齐）。 */}
               {onFold ? (
-                <>
-                  <ActionButton
-                    id={it.id}
-                    action="fold"
-                    label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
-                    glyph="⤵"
-                    disabled={!!it.local || foldingId === it.id || interruptingId === it.id}
-                    onAction={onFold}
-                  />
-                  <ActionButton
-                    id={it.id}
-                    action="interrupt"
-                    label="打断并发送（立刻停掉当前这一轮，把这条发出去）"
-                    glyph="⏹"
-                    tone="danger"
-                    disabled={!!it.local || interruptingId === it.id || foldingId === it.id}
-                    onAction={onFold}
-                  />
-                </>
+                <ActionButton
+                  id={it.id}
+                  action="fold"
+                  label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
+                  glyph="⤵"
+                  disabled={!!it.local || foldingId === it.id || interruptingId === it.id}
+                  onAction={onFold}
+                />
               ) : null}
               {/* ★ 删掉这一条（还没发出去的那条）⇒ 它再也不会被发出去。 */}
               {onDelete ? (
