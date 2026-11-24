@@ -159,6 +159,44 @@ export function buildClaudeInvocation(ctx: CliServiceContext): CliInvocation | n
  */
 export { parseClaudeLine };
 
+/**
+ * ★ [T-128-fix] 起一个真正常驻的 Claude Code 后台会话（原生 `claude --bg`）。
+ *
+ * 与 `-p --resume` 的区别：`--bg` 会话会一直留在 `~/.claude/sessions` 注册表里，
+ * 现有 `pc_cc_send/append/control` 的 peer IPC 才能找到它。
+ * ⚠️ `--bg` 会自己生成 sessionId 并忽略 `--session-id`（CLI 2.1.330+ 实测），
+ *    所以调用方必须从 `claude agents --json` 解析真实 sessionId 并对外返回它。
+ */
+export function buildClaudeBgInvocation(ctx: CliServiceContext): CliInvocation | null {
+  const bin = resolveClaudeBinary();
+  if (!bin) return null;
+  const isShim = /\.(cmd|bat)$/i.test(bin);
+  const nodeEntry = isShim ? resolveNodeEntryFromShim(bin) : null;
+  let command: string;
+  let args: string[];
+  if (nodeEntry) {
+    command = process.execPath;
+    args = [nodeEntry];
+  } else if (isShim) {
+    return null;
+  } else {
+    command = bin;
+    args = [];
+  }
+  const task = strArg(ctx.args, 'task') || 'Persistent Claude Code session. Wait for further instructions.';
+  args.push('--bg', '--permission-mode', 'dontAsk');
+  // ⚠️ `--name` 会被 CLI **忽略**（会话实际 name 变成 hex id）⇒ 仍然传，
+  //    但调用方**不要**靠 name 反查 bg_id（要从 stdout 解析）。
+  args.push('--name', strArg(ctx.args, 'name') || 'gacode-persistent');
+  // ★ [T-128-fix] 受信任目录兜底：cwd 不被信任时 CLI 会直接拒绝（stderr: Workspace not trusted）。
+  //   ⇒ 改成在**受信任的 cwd** 里起会话，并用 `--add-dir` 保留对目标目录的访问权。
+  const cwd = ctx.cwd || null;
+  const addDir = strArg(ctx.args, 'add_dir');
+  if (addDir) args.push('--add-dir', addDir);
+  args.push(task);
+  return { command, args, cwd };
+}
+
 /** Claude Code 这个 CLI 服务。 */
 export const claudeService: CliService = {
   id: 'claude',

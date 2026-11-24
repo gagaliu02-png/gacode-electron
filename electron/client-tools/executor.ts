@@ -47,8 +47,12 @@ import {
 import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus, pcBrowserShot, pcBrowserBack, pcBrowserWindow } from './browser.ts';
 import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerAppend, sendPeerControl } from './claudeCodePeer.ts';
+import { resolveClaudeBinary } from './claudeService.ts';
+import { buildClaudeBgInvocation } from './claudeService.ts';
+import { resolveClaudeLaunchCwd } from './claudeTrust.ts';
+import { stopClaudeBgSession } from './claudeBgSession.ts';
 import { buildCcReceipt, deliveryIdFromArgs } from './ccReceipt.ts';
-import { closePersistentSession, listPersistentSessions, touchPersistentSession } from './ccPersistentSession.ts';
+import { acquirePersistentSession, closePersistentSession, listPersistentSessions, setPersistentSessionBgId, touchPersistentSession } from './ccPersistentSession.ts';
 import { validateClientToolArgs } from './clientToolArgs.ts';
 import type { PeerReplyTo } from './claudeResultFormat.ts';
 // ★ [2026-11-19 · T-068 / T-072] peer notice 读侧：注入后登记订阅，
@@ -525,7 +529,15 @@ async function pcCcSessions(
     let sessions = listClaudeSessions();
     if (onlyVscode) sessions = sessions.filter((s) => s.entrypoint === 'claude-vscode');
     const deliveryId = opts.pendingId || deliveryIdFromArgs(args);
-    const out = sessions.map((s) => summarizeSession(s));
+    const out = sessions.map((s) => ({
+      ...summarizeSession(s),
+      // ★ [T-128-fix] 后台会话（claude --bg）：带 bg_id ⇒ pc_cc_close 能直接关它。
+      ...(s.kind === 'bg' || s.entrypoint === 'cli'
+        ? { is_background: true, bg_id: s.jobId || s.sessionId.split('-')[0] || null }
+        : {}),
+      // 有信箱 ⇒ pc_cc_send/append 能投递
+      deliverable: !!s.messagingSocketPath,
+    }));
     const persistent = listPersistentSessions().map((p) => ({
       session_id: p.session_id,
       cwd: p.cwd,
@@ -762,6 +774,113 @@ async function pcCcAppend(args: Record<string, unknown> | null): Promise<ClientT
   }
 }
 
+/**
+ * ★ [T-128-fix] pc_cc_new 的真正常驻实现：
+ *   `claude --bg` 返回后，从 `claude agents --json` 找 kind=background + name 的会话，
+ *   拿真实 sessionId/bg_id 登记。这样 `~/.claude/sessions` 一直有活会话，
+ *   pc_cc_send/append 的 peer IPC 才能找到目标。
+ */
+async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | null): Promise<ClientToolResult> {
+  const task = str(args, 'task');
+  if (!task) return fail('pc_cc_new 缺 task');
+  const name = str(args, 'name') || `gacode-persistent-${Date.now()}`;
+  const cli = resolveClaudeBinary();
+  if (!cli) return fail('找不到 Claude Code 可执行文件（claude）');
+
+  // ★ [T-128-fix] 信任兜底：cwd 不被信任时，CLI 会拒绝启动（stderr: Workspace not trusted）。
+  //   ⇒ 换到受信任的祖先目录起会话，目标目录用 --add-dir 授权。
+  const launch = resolveClaudeLaunchCwd(cwd);
+  const invocation = buildClaudeBgInvocation({
+    args: { task, name, add_dir: launch.addDir || undefined },
+    cwd: launch.cwd,
+    timeoutMs: null,
+    jobId: name,
+  });
+  // ⚠️ 目标目录未被信任 ⇒ 只能在受信任目录跑（CLI 的 --add-dir 也要求目标已信任）。
+  //   ⇒ 如实告知，别让模型以为它就在那个目录里。
+  const trustNote = launch.untrustedTarget
+    ? `注意：目标目录 ${launch.untrustedTarget} 尚未被 Claude Code 信任（信任记录在 ~/.claude.json），`
+      + `本次会话实际运行目录是 ${launch.cwd}；请在该目录下手动运行一次 claude 并接受信任提示，之后就能直接在目标目录跑。`
+    : '';
+  if (!invocation) return fail('无法构造 Claude Code 常驻启动命令');
+
+  // 1) 启动 --bg：CLI 自己后台化并立刻返回，stdout 形如
+  //    `backgrounded · <bg_id> · <name>` ⇒ **直接解析 bg_id**，不要靠 name 反查
+  //    （实测 `--bg` 会忽略 `--name`，会话实际 name 变成 hex id ⇒ 按 name 匹配必然失败）。
+  let bgId = '';
+  let stdout = '';
+  let stderr = '';
+  try {
+    const captured = await new Promise<{ out: string; err: string }>((resolve, reject) => {
+      const child = require('child_process').spawn(invocation.command, invocation.args, {
+        cwd: invocation.cwd || undefined,
+        // ⚠️ stderr **必须**捕获：CLI 的失败原因（如 Workspace not trusted）只走 stderr
+        //    ⇒ 丢掉它就只剩「(无输出)」，模型完全看不到真实原因。
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+      let out = '';
+      let err = '';
+      child.stdout?.on('data', (d: any) => { out += d.toString(); });
+      child.stderr?.on('data', (d: any) => { err += d.toString(); });
+      child.on('error', reject);
+      child.on('close', () => resolve({ out, err }));
+    });
+    stdout = captured.out;
+    stderr = captured.err;
+  } catch (e) {
+    return fail(`启动 Claude Code 常驻会话失败: ${(e as Error).message}`);
+  }
+  const m = /backgrounded[^0-9a-fA-F]*([0-9a-fA-F]{6,})/.exec(stdout);
+  bgId = m ? m[1] : '';
+  if (!bgId) {
+    const why = (stderr || stdout).trim().slice(0, 400) || '(无输出)';
+    return fail(`Claude Code 常驻会话未启动成功：${why}`);
+  }
+
+  // 2) 用 bg_id 到 agents --json 里取真实 sessionId（bg_id 是 sessionId 的前缀）
+  const deadline = Date.now() + 20000;
+  let found: any = null;
+  while (Date.now() < deadline) {
+    try {
+      const out = await new Promise<string>((resolve) => {
+        const child = require('child_process').spawn(cli, ['agents', '--json'], { stdio: ['ignore','pipe','ignore'], windowsHide: true });
+        let s=''; child.stdout?.on('data',(d:any)=>s+=d.toString());
+        child.on('error',()=>resolve('')); child.on('close',()=>resolve(s));
+      });
+      const arr = JSON.parse(out || '[]');
+      found = arr.find((x:any) => x && (x.id === bgId || (typeof x.sessionId === 'string' && x.sessionId.startsWith(bgId))));
+      if (found) break;
+    } catch { /* retry */ }
+    await new Promise(r=>setTimeout(r,500));
+  }
+  if (!found || !found.sessionId) {
+    // ⚠️ 登记失败 ⇒ **别把后台会话漏在机器上**（否则白占一个常驻进程）。
+    try {
+      const child = require('child_process').spawn(cli, ['stop', bgId], { stdio: 'ignore', windowsHide: true });
+      child.on('error', () => {});
+    } catch { /* best-effort */ }
+    return fail(`Claude Code 常驻会话已启动（bg_id=${bgId}），但没能从 agents --json 读到 sessionId`);
+  }
+
+  // 3) 用 CLI 真实 sessionId 作为对外 session_id，并登记 bg_id
+  acquirePersistentSession({ session_id: found.sessionId, cwd, name: found.name || name });
+  setPersistentSessionBgId(found.sessionId, bgId);
+
+  return ok({
+    stdout: [
+      `已在后台启动常驻 Claude Code 会话`,
+      `session_id: ${found.sessionId}`,
+      `bg_id: ${found.id}`,
+      `name: ${name}`,
+      `工作目录: ${launch.cwd}`,
+      ...(trustNote ? [trustNote] : []),
+      `后续用 pc_cc_send/append 给这个 session_id 发消息；关闭用 pc_cc_close。`,
+    ].join('\n'),
+    exitCode: 0,
+  });
+}
+
 /** pc_cc_close —— T-128 PC-CC-Close：关闭逻辑常驻会话登记。 */
 async function pcCcClose(
   args: Record<string, unknown> | null,
@@ -769,7 +888,19 @@ async function pcCcClose(
   const sessionId = str(args, 'session_id');
   if (!sessionId) return fail('缺少 session_id');
   const removed = closePersistentSession(sessionId);
-  if (!removed) return fail(`常驻会话不存在或已过期: ${sessionId}`);
+  // ★ [T-128-fix] 不要求「先 adopt」：本机在跑的后台会话（claude --bg）
+  //   直接从 session registry 拿 bg_id（jobId）⇒ 也能关。
+  const live = findSession(sessionId);
+  const isBg = !!(live && (live.kind === 'bg' || live.entrypoint === 'cli'));
+  const bgId = removed?.bg_id || (isBg ? (live!.jobId || sessionId.split('-')[0]) : null);
+  if (!removed && !bgId) {
+    return fail(`常驻会话不存在或已过期: ${sessionId}`);
+  }
+  // 有原生 bg_id ⇒ 真停掉 CLI 后台会话，而不只是删登记。
+  if (bgId) {
+    const stopped = await stopClaudeBgSession(bgId);
+    if (!stopped) return fail(`关闭 CLI 后台会话失败（claude stop ${bgId} 未成功）`);
+  }
   return ok({
     stdout: JSON.stringify({
       status: 'closed',
@@ -967,6 +1098,9 @@ export async function executeClientTool(
       hint: argCheck.hint,
     } as any);
   }
+
+  // ★ [T-128-fix] pc_cc_new 必须走真正常驻进程，不能进 detached `-p` 作业分支。
+  if (tool === 'pc_cc_new') return pcCcNewBg(args, cwd);
 
   // ★ [2026-11-13 · 订正 27] 后台作业四个分支（L-27a）。
   //   「起作业」**立即返回**（不 await 端侧回传）⇒ 模型这一轮不被堵住。

@@ -19,11 +19,14 @@ test('T108 pc_cc tools return receipt fields', () => {
   assert.ok(src.includes('receipt: buildCcReceipt('), 'pc_cc tools must include receipt');
 });
 
-test('T108 pc_cc_new is recognized as background Claude Code alias', () => {
+test('T108 pc_cc_new is recognized as persistent native background Claude alias', () => {
   const cli = fs.readFileSync(new URL('electron/client-tools/cliService.ts', ROOT), 'utf8');
   const bg = fs.readFileSync(new URL('electron/client-tools/backgroundJobs.ts', ROOT), 'utf8');
-  assert.match(cli, /pc_cc_new/);
-  assert.match(bg, /pc_cc_new/);
+  // T-128-fix: pc_cc_new is handled by executor as native `--bg` persistent session,
+  // not by the detached one-shot BACKGROUND_START_TOOLS list.
+  const exec = fs.readFileSync(new URL('electron/client-tools/executor.ts', ROOT), 'utf8');
+  assert.doesNotMatch(bg, /tool === 'pc_cc_new'/);
+  assert.match(exec, /pcCcNewBg/);
 });
 
 test('T103 delivery_id remains in peer message content', () => {

@@ -43,6 +43,7 @@ import { pollJob } from './jobRunner.ts';
 import { markDispatchReported } from './dispatchLedger.ts';
 import { emitJobsChanged } from './jobView.ts';
 import { setPersistentSessionJob } from './ccPersistentSession.ts';
+import { sweepIdleBackgroundSessions } from './claudeBgSession.ts';
 
 /** 巡检间隔（毫秒）—— 5~10 秒之间（题面要求）。 */
 export const JOB_SWEEP_INTERVAL_MS = 7000;
@@ -233,6 +234,9 @@ export class JobReporter {
    * @returns 这一拍回传了几条
    */
   async tick(report?: JobReportFn): Promise<number> {
+    // ★ [T-128-fix] 空闲 5 分钟自动关闭原生 bg 会话（与作业巡检共用 7s 定时器）。
+    //   判据 = 该 bg 会话**最后活动时间**距今超过 TTL ⇒ `claude stop`。
+    void sweepIdleBackgroundSessions();
     if (this.busy) return 0;
     const reportFn = report || this.report;
     this.busy = true;
