@@ -242,8 +242,8 @@ export function flushInboxMessage(
 export function foldInboxMessage(
   sessionId: string,
   messageId: string,
-): Promise<{ folded: boolean; reason: string | null }> {
-  return request<{ folded: boolean; reason: string | null }>(
+): Promise<{ folded: boolean; reason: string | null; escalated?: boolean }> {
+  return request<{ folded: boolean; reason: string | null; escalated?: boolean }>(
     `/yinian/sessions/${sessionId}/inbox/${encodeURIComponent(messageId)}/fold`,
     { method: "POST" },
   );

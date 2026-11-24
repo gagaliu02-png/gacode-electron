@@ -3761,9 +3761,13 @@ export function ChatDetail() {
           const r = await foldInboxMessage(chatId, id);
           toast({
             message:
-              r?.folded === false
-                ? "当前没有正在跑的对话，已按排队处理"
-                : "已插入本轮：agent 会在下一次工具调用时看到",
+              // ★ [T-139] 服务端在「没有活跃轮」时**自动降级为第三段**（硬停 + 起新轮）
+              //   ⇒ 如实说「已停轮并发出」，**不能**说「已插入本轮」（那就是撒谎）。
+              r?.escalated
+                ? "已停掉当前这一轮并把这条发出去了"
+                : r?.folded === false
+                  ? "当前没有正在跑的对话，已按排队处理"
+                  : "已插入本轮：agent 会在下一次工具调用时看到",
             variant: "default",
           });
         } else {
@@ -4609,13 +4613,10 @@ export function ChatDetail() {
         items={queueEntries}
         expanded={queueExpanded}
         onToggle={() => setQueueExpanded((v) => !v)}
-        onFlush={(id) => {
-          void flushQueueItem(id);
-        }}
+        // ★ [T-139] 「⏫ 立即发送」按钮取消（与安卓对齐）⇒ 不再传 onFlush / flushingId.
         onRemove={(id) =>
           setLocalQueue((prev) => prev.filter((l) => l.id !== id))
         }
-        flushingId={flushingId}
         // ★ 队列删除：服务端行 ⇒ DELETE 端点；`local:` 乐观行 ⇒ 端侧直接收掉。
         onDelete={(id) => {
           void deleteQueueItem(id);

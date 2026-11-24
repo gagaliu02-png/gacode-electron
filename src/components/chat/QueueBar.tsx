@@ -12,19 +12,19 @@
  *
  * ```
  *   ┌──────────────────────────────────────────────┐
- *   │  N 条排队中 ⌄                            ⏫   │   ← 队列条
+ *   │  N 条排队中 ⌄                            ⤵   │   ← 队列条
  *   └──────────────────────────────────────────────┘
  *     · 排队项正文预览（展开时显示在队列条下方）
  *     · 排队项正文预览
  * ```
  *
  *   · 左边「**N 条排队中 ⌄**」= 队列指示 + **展开**（列出每条排队消息的正文）；
- *   · 右边「**⏫**」= **立即发送** = 插队投递（服务端标 `injectable` ⇒
+ *   · 右边「**立即发送**」= **立即发送** = 插队投递（服务端标 `injectable` ⇒
  *     agent 在**下一个工具边界**就并入当前这一轮 ⇒ **不打断**当前轮）；
- *   · 每条排队消息**自己也带一个 ⏫**（「把**那条**插队」）—— 队列条上的 ⏫
+ *   · 每条排队消息**自己也带一个 立即发送**（「把**那条**插队」）—— 队列条上的 立即发送
  *     默认作用于**队首**那条（服务端排序 = priority desc, seq asc）；
  *   · ★ 每条排队消息**还带一个 🗑**（「删掉**那条**」）—— 队列项**还没发出去**
- *     ⇒ 删掉它 ⇒ 它**再也不会被发出去**（泵队列跳过它、「⏫」也插不了它）。
+ *     ⇒ 删掉它 ⇒ 它**再也不会被发出去**（泵队列跳过它、「立即发送」也插不了它）。
  *
  * ⚠️ 本组件**只渲染 + 把点击抛给父组件** —— 队列数据、插队/删除请求都在 ChatDetail。
  * ⚠️ 队列是**服务端**的东西（跨端共享：手机上排的队 PC 看得见）⇒ 本组件
@@ -86,8 +86,7 @@ export interface QueueBarProps {
   expanded: boolean;
   /** 点「N 条排队中 ⌄」⇒ 展开/收起。 */
   onToggle: () => void;
-  /** 点「⏫」⇒ **立即发送**这一条（插队）。 */
-  onFlush: (id: string) => void;
+  // ★ [T-139] 「立即发送 立即发送」按钮已取消 ⇒ 不再有 onFlush.
   /**
    * ★ [T-118 · 段二/段三 · 2026-11-23] 三段式的两个新动作。
    *
@@ -108,7 +107,7 @@ export interface QueueBarProps {
    * ★ **删掉一条排队消息**（★ 2026-11-14 · 队列删除）。
    *
    *   · 服务端行（有服务端 id）⇒ 父组件调 `DELETE /yinian/sessions/:id/inbox/:messageId`
-   *     ⇒ 删完它**再也不会被发出去**（泵队列跳过它、「⏫」也插不了它）；
+   *     ⇒ 删完它**再也不会被发出去**（泵队列跳过它、「立即发送」也插不了它）；
    *   · 端侧乐观行（`local:` 前缀，服务端还没认领）⇒ 父组件**端侧**直接删
    *     （它没有服务端 id ⇒ 没有端点可调）。
    *
@@ -126,49 +125,16 @@ function preview(content: string, max = 120): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
-/** 「⏫」按钮 —— 深色圆形（立即发送 = 插队）。 */
-function FlushButton({
-  id,
-  label,
-  disabled,
-  onFlush,
-}: {
-  id: string;
-  label: string;
-  disabled?: boolean;
-  onFlush: (id: string) => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      data-testid={`queue-flush-${id}`}
-      disabled={disabled}
-      onClick={() => onFlush(id)}
-      className={[
-        "shrink-0 w-7 h-7 inline-flex items-center justify-center rounded-full",
-        "bg-fg/15 text-fg hover:bg-fg/25 transition-colors duration-150",
-        "disabled:opacity-40 disabled:cursor-not-allowed",
-      ].join(" ")}
-    >
-      <span aria-hidden="true" className="text-[13px] leading-none">
-        ⏫
-      </span>
-    </button>
-  );
-}
-
 /**
  * ★ [T-118 · 段二/段三 · 2026-11-23] 两个新动作 —— 三段式在端侧的落法。
  *
  * | 按钮 | 段 | 服务端 | 打不打断 | 图标 |
  * |---|---|---|---|---|
- * | ⏫ 立即发送（原有） | 插话 | `flush`（软停 + 起新轮） | 软停 | ⏫ |
+ * | ~~立即发送（原有）~~ | 插话 | `flush`（软停 + 起新轮） | 软停 | — |
  * | **插入本轮** | **段二** | `fold`（只标记可注入） | **不打断** | ⤵ |
- * | **打断并发送** | **段三** | `interrupt`（硬停 + 起新轮） | **硬停（秒级）** | ⏹ |
+ * | ~~打断并发送~~ | **段三** | `interrupt`（硬停 + 起新轮） | **硬停（秒级）** | —（并进「插入本轮」） |
  *
- * ⚠️ 两个新按钮**不抢** ⏫ 的位置：⏫ 仍是「立即发送」（老语义，老用户肌肉记忆）。
+ * ⚠️ 两个新按钮**不抢** 立即发送 的位置：立即发送 仍是「立即发送」（老语义，老用户肌肉记忆）。
  */
 function ActionButton({
   id,
@@ -257,7 +223,6 @@ export function QueueBar({
   items,
   expanded,
   onToggle,
-  onFlush,
   onFold,
   foldingId,
   interruptingId,
@@ -300,33 +265,18 @@ export function QueueBar({
           <span className="hidden sm:inline max-w-[280px] truncate text-xs text-fg-subtle">
             {preview(head.content)}
           </span>
-          <FlushButton
-            id={head.id}
-            label="立即发送（插队）"
-            disabled={!canFlushHead || flushingId === head.id}
-            onFlush={onFlush}
-          />
-          {/* ★ [T-118] 三段式的两个新动作（队首也有一份） */}
+          {/* ★ [T-139] **「立即发送 立即发送」按钮取消**（用户 2026-11-24 拍板，与安卓对齐）。
+              理由：它= 插话（软停 + 起新轮），与「插入本轮」语义重叠，且深色圆形最难认。
+              ⇒ 队列条上**只剩「插入本轮」**（发不出去时**服务端自动降级**第三段）。 */}
           {onFold ? (
-            <>
-              <ActionButton
-                id={head.id}
-                action="fold"
-                label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
-                glyph="⤵"
-                disabled={!canFlushHead || foldingId === head.id || interruptingId === head.id}
-                onAction={onFold}
-              />
-              <ActionButton
-                id={head.id}
-                action="interrupt"
-                label="打断并发送（立刻停掉当前这一轮，把这条发出去）"
-                glyph="⏹"
-                tone="danger"
-                disabled={!canFlushHead || interruptingId === head.id || foldingId === head.id}
-                onAction={onFold}
-              />
-            </>
+            <ActionButton
+              id={head.id}
+              action="fold"
+              label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
+              glyph="⤵"
+              disabled={!canFlushHead || foldingId === head.id || interruptingId === head.id}
+              onAction={onFold}
+            />
           ) : null}
         </div>
       </div>
@@ -379,33 +329,16 @@ export function QueueBar({
                   删掉
                 </button>
               ) : null}
-              <FlushButton
-                id={it.id}
-                label="立即发送这一条（插队）"
-                disabled={!!it.local || flushingId === it.id}
-                onFlush={onFlush}
-              />
-              {/* ★ [T-118] 三段式的两个新动作（每一条都有） */}
+              {/* ★ [T-139] 每条只剩「插入本轮」（+「删掉」）⇒「立即发送 立即发送」取消（与安卓对齐）。 */}
               {onFold ? (
-                <>
-                  <ActionButton
-                    id={it.id}
-                    action="fold"
-                    label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
-                    glyph="⤵"
-                    disabled={!!it.local || foldingId === it.id || interruptingId === it.id}
-                    onAction={onFold}
-                  />
-                  <ActionButton
-                    id={it.id}
-                    action="interrupt"
-                    label="打断并发送（立刻停掉当前这一轮，把这条发出去）"
-                    glyph="⏹"
-                    tone="danger"
-                    disabled={!!it.local || interruptingId === it.id || foldingId === it.id}
-                    onAction={onFold}
-                  />
-                </>
+                <ActionButton
+                  id={it.id}
+                  action="fold"
+                  label="插入本轮（不打断，agent 会在下一次工具调用时看到）"
+                  glyph="⤵"
+                  disabled={!!it.local || foldingId === it.id || interruptingId === it.id}
+                  onAction={onFold}
+                />
               ) : null}
               {/* ★ 删掉这一条（还没发出去的那条）⇒ 它再也不会被发出去。 */}
               {onDelete ? (

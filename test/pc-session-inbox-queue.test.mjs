@@ -46,18 +46,21 @@ const SHARED = "shared/types.ts";
 // GC-P28-1 · 队列条 UI
 // ===========================================================================
 
-test("GC-P28-1 队列条: 「N 条排队中」+「⏫」+ 每条正文预览", () => {
+test("GC-P28-1 队列条: 「N 条排队中」+「插入本轮」+ 每条正文预览（★ [T-139]「⏫ 立即发送」已取消）", () => {
   const code = repoCode(QUEUE_BAR);
   assert.ok(code.includes("条排队中"), "★ 队列条要有「N 条排队中」");
-  assert.ok(code.includes("⏫"), "★ 队列条要有「⏫」（立即发送 = 插队）");
+  // ★ [T-139] 用户 2026-11-24 拍板：⏫（深色圆形）取消 ⇒ 队列行只剩「插入本轮」。
+  assert.ok(!code.includes("⏫"), "★ 「⏫ 立即发送」已取消（与安卓对齐）");
+  assert.ok(!code.includes("onFlush"), "★ 不再有 onFlush（⏫ 的回调）");
+  assert.ok(code.includes("⤵"), "★ 队列条要有「插入本轮」按钮");
   // 展开/收起
   assert.ok(code.includes("onToggle"), "左边的「N 条排队中 ⌄」可展开");
   assert.ok(code.includes("aria-expanded"), "展开态要给 a11y 一个交代");
   // 每条排队消息的正文预览
   assert.ok(code.includes("queue-item"), "★ 每条排队消息要有自己的行（正文预览）");
   assert.ok(code.includes("it.content"), "★ 每行要显示那条消息的正文");
-  // 插队 = flush
-  assert.ok(code.includes("onFlush"), "「⏫」要把 id 抛给父组件（插队）");
+  // ★ [T-139] 「插入本轮」把 id 抛给父组件（fold）
+  assert.ok(code.includes("onFold"), "「插入本轮」要把 id 抛给父组件");
 });
 
 test("GC-P28-1b 队列条: 「⏫」作用在**队首**那条 + 每条自己也带一个", () => {

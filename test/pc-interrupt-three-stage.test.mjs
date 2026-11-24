@@ -40,18 +40,21 @@ test("T118-PC-1 API 客户端有 fold / interrupt 两个端点（路径与服务
   assert.ok(code.includes("/flush"), "★ 老的 flush（插话）不许被删掉");
 });
 
-test("T118-PC-2 队列条上有两个新按钮，且不抢 ⏫ 的位置", () => {
+test("T118-PC-2 ★[T-139] 队列条上**只剩一个**「插入本轮」按钮（⏫ 与「打断并发送」都取消）", () => {
   const code = repoCode(QUEUE_BAR);
   assert.ok(code.includes("⤵"), "★ 要有「插入本轮」按钮");
-  assert.ok(code.includes("⏹"), "★ 要有「打断并发送」按钮");
-  assert.ok(code.includes("⏫"), "★ 老的「⏫ 立即发送」要留着");
-  // 两个动作要挂在同一个回调上（父组件统一处理）
-  assert.ok(code.includes("onFold"), "★ 两个新动作要能抛给父组件");
+  // ★ [T-139] 用户 2026-11-24 拍板：
+  //   「⏫ 立即发送」取消（深色圆形最难认，且与「插入本轮」语义重叠）；
+  //   「打断并发送」与「插入本轮」**合二为一** ⇒ 发不出去时由**服务端自动降级**段三。
+  assert.ok(!code.includes("⏹"), "★ 「打断并发送」按钮取消（并进「插入本轮」的自动降级）");
+  assert.ok(!code.includes("⏫"), "★ 「⏫ 立即发送」取消");
+  // 动作要挂在同一个回调上（父组件统一处理）
+  assert.ok(code.includes("onFold"), "★ 「插入本轮」要能抛给父组件");
   // 队首 + 每条都要有（testid 是模板 `queue-${action}-${id}` ⇒ 源码里是这个形状）
-  assert.ok(code.includes("queue-${action}-${id}"), "★ 两个动作按钮都要有 testid");
+  assert.ok(code.includes("queue-${action}-${id}"), "★ 动作按钮要有 testid");
   assert.ok(code.includes('action="fold"'), "★ 队首那份要有 fold");
-  assert.ok(code.includes('action="interrupt"'), "★ 队首那份要有 interrupt");
-  assert.ok(code.includes('action="fold"', code.indexOf("queue-items")) || true, "（展开区每条也要有一份）");
+  // ★ [T-139] 「打断并发送」**不再有独立按钮** ⇒ 它由**服务端自动降级**承担。
+  assert.ok(!code.includes('action="interrupt"'), "★ 不再有独立的 interrupt 按钮（并进「插入本轮」的自动降级）");
 });
 
 test("T118-PC-3 机器信不进「N 条排队中」（判据用 kind，不用 fromKind）", () => {
