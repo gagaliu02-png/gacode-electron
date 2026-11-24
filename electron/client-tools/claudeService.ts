@@ -125,11 +125,14 @@ export function buildClaudeInvocation(ctx: CliServiceContext): CliInvocation | n
   //   否则保持老语义：新建 session_id。restore/resume 失败由 CLI 自己报错，
   //   端侧不偷偷再新建（那会让 Cody 以为仍在同一个上下文里）。
   const resumeSessionId = strArg(ctx.args, 'resume_session_id');
+  const newSessionId = strArg(ctx.args, 'new_session_id');
   args.push(
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
-    ...(resumeSessionId ? (['--resume', resumeSessionId] as string[]) : (['--session-id', randomUUID()] as string[])),
+    ...(resumeSessionId
+      ? (['--resume', resumeSessionId] as string[])
+      : (['--session-id', newSessionId || randomUUID()] as string[])),
     '--permission-mode', 'bypassPermissions',
     // ⚠️ 位置参数放**最后** —— `--add-dir` / `--tools` 这类「可变长」选项会把
     //    紧跟其后的位置参数一起吞掉 ⇒ 提示词必须排在所有选项之后。

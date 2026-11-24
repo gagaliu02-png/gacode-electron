@@ -79,7 +79,11 @@ export function startBackgroundJob(input: BackgroundStartInput): ClientToolResul
       name: args0.name,
     });
     persistentSessionId = acq.session_id;
-    args = { ...args0, resume_session_id: acq.session_id };
+    // ★ 首次创建必须用 --session-id（--resume 只能续已存在的 transcript）。
+    //   后续 acquire 复用时才传 resume_session_id。
+    args = acq.reused
+      ? { ...args0, resume_session_id: acq.session_id }
+      : { ...args0, new_session_id: acq.session_id };
   }
 
   const jobId = (input.jobId && String(input.jobId)) || `job-${randomUUID()}`;

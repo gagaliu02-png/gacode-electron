@@ -44,3 +44,27 @@ test('T128-PC-4 · pc_cc_close 显式关闭后不可再复用', () => {
   assert.equal(b.reused, false);
   assert.notEqual(b.session_id, a.session_id);
 });
+
+
+test('T128-PC-5 · 首次新建用 --session-id，复用才用 --resume', async () => {
+  const cli = await import('../electron/client-tools/claudeService.ts');
+  const first = cli.buildClaudeInvocation({
+    args: { task: 'x', new_session_id: '11111111-1111-4111-8111-111111111111' },
+    cwd: null,
+    timeoutMs: null,
+    jobId: 'j',
+  });
+  assert.ok(first && first.args.includes('--session-id'));
+  assert.ok(first.args.includes('11111111-1111-4111-8111-111111111111'));
+  assert.ok(!first.args.includes('--resume'));
+
+  const reused = cli.buildClaudeInvocation({
+    args: { task: 'x', resume_session_id: '22222222-2222-4222-8222-222222222222' },
+    cwd: null,
+    timeoutMs: null,
+    jobId: 'j',
+  });
+  assert.ok(reused && reused.args.includes('--resume'));
+  assert.ok(reused.args.includes('22222222-2222-4222-8222-222222222222'));
+  assert.ok(!reused.args.includes('--session-id'));
+});
