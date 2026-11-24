@@ -97,8 +97,39 @@ export function formatReplyToAttr(replyTo: PeerReplyTo | null | undefined): stri
   return parts.length ? parts.join(' ') : null;
 }
 
+/**
+ * [T-092] notify 专用注入正文：显式携带 notify_intent + reply_to + task_id。
+ *
+ * 老格式（`buildPeerMessageContent(text, taskId, replyTo)`）保持不变；
+ * 本函数在 notify_when_idle 分支单独使用，属性顺序固定为：
+ *   task_id → notify_intent → reply_to_business_session_id → reply_to_cc_session_id → reply_channel。
+ */
+export interface PeerNotifyIntent {
+  /** 目前仅支持 report_when_idle；未知值一律不写属性，避免伪造契约。 */
+  value: string;
+}
+
+export function buildNotifyPeerMessageContent(
+  text: string,
+  taskId: string,
+  replyTo: PeerReplyTo | null | undefined,
+  notifyIntent: PeerNotifyIntent | null | undefined,
+): string {
+  const attrs = [
+    `task_id="${String(taskId).replace(/[^\w.:\-]/g, '')}"`,
+    notifyIntent?.value === 'report_when_idle' ? 'notify_intent="report_when_idle"' : null,
+    formatReplyToAttr(replyTo),
+  ].filter(Boolean).join(' ');
+  return (
+    `<cross-session-message from="uds:gaclaw" ${attrs}>\n` +
+    `${String(text ?? '').slice(0, 4000)}\n` +
+    `${buildReportingContract(taskId, replyTo, notifyIntent?.value === 'report_when_idle' ? 'report_when_idle' : null)}\n` +
+    `</cross-session-message>`
+  );
+}
+
 /** 汇报协议模板（工具层自动追加到任务末尾）。 */
-export function buildReportingContract(taskId?: string | null, replyTo?: PeerReplyTo | null): string {
+export function buildReportingContract(taskId?: string | null, replyTo?: PeerReplyTo | null, notifyIntent?: 'report_when_idle' | null): string {
   const taskIdLine = taskId ? `task_id: ${String(taskId)}` : null;
   const replyToAttr = formatReplyToAttr(replyTo);
   return [
@@ -123,6 +154,12 @@ export function buildReportingContract(taskId?: string | null, replyTo?: PeerRep
       `📮 本任务自带回信地址（见上方 <cross-session-message> 的 ${replyToAttr}）。`,
       '   如需主动回信，**使用 reply_to 提供的 session_id / channel**，不要猜 session_id，也不要自己找所谓的发送入口。',
       '   若不需要主动回信，忽略本条即可；最终结果仍按上面的结果块输出。',
+    ] : []),
+    ...(notifyIntent === 'report_when_idle' && replyToAttr ? [
+      '',
+      '📢 这是一条 notify_intent="report_when_idle" 契约：',
+      '   完成当前工作后，**必须**使用 `gaclaw-msg send` 按上面的 reply_to 主动回报结论。',
+      '   ⛔ 不要猜 session_id（reply_to 已给全）；notify 本身不代表已回报。',
     ] : []),
   ].join('\n');
 }

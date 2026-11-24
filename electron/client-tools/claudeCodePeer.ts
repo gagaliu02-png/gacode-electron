@@ -43,7 +43,7 @@ import { randomUUID, createHash } from 'crypto';
 
 import { listClaudeSessions, type ClaudeSessionRecord } from './claudeCodeSession.ts';
 // ★ [2026-11-17 · T-022] 汇报协议模板（注入正文里带 ⇒ 端侧按格式回结果）
-import { buildReportingContract, formatReplyToAttr, type PeerReplyTo } from './claudeResultFormat.ts';
+import { buildReportingContract, buildNotifyPeerMessageContent, formatReplyToAttr, type PeerReplyTo } from './claudeResultFormat.ts';
 // [T-069] 诊断日志：走 peerLog ⇒ 生产落 client-tools.log，单测只 console。
 import { peerLog } from './peerLog.ts';
 
@@ -248,7 +248,16 @@ export function buildPeerMessageContent(
   taskId?: string | null,
   replyToOrDeliveryId?: PeerReplyTo | string | null,
   deliveryId?: string | null,
+  notifyIntent?: 'report_when_idle' | null,
 ): string {
+  // [T-092] 专用 notify 形状：显式 notify_intent + reply_to + task_id（顺序固定）。
+  //   ⚠️ 第三位按类型判别（对象 ⇒ replyTo；字符串 ⇒ deliveryId），见下方 third/thirdAsDeliveryId。
+  const thirdArg = replyToOrDeliveryId;
+  const replyToObj: PeerReplyTo | null =
+    thirdArg && typeof thirdArg === 'object' ? (thirdArg as PeerReplyTo) : null;
+  if (notifyIntent === 'report_when_idle' && taskId && replyToObj) {
+    return buildNotifyPeerMessageContent(text, String(taskId), replyToObj, { value: notifyIntent });
+  }
   const body = neutralize(String(text ?? '').slice(0, 4000));
   // ★ [T-103-b · 统一 envelope] 带 delivery_id ⇒ 与 peer.mjs send / receipt 状态机同一套幂等键，
   //   peer_idle_notice 回来时凭 delivery_id 对上具体那次投递。
@@ -329,11 +338,12 @@ export async function sendPeerMessage(
   taskId?: string | null,
   replyTo?: PeerReplyTo | null,
   deliveryId?: string | null,
+  notifyIntent?: 'report_when_idle' | null,
 ): Promise<{ ok: boolean; reason?: string; session_id?: string }> {
   const rec = findSession(sessionId);
   if (!rec) return { ok: false, reason: 'session_not_live' };
   // ★ deliveryId 缺省退回 taskId ⇒ 老的调用方（只传 taskId）也能带上 delivery_id 属性。
-  const content = buildPeerMessageContent(text, taskId, replyTo, deliveryId ?? taskId);
+  const content = buildPeerMessageContent(text, taskId, replyTo, deliveryId ?? taskId, notifyIntent);
   const frame = {
     type: 'user',
     message: { role: 'user', content },

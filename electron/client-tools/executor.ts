@@ -56,6 +56,8 @@ import type { PeerReplyTo } from './claudeResultFormat.ts';
 import { claudeCodePeerInbox } from './claudeCodePeerInbox.ts';
 // [T-069] 诊断日志：走 peerLog ⇒ 生产落 client-tools.log，单测只 console。
 import { peerLog } from './peerLog.ts';
+// [T-086] QMT WorkBuddy 本机 stdio bridge（受控只读 + 审核门下单）
+import { executeQmtTool } from './qmtBridge.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';
 
 // ===========================================================================
@@ -793,9 +795,25 @@ async function pcCcControl(
     return ok({ stdout: JSON.stringify({ status: 'renamed', session_id: sessionId, name, delivery_id: deliveryId, receipt: buildCcReceipt({ deliveryId, delivered: true, accepted: true }) }), exitCode: 0 });
   }
   if (action === 'notify_when_idle') {
+    // [T-092] 合成契约：notify 必须带 reply_to，否则 fail-closed（不挂空契约）。
+    const requestedMsgId = str(args, 'msg_id');
+    const msgId = requestedMsgId || randomUUID();
+    const replyTo = readPeerReplyTo(args);
+    if (!replyTo?.business_session_id) {
+      return fail('notify_when_idle 需要 reply_to_business_session_id（缺少则不挂回报契约）');
+    }
+    const replyChannel = str(args, 'reply_channel');
+    if (replyChannel && replyChannel !== 'inbox') {
+      return fail(`notify_when_idle 只支持 reply_channel=inbox（收到 ${replyChannel}）`);
+    }
+    const normalizedReplyTo: PeerReplyTo = {
+      ...replyTo,
+      channel: 'inbox',
+    };
+    const text = str(args, 'text')
+      || '你有一项 gaclaw 通知：完成当前工作后，必须使用 gaclaw-msg send 按 reply_to 主动回报结论；不要猜 session_id；notify 本身不代表已回报。';
     // [T-069] 订阅「我空闲时通知你」—— 登记诊断映射到 inbox，拿合法 reply target。
     let from: string;
-    const msgId = randomUUID();
     try {
       claudeCodePeerInbox.start();
       const replyTarget = claudeCodePeerInbox.from();
@@ -818,6 +836,27 @@ async function pcCcControl(
       session_id: sessionId,
       task_id: diag.taskId,
     }));
+    // [T-092] 第一步：先注入契约消息（priority=later，不打断当前轮）。
+    // task_id = msg_id（合成 notice 可用它定向注入），control 继续用同一个 msg_id。
+    const injected = await sendPeerMessage(
+      sessionId,
+      text,
+      'later',
+      msgId,
+      normalizedReplyTo,
+      'report_when_idle',
+    );
+    if (!injected.ok) {
+      claudeCodePeerInbox.cancel(msgId);
+      return fail(`注入 notify 回报契约失败: ${injected.reason || 'unknown'}`);
+    }
+    peerLog('cc-control', 'notify_when_idle report contract injected ' + JSON.stringify({
+      msg_id: msgId,
+      session_id: sessionId,
+      reply_to_business_session_id: normalizedReplyTo.business_session_id,
+      reply_to_cc_session_id: normalizedReplyTo.cc_session_id || null,
+    }));
+    // [T-069] 第二步：再发订阅帧（notice 仍只记日志、不触发 D3）。
     const r = await sendPeerControl(sessionId, 'notify_when_idle', {
       from,
       msg_id: msgId,
@@ -836,7 +875,7 @@ async function pcCcControl(
         // ★ [T-068 / T-072] 订阅登记的定位信息 —— 合成 notice 可用 msg_id 定向注入。
         msg_id: msgId,
         from,
-        note: '已登记诊断订阅；该会话空闲时回的 notice 只记日志、不触发 D3 回传。合成 notice 可用 msg_id 定向注入。',
+        note: '已注入 report_when_idle 回报契约并发诊断订阅；完成当前工作后 CC 必须用 gaclaw-msg send 按 reply_to 主动回报；notice 本身只记日志、不触发 D3。',
       }),
       exitCode: 0,
     });
@@ -972,6 +1011,25 @@ export async function executeClientTool(
     case 'pc_cc_append': return pcCcAppend(args);
     case 'pc_cc_control': return pcCcControl(args);
     case 'pc_cc_close': return pcCcClose(args);
+    // [T-086] QMT：只读 + 受控下单（submit 内置逐笔审核门，fail-closed）
+    case 'pc_qmt_health':
+    case 'pc_qmt_account':
+    case 'pc_qmt_quote':
+    case 'pc_qmt_positions':
+    case 'pc_qmt_orders':
+    case 'pc_qmt_trades':
+    case 'pc_qmt_prepare':
+    case 'pc_qmt_preview':
+    case 'pc_qmt_submit':
+    case 'pc_qmt_auto_status':
+    case 'pc_qmt_auto_authorize':
+    case 'pc_qmt_auto_order':
+    case 'pc_qmt_auto_revoke':
+    case 'pc_qmt_cancel_order':
+    case 'pc_qmt_intent_wait':
+    case 'pc_qmt_intent_get':
+    case 'pc_qmt_intent_list':
+    case 'pc_qmt_risk_limits': return executeQmtTool(tool, args);
     default:
       return fail(`未知的端侧工具: ${tool}`);
   }

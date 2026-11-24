@@ -23,6 +23,13 @@ const USAGE = `gaclaw-msg <list|read|send> [flags]
          [--idempotency-key <s>]
 
 公共： [--hook-url <url>] [--token <token>]
+
+收到 <cross-session-message notify_intent="report_when_idle" reply_to_...> 后：
+  完成当前工作**必须**调用 gaclaw-msg send 按 reply_to 主动回报结论；
+  用 --to-session / --reply-to（或 --reply-to-business-session-id /
+  --reply-to-cc-session-id / --reply-channel）显式指定回信地址；
+  ⛔ 不要猜 session_id；notify 本身不代表已回报。业务回报只走
+  gaclaw-msg -> /devices/cc/messages -> session-inbox（不新增通道）。
 `;
 
 function fail(message, code = 1) {

@@ -25,6 +25,8 @@ const {
   RESULT_BLOCK_START, RESULT_BLOCK_END,
   parseGaclawResultBlock, extractClaudeResult, buildReportingContract,
 } = await import('../electron/client-tools/claudeResultFormat.ts');
+const { buildPeerMessageContent } =
+  await import('../electron/client-tools/claudeCodePeer.ts');
 const { parseClaudeLine, summarizeClaude } =
   await import('../electron/client-tools/claudeOutput.ts');
 
@@ -208,4 +210,42 @@ test('GC-CRF-8 · ★ summarizeClaude 老行为不破', () => {
   // 出错且没正文 ⇒ 仍要说清 subtype
   const bad = result('', true);
   assert.ok(summarizeClaude([bad]).includes('error'), '没正文时要说清 subtype');
+});
+
+// ── [T-092] notify 契约消息格式 ────────────────────────────────────────
+
+test('T092-CRF-1 ★ notify_intent 契约消息：属性齐全 + 主动回报正文 + task_id 结果块', () => {
+  const content = buildPeerMessageContent(
+    '完成当前工作后回报结论',
+    'msg-123',
+    {
+      business_session_id: 'biz-1',
+      cc_session_id: 'cc-9',
+      channel: 'inbox',
+    },
+    'report_when_idle',
+  );
+  assert.match(content, /^<cross-session-message from="uds:gaclaw" task_id="msg-123" notify_intent="report_when_idle" reply_to_business_session_id="biz-1" reply_to_cc_session_id="cc-9" reply_channel="inbox">/);
+  assert.match(content, /\*\*必须\*\*使用 .gaclaw-msg send. 按上面的 reply_to 主动回报结论/);
+  assert.match(content, /不要猜 session_id/);
+  assert.match(content, /notify 本身不代表已回报/);
+  assert.match(content, /task_id: msg-123/);
+  assert.ok(content.endsWith('</cross-session-message>'));
+});
+
+test('T092-CRF-2 ★ 老调用格式兼容：无 notifyIntent 时不写 notify_intent / 不改老结果块', () => {
+  const legacy = buildPeerMessageContent('老任务', 'task-a', {
+    business_session_id: 'biz-a',
+    channel: 'pc',
+  });
+  assert.match(legacy, /task_id="task-a"/);
+  assert.match(legacy, /reply_to_business_session_id="biz-a"/);
+  assert.ok(!legacy.includes('notify_intent'));
+  assert.ok(!legacy.includes('report_when_idle'));
+  assert.match(legacy, /task_id: task-a/);
+
+  const bare = buildPeerMessageContent('裸任务');
+  assert.match(bare, /^<cross-session-message from="uds:gaclaw">/);
+  assert.ok(!bare.includes('task_id='));
+  assert.ok(!bare.includes('reply_to'));
 });
