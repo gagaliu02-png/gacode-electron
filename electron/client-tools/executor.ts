@@ -50,6 +50,7 @@ import { findSession, sendPeerMessage, sendPeerAppend, sendPeerControl } from '.
 import { resolveClaudeBinary } from './claudeService.ts';
 import { buildClaudeBgInvocation } from './claudeService.ts';
 import { resolveClaudeLaunchCwd } from './claudeTrust.ts';
+import { adoptClaudeBgSession as adoptBgSession, stopClaudeBgSession } from './claudeBgSession.ts';
 import { buildCcReceipt, deliveryIdFromArgs } from './ccReceipt.ts';
 import { acquirePersistentSession, closePersistentSession, listPersistentSessions, setPersistentSessionBgId, touchPersistentSession } from './ccPersistentSession.ts';
 import { validateClientToolArgs } from './clientToolArgs.ts';
@@ -782,6 +783,12 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
     timeoutMs: null,
     jobId: name,
   });
+  // ⚠️ 目标目录未被信任 ⇒ 只能在受信任目录跑（CLI 的 --add-dir 也要求目标已信任）。
+  //   ⇒ 如实告知，别让模型以为它就在那个目录里。
+  const trustNote = launch.untrustedTarget
+    ? `注意：目标目录 ${launch.untrustedTarget} 尚未被 Claude Code 信任（信任记录在 ~/.claude.json），`
+      + `本次会话实际运行目录是 ${launch.cwd}；请在该目录下手动运行一次 claude 并接受信任提示，之后就能直接在目标目录跑。`
+    : '';
   if (!invocation) return fail('无法构造 Claude Code 常驻启动命令');
 
   // 1) 启动 --bg：CLI 自己后台化并立刻返回，stdout 形如
@@ -853,7 +860,8 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
       `session_id: ${found.sessionId}`,
       `bg_id: ${found.id}`,
       `name: ${name}`,
-      `工作目录: ${cwd || '(默认)'}`,
+      `工作目录: ${launch.cwd}`,
+      ...(trustNote ? [trustNote] : []),
       `后续用 pc_cc_send/append 给这个 session_id 发消息；关闭用 pc_cc_close。`,
     ].join('\n'),
     exitCode: 0,
@@ -862,72 +870,21 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
 
 /**
  * ★ [T-128-fix] 把**已经存在**的 CLI 后台会话登记进 Gacode 的常驻会话表。
- *
- * 用途：用户/运维在命令行手动起的 `claude --bg` 会话（如 probe-a / probe-b），
- *   之前 `pc_cc_send` / `pc_cc_close` 都不认（persistent_sessions 是空的）。
- *   现在可以按 **bg_id** 或 **session_id** 登记 ⇒ 两个工具立刻就能用。
- *
- * 判据（必须都有，缺一不可）：
- *   · 该会话在 `claude agents --json` 里且 kind=background（真后台会话）；
- *   · 它的会话注册项里有 `messagingSocketPath`（**有信箱** ⇒ peer 注入可用）。
- *   ⚠️ 没有信箱的会话即使登记了，`pc_cc_send` 也会投不进去 ⇒ 明确拒绝并说明。
+ * 实现放在 `claudeBgSession.ts`（不 import electron ⇒ 可单测）。
  */
 async function adoptClaudeBgSession(
   args: Record<string, unknown> | null,
 ): Promise<ClientToolResult> {
-  const bgId = str(args, 'bg_id');
-  const sessionIdArg = str(args, 'session_id');
-  if (!bgId && !sessionIdArg) return fail('缺少 bg_id 或 session_id');
-  const cli = resolveClaudeBinary();
-  if (!cli) return fail('找不到 Claude Code 可执行文件（claude）');
-
-  const out = await new Promise<string>((resolve) => {
-    const child = require('child_process').spawn(cli, ['agents', '--json'], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-      windowsHide: true,
-    });
-    let s = '';
-    child.stdout?.on('data', (d: any) => { s += d.toString(); });
-    child.on('error', () => resolve(''));
-    child.on('close', () => resolve(s));
+  const r = adoptBgSession({
+    bgId: str(args, 'bg_id'),
+    sessionId: str(args, 'session_id'),
   });
-
-  let arr: any[] = [];
-  try { arr = JSON.parse(out || '[]'); } catch { /* ignore */ }
-  const hit = arr.find((x: any) => x && (
-    (bgId && (x.id === bgId || (typeof x.sessionId === 'string' && x.sessionId.startsWith(bgId))))
-    || (sessionIdArg && x.sessionId === sessionIdArg)
-  ));
-  if (!hit) return fail(`本机没有这个 CLI 后台会话: ${bgId || sessionIdArg}`);
-  if (hit.kind !== 'background') {
-    return fail(`该会话不是后台会话（kind=${hit.kind}），只有 claude --bg 起的才能登记`);
-  }
-
-  // 必须有信箱，否则 pc_cc_send 投不进去 ⇒ 如实说，别登记个不能用的。
-  const rec = findSession(hit.sessionId);
-  if (!rec || !rec.messagingSocketPath) {
-    return fail(
-      `会话 ${hit.sessionId} 没有信箱（messagingSocketPath 为空）⇒ pc_cc_send 投不进去；`
-      + '请用支持 peer 消息通道的 Claude Code 版本（≥2.1.330）重新起会话',
-    );
-  }
-
-  acquirePersistentSession({
-    session_id: hit.sessionId,
-    cwd: hit.cwd || null,
-    name: hit.name || null,
-    adopt: true,
-  });
-  setPersistentSessionBgId(hit.sessionId, String(hit.id));
-
+  if (!r.ok) return fail(r.message || '登记失败');
   return ok({
     stdout: JSON.stringify({
       status: 'adopted',
-      session_id: hit.sessionId,
-      bg_id: String(hit.id),
-      name: hit.name || null,
-      cwd: hit.cwd || null,
-      deliverable: true,
+      session_id: r.session_id,
+      bg_id: r.bg_id,
       note: '已登记进常驻会话表；pc_cc_send/append 可直接用它，pc_cc_close 可关闭它。',
     }),
     exitCode: 0,
@@ -944,20 +901,8 @@ async function pcCcClose(
   if (!removed) return fail(`常驻会话不存在或已过期: ${sessionId}`);
   // ★ [T-128-fix] 有原生 bg_id ⇒ 真停掉 CLI 后台会话，而不只是删登记。
   if (removed.bg_id) {
-    try {
-      const cli = resolveClaudeBinary();
-      if (!cli) return fail('找不到 Claude Code 可执行文件，无法关闭常驻会话');
-      await new Promise<void>((resolve) => {
-        const child = require('child_process').spawn(cli, ['stop', removed.bg_id!], {
-          stdio: 'ignore',
-          windowsHide: true,
-        });
-        child.on('error', () => resolve());
-        child.on('close', () => resolve());
-      });
-    } catch (e) {
-      return fail(`关闭 CLI 后台会话失败: ${(e as Error).message}`);
-    }
+    const stopped = await stopClaudeBgSession(removed.bg_id);
+    if (!stopped) return fail(`关闭 CLI 后台会话失败（claude stop ${removed.bg_id} 未成功）`);
   }
   return ok({
     stdout: JSON.stringify({

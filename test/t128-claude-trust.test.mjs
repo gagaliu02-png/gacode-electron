@@ -14,10 +14,11 @@ test('T128-TRUST-1 · 受信任目录直接可用', () => {
   assert.ok(r.cwd.toLowerCase().includes('gaclaw-project'));
 });
 
-test('T128-TRUST-2 · 未信任目录 ⇒ 换受信任 cwd + add-dir 授权目标', () => {
+test('T128-TRUST-2 · 未信任目录 ⇒ 换受信任 cwd，且**不带** add-dir（CLI 会拒未信任的 add-dir）', () => {
   const r = T.resolveClaudeLaunchCwd('d:/definitely-not-trusted-dir-xyz');
-  assert.ok(r.addDir, '未信任目录必须走 add-dir');
-  assert.ok(r.addDir.toLowerCase().includes('not-trusted-dir-xyz'));
+  assert.equal(r.addDir, null, '未信任目录不能进 --add-dir（CLI 直接拒）');
+  assert.ok(r.untrustedTarget, '必须回报未信任的目标目录');
+  assert.ok(r.untrustedTarget.toLowerCase().includes('not-trusted-dir-xyz'));
   assert.ok(r.cwd, '必须有兜底 cwd');
 });
 

@@ -98,14 +98,29 @@ export function findTrustedCwd(cwd: string | null): { trusted: boolean; fallback
 /**
  * 计算启动 `claude --bg` 该用的 cwd 与 `--add-dir`。
  *
- * @returns cwd 直接可用的目录；addDir = 需要额外授权的目标目录（仅在 cwd 被换过时有值）
+ * ⚠️ **实测约束（2.1.331）**：`--add-dir <dir>` 要求 `<dir>` **本身已被信任**，
+ *   否则 CLI 直接拒绝：`Added folder not trusted: ...`。
+ *   ⇒ 所以「换到受信任 cwd + add-dir 目标」这条兜底**只在目标目录已信任时成立**。
+ *
+ * ⇒ 口径：
+ *   · 目标目录（含祖先）已信任 ⇒ 直接用它当 cwd，不带 add-dir。
+ *   · 目标目录未信任 ⇒ 用**受信任的兜底目录**当 cwd，**不带 add-dir**
+ *     （带了必被拒），并把 `untrustedTarget` 回报给调用方 ⇒ 由上层如实告知用户
+ *     「这个目录还没被信任，Claude Code 会在 <兜底目录> 里跑」。
+ *
+ * @returns cwd = 实际启动目录；addDir = 仅当目标目录**已信任**但 cwd 被换过时才有值；
+ *          untrustedTarget = 原本想用、但未被信任的目标目录（null = 没有这个问题）
  */
-export function resolveClaudeLaunchCwd(cwd: string | null): { cwd: string; addDir: string | null } {
+export function resolveClaudeLaunchCwd(cwd: string | null): {
+  cwd: string;
+  addDir: string | null;
+  untrustedTarget: string | null;
+} {
   const target = cwd ? path.resolve(cwd) : null;
   const { trusted, fallback } = findTrustedCwd(target);
   if (trusted || !target) {
-    return { cwd: target || fallback || os.homedir(), addDir: null };
+    return { cwd: target || fallback || os.homedir(), addDir: null, untrustedTarget: null };
   }
-  // cwd 不可信 ⇒ 在受信任的祖先里起会话，把目标目录用 --add-dir 授权。
-  return { cwd: fallback || os.homedir(), addDir: target };
+  // 目标目录未信任 ⇒ 不能用 add-dir（CLI 会拒）⇒ 在受信任兜底目录启动。
+  return { cwd: fallback || os.homedir(), addDir: null, untrustedTarget: target };
 }
