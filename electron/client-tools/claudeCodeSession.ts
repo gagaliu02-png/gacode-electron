@@ -52,6 +52,9 @@ export interface ClaudeSessionRecord {
   peerProtocol?: number;
   peerFeatures?: string[];
   updatedAt?: number;
+  /** ★ [T-128-fix] `claude --bg` 后台会话的短 id（= `claude stop <jobId>`）。
+   *   实测 bg 会话的注册项里带 `jobId`，且它就是 sessionId 的前缀。 */
+  jobId?: string;
 }
 
 /** 目录名 = cwd 把非字母数字全换成 `-`。 */
@@ -89,7 +92,13 @@ export function listClaudeSessions(): ClaudeSessionRecord[] {
       const raw = fs.readFileSync(path.join(dir, f), 'utf8');
       const d = JSON.parse(raw);
       if (typeof d.sessionId !== 'string' || typeof d.pid !== 'number') continue;
-      out.push(d as ClaudeSessionRecord);
+      out.push({
+        ...(d as ClaudeSessionRecord),
+        // ★ [T-128-fix] 带上 jobId（bg 会话的 bg_id）⇒ 关闭时能直接 `claude stop`。
+        ...(typeof (d as any).jobId === 'string' && (d as any).jobId
+          ? { jobId: (d as any).jobId }
+          : {}),
+      });
     } catch {
       // 登记文件可能正被写（撕裂读）⇒ 跳过这一条，不让整个列表失败
     }

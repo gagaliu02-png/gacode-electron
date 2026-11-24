@@ -50,7 +50,7 @@ import { findSession, sendPeerMessage, sendPeerAppend, sendPeerControl } from '.
 import { resolveClaudeBinary } from './claudeService.ts';
 import { buildClaudeBgInvocation } from './claudeService.ts';
 import { resolveClaudeLaunchCwd } from './claudeTrust.ts';
-import { adoptClaudeBgSession as adoptBgSession, stopClaudeBgSession } from './claudeBgSession.ts';
+import { stopClaudeBgSession } from './claudeBgSession.ts';
 import { buildCcReceipt, deliveryIdFromArgs } from './ccReceipt.ts';
 import { acquirePersistentSession, closePersistentSession, listPersistentSessions, setPersistentSessionBgId, touchPersistentSession } from './ccPersistentSession.ts';
 import { validateClientToolArgs } from './clientToolArgs.ts';
@@ -524,7 +524,15 @@ async function pcCcSessions(
     let sessions = listClaudeSessions();
     if (onlyVscode) sessions = sessions.filter((s) => s.entrypoint === 'claude-vscode');
     const deliveryId = opts.pendingId || deliveryIdFromArgs(args);
-    const out = sessions.map((s) => summarizeSession(s));
+    const out = sessions.map((s) => ({
+      ...summarizeSession(s),
+      // ★ [T-128-fix] 后台会话（claude --bg）：带 bg_id ⇒ pc_cc_close 能直接关它。
+      ...(s.kind === 'bg' || s.entrypoint === 'cli'
+        ? { is_background: true, bg_id: s.jobId || s.sessionId.split('-')[0] || null }
+        : {}),
+      // 有信箱 ⇒ pc_cc_send/append 能投递
+      deliverable: !!s.messagingSocketPath,
+    }));
     const persistent = listPersistentSessions().map((p) => ({
       session_id: p.session_id,
       cwd: p.cwd,
@@ -868,29 +876,6 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
   });
 }
 
-/**
- * ★ [T-128-fix] 把**已经存在**的 CLI 后台会话登记进 Gacode 的常驻会话表。
- * 实现放在 `claudeBgSession.ts`（不 import electron ⇒ 可单测）。
- */
-async function adoptClaudeBgSession(
-  args: Record<string, unknown> | null,
-): Promise<ClientToolResult> {
-  const r = adoptBgSession({
-    bgId: str(args, 'bg_id'),
-    sessionId: str(args, 'session_id'),
-  });
-  if (!r.ok) return fail(r.message || '登记失败');
-  return ok({
-    stdout: JSON.stringify({
-      status: 'adopted',
-      session_id: r.session_id,
-      bg_id: r.bg_id,
-      note: '已登记进常驻会话表；pc_cc_send/append 可直接用它，pc_cc_close 可关闭它。',
-    }),
-    exitCode: 0,
-  });
-}
-
 /** pc_cc_close —— T-128 PC-CC-Close：关闭逻辑常驻会话登记。 */
 async function pcCcClose(
   args: Record<string, unknown> | null,
@@ -898,11 +883,18 @@ async function pcCcClose(
   const sessionId = str(args, 'session_id');
   if (!sessionId) return fail('缺少 session_id');
   const removed = closePersistentSession(sessionId);
-  if (!removed) return fail(`常驻会话不存在或已过期: ${sessionId}`);
-  // ★ [T-128-fix] 有原生 bg_id ⇒ 真停掉 CLI 后台会话，而不只是删登记。
-  if (removed.bg_id) {
-    const stopped = await stopClaudeBgSession(removed.bg_id);
-    if (!stopped) return fail(`关闭 CLI 后台会话失败（claude stop ${removed.bg_id} 未成功）`);
+  // ★ [T-128-fix] 不要求「先 adopt」：本机在跑的后台会话（claude --bg）
+  //   直接从 session registry 拿 bg_id（jobId）⇒ 也能关。
+  const live = findSession(sessionId);
+  const isBg = !!(live && (live.kind === 'bg' || live.entrypoint === 'cli'));
+  const bgId = removed?.bg_id || (isBg ? (live!.jobId || sessionId.split('-')[0]) : null);
+  if (!removed && !bgId) {
+    return fail(`常驻会话不存在或已过期: ${sessionId}`);
+  }
+  // 有原生 bg_id ⇒ 真停掉 CLI 后台会话，而不只是删登记。
+  if (bgId) {
+    const stopped = await stopClaudeBgSession(bgId);
+    if (!stopped) return fail(`关闭 CLI 后台会话失败（claude stop ${bgId} 未成功）`);
   }
   return ok({
     stdout: JSON.stringify({
@@ -1021,7 +1013,6 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_cc_append: 30000,
   pc_cc_control: 30000,
   pc_cc_close: 30000,
-  pc_cc_adopt: 30000,
 };
 
 /** 端侧支持的工具名。 */
@@ -1068,8 +1059,6 @@ export async function executeClientTool(
 
   // ★ [T-128-fix] pc_cc_new 必须走真正常驻进程，不能进 detached `-p` 作业分支。
   if (tool === 'pc_cc_new') return pcCcNewBg(args, cwd);
-  // ★ [T-128-fix] 登记已有的 CLI 后台会话（手动起的 probe-a/probe-b 也能用）。
-  if (tool === 'pc_cc_adopt') return adoptClaudeBgSession(args);
 
   // ★ [2026-11-13 · 订正 27] 后台作业四个分支（L-27a）。
   //   「起作业」**立即返回**（不 await 端侧回传）⇒ 模型这一轮不被堵住。
@@ -1117,7 +1106,6 @@ export async function executeClientTool(
     case 'pc_cc_append': return pcCcAppend(args);
     case 'pc_cc_control': return pcCcControl(args);
     case 'pc_cc_close': return pcCcClose(args);
-    case 'pc_cc_adopt': return adoptClaudeBgSession(args);
     default:
       return fail(`未知的端侧工具: ${tool}`);
   }

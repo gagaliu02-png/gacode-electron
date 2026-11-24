@@ -68,7 +68,6 @@ const RULES: Record<string, Rule> = {
   },
   pc_claude: { required: ['task'], string: ['task', 'cwd'], intRange: { max_turns: [1, 1000] }, minLength: { task: 1 }, maxLength: { task: 100000, cwd: 1000 } },
   pc_cc_new: { required: ['task'], string: ['task', 'cwd'], intRange: { max_turns: [1, 1000] }, minLength: { task: 1 }, maxLength: { task: 100000, cwd: 1000 } },
-  pc_cc_adopt: { string: ['bg_id', 'session_id'], minLength: { bg_id: 1, session_id: 1 } },
   pc_job_start: { required: ['command'], string: ['command', 'cwd'], minLength: { command: 1 }, maxLength: { command: 100000, cwd: 1000 } },
   pc_job_status: { required: ['job_id'], string: ['job_id'], minLength: { job_id: 1 } },
   pc_job_stop: { required: ['job_id'], string: ['job_id'], minLength: { job_id: 1 } },

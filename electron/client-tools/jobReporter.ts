@@ -42,7 +42,8 @@ import type { LocalJob } from './localJobs.ts';
 import { pollJob } from './jobRunner.ts';
 import { markDispatchReported } from './dispatchLedger.ts';
 import { emitJobsChanged } from './jobView.ts';
-import { setPersistentSessionJob, takeExpiredPersistentSessions } from './ccPersistentSession.ts';
+import { setPersistentSessionJob } from './ccPersistentSession.ts';
+import { sweepIdleBackgroundSessions } from './claudeBgSession.ts';
 
 /** 巡检间隔（毫秒）—— 5~10 秒之间（题面要求）。 */
 export const JOB_SWEEP_INTERVAL_MS = 7000;
@@ -234,18 +235,8 @@ export class JobReporter {
    */
   async tick(report?: JobReportFn): Promise<number> {
     // ★ [T-128-fix] 空闲 5 分钟自动关闭原生 bg 会话（与作业巡检共用 7s 定时器）。
-    for (const expired of takeExpiredPersistentSessions()) {
-      if (!expired.bg_id) continue;
-      try {
-        const { spawn } = require('child_process');
-        // resolve binary lazily; avoid importing claudeService into tests when unnecessary
-        const { resolveClaudeBinary } = require('./claudeService.ts');
-        const cli = resolveClaudeBinary();
-        if (!cli) continue;
-        const child = spawn(cli, ['stop', expired.bg_id], { stdio: 'ignore', windowsHide: true });
-        child.on('error', () => {});
-      } catch { /* best-effort */ }
-    }
+    //   判据 = 该 bg 会话**最后活动时间**距今超过 TTL ⇒ `claude stop`。
+    void sweepIdleBackgroundSessions();
     if (this.busy) return 0;
     const reportFn = report || this.report;
     this.busy = true;

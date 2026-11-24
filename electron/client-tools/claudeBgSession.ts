@@ -7,8 +7,8 @@
  * 但 Gacode 自己的常驻会话表（`ccPersistentSession.ts`）一开始是空的
  * ⇒ `pc_cc_send` / `pc_cc_close` 不认这些会话。
  *
- * ⇒ 本模块提供「按 bg_id / session_id 把已有后台会话登记进来」的能力，
- *   并**先验信箱**（`messagingSocketPath`）——没有信箱的会话登记了也投不进去。
+ * ⇒ 本模块提供「列出后台会话」与「停掉后台会话」两个原语。
+ *   ⚠️ 注册项里带 `jobId`（= bg_id），所以**不需要**额外的登记步骤。
  *
  * ## ⛔ 不 import electron
  *
@@ -17,7 +17,6 @@
 
 import { execFileSync, spawn } from 'child_process';
 import { findSession } from './claudeCodePeer.ts';
-import { acquirePersistentSession, setPersistentSessionBgId } from './ccPersistentSession.ts';
 import { resolveClaudeBinary } from './claudeService.ts';
 
 export interface ClaudeBgSessionInfo {
@@ -53,10 +52,13 @@ export function listClaudeBgSessions(cli?: string): ClaudeBgSessionInfo[] {
     return [];
   }
   if (!Array.isArray(arr)) return [];
+  // ⛔ **只要后台会话**：interactive / vscode 会话没有 bg id，混进来会让
+  //    「按 bg_id 关闭」这类操作打错目标。
   return arr
-    .filter((x) => x && typeof x.sessionId === 'string' && x.sessionId)
+    .filter((x) => x && typeof x.sessionId === 'string' && x.sessionId && x.kind === 'background')
     .map((x) => ({
-      id: String(x.id ?? ''),
+      // ⚠️ `id` 缺失时用 sessionId 前缀兜底（实测 bg_id == sessionId 前缀）。
+      id: String(x.id || String(x.sessionId).split('-')[0]),
       sessionId: String(x.sessionId),
       name: typeof x.name === 'string' ? x.name : null,
       cwd: typeof x.cwd === 'string' ? x.cwd : null,
@@ -89,51 +91,6 @@ export function hasPeerInbox(sessionId: string): boolean {
   return !!(rec && rec.messagingSocketPath);
 }
 
-/**
- * 把一个后台会话登记进 Gacode 常驻会话表。
- *
- * @returns { ok: true, session_id, bg_id } 或 { ok: false, reason, message }
- */
-export function adoptClaudeBgSession(
-  query: { bgId?: string | null; sessionId?: string | null },
-  sessions?: ClaudeBgSessionInfo[],
-): { ok: boolean; reason?: string; session_id?: string; bg_id?: string; message?: string } {
-  const bgId = query.bgId ? String(query.bgId) : null;
-  const sid = query.sessionId ? String(query.sessionId) : null;
-  if (!bgId && !sid) return { ok: false, reason: 'missing_param', message: '缺少 bg_id 或 session_id' };
-
-  const hit = findClaudeBgSession({ bgId, sessionId: sid }, sessions);
-  if (!hit) {
-    return { ok: false, reason: 'not_found', message: `本机没有这个 CLI 后台会话: ${bgId || sid}` };
-  }
-  if (hit.kind !== 'background') {
-    return {
-      ok: false,
-      reason: 'not_background',
-      message: `该会话不是后台会话（kind=${hit.kind}），只有 claude --bg 起的才能登记`,
-    };
-  }
-  if (!hasPeerInbox(hit.sessionId)) {
-    return {
-      ok: false,
-      reason: 'no_inbox',
-      message:
-        `会话 ${hit.sessionId} 没有信箱（messagingSocketPath 为空）⇒ pc_cc_send 投不进去；`
-        + '请用支持 peer 消息通道的 Claude Code 版本（≥2.1.330）重新起会话',
-    };
-  }
-
-  acquirePersistentSession({
-    session_id: hit.sessionId,
-    cwd: hit.cwd,
-    name: hit.name,
-    adopt: true,
-  });
-  setPersistentSessionBgId(hit.sessionId, hit.id || bgId || hit.sessionId.slice(0, 8));
-
-  return { ok: true, session_id: hit.sessionId, bg_id: hit.id };
-}
-
 /** 停掉一个 CLI 后台会话（`claude stop <bg_id>`）。 */
 export function stopClaudeBgSession(bgId: string): Promise<boolean> {
   const bin = resolveClaudeBinary();
@@ -147,4 +104,35 @@ export function stopClaudeBgSession(bgId: string): Promise<boolean> {
       resolve(false);
     }
   });
+}
+
+/** 空闲多久算过期（毫秒）—— 与常驻会话表的 TTL 一致。 */
+export const BG_IDLE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * 扫本机**后台会话**（`claude --bg`），把空闲超过 TTL 的停掉。
+ *
+ * ⚠️ 判据用注册项的 `updatedAt`（CLI 每次状态变化都会更新它）⇒
+ *   「最近没动过」= 空闲；正在跑的任务会持续更新它 ⇒ 不会被误杀。
+ *
+ * @returns 被停掉的会话数
+ */
+export function sweepIdleBackgroundSessions(
+  ttlMs: number = BG_IDLE_TTL_MS,
+  now: number = Date.now(),
+): number {
+  const sessions = listClaudeBgSessions();
+  let stopped = 0;
+  for (const s of sessions) {
+    const rec = findSession(s.sessionId);
+    if (!rec) continue;
+    const last = typeof rec.updatedAt === 'number' ? rec.updatedAt : 0;
+    if (!last) continue;
+    if (now - last < ttlMs) continue;
+    const bgId = s.id || s.sessionId.split('-')[0];
+    void stopClaudeBgSession(bgId).then((ok) => {
+      if (ok) stopped += 1;
+    });
+  }
+  return stopped;
 }
