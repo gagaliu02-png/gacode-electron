@@ -45,12 +45,12 @@ import {
   startBackgroundJob,
 } from './backgroundJobs.ts';
 import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrowserFocus, pcBrowserShot, pcBrowserBack, pcBrowserWindow } from './browser.ts';
-import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
+import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath, waitForFirstAssistantReply } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerAppend, sendPeerControl } from './claudeCodePeer.ts';
 import { resolveClaudeBinary } from './claudeService.ts';
 import { buildClaudeBgInvocation } from './claudeService.ts';
 import { resolveClaudeLaunchCwd } from './claudeTrust.ts';
-import { stopClaudeBgSession } from './claudeBgSession.ts';
+import { stopClaudeBgSession, listClaudeBgSessions } from './claudeBgSession.ts';
 import { buildCcReceipt, deliveryIdFromArgs } from './ccReceipt.ts';
 import { acquirePersistentSession, closePersistentSession, listPersistentSessions, setPersistentSessionBgId, touchPersistentSession } from './ccPersistentSession.ts';
 import { validateClientToolArgs } from './clientToolArgs.ts';
@@ -60,7 +60,9 @@ import type { PeerReplyTo } from './claudeResultFormat.ts';
 import { claudeCodePeerInbox } from './claudeCodePeerInbox.ts';
 // [T-069] 诊断日志：走 peerLog ⇒ 生产落 client-tools.log，单测只 console。
 import { peerLog } from './peerLog.ts';
-import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
+// ⚠️ [T-128b] 修掉重复 import（origin/main 遗留：第 49 行已经 import 过 claudeCodePeer 的
+//   findSession / sendPeerMessage / sendPeerControl ⇒ 这里再 import 一次 ⇒ TS2300
+//   「Duplicate identifier」⇒ 整个 node typecheck 直接红）。
 // [T-086] QMT WorkBuddy 本机 stdio bridge（受控只读 + 审核门下单）
 import { executeQmtTool } from './qmtBridge.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';
@@ -862,8 +864,18 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
   }
 
   // 3) 用 CLI 真实 sessionId 作为对外 session_id，并登记 bg_id
-  acquirePersistentSession({ session_id: found.sessionId, cwd, name: found.name || name });
+  //    ⚠️ [T-128b] 登记里的 session_id 必须**就是 CLI 那个真 id**
+  //    （`acquirePersistentSession` 已修：传了 id 就用它建记录，不再 randomUUID）
+  //    ⇒ 顺带 `setPersistentSessionBgId` 也就能命中了（之前按真 id 找记录永远找不到 ⇒ bg_id 永远 null）。
+  acquirePersistentSession({ session_id: found.sessionId, cwd: launch.cwd, name: found.name || name });
   setPersistentSessionBgId(found.sessionId, bgId);
+
+  // 4) ★ [T-128b] 等首条回复（最多 45s）—— `pc_cc_new` 现在是 **sync** 模式：
+  //    工具调用要在本轮内把「会话建好了 + 它说了什么」一起回给模型。
+  //    ⚠️ 超时**不算失败**：照常返回 session_id（模型稍后可用 pc_cc_read 补看），
+  //    绝不能因为首答慢就把刚建好的会话判成失败（那会留下孤儿后台进程）。
+  const waitMs = Number(process.env.CC_NEW_FIRST_REPLY_WAIT_MS ?? 45_000);
+  const first = await waitForFirstAssistantReply(found.sessionId, Number.isFinite(waitMs) ? waitMs : 45_000);
 
   return ok({
     stdout: [
@@ -873,6 +885,9 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
       `name: ${name}`,
       `工作目录: ${launch.cwd}`,
       ...(trustNote ? [trustNote] : []),
+      ...(first.text
+        ? [`首条回复:`, first.text]
+        : [`首条回复: (还没出来，会话仍在跑；之后可用 pc_cc_read 看)`]),
       `后续用 pc_cc_send/append 给这个 session_id 发消息；关闭用 pc_cc_close。`,
     ].join('\n'),
     exitCode: 0,
@@ -897,7 +912,18 @@ async function pcCcClose(
   // 有原生 bg_id ⇒ 真停掉 CLI 后台会话，而不只是删登记。
   if (bgId) {
     const stopped = await stopClaudeBgSession(bgId);
-    if (!stopped) return fail(`关闭 CLI 后台会话失败（claude stop ${bgId} 未成功）`);
+    if (!stopped) {
+      // ★ [T-128b] `claude stop` 失败**不一定**是失败：会话可能**已经被停掉了**
+      //   （空闲 5 分钟清扫先一步停了它 ⇒ 真机实测：关一个已被清扫的会话会报
+      //   「关闭 CLI 后台会话失败」，其实它早就不在了）。
+      //   ⇒ 复核一次：agents 列表里已经没这个 bg 会话 ⇒ 当作「已关闭」如实回报。
+      const stillThere = listClaudeBgSessions().some(
+        (s) => s.id === bgId || (s.sessionId || '').startsWith(bgId),
+      );
+      if (stillThere) {
+        return fail(`关闭 CLI 后台会话失败（claude stop ${bgId} 未成功）`);
+      }
+    }
   }
   return ok({
     stdout: JSON.stringify({
