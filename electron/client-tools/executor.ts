@@ -817,6 +817,11 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
     await new Promise(r=>setTimeout(r,500));
   }
   if (!found || !found.sessionId) {
+    // ⚠️ 登记失败 ⇒ **别把后台会话漏在机器上**（否则白占一个常驻进程）。
+    try {
+      const child = require('child_process').spawn(cli, ['stop', bgId], { stdio: 'ignore', windowsHide: true });
+      child.on('error', () => {});
+    } catch { /* best-effort */ }
     return fail(`Claude Code 常驻会话已启动（bg_id=${bgId}），但没能从 agents --json 读到 sessionId`);
   }
 
