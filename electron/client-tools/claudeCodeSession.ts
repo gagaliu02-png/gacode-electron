@@ -246,6 +246,65 @@ function extractTurn(d: any): TranscriptTurn | null {
 }
 
 /**
+ * 按 sessionId 找一条**活**会话登记。
+ *
+ * ⚠️ 用 `listClaudeSessions()` 而不是 `claudeCodePeer.findSession()`
+ *    —— 后者在本模块之外（`claudeCodePeer.ts`），反向 import 会成环。
+ */
+export function findClaudeSessionById(sessionId: string): ClaudeSessionRecord | null {
+  const want = String(sessionId || '');
+  if (!want) return null;
+  return listClaudeSessions().find((r) => r.sessionId === want) || null;
+}
+
+/**
+ * ★ [T-128b] 等一个会话的**首条助手回复**（`pc_cc_new` 用）。
+ *
+ * ## 为什么需要
+ *
+ * `pc_cc_new` 改成 `mode:'sync'` 后，工具调用要**在本轮内**把「会话建好了 + 它说了什么」
+ * 一起回给模型 ⇒ 必须等首条回复出来。
+ *
+ * ## 怎么判「首条回复出来了」
+ *
+ * 会话的 transcript 在 `~/.claude/projects/<slug>/<sessionId>.jsonl`，
+ * 每条记录是 `{type:'assistant'|'user'|..., message:{content}}`。
+ * ⇒ **第一条带正文的 assistant 记录** = 首条回复。
+ * （只调工具没说话的那种 assistant 记录没有正文 ⇒ 不算首答，继续等。）
+ *
+ * ## 超时怎么办
+ *
+ * 超时**不算失败**：返回 `timedOut:true` + 空正文，
+ * 调用方（`pcCcNewBg`）照常返回 session_id ⇒ 模型可以稍后用 `pc_cc_read` 补看。
+ * ⇒ 绝不能因为「首答慢」就把刚建好的会话判成失败（那会留下孤儿后台进程）。
+ *
+ * @param timeoutMs 最长等多久（默认 45s）
+ * @returns 首条回复正文 + 是否超时
+ */
+export async function waitForFirstAssistantReply(
+  sessionId: string,
+  timeoutMs = 45_000,
+  pollMs = 1_000,
+): Promise<{ text: string; timedOut: boolean; waitedMs: number }> {
+  const started = Date.now();
+  const deadline = started + Math.max(0, timeoutMs);
+  for (;;) {
+    const rec = findClaudeSessionById(sessionId);
+    if (rec) {
+      const { turns } = readTranscriptTail(rec, { maxTurns: 12 });
+      const first = turns.find((t) => t.role === 'assistant' && !!t.text && !!t.text.trim());
+      if (first) {
+        return { text: first.text, timedOut: false, waitedMs: Date.now() - started };
+      }
+    }
+    if (Date.now() >= deadline) {
+      return { text: '', timedOut: true, waitedMs: Date.now() - started };
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
+
+/**
  * 汇总一个会话的「当前在干嘛」。
  *
  * 语义：

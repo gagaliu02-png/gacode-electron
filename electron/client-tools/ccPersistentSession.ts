@@ -86,7 +86,17 @@ function sweepExpired(now: number): boolean {
  * 给 `pc_cc_new` 取/建一个常驻 session_id。
  *
  * - 参数里给了可复用的 session_id 且登记仍有效 ⇒ 复用并 touch。
- * - 否则新建 UUID 并登记。
+ * - 参数里给了 session_id 但**登记里没有** ⇒ **用这个 id 建记录**（见下方 ⛔）。
+ * - 完全没给 id ⇒ 新建 UUID 并登记。
+ *
+ * ⛔ [T-128b · 真机缺陷 1] 传了 id 却**另起一个随机 UUID** 是错的：
+ *   `pcCcNewBg` 拿到的是 **CLI 真实 sessionId**（`claude agents --json` 里的那个），
+ *   它同时是这个会话在 `~/.claude/sessions/<pid>.json` 里的身份
+ *   ⇒ 记录里的 id 必须**就是它**，否则：
+ *     · 模型拿到的 id 在 `pc_cc_read`/`pc_cc_send`/`pc_cc_close` 一律「会话不在本机运行中」；
+ *     · `setPersistentSessionBgId(真实 id, bgId)` 按真实 id 找记录 ⇒ 找不到 ⇒ `bg_id` 永远 null
+ *       ⇒ `pc_cc_close` 只能删登记、停不掉 CLI 进程 ⇒ **常驻进程泄漏**。
+ *   （真机实测：模型拿到 `512e3f2d…`，真实会话是 `f8026214-0689-…`。）
  */
 export function acquirePersistentSession(args: {
   session_id?: unknown;
@@ -107,6 +117,18 @@ export function acquirePersistentSession(args: {
       writeState(state);
       return { session_id: hit.session_id, reused: true, cwd: hit.cwd };
     }
+    // ★ [T-128b] 传了 id 但登记里没有 ⇒ **用传入的 id 建记录**（不再 randomUUID）。
+    const rec: CcPersistentSession = {
+      session_id: wanted,
+      cwd: args.cwd ?? null,
+      name: typeof args.name === 'string' && args.name ? args.name : null,
+      created_at: now,
+      last_activity_at: now,
+      active_job_id: null,
+    };
+    state.sessions.push(rec);
+    writeState(state);
+    return { session_id: rec.session_id, reused: false, cwd: rec.cwd };
   }
   const rec: CcPersistentSession = {
     session_id: randomUUID(),
