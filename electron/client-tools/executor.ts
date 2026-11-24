@@ -50,7 +50,7 @@ import { findSession, sendPeerMessage, sendPeerAppend, sendPeerControl } from '.
 import { resolveClaudeBinary } from './claudeService.ts';
 import { buildClaudeBgInvocation } from './claudeService.ts';
 import { resolveClaudeLaunchCwd } from './claudeTrust.ts';
-import { stopClaudeBgSession, listClaudeBgSessions } from './claudeBgSession.ts';
+import { stopClaudeBgSession } from './claudeBgSession.ts';
 import { buildCcReceipt, deliveryIdFromArgs } from './ccReceipt.ts';
 import { acquirePersistentSession, closePersistentSession, listPersistentSessions, setPersistentSessionBgId, touchPersistentSession } from './ccPersistentSession.ts';
 import { validateClientToolArgs } from './clientToolArgs.ts';
@@ -916,11 +916,16 @@ async function pcCcClose(
       // ★ [T-128b] `claude stop` 失败**不一定**是失败：会话可能**已经被停掉了**
       //   （空闲 5 分钟清扫先一步停了它 ⇒ 真机实测：关一个已被清扫的会话会报
       //   「关闭 CLI 后台会话失败」，其实它早就不在了）。
-      //   ⇒ 复核一次：agents 列表里已经没这个 bg 会话 ⇒ 当作「已关闭」如实回报。
-      const stillThere = listClaudeBgSessions().some(
-        (s) => s.id === bgId || (s.sessionId || '').startsWith(bgId),
-      );
-      if (stillThere) {
+      //
+      //   ⚠️ 复核必须**便宜**：读本机会话登记文件（`findSession`，一次文件读）
+      //   **不许**在这里跑 `claude agents --json` ——
+      //   那是**同步** CLI 调用（`execFileSync`），实测在会话正在被停掉时会**挂住**，
+      //   而 `execFileSync` 的 timeout 只发 SIGTERM ⇒ 不响应就一直卡
+      //   ⇒ 工具调用永不返回 ⇒ D3 回执发不出去 ⇒ 服务端 30s 判 `client_no_response`
+      //   （真机 2026-11-24 实测：close 派单 30s 超时、而进程其实已被停掉）。
+      await new Promise((r) => setTimeout(r, 300)); // 等 CLI 把登记文件摘掉
+      const stillLive = !!findSession(sessionId);
+      if (stillLive) {
         return fail(`关闭 CLI 后台会话失败（claude stop ${bgId} 未成功）`);
       }
     }
