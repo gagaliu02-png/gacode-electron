@@ -34,6 +34,8 @@ import { claudeService } from './claudeService.ts';
 import { rawService } from './cliService.ts';
 import { registerBuiltinCliServices } from './cliServices.ts';
 import { describeJob, findJob, pollJob, startJob, stopJobById } from './jobRunner.ts';
+import { updateJob } from './localJobs.ts';
+import { acquirePersistentSession, setPersistentSessionJob } from './ccPersistentSession.ts';
 import type { ClientToolResult } from './types.ts';
 
 // ⚠️ 内置 CLI 服务（`claude`）在这里注册一次 —— 本模块是「工具 → 服务」的映射处。
@@ -62,9 +64,23 @@ export function startBackgroundJob(input: BackgroundStartInput): ClientToolResul
     return { status: 'error', error: `未知的后台作业工具: ${tool}` };
   }
 
-  const args = input.args || {};
+  const args0 = input.args || {};
   // ⚠️ 工作目录：入参里的 `cwd` 优先，其次派单带的那个。
-  const cwd = strArg(args, 'cwd') || input.cwd || null;
+  const cwd = strArg(args0, 'cwd') || input.cwd || null;
+
+  // ★ [T-128] pc_cc_new = 逻辑常驻会话：取/复用 session_id，传给 CLI --resume；
+  //   pc_claude 保持老的一次性语义（不传 resume_session_id）。
+  let persistentSessionId: string | null = null;
+  let args: Record<string, unknown> = args0;
+  if (tool === 'pc_cc_new') {
+    const acq = acquirePersistentSession({
+      session_id: args0.session_id,
+      cwd,
+      name: args0.name,
+    });
+    persistentSessionId = acq.session_id;
+    args = { ...args0, resume_session_id: acq.session_id };
+  }
 
   const jobId = (input.jobId && String(input.jobId)) || `job-${randomUUID()}`;
 
@@ -96,9 +112,12 @@ export function startBackgroundJob(input: BackgroundStartInput): ClientToolResul
     // ★ [2026-11-14 · 订正 28 · W5] 把**业务会话**带进作业表
     //   ⇒ 「停止本会话的一切」在本机这一侧也认得出来。
     started = startJob(jobId, service, invocation, input.sessionId ?? null);
+    if (persistentSessionId) updateJob(jobId, { ccPersistentSessionId: persistentSessionId });
   } catch (e) {
+    if (persistentSessionId) setPersistentSessionJob(persistentSessionId, null);
     return { status: 'error', error: `后台作业起不来: ${(e as Error).message}` };
   }
+  if (persistentSessionId) setPersistentSessionJob(persistentSessionId, started.jobId);
 
   const lines = [
     `已在后台启动作业（${service.title}）`,
@@ -115,6 +134,10 @@ export function startBackgroundJob(input: BackgroundStartInput): ClientToolResul
     );
   }
   lines.push('作业会继续在后台跑，完成后结果会自动汇报给用户。');
+  if (persistentSessionId) {
+    lines.push(`常驻会话 id: ${persistentSessionId}`);
+    lines.push('这个会话会在空闲 5 分钟后自动关闭；需要提前关闭时用 pc_cc_close。');
+  }
 
   return {
     status: 'ok',

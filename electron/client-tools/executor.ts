@@ -48,6 +48,7 @@ import { pcBrowserOpen, pcBrowserSnapshot, pcBrowserAct, pcBrowserClose, pcBrows
 import { listClaudeSessions, readTranscriptTail, summarizeSession, transcriptPath } from './claudeCodeSession.ts';
 import { findSession, sendPeerMessage, sendPeerAppend, sendPeerControl } from './claudeCodePeer.ts';
 import { buildCcReceipt, deliveryIdFromArgs } from './ccReceipt.ts';
+import { closePersistentSession, listPersistentSessions, touchPersistentSession } from './ccPersistentSession.ts';
 import { validateClientToolArgs } from './clientToolArgs.ts';
 import type { PeerReplyTo } from './claudeResultFormat.ts';
 // ★ [2026-11-19 · T-068 / T-072] peer notice 读侧：注入后登记订阅，
@@ -520,9 +521,17 @@ async function pcCcSessions(
     if (onlyVscode) sessions = sessions.filter((s) => s.entrypoint === 'claude-vscode');
     const deliveryId = opts.pendingId || deliveryIdFromArgs(args);
     const out = sessions.map((s) => summarizeSession(s));
+    const persistent = listPersistentSessions().map((p) => ({
+      session_id: p.session_id,
+      cwd: p.cwd,
+      name: p.name,
+      active_job_id: p.active_job_id,
+      last_activity_at: p.last_activity_at,
+    }));
     return ok({
       stdout: JSON.stringify({
         ...out,
+        persistent_sessions: persistent,
         delivery_id: deliveryId,
         receipt: buildCcReceipt({ deliveryId, delivered: true, accepted: true }),
       }),
@@ -650,6 +659,7 @@ async function pcCcSend(
     // ③ 注入（带 task_id + reply-to + 汇报协议）。
     const r = await sendPeerMessage(sessionId, text, priority, taskId, replyTo);
     if (!r.ok) return fail(`投递失败: ${r.reason || 'unknown'}`);
+    touchPersistentSession(sessionId);
 
     // ④ 先登记映射、再发订阅帧 ⇒ 回执不会落在登记之前。
     const msgId = randomUUID();
@@ -745,6 +755,24 @@ async function pcCcAppend(args: Record<string, unknown> | null): Promise<ClientT
   } catch (e) {
     return fail(`投递失败: ${(e as Error).message}`);
   }
+}
+
+/** pc_cc_close —— T-128 PC-CC-Close：关闭逻辑常驻会话登记。 */
+async function pcCcClose(
+  args: Record<string, unknown> | null,
+): Promise<ClientToolResult> {
+  const sessionId = str(args, 'session_id');
+  if (!sessionId) return fail('缺少 session_id');
+  const removed = closePersistentSession(sessionId);
+  if (!removed) return fail(`常驻会话不存在或已过期: ${sessionId}`);
+  return ok({
+    stdout: JSON.stringify({
+      status: 'closed',
+      session_id: sessionId,
+      note: '已关闭常驻登记；历史 transcript 保留；之后 pc_cc_new 不再 resume 这个 session_id。',
+    }),
+    exitCode: 0,
+  });
 }
 
 /** pc_cc_control —— 控制动作（改名 / 订阅空闲通知）。 */
@@ -853,6 +881,7 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   // ★ [T-111] append 只等本机写通道回执，不等 Claude Code 的结果。
   pc_cc_append: 30000,
   pc_cc_control: 30000,
+  pc_cc_close: 30000,
 };
 
 /** 端侧支持的工具名。 */
@@ -942,6 +971,7 @@ export async function executeClientTool(
     // ★ [T-111] 轻量追加（fire-and-forget）—— 不建 work_unit、不等结果。
     case 'pc_cc_append': return pcCcAppend(args);
     case 'pc_cc_control': return pcCcControl(args);
+    case 'pc_cc_close': return pcCcClose(args);
     default:
       return fail(`未知的端侧工具: ${tool}`);
   }

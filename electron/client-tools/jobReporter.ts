@@ -42,6 +42,7 @@ import type { LocalJob } from './localJobs.ts';
 import { pollJob } from './jobRunner.ts';
 import { markDispatchReported } from './dispatchLedger.ts';
 import { emitJobsChanged } from './jobView.ts';
+import { setPersistentSessionJob } from './ccPersistentSession.ts';
 
 /** 巡检间隔（毫秒）—— 5~10 秒之间（题面要求）。 */
 export const JOB_SWEEP_INTERVAL_MS = 7000;
@@ -272,6 +273,8 @@ export class JobReporter {
         // ⑤ 标「已上报」⇒ 这条派单彻底完事（重连补推也不会再起一个）。
         markJobReported(polled.job.id, payload.stdout || payload.error || undefined);
         markDispatchReported(polled.job.id, payload.error || null);
+        // ★ [T-128] 作业完成并上报 ⇒ 常驻会话从「忙」转回空闲计时。
+        if (polled.job.ccPersistentSessionId) setPersistentSessionJob(polled.job.ccPersistentSessionId, null);
         reported += 1;
       }
     } finally {

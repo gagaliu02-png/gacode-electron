@@ -89,6 +89,8 @@ export interface LocalJob {
   pid: number | null;
   /** 发起这个作业的会话。 */
   sessionId: string | null;
+  /** ★ [T-128] 这个作业属于哪个逻辑常驻 Claude 会话（完成后要解绑 active_job_id）。 */
+  ccPersistentSessionId?: string | null;
   /** 输出日志文件。 */
   outputFile: string | null;
   /** 状态（见 `LocalJobStatus`；终态一律不计横幅，历史列表仍可见）。 */
@@ -211,6 +213,7 @@ export function appendJob(job: Partial<LocalJob> & { id: string; serviceId: stri
     cwd: job.cwd ?? null,
     pid: job.pid ?? null,
     sessionId: job.sessionId ?? null,
+    ...(job.ccPersistentSessionId ? { ccPersistentSessionId: job.ccPersistentSessionId } : {}),
     outputFile: job.outputFile ?? null,
     status: job.status || 'queued',
     startedAt: job.startedAt ?? Date.now(),

@@ -34,6 +34,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { getCliService } from './cliService.ts';
 import type { CliEvent, CliService } from './cliService.ts';
 import { isProcessAlive, killTree, pickShell } from './proc.ts';
+import { setPersistentSessionJob } from './ccPersistentSession.ts';
 import {
   appendJob,
   getJob,
@@ -335,6 +336,8 @@ export function stopJobById(jobId: string): { stopped: boolean; job: LocalJob | 
     settledAt: Date.now(),
     ...(alive ? { summary: '已被用户停止' } : {}),
   });
+  // ★ [T-128] 作业被停 ⇒ 常驻会话不再算「忙」，空闲计时恢复。
+  if (next?.ccPersistentSessionId) setPersistentSessionJob(next.ccPersistentSessionId, null);
   return { stopped: true, job: next || job };
 }
 
