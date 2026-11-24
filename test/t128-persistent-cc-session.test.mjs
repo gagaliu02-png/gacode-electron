@@ -78,3 +78,10 @@ test('T128-PC-6 · expired sweep 返回过期项并从登记移除（供 claude 
   assert.equal(expired[0].session_id, a.session_id);
   assert.equal(M.isPersistentSessionActive(a.session_id, 1000 + M.CC_IDLE_TTL_MS), false);
 });
+
+test('T128-PC-7 · bg_id 从 CLI stdout 解析（不靠 name 反查）', () => {
+  const stdout = 'backgrounded · 5002b1dc · t128-repro' + String.fromCharCode(10) + '  claude agents list sessions';
+  const m = /backgrounded[^0-9a-fA-F]*([0-9a-fA-F]{6,})/.exec(stdout);
+  assert.ok(m, 'must parse bg id from stdout');
+  assert.equal(m[1], '5002b1dc');
+});

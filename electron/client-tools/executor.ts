@@ -774,18 +774,33 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
   const invocation = buildClaudeBgInvocation({ args: { task, name }, cwd, timeoutMs: null, jobId: name });
   if (!invocation) return fail('无法构造 Claude Code 常驻启动命令');
 
-  // 1) 启动 --bg（CLI 自己后台化，短命令立即返回）
-  await new Promise<void>((resolve, reject) => {
-    const child = require('child_process').spawn(invocation.command, invocation.args, {
-      cwd: invocation.cwd || undefined,
-      stdio: 'ignore',
-      windowsHide: true,
+  // 1) 启动 --bg：CLI 自己后台化并立刻返回，stdout 形如
+  //    `backgrounded · <bg_id> · <name>` ⇒ **直接解析 bg_id**，不要靠 name 反查
+  //    （实测 `--bg` 会忽略 `--name`，会话实际 name 变成 hex id ⇒ 按 name 匹配必然失败）。
+  let bgId = '';
+  let stdout = '';
+  try {
+    stdout = await new Promise<string>((resolve, reject) => {
+      const child = require('child_process').spawn(invocation.command, invocation.args, {
+        cwd: invocation.cwd || undefined,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+      });
+      let s = '';
+      child.stdout?.on('data', (d: any) => { s += d.toString(); });
+      child.on('error', reject);
+      child.on('close', () => resolve(s));
     });
-    child.on('error', reject);
-    child.on('close', () => resolve());
-  });
+  } catch (e) {
+    return fail(`启动 Claude Code 常驻会话失败: ${(e as Error).message}`);
+  }
+  const m = /backgrounded[^0-9a-fA-F]*([0-9a-fA-F]{6,})/.exec(stdout);
+  bgId = m ? m[1] : '';
+  if (!bgId) {
+    return fail(`Claude Code 常驻会话未启动成功（没有得到 bg_id）：${stdout.slice(0, 300).trim() || '(无输出)'}`);
+  }
 
-  // 2) 等 registry 出现，并按 name 找 bg_id/sessionId
+  // 2) 用 bg_id 到 agents --json 里取真实 sessionId（bg_id 是 sessionId 的前缀）
   const deadline = Date.now() + 20000;
   let found: any = null;
   while (Date.now() < deadline) {
@@ -796,16 +811,18 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
         child.on('error',()=>resolve('')); child.on('close',()=>resolve(s));
       });
       const arr = JSON.parse(out || '[]');
-      found = arr.find((x:any)=> x && x.kind === 'background' && (x.name === name || x.id === name));
+      found = arr.find((x:any) => x && (x.id === bgId || (typeof x.sessionId === 'string' && x.sessionId.startsWith(bgId))));
       if (found) break;
     } catch { /* retry */ }
     await new Promise(r=>setTimeout(r,500));
   }
-  if (!found || !found.sessionId || !found.id) return fail('Claude Code 常驻会话已启动，但没能从 agents --json 读到 sessionId/bg_id');
+  if (!found || !found.sessionId) {
+    return fail(`Claude Code 常驻会话已启动（bg_id=${bgId}），但没能从 agents --json 读到 sessionId`);
+  }
 
   // 3) 用 CLI 真实 sessionId 作为对外 session_id，并登记 bg_id
-  acquirePersistentSession({ session_id: found.sessionId, cwd, name });
-  setPersistentSessionBgId(found.sessionId, String(found.id));
+  acquirePersistentSession({ session_id: found.sessionId, cwd, name: found.name || name });
+  setPersistentSessionBgId(found.sessionId, bgId);
 
   return ok({
     stdout: [
