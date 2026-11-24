@@ -61,8 +61,6 @@ import { claudeCodePeerInbox } from './claudeCodePeerInbox.ts';
 // [T-069] 诊断日志：走 peerLog ⇒ 生产落 client-tools.log，单测只 console。
 import { peerLog } from './peerLog.ts';
 import { findSession, sendPeerMessage, sendPeerControl } from './claudeCodePeer.ts';
-// ★ [2026-11-17 · T-022] 等端侧 Claude Code 的处理结果（前台等）
-import { watchClaudeSessionResult } from './claudeCodeResultWatcher.ts';
 // [T-086] QMT WorkBuddy 本机 stdio bridge（受控只读 + 审核门下单）
 import { executeQmtTool } from './qmtBridge.ts';
 import type { ClientToolArtifact, ClientToolResult } from './types.ts';

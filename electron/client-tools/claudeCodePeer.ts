@@ -247,14 +247,20 @@ export function buildPeerMessageContent(
   text: string,
   taskId?: string | null,
   replyToOrDeliveryId?: PeerReplyTo | string | null,
-  deliveryId?: string | null,
-  notifyIntent?: 'report_when_idle' | null,
+  deliveryIdOrNotifyIntent?: string | null,
+  explicitNotifyIntent?: 'report_when_idle' | null,
 ): string {
   // [T-092] 专用 notify 形状：显式 notify_intent + reply_to + task_id（顺序固定）。
   //   ⚠️ 第三位按类型判别（对象 ⇒ replyTo；字符串 ⇒ deliveryId），见下方 third/thirdAsDeliveryId。
   const thirdArg = replyToOrDeliveryId;
   const replyToObj: PeerReplyTo | null =
     thirdArg && typeof thirdArg === 'object' ? (thirdArg as PeerReplyTo) : null;
+  // ⚠️ 第四位按**值**判别（T-092 与 T-108 的位置冲突合并）：
+  //   'report_when_idle' ⇒ notifyIntent（T-092 契约）；其它字符串 ⇒ deliveryId（T-108 幂等键）。
+  //   这样两条线的既有调用方都不用改参数位置。
+  const notifyIntent: 'report_when_idle' | null =
+    explicitNotifyIntent ?? (deliveryIdOrNotifyIntent === 'report_when_idle' ? 'report_when_idle' : null);
+  const deliveryId: string | null = notifyIntent ? null : deliveryIdOrNotifyIntent ?? null;
   if (notifyIntent === 'report_when_idle' && taskId && replyToObj) {
     return buildNotifyPeerMessageContent(text, String(taskId), replyToObj, { value: notifyIntent });
   }
@@ -337,13 +343,20 @@ export async function sendPeerMessage(
   priority: PeerPriority = 'later',
   taskId?: string | null,
   replyTo?: PeerReplyTo | null,
-  deliveryId?: string | null,
-  notifyIntent?: 'report_when_idle' | null,
+  deliveryIdOrNotifyIntent?: string | null,
 ): Promise<{ ok: boolean; reason?: string; session_id?: string }> {
   const rec = findSession(sessionId);
   if (!rec) return { ok: false, reason: 'session_not_live' };
-  // ★ deliveryId 缺省退回 taskId ⇒ 老的调用方（只传 taskId）也能带上 delivery_id 属性。
-  const content = buildPeerMessageContent(text, taskId, replyTo, deliveryId ?? taskId, notifyIntent);
+  // ★ 第四位按值判别：'report_when_idle' ⇒ notifyIntent（T-092），其它 ⇒ deliveryId（T-108）。
+  //   deliveryId 缺省退回 taskId ⇒ 老的调用方（只传 taskId）也能带上 delivery_id 属性。
+  const isNotify = deliveryIdOrNotifyIntent === 'report_when_idle';
+  const deliveryId = isNotify ? null : deliveryIdOrNotifyIntent ?? null;
+  const content = buildPeerMessageContent(
+    text,
+    taskId,
+    replyTo,
+    isNotify ? deliveryIdOrNotifyIntent : (deliveryId ?? taskId),
+  );
   const frame = {
     type: 'user',
     message: { role: 'user', content },
