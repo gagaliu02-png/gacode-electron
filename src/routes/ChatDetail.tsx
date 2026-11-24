@@ -930,6 +930,33 @@ export function ChatDetail() {
   // 流式期间累积 (content + events). MessageList 用 streamingContent 渲染最后一条.
   const [streamingAssistantId, setStreamingAssistantId] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
+  /**
+   * ★ [T-138] **终态冻结行** —— 终态帧到达时不撤本地内容，而是把它冻在这里，
+   * 直到服务端 history 里同 turnKey 的行**正文到齐**才撤掉。
+   *
+   * ## 病根（真机 2026-11-24）
+   * 服务端是**增量落库**：先落一个 `len=0` 的助手行，约 1.6s 后才 UPDATE 正文；
+   * 而 PC 在终态帧就 `clearLocalRow()` ⇒ 本地那一份唯一的内容被删掉
+   * ⇒ 2s 延迟刷新恰好在正文到达**之前**拉到空行 ⇒ 气泡内容突然消失
+   * ⇒ 之后无人再刷 ⇒ 必须退出重进才拉得回来。
+   *
+   * ⇒ 安卓同款场景**不会闪**：它 done 时不清本地 Room 行，归并取**较长正文**，
+   *   迟到的空服务端行盖不空本地行。这里把同样的思路搬到 PC：
+   *   冻结行一直渲染，直到服务端行正文长度 ≥ 冻结行（= 正文到齐）才撤。
+   */
+  const [frozenAssistantRow, setFrozenAssistantRow] = useState<{
+    id: string;
+    content: string;
+    richEvents: RichEventBase[];
+    phases: ExecutionPhase[];
+    turnKey: string | null;
+    startedAt: number | null;
+    finishedAt: number | null;
+    elapsedMs: number | null;
+    toolCallCount?: number;
+    thinkingCount?: number;
+    terminalReason?: string | null;
+  } | null>(null);
   // ★ 契约判别联合 (契约 §2) —— 流式富事件的类型是**冻结**的, ⛔ 不再是
   //   `Record<string, unknown>` (那样按 type 收窄就拿不到字段名检查)。
   const [streamingEvents, setStreamingEvents] = useState<RichEventBase[]>([]);
@@ -1094,6 +1121,13 @@ export function ChatDetail() {
   const turnAcRef = useRef<AbortController | null>(null);
   // ★ [批 G8] 「等服务端落库完再刷一次会话列表」的定时器 (bug1) —— 换轮/卸载时要清。
   const chatsRefreshTimerRef = useRef<number | null>(null);
+  /**
+   * ★ [T-138] 终态后「刷到正文到齐」的递增重试：
+   *   [1000, 3000, 6000, 10000] ms 各刷一次 history，直到该 turnKey 的助手正文非空
+   *   （= 服务端把增量落库补完）⇒ 撤掉冻结行。
+   *   ⚠️ 只刷 history，不刷 chats（那个交给原来的 2s 定时器）。
+   */
+  const terminalRefreshTimersRef = useRef<number[]>([]);
 
   // 0.7.5 增量 — 知识库挂载 (chat-id-30) /
   //   流式起始时间戳 (chat-id-20) / call tree (chat-id-12) / phases 合并 (chat-id-35)
@@ -1255,6 +1289,10 @@ export function ChatDetail() {
     streamingTurnKeyRef.current = null;
     setStreamingTurnMeta(EMPTY_STREAMING_TURN_META);
     streamingTurnMetaRef.current = EMPTY_STREAMING_TURN_META;
+    // ★ [T-138] 换会话 ⇒ 清掉上一会话的终态冻结行与递增刷新定时器。
+    setFrozenAssistantRow(null);
+    terminalRefreshTimersRef.current.forEach((t) => window.clearTimeout(t));
+    terminalRefreshTimersRef.current = [];
     // ── 本轮「切开」气泡 + 补充幂等 ──
     setCutRows([]);
     turnWasSplitRef.current = false;
@@ -1475,31 +1513,44 @@ export function ChatDetail() {
     ];
     // ★ [T-052 · T-114] **按段序归位**（跨轮保持原顺序 · 同一轮内按段号排）。
     //   ⛔ 稳定排序 ⇒ 不带段号锚点的行（老数据 / 老服务端）位置**逐字不变**。
-    if (!streamingAssistantId) return orderByTurnSegment(withCutRows);
+    // ★ [T-138] 终态冻结行 — 终态帧清掉流式行后，用冻结的那一份继续渲染，
+    //   直到服务端同 turnKey 的正文到齐（见下方「正文到齐 ⇒ 撤冻结行」）。
+    const liveRow = streamingAssistantId
+      ? {
+          id: streamingAssistantId,
+          content: streamingContent,
+          richEvents: dedupeRichEvents(streamingEvents),
+          phases: streamingPhases,
+          turnKey: streamingTurnKey ?? null,
+          startedAt: streamingTiming?.startedAt ?? streamingTurnMeta.startedAt ?? null,
+          finishedAt: streamingTiming?.finishedAt ?? null,
+          elapsedMs: streamingTurnMeta.elapsedMs ?? streamingTiming?.elapsedMs ?? null,
+          toolCallCount: streamingTurnMeta.toolCallCount,
+          thinkingCount: streamingTurnMeta.thinkingCount,
+          terminalReason: streamingTurnMeta.terminalReason,
+        }
+      : frozenAssistantRow;
+    if (!liveRow) return orderByTurnSegment(withCutRows);
     const streamingMsg: ChatMessageModel = {
-      id: streamingAssistantId,
+      id: liveRow.id,
       role: "assistant",
-      content: streamingContent,
-      richEvents: dedupeRichEvents(streamingEvents),
+      content: liveRow.content,
+      richEvents: liveRow.richEvents,
       // A2-D4-02 · 思考 / 工具时间线随消息下传 → ExecutionTimeline
-      phases: streamingPhases,
+      phases: liveRow.phases,
       // ★ RC-5: 续传接不回来 ⇒ 这一行只到中断前 ⇒ 气泡上标「未收到服务端回复」。
       //   ⛔ 与 `terminalReason` **不是一回事** (安卓同款 `messages_local.stalled`)。
-      stalled: streamingStalled || undefined,
+      stalled: !streamingAssistantId ? undefined : streamingStalled || undefined,
       // ★ [批 G13-4 · 2026-11-08] 这一行的**轮次身份** —— 与历史行的 `metadata.turnKey`
       //   同值 ⇒ 「是不是同一轮」可以精确命中 (web 端同款: buildAttachRow 带 turnKey)。
       //   没有 ⇒ null ⇒ 回落老的启发式, 行为不变。
-      turnKey: streamingTurnKey ?? null,
-      // ★ [2026-11-13] 四要素 + 计时 ⇒ 气泡上的「已执行 N 秒 / 共执行 N 秒」。
-      //   ⚠️ 旧写法这里**一个都没挂** ⇒ `streamingTurnMeta` 那个 state 收集了
-      //     服务端的四要素却**从不被读** ⇒ 秒表永远不出现（PC 端「气泡缺执行时间」
-      //     的根因）。现在这行把它们真正接到气泡上。
-      startedAt: streamingTiming?.startedAt ?? streamingTurnMeta.startedAt ?? null,
-      finishedAt: streamingTiming?.finishedAt ?? null,
-      elapsedMs: streamingTurnMeta.elapsedMs ?? streamingTiming?.elapsedMs ?? null,
-      toolCallCount: streamingTurnMeta.toolCallCount,
-      thinkingCount: streamingTurnMeta.thinkingCount,
-      terminalReason: streamingTurnMeta.terminalReason,
+      turnKey: liveRow.turnKey,
+      startedAt: liveRow.startedAt,
+      finishedAt: liveRow.finishedAt,
+      elapsedMs: liveRow.elapsedMs,
+      toolCallCount: liveRow.toolCallCount,
+      thinkingCount: liveRow.thinkingCount,
+      terminalReason: liveRow.terminalReason,
     };
     // ★ a4 契约 v1 · W-3 · 气泡收敛 —— **流式路径**也要滤掉「已被服务端删除的交付物」。
     //   ⛔ 判据在 `lib/deliverable-visibility.ts` (H-9) —— 这里**只接线**, 不 inline 判据。
@@ -1560,6 +1611,8 @@ export function ChatDetail() {
     streamingPhases,
     streamingTurnKey,
     streamingStalled,
+    // ★ [T-138] 终态冻结行（终态帧清掉流式行后靠它继续渲染）
+    frozenAssistantRow,
     deletedDeliverableIds,
     // ★ [批 G8] 乐观上屏那一行
     pendingUserMsg,
@@ -2129,10 +2182,57 @@ export function ChatDetail() {
         }
         // ★ [2026-11-13] 收表（**必须在 clearLocalRow 之前** —— 它会清 turnKey）。
         finishTurnTiming();
+        // ★ [T-138] **先冻结本地流式内容，再清流式行** —— 安卓同款做法：
+        //   服务端增量落库先写空正文行（约 1.6s 后才补正文）⇒ 这段窗口里
+        //   只渲染冻结行（= 用户刚看到的完整内容）⇒ 气泡不再闪/消失。
+        //   ⚠️ 必须**逐字段从 ref/state 读**（clearLocalRow 之后 state 就空了）。
+        const frozenTk = streamingTurnKeyRef.current;
+        if (streamingContentRef.current) {
+          setFrozenAssistantRow({
+            id: localRowIdRef.current || `frozen-${Date.now()}`,
+            content: streamingContentRef.current,
+            richEvents: streamingEventsRef.current,
+            phases: streamingPhasesRef.current,
+            turnKey: frozenTk,
+            startedAt: streamingTimingRef.current?.startedAt ?? null,
+            finishedAt: Date.now(),
+            elapsedMs: streamingTimingRef.current?.elapsedMs ?? null,
+            toolCallCount: streamingTurnMetaRef.current.toolCallCount ?? undefined,
+            thinkingCount: streamingTurnMetaRef.current.thinkingCount ?? undefined,
+            terminalReason: streamingTurnMetaRef.current.terminalReason,
+          });
+        }
         clearLocalRow();
         // 刷新 history + chats (server 落库后 title 改了)
         queryClient.invalidateQueries({ queryKey: ["history", chatId] });
         queryClient.invalidateQueries({ queryKey: ["chats"] });
+        // ★ [T-138 · B] 递增重试：1s/3s/6s/10s 各刷一次 history，
+        //   直到服务端同 turnKey 的助手正文非空（落库补完）⇒ 撤冻结行。
+        {
+          const delays = [1000, 3000, 6000, 10000];
+          terminalRefreshTimersRef.current.forEach((t) => window.clearTimeout(t));
+          terminalRefreshTimersRef.current = delays.map((ms, i) =>
+            window.setTimeout(() => {
+              void (async () => {
+                await queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+                // 服务端正文到齐 ⇒ 撤掉冻结行（保守：只在能确认时撤）
+                const data = queryClient.getQueryData<{ messages: Array<{ role: string; turnKey?: string | null; content: string }> }>(["history", chatId]);
+                const serverRow = data?.messages?.find(
+                  (m) => m.role === "assistant" && frozenTk && m.turnKey === frozenTk,
+                );
+                if (serverRow && serverRow.content.trim().length > 0) {
+                  setFrozenAssistantRow((cur) => (cur?.turnKey === frozenTk ? null : cur));
+                  terminalRefreshTimersRef.current.forEach((t) => window.clearTimeout(t));
+                  terminalRefreshTimersRef.current = [];
+                } else if (i === delays.length - 1) {
+                  // 兜底：最后一次仍没确认到正文（老服务端没 turnKey / 网络抖）
+                  // ⇒ 也撤掉冻结行，避免它永久粘着（此时 history 已经是权威）。
+                  setFrozenAssistantRow((cur) => (cur?.turnKey === frozenTk ? null : cur));
+                }
+              })();
+            }, ms),
+          );
+        }
         // ★ [批 G8 · 2026-11-02] 终态帧这一刻, 服务端**还没落库**(webhook 还要 ~1s),
         //   ⇒ 上面那次 invalidate 拉回来的仍是旧列表 ⇒ 新会话不出现 (bug1)。
         //   ⇒ 再补一次**延迟**刷新 (等服务端落库完)。web 的同款做法是把 invalidate
@@ -4161,6 +4261,10 @@ export function ChatDetail() {
         window.clearTimeout(chatsRefreshTimerRef.current);
         chatsRefreshTimerRef.current = null;
       }
+      // ★ [T-138] 终态递增刷新定时器 + 冻结行清理（卸载后不许再 setState）。
+      terminalRefreshTimersRef.current.forEach((t) => window.clearTimeout(t));
+      terminalRefreshTimersRef.current = [];
+      setFrozenAssistantRow(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
