@@ -93,6 +93,8 @@ export function acquirePersistentSession(args: {
   cwd?: string | null;
   name?: unknown;
   now?: number;
+  /** ★ [T-128-fix] true = 登记**已有**会话（pc_cc_adopt），而不是复用失败另开 id。 */
+  adopt?: boolean;
 }): { session_id: string; reused: boolean; cwd: string | null } {
   const now = args.now ?? Date.now();
   sweepExpired(now);
@@ -106,6 +108,21 @@ export function acquirePersistentSession(args: {
       if (typeof args.name === 'string' && args.name) hit.name = args.name;
       writeState(state);
       return { session_id: hit.session_id, reused: true, cwd: hit.cwd };
+    }
+    // ★ [T-128-fix] 登记**已有**会话（pc_cc_adopt）：wanted 在表里没有 ⇒
+    //   直接把它登记进来（而不是当作"复用失败"另开一个 id）。
+    if (args.adopt === true) {
+      const rec: CcPersistentSession = {
+        session_id: wanted,
+        cwd: args.cwd ?? null,
+        name: typeof args.name === 'string' && args.name ? args.name : null,
+        created_at: now,
+        last_activity_at: now,
+        active_job_id: null,
+      };
+      state.sessions.push(rec);
+      writeState(state);
+      return { session_id: rec.session_id, reused: false, cwd: rec.cwd };
     }
   }
   const rec: CcPersistentSession = {

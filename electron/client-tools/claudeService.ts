@@ -184,8 +184,17 @@ export function buildClaudeBgInvocation(ctx: CliServiceContext): CliInvocation |
     args = [];
   }
   const task = strArg(ctx.args, 'task') || 'Persistent Claude Code session. Wait for further instructions.';
-  args.push('--bg', '--permission-mode', 'dontAsk', '--name', strArg(ctx.args, 'name') || 'gacode-persistent', task);
-  return { command, args, cwd: ctx.cwd || null };
+  args.push('--bg', '--permission-mode', 'dontAsk');
+  // ⚠️ `--name` 会被 CLI **忽略**（会话实际 name 变成 hex id）⇒ 仍然传，
+  //    但调用方**不要**靠 name 反查 bg_id（要从 stdout 解析）。
+  args.push('--name', strArg(ctx.args, 'name') || 'gacode-persistent');
+  // ★ [T-128-fix] 受信任目录兜底：cwd 不被信任时 CLI 会直接拒绝（stderr: Workspace not trusted）。
+  //   ⇒ 改成在**受信任的 cwd** 里起会话，并用 `--add-dir` 保留对目标目录的访问权。
+  const cwd = ctx.cwd || null;
+  const addDir = strArg(ctx.args, 'add_dir');
+  if (addDir) args.push('--add-dir', addDir);
+  args.push(task);
+  return { command, args, cwd };
 }
 
 /** Claude Code 这个 CLI 服务。 */
