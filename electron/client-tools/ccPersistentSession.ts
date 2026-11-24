@@ -28,6 +28,8 @@ const STATE_FILE_NAME = 'cc-persistent-sessions.json';
 
 export interface CcPersistentSession {
   session_id: string;
+  /** ★ [T-128-fix] CLI 原生后台会话 id（`claude stop <bg_id>` 用）。 */
+  bg_id?: string | null;
   cwd: string | null;
   name: string | null;
   created_at: number;
@@ -119,7 +121,21 @@ export function acquirePersistentSession(args: {
   return { session_id: rec.session_id, reused: false, cwd: rec.cwd };
 }
 
-/** 给常驻登记绑定/解绑当前后台 job_id（作业启动时绑定，结算/失败时解绑）。 */
+/** 设置 CLI 原生 bg_id（pc_cc_new 从 `claude agents --json` 解析出来后写入）。 */
+export function setPersistentSessionBgId(sessionId: string, bgId: string, now: number = Date.now()): void {
+  const state = readState();
+  const hit = state.sessions.find((s) => s.session_id === sessionId);
+  if (!hit) return;
+  hit.bg_id = bgId;
+  hit.last_activity_at = now;
+  writeState(state);
+}
+
+/** 取常驻登记（close 时要拿 bg_id）。 */
+export function getPersistentSession(sessionId: string): CcPersistentSession | null {
+  return readState().sessions.find((s) => s.session_id === sessionId) || null;
+}
+
 export function setPersistentSessionJob(sessionId: string, jobId: string | null, now: number = Date.now()): void {
   const state = readState();
   const hit = state.sessions.find((s) => s.session_id === sessionId);
@@ -153,12 +169,25 @@ export function listPersistentSessions(now: number = Date.now()): CcPersistentSe
 }
 
 /** PC-CC-Close：显式关闭登记；返回是否存在并被移除。 */
-export function closePersistentSession(sessionId: string): boolean {
+export function closePersistentSession(sessionId: string): CcPersistentSession | null {
   const state = readState();
+  const hit = state.sessions.find((s) => s.session_id === sessionId) || null;
+  if (!hit) return null;
   const next = state.sessions.filter((s) => s.session_id !== sessionId);
-  if (next.length === state.sessions.length) return false;
   writeState({ version: 1, sessions: next });
-  return true;
+  return hit;
+}
+
+/**
+ * ★ [T-128-fix] 空闲巡检：返回已经过期的常驻会话，并把它们从登记里移除。
+ *   调用方拿到 bg_id 后执行 `claude stop <bg_id>`。
+ */
+export function takeExpiredPersistentSessions(now: number = Date.now()): CcPersistentSession[] {
+  const state = readState();
+  const expired = state.sessions.filter((s) => isExpired(s, now));
+  if (!expired.length) return [];
+  writeState({ version: 1, sessions: state.sessions.filter((s) => !isExpired(s, now)) });
+  return expired;
 }
 
 /** 测试专用：清空文件。 */

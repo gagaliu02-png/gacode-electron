@@ -37,8 +37,8 @@ test('T128-PC-3 · 有活跃 job 不因空闲过期', () => {
 test('T128-PC-4 · pc_cc_close 显式关闭后不可再复用', () => {
   M._resetPersistentSessionsForTest();
   const a = M.acquirePersistentSession({ now: 1000 });
-  assert.equal(M.closePersistentSession(a.session_id), true);
-  assert.equal(M.closePersistentSession(a.session_id), false);
+  assert.ok(M.closePersistentSession(a.session_id), 'close should return removed record');
+  assert.equal(M.closePersistentSession(a.session_id), null);
   assert.equal(M.isPersistentSessionActive(a.session_id, 1001), false);
   const b = M.acquirePersistentSession({ session_id: a.session_id, now: 1002 });
   assert.equal(b.reused, false);
@@ -67,4 +67,14 @@ test('T128-PC-5 · 首次新建用 --session-id，复用才用 --resume', async 
   assert.ok(reused && reused.args.includes('--resume'));
   assert.ok(reused.args.includes('22222222-2222-4222-8222-222222222222'));
   assert.ok(!reused.args.includes('--session-id'));
+});
+
+
+test('T128-PC-6 · expired sweep 返回过期项并从登记移除（供 claude stop 使用）', () => {
+  M._resetPersistentSessionsForTest();
+  const a = M.acquirePersistentSession({ now: 1000 });
+  const expired = M.takeExpiredPersistentSessions(1000 + M.CC_IDLE_TTL_MS);
+  assert.equal(expired.length, 1);
+  assert.equal(expired[0].session_id, a.session_id);
+  assert.equal(M.isPersistentSessionActive(a.session_id, 1000 + M.CC_IDLE_TTL_MS), false);
 });

@@ -59,7 +59,7 @@ export interface BackgroundStartInput {
 export function startBackgroundJob(input: BackgroundStartInput): ClientToolResult {
   const tool = input.tool;
   const service: CliService | null =
-    tool === 'pc_claude' || tool === 'pc_cc_new' ? claudeService : tool === 'pc_job_start' ? rawService : null;
+    tool === 'pc_claude' ? claudeService : tool === 'pc_job_start' ? rawService : null;
   if (!service) {
     return { status: 'error', error: `未知的后台作业工具: ${tool}` };
   }
@@ -70,21 +70,11 @@ export function startBackgroundJob(input: BackgroundStartInput): ClientToolResul
 
   // ★ [T-128] pc_cc_new = 逻辑常驻会话：取/复用 session_id，传给 CLI --resume；
   //   pc_claude 保持老的一次性语义（不传 resume_session_id）。
-  let persistentSessionId: string | null = null;
-  let args: Record<string, unknown> = args0;
-  if (tool === 'pc_cc_new') {
-    const acq = acquirePersistentSession({
-      session_id: args0.session_id,
-      cwd,
-      name: args0.name,
-    });
-    persistentSessionId = acq.session_id;
-    // ★ 首次创建必须用 --session-id（--resume 只能续已存在的 transcript）。
-    //   后续 acquire 复用时才传 resume_session_id。
-    args = acq.reused
-      ? { ...args0, resume_session_id: acq.session_id }
-      : { ...args0, new_session_id: acq.session_id };
-  }
+  // ★ [T-128-fix] pc_cc_new 不再走 detached `-p` 后台作业：它必须由 executor
+  //   用 `claude --bg` 起原生常驻会话，否则 session registry 会随进程退出消失，
+  //   后续 pc_cc_send/append 无法投递。保留此变量只为 pc_job_start/raw 老逻辑兼容。
+  const persistentSessionId: string | null = null;
+  const args: Record<string, unknown> = args0;
 
   const jobId = (input.jobId && String(input.jobId)) || `job-${randomUUID()}`;
 
@@ -95,7 +85,7 @@ export function startBackgroundJob(input: BackgroundStartInput): ClientToolResul
     jobId,
   });
   if (!invocation) {
-    if (tool === 'pc_claude' || tool === 'pc_cc_new') {
+    if (tool === 'pc_claude') {
       const task = strArg(args, 'task');
       if (!task) {
         return { status: 'error', error: `${tool} 缺 task` };

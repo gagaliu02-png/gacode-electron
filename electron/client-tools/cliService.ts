@@ -231,7 +231,7 @@ export function numArg(args: Record<string, unknown> | null, key: string): numbe
  *    —— `backgroundJobs.ts` 会连带 import `claudeService.ts`（带审批旁路标志的那个模块），
  *    而单测**只做形状断言**、不需要真起 agent ⇒ 别把那条链拖进单测。
  */
-export const BACKGROUND_START_TOOLS = ['pc_claude', 'pc_cc_new', 'pc_job_start'] as const;
+export const BACKGROUND_START_TOOLS = ['pc_claude', 'pc_job_start'] as const;
 
 /** 「作业控制」（查 / 停）的工具名。 */
 export const JOB_CONTROL_TOOLS = ['pc_job_status', 'pc_job_stop'] as const;

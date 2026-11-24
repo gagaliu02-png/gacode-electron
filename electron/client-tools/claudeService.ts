@@ -159,6 +159,35 @@ export function buildClaudeInvocation(ctx: CliServiceContext): CliInvocation | n
  */
 export { parseClaudeLine };
 
+/**
+ * ★ [T-128-fix] 起一个真正常驻的 Claude Code 后台会话（原生 `claude --bg`）。
+ *
+ * 与 `-p --resume` 的区别：`--bg` 会话会一直留在 `~/.claude/sessions` 注册表里，
+ * 现有 `pc_cc_send/append/control` 的 peer IPC 才能找到它。
+ * ⚠️ `--bg` 会自己生成 sessionId 并忽略 `--session-id`（CLI 2.1.330+ 实测），
+ *    所以调用方必须从 `claude agents --json` 解析真实 sessionId 并对外返回它。
+ */
+export function buildClaudeBgInvocation(ctx: CliServiceContext): CliInvocation | null {
+  const bin = resolveClaudeBinary();
+  if (!bin) return null;
+  const isShim = /\.(cmd|bat)$/i.test(bin);
+  const nodeEntry = isShim ? resolveNodeEntryFromShim(bin) : null;
+  let command: string;
+  let args: string[];
+  if (nodeEntry) {
+    command = process.execPath;
+    args = [nodeEntry];
+  } else if (isShim) {
+    return null;
+  } else {
+    command = bin;
+    args = [];
+  }
+  const task = strArg(ctx.args, 'task') || 'Persistent Claude Code session. Wait for further instructions.';
+  args.push('--bg', '--permission-mode', 'dontAsk', '--name', strArg(ctx.args, 'name') || 'gacode-persistent', task);
+  return { command, args, cwd: ctx.cwd || null };
+}
+
 /** Claude Code 这个 CLI 服务。 */
 export const claudeService: CliService = {
   id: 'claude',
