@@ -112,7 +112,8 @@ import {
 //   本机「切开」出来的段用**本机时钟**、服务端补写的注入行用**服务端时钟**
 //   ⇒ 同毫秒谁大谁小看运气 ⇒ 「LLM 气泡跑到用户气泡上面」。
 //   服务端给注入行写 `metadata.turnKey = tk_xxx#N`（段号锚点）⇒ 按段号定序。
-import { orderByTurnSegment } from "../lib/sse/merge-history";
+// ★ [T-144] PC 专属排序口径（共享层 `src/lib/sse/**` 是 web/PC 逐字节共享 ⇒ 不改它）。
+import { orderByTurnSegmentForPC as orderByTurnSegment } from "../lib/turn-segment-order";
 import { notifyAiReplyArrived } from "../lib/chat-notifications";
 // ★ [订正 30 · 2026-11-15] 「服务端起轮了」的端内广播（观众侧）。
 import { subscribeTurnStarted } from "../lib/turn-started";
@@ -1896,9 +1897,11 @@ export function ChatDetail() {
           turnKey: streamingTurnKeyRef.current,
         },
       });
-      // ★ [T-144] 续答气泡（A2）也要立刻带上段号锚点 #N（N = 服务端本次切段后的段数）
+      // ★ [T-144] 续答气泡（A2）也要带上段号锚点 #N（N = 服务端本次切段后的段数）
       //   ⇒ 与补充行同段号、与服务端历史行同锚点 ⇒ orderByTurnSegment 第一次就排对。
-      if (sb.segmentIndex != null && streamingTurnKeyRef.current) {
+      //   ⚠️ **N=1 时不改**（`offset=0` ⇒ 第一段本来就切不开 ⇒ 服务端只有一段、锚点 `#1`）
+      //   ⇒ 续答行保持原基键 ⇒ 与服务端那一行认得亲（否则会多出一条气泡）。
+      if (sb.segmentIndex != null && sb.segmentIndex >= 2 && streamingTurnKeyRef.current) {
         const base = String(streamingTurnKeyRef.current).replace(/#\d+$/, "");
         streamingTurnKeyRef.current = `${base}#${sb.segmentIndex}`;
         setStreamingTurnKey(streamingTurnKeyRef.current);

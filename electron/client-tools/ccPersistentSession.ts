@@ -22,6 +22,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { userDataDir } from './localJobs.ts';
+// ★ [T-149-cc] 「在不在跑」的唯一真源（与 bg 巡检共用）。
+import { isClaudeSessionBusy } from './ccSessionBusy.ts';
+import { listClaudeSessions, type ClaudeSessionRecord } from './claudeCodeSession.ts';
 
 export const CC_IDLE_TTL_MS = 5 * 60 * 1000;
 const STATE_FILE_NAME = 'cc-persistent-sessions.json';
@@ -68,15 +71,32 @@ function writeState(state: StateFile): void {
   fs.renameSync(tmp, stateFile());
 }
 
-function isExpired(s: CcPersistentSession, now: number): boolean {
+function isExpired(s: CcPersistentSession, now: number, records?: ClaudeSessionRecord[] | null): boolean {
   // 有任务在跑 ⇒ 永不因空闲过期；空闲计时只看 last_activity_at。
-  return !s.active_job_id && now - s.last_activity_at >= CC_IDLE_TTL_MS;
+  if (s.active_job_id) return false;
+  // ⚠️ 便宜的判据**先**过 —— 绝大多数会话到不了下面那步（也就不会去扫 CLI 登记项）。
+  if (now - s.last_activity_at < CC_IDLE_TTL_MS) return false;
+  // ★ [T-149-cc] **CLI 侧也在跑 ⇒ 同样不算过期**。
+  //   与 `claudeBgSession.sweepIdleBackgroundSessions`（真正杀进程的那套）共用**同一个判据**
+  //   ⇒ 两套 TTL 不再各判各的（原先：有保护的这套不杀进程，杀进程的那套没保护）。
+  if (isClaudeSessionBusy({ sessionId: s.session_id, records })) return false;
+  return true;
+}
+
+/** 批量判时预加载 CLI 登记项（避免逐个扫盘）。 */
+function loadSessionRecords(): ClaudeSessionRecord[] | null {
+  try {
+    return listClaudeSessions();
+  } catch {
+    return null;
+  }
 }
 
 /** 内部：清掉过期项，返回是否写过文件。 */
 function sweepExpired(now: number): boolean {
   const state = readState();
-  const kept = state.sessions.filter((s) => !isExpired(s, now));
+  const records = loadSessionRecords();
+  const kept = state.sessions.filter((s) => !isExpired(s, now, records));
   if (kept.length === state.sessions.length) return false;
   writeState({ version: 1, sessions: kept });
   return true;
@@ -187,7 +207,8 @@ export function isPersistentSessionActive(sessionId: string, now: number = Date.
 /** 列出当前有效常驻会话。 */
 export function listPersistentSessions(now: number = Date.now()): CcPersistentSession[] {
   sweepExpired(now);
-  return readState().sessions.filter((s) => !isExpired(s, now));
+  const records = loadSessionRecords();
+  return readState().sessions.filter((s) => !isExpired(s, now, records));
 }
 
 /** PC-CC-Close：显式关闭登记；返回是否存在并被移除。 */
@@ -206,9 +227,10 @@ export function closePersistentSession(sessionId: string): CcPersistentSession |
  */
 export function takeExpiredPersistentSessions(now: number = Date.now()): CcPersistentSession[] {
   const state = readState();
-  const expired = state.sessions.filter((s) => isExpired(s, now));
+  const records = loadSessionRecords();
+  const expired = state.sessions.filter((s) => isExpired(s, now, records));
   if (!expired.length) return [];
-  writeState({ version: 1, sessions: state.sessions.filter((s) => !isExpired(s, now)) });
+  writeState({ version: 1, sessions: state.sessions.filter((s) => !isExpired(s, now, records)) });
   return expired;
 }
 

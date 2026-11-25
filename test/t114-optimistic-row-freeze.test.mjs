@@ -141,10 +141,14 @@ test("C1 merge-history 必须含 T-052 段序归位（与 web 端对齐）", () 
 //     —— 包里必须能看到 orderByTurnSegment（否则 PC 端段序仍是坏的）
 // ---------------------------------------------------------------------------
 test("C2 PC 渲染层必须调用段序归位（本机段 + 服务端注入行混排 ⇒ 同毫秒顺序会倒挂）", () => {
+  // ★ [T-144] 段序归位的**判据**仍住在共享层（`lib/sse/merge-history`）⇒ 不许内联第二份；
+  //   但 PC 端多一条「同段号内 user 行在前」的规则 ⇒ 允许通过 **PC 专属包装**引入
+  //   （`lib/turn-segment-order` 内部仍调共享层的 orderByTurnSegment）。
+  //   ⇒ 断言只钉「判据来源」+「最终列表确实走了排序」，不钉具体 import 写法。
   assert.match(
     src,
-    /import \{ orderByTurnSegment \} from "\.\.\/lib\/sse\/merge-history"/,
-    "C2 PC 端必须从共享层引入段序归位（判据住在共享层 ⇒ 不许内联第二份）",
+    /import \{ orderByTurnSegmentForPC as orderByTurnSegment \} from "\.\.\/lib\/turn-segment-order"/,
+    "C2 PC 端必须经 PC 专属包装引入段序归位（判据仍住在共享层）",
   );
   assert.match(
     src,
