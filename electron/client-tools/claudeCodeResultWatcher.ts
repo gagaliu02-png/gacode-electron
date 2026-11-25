@@ -31,6 +31,8 @@ import * as fs from 'fs';
 import { listClaudeSessions, transcriptPath, type ClaudeSessionRecord } from './claudeCodeSession.ts';
 import { extractClaudeResult, parseGaclawResultBlock, type ExtractedClaudeResult } from './claudeResultFormat.ts';
 import type { CliEvent } from './cliService.ts';
+// ★ [T-149-cc] 「被空闲巡检自动关掉」的墓碑 —— 用来给出准确归因。
+import { findAutoClosed } from './ccAutoClosed.ts';
 
 /** 轮询间隔（毫秒）。 */
 export const WATCHER_POLL_MS = 1500;
@@ -208,6 +210,8 @@ export function watchClaudeSessionResult(opts: WatchOptions): Promise<WatchResul
     let offset = Math.max(0, Number(opts.sinceOffset) || 0);
     let seen = '';            // 累积看到的新增正文（跨轮次）
     let settled = false;
+    // ★ [T-149-cc] 见过它的登记项吗？—— 「见过→没了」= 会话被外部关掉了。
+    let sawRecord = false;
     const startedAt = Date.now();
 
     const finish = (r: WatchResult) => {
@@ -241,10 +245,28 @@ export function watchClaudeSessionResult(opts: WatchOptions): Promise<WatchResul
 
       // ⑤ 兜底：会话变 idle（不忙了）且有新正文 ⇒ 那段正文就是结果
       const rec = findRecord(opts.sessionId);
-      if (rec && rec.status === 'idle' && seen.trim()) {
-        const ev: CliEvent[] = [{ type: 'text', text: seen, raw: { eventType: 'assistant' } }];
-        const extracted = extractClaudeResult(ev);
-        if (extracted.found) { finish({ ok: true, result: extracted }); return; }
+      if (rec) {
+        sawRecord = true;
+        if (rec.status === 'idle' && seen.trim()) {
+          const ev: CliEvent[] = [{ type: 'text', text: seen, raw: { eventType: 'assistant' } }];
+          const extracted = extractClaudeResult(ev);
+          if (extracted.found) { finish({ ok: true, result: extracted }); return; }
+        }
+      } else {
+        // ★ [T-149-cc] **会话消失了** —— 原先没有这一支 ⇒ 只能干等到 600s 超时，
+        //   报的还是「等待结果超时」⇒ 归因完全丢失（用户看到的是「agent 凭空消失」）。
+        //   ⇒ 现在立刻收场，并查**墓碑**给出准确原因：
+        //     · 有墓碑 ⇒ 是被空闲巡检回收的（2026-11-25 那次事故就是这个）
+        //     · 无墓碑 ⇒ 被显式关闭（pc_cc_close）或异常退出
+        const tomb = findAutoClosed(opts.sessionId);
+        if (tomb) {
+          finish({ ok: false, error: 'Claude Code 会话因空闲被自动关闭（任务未完成）' });
+          return;
+        }
+        if (sawRecord) {
+          finish({ ok: false, error: 'Claude Code 会话已消失（被显式关闭或异常退出）' });
+          return;
+        }
       }
     }, pollMs);
 
