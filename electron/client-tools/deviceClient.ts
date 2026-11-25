@@ -54,6 +54,8 @@ import { hasBrowserTabPool } from './browser.ts';
 import { hasClaudeCodeSessions, listClaudeSessions } from './claudeCodeSession.ts';
 // [T-086] QMT bridge 本机可用性（只声明能力，不下单、不连服务端）
 import { qmtAvailable } from './qmtBridge.ts';
+// ★ [2026-11-26 · T-159] Git Bash 探测（`pc_bash` 的能力键判据）
+import { bashExists } from './bashPath.ts';
 import { emitJobsChanged } from './jobView.ts';
 import type { JobReportPayload } from './jobReporter.ts';
 // ★ [2026-11-17] 解绑 / 登出 ⇒ 清掉上一账号在本机的作业 / 派单 / 审计记录。
@@ -264,12 +266,21 @@ export function deviceCapabilities(): string {
   const claudeCode = hasClaudeCodeSessions();
   // ★ [T-086] QMT bridge 命令/配置存在才声明 qmt=1（安全降级；能力头不做鉴权，闸门在 qmtBridge/gate）
   const qmt = qmtAvailable();
-  _capabilitiesCache = buildCapabilityString({ pty, job: true, browser, claudeCode, qmt });
+  // ★ [2026-11-26 · T-159] Git Bash 直连（`pc_bash`）：**探测到 bash.exe 才声明 `bash=1`**。
+  //   ⚠️ 独立能力键（**不复用 `pty`**）—— 没装 Git Bash 的机器**不该**收到 `pc_bash`
+  //   ⇒ 否则模型调了必然失败（「找不到 bash.exe」）⇒ 整轮空转（同 pty 探测失败的处置口径）。
+  const bash = bashExists();
+  _capabilitiesCache = buildCapabilityString({ pty, job: true, browser, claudeCode, qmt, bash });
   if (browser) {
     logDevice('浏览器池已接线 ⇒ 能力表声明 browser=1（pc_browser_* 可下发）');
   }
   if (claudeCode) {
     logDevice('本机有 Claude Code 会话登记 ⇒ 能力表声明 claude-code=1（pc_cc_* 可下发）');
+  }
+  if (bash) {
+    logDevice('本机有 Git Bash ⇒ 能力表声明 bash=1（pc_bash 可下发）');
+  } else {
+    logDevice('本机没找到 Git Bash ⇒ 不声明 bash（pc_bash 不下发）');
   }
   return _capabilitiesCache;
 }

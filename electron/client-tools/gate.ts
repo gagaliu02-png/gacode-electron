@@ -217,6 +217,10 @@ export function findBlacklistHit(command: string): string | null {
 export const COMMAND_ARG_BY_TOOL: Record<string, string> = {
   pc_shell: 'command',
   pc_job_start: 'command',
+  // ★ [2026-11-26 · T-159] `pc_bash`（Git Bash 直连）**同样带 command 参数**
+  //   ⇒ 必须进这张表，否则它就是一条**绕过黑名单**的路（`pc_bash format C:` 能过闸）。
+  //   ⚠️ 这条不许漏 —— 漏了等于给黑名单开后门。
+  pc_bash: 'command',
 };
 
 /**

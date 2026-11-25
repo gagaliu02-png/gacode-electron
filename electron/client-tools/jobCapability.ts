@@ -90,9 +90,10 @@ export function probeJobExecutor(): JobCapabilityProbe {
  *              `browser` = 本机浏览器能被 agent 驱动（`browser.ts` 池已接线，订正 31）；
  *              `claudeCode` = 本机 Claude Code 会话可被管控（`claudeCodeSession.ts` 接线了，订正 T-020）。
  *              `qmt` = 本机 QMT bridge 命令/配置存在（`qmtBridge.ts`，T-086）。
+ *              `bash` = 本机**有 Git Bash**（`bashPath.ts` 探测到 bash.exe，T-159）。
  */
 export function buildCapabilityString(
-  flags: { pty: boolean; job: boolean; browser?: boolean; claudeCode?: boolean; qmt?: boolean },
+  flags: { pty: boolean; job: boolean; browser?: boolean; claudeCode?: boolean; qmt?: boolean; bash?: boolean },
 ): string {
   const parts = ['client-tools=1'];
   if (flags.pty) parts.push('pty=1');
@@ -107,5 +108,9 @@ export function buildCapabilityString(
   if (flags.claudeCode) parts.push('claude-code=1');
   // ★ [T-086] QMT bridge 本机可用（bridge 命令/配置存在）才声明 `qmt=1`。
   if (flags.qmt) parts.push('qmt=1');
+  // ★ [2026-11-26 · T-159] 本机**有 Git Bash** 才声明 `bash=1`。
+  //   ⚠️ 服务端 `pc_bash` 的能力键就是 `bash` ⇒ 不声明 ⇒ 不下发 ⇒ 模型看不见它
+  //   ⇒ **没装 Git Bash 的机器不会收到一个必然失败的派单**（同 pty 探测失败的处置口径）。
+  if (flags.bash) parts.push('bash=1');
   return parts.join(',');
 }

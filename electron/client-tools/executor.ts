@@ -31,10 +31,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { desktopCapturer, nativeImage, shell } from 'electron';
 import { runCommand } from './pty';
+// ★ [T-159] `pc_bash` 用 **spawn**（不用 node-pty）⇒ 只借 `killTree`（纯 Node，杀进程树）。
+//   ⚠️ **不能**从 './pty' 拿 `killTree` —— pty.ts 顶层 `import * as pty from 'node-pty'`
+//   ⇒ 单测 import 它就会炸（原生模块 ABI）。`proc.ts` 是纯 Node ⇒ 安全。
+//   ⚠️ 同理 `MAX_OUTPUT_CHARS` 不从 pty.ts 拿，**本地定义**一份（值与 pty.ts 一致）。
+import { killTree } from './proc.ts';
+import { findGitBash, bashNotFoundMessage } from './bashPath.ts';
 import {
   isBackgroundStartTool,
   isJobControlTool,
@@ -145,6 +151,147 @@ async function pcShell(
     };
   }
   return ok({ stdout: r.stdout, exitCode: r.exitCode });
+}
+
+/**
+ * ★ [T-159] 单条命令的输出上限（防止一条命令刷爆内存 + 刷爆模型上下文）。
+ *
+ * ⚠️ **本地定义**一份，不从 `pty.ts` import —— 值必须与 `pty.ts::MAX_OUTPUT_CHARS` 一致
+ *   （200000），但 import 会把 node-pty 拖进来 ⇒ 单测环境炸。
+ */
+const MAX_OUTPUT_CHARS = 200000;
+
+// ===========================================================================
+// pc_bash —— 直连 Git Bash 执行 bash 脚本
+// ===========================================================================
+
+/**
+ * ★ [2026-11-26 · T-159] `pc_bash`：**直接 spawn Git Bash**，脚本正文**原样**喂给 bash。
+ *
+ * ## 为什么不用 `pc_shell`（真终端）
+ *
+ * `pc_shell` 走 node-pty（ConPTY）+ `pickShell()`（Windows 上 = `cmd /d /s /c`）
+ * ⇒ **cmd 的引号层**会把 `bash -lc 'a && b'` **腰斩**
+ * （实测：`bash.exe -c "uname -a"` 在 `pc_shell` 下报 `unexpected EOF while looking for matching quote`，
+ *  而**无引号的单行**命令可正常跑通）。
+ * ⇒ 这里**直接 spawn bash.exe**，脚本正文作为**一个 argv 元素**整体传入
+ * ⇒ `&&` / `||` / 管道 / `$(...)` / 单引号 **原样**到达 bash（参照 Claude Code 的 Bash 工具）。
+ *
+ * ## 为什么不用 node-pty
+ *
+ * bash 脚本**本来就不需要 TTY**（不交互、不读终端尺寸）⇒ 用普通 `spawn` 更轻。
+ * ⚠️ 副作用：**没有真终端** ⇒ 依赖 TTY 的程序（`vim` / `top`）在这里跑不了
+ *   ⇒ 那类需求仍该走 `pc_shell`。
+ *
+ * ## 找不到 Git Bash 怎么办
+ *
+ * **如实报错**（`bash_not_found`），**绝不**降级到 cmd.exe
+ * ⇒ 降级会让 `&&` / 管道 / 引号**又**被腰斩 ⇒ 跑出来的东西与用户预期不符
+ * ⇒ 比直接失败更危险（用户会以为命令真的跑过了）。
+ */
+async function pcBash(
+  args: Record<string, unknown> | null,
+  cwd: string | null,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ClientToolResult> {
+  const command = str(args, 'command');
+  if (!command) return fail('pc_bash 缺 command');
+
+  const bash = findGitBash();
+  if (!bash) {
+    return fail(bashNotFoundMessage());
+  }
+
+  const workDir = cwd || str(args, 'cwd') || null;
+
+  return await new Promise<ClientToolResult>((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let aborted = false;
+    let child: ReturnType<typeof spawn> | null = null;
+
+    const finish = (result: ClientToolResult): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    // 超时 ⇒ 杀整棵进程树（否则孙进程继续跑，用户以为停了其实还在改文件）
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { if (child && child.pid) killTree(child.pid); } catch (_) { /* 已经死了 */ }
+    }, timeoutMs);
+
+    const onAbort = (): void => {
+      aborted = true;
+      try { if (child && child.pid) killTree(child.pid); } catch (_) { /* 已经死了 */ }
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+
+    try {
+      // ★ 关键：`command` 作为**一个 argv 元素**整体传入 ⇒ 不经任何 shell 二次解析
+      //   ⇒ 引号 / && / 管道 / $(...) 原样到达 bash。
+      child = spawn(bash, ['-c', command], {
+        cwd: workDir || undefined,
+        windowsHide: true,
+        env: { ...process.env },
+      });
+    } catch (e) {
+      finish(fail(`启动 Git Bash 失败：${(e as Error).message}`));
+      return;
+    }
+
+    const cap = MAX_OUTPUT_CHARS;
+    child.stdout?.on('data', (b: Buffer) => {
+      if (stdout.length < cap) stdout += b.toString();
+    });
+    child.stderr?.on('data', (b: Buffer) => {
+      if (stderr.length < cap) stderr += b.toString();
+    });
+
+    child.on('error', (e: Error) => {
+      finish(fail(`Git Bash 执行失败：${e.message}`));
+    });
+
+    child.on('close', (code: number | null) => {
+      // ⚠️ `code` 是 `number | null`（进程被信号杀死时 bash 给 null）
+      //   ⇒ `ClientToolResult.exitCode` 是 `number | undefined` ⇒ 这里**归一**成 undefined。
+      const exitCode = code === null ? undefined : code;
+      if (aborted) {
+        finish(fail('命令已被用户停止', { stdout, exitCode }));
+        return;
+      }
+      if (timedOut) {
+        finish(fail(`命令超时（${Math.round(timeoutMs / 1000)}s）并已被终止`, {
+          stdout, stderr, exitCode,
+        }));
+        return;
+      }
+      if (exitCode !== 0) {
+        finish({
+          status: 'error',
+          stdout,
+          stderr,
+          exitCode,
+          error: `命令退出码 ${code}`,
+        });
+        return;
+      }
+      finish(ok({ stdout, stderr, exitCode }));
+    });
+  });
 }
 
 // ===========================================================================
@@ -1163,6 +1310,8 @@ async function pcCcControl(
 /** 各工具的默认超时（服务端 spec 里也有，这里兜底「服务端没给」的情况）。 */
 const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_shell: 600000,
+  // ★ [2026-11-26 · T-159] Git Bash 直连 —— 与 pc_shell 同量级超时
+  pc_bash: 600000,
   pc_read_file: 120000,
   pc_write_file: 120000,
   pc_list_dir: 120000,
@@ -1259,6 +1408,8 @@ export async function executeClientTool(
 
   switch (tool) {
     case 'pc_shell': return pcShell(args, cwd, t, signal);
+    // ★ [2026-11-26 · T-159] Git Bash 直连（不走 cmd / 不走 node-pty）
+    case 'pc_bash': return pcBash(args, cwd, t, signal);
     case 'pc_read_file': return pcReadFile(args, cwd);
     case 'pc_write_file': return pcWriteFile(args, cwd);
     case 'pc_list_dir': return pcListDir(args, cwd);
