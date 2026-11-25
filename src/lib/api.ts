@@ -560,6 +560,98 @@ export function deleteSessions(ids: string[]): Promise<{ ok: true; deletedCount:
 // ─────────── History (messages) ───────────
 
 /**
+ * ★ [T-156 · 2026-11-26] `phases_json` 的**一次性解析** —— 一条消息只 `JSON.parse` 一次。
+ *
+ * ## 病根（长会话卡顿的成因之一）
+ *
+ *   以前 `getHistory` 对**同一条**消息的 `phases_json` **解析两遍**：
+ *   一遍喂 `parsePhasesJson`（执行时间线），一遍喂 `parsePhasesRichEvents`（富事件）。
+ *   ⇒ 一条消息 **2 次** `JSON.parse`；而 `phases_json` 单条上限 **64KB**
+ *     （服务端 `UNIFIED_API_PHASES_MAX_BYTES`）⇒ 一条长会话（几千条消息）
+ *     就是**几万次**大字符串解析 —— 开个会话要等好几秒。
+ *
+ * ## 口径（**一处**）
+ *
+ *   `parsePhasesOnce` 是**唯一**的解析入口：**一次** `JSON.parse` ⇒ 同时派生两份结果：
+ *   · `phases`     —— 执行时间线（`ExecutionTimeline` 的数据契约）
+ *   · `richEvents` —— 富事件（交付物卡片 / 工具卡片）
+ *
+ *   两个公开函数 `parsePhasesJson` / `parsePhasesRichEvents` **保留**（别处可能 import）
+ *   ⇒ 但它们现在只是这**一次解析**的两个视图 ⇒ **对外行为逐字不变**。
+ *
+ * ## 健壮性（跟老口径逐字一致 · server 数据不可信）
+ *
+ *   · 字段缺失 / null / 空串 → 两份都是 undefined（不给空数组，免得渲出空容器）
+ *   · 非法 JSON → undefined（静默降级，不抛异常）
+ *   · 解析结果非数组 → undefined
+ *   · 条目字段缺失 / 类型不对 → **逐条丢弃**，其余合法项保留（⛔ 不整份丢）
+ */
+export interface ParsedPhases {
+  phases: ExecutionPhase[] | undefined;
+  richEvents: RichEventBase[] | undefined;
+}
+
+/**
+ * ★ [T-156] 单行小缓存 —— `getHistory` 里 `parsePhasesJson` / `parsePhasesRichEvents`
+ *   对**同一条**消息的 `phases_json` 连着调两次 ⇒ 这里只让第一次真的 `JSON.parse`。
+ *   ⚠️ 只缓存**最后一次**输入（两条消息之间不复用）—— 长会话不会缓存几千份 64KB 字符串。
+ *   ⚠️ 公开函数行为不变（始终是「按当前字符串算出的那份结果」）。
+ */
+let lastPhasesInput: string | null | undefined;
+let lastPhasesParsed: ParsedPhases | null = null;
+
+export function parsePhasesOnce(
+  phasesJson: string | null | undefined,
+): ParsedPhases {
+  if (lastPhasesParsed && phasesJson === lastPhasesInput) return lastPhasesParsed;
+  lastPhasesInput = phasesJson;
+  lastPhasesParsed = null;
+  const empty: ParsedPhases = { phases: undefined, richEvents: undefined };
+  if (!phasesJson) return empty;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(phasesJson);
+  } catch {
+    lastPhasesParsed = empty;
+    return empty;
+  }
+  if (!Array.isArray(parsed)) {
+    lastPhasesParsed = empty;
+    return empty;
+  }
+  const phases: ExecutionPhase[] = [];
+  const events: RichEventBase[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const p = item as {
+      type?: unknown;
+      text?: unknown;
+      event?: unknown;
+      ts?: unknown;
+    };
+    const ts = typeof p.ts === "number" && Number.isFinite(p.ts) ? p.ts : undefined;
+    if (p.type === "thinking") {
+      // ★ 原样收下 —— **不合并** (T-16)；字段类型不对就丢这一条。
+      if (typeof p.text === "string") phases.push({ type: "thinking", text: p.text, ts });
+      continue;
+    }
+    if (p.type !== "tool") continue;
+    if (!p.event || typeof p.event !== "object") continue;
+    // 相位数组收**原始** event（`ExecutionTimeline` 的数据契约）。
+    phases.push({ type: "tool", event: p.event as Record<string, unknown>, ts });
+    // 富事件过归一层（L-8 / L-9 / L-11 / L-12）—— 跟老口径逐字一致。
+    const norm = normalizeRichEvent(p.event);
+    if (norm.event) events.push(norm.event);
+  }
+  lastPhasesInput = phasesJson;
+  lastPhasesParsed = {
+    phases: phases.length > 0 ? phases : undefined,
+    richEvents: events.length > 0 ? events : undefined,
+  };
+  return lastPhasesParsed;
+}
+
+/**
  * A2-D4-02 · 解析 server 落库的 `phases_json` → `ExecutionPhase[]`.
  *
  * 数据源 (跟 web 同端点同字段): `GET /yinian/sessions/:id/messages` 返回体里
@@ -577,42 +669,13 @@ export function deleteSessions(ids: string[]): Promise<{ ok: true; deletedCount:
  *   `authoritative: false` 时才走合并; ⚠️ 兼容分支待下线 R5)。
  *   ⇒ 「合并逻辑」全仓**只剩那一处**, 解析层不再有第二份。
  *
- * 健壮性 (server 数据不可信, 一条脏数据不许拖垮整个 history):
- *   · 字段缺失 / null / 空串 → undefined (不给空数组, 免得渲出空 timeline 容器)
- *   · 非法 JSON → undefined (静默降级, 不抛异常)
- *   · 解析结果非数组 → undefined
- *   · 条目字段缺失 / 类型不对 → **逐条丢弃**, 其余合法项保留 (不整份丢)
+ * ★ [T-156] 本函数现在**只是** `parsePhasesOnce` 的一个视图（**一次** JSON.parse）。
+ *   （老口径：每条消息解析两遍 ⇒ 长会话几万次大字符串解析 ⇒ 打开会话要等好几秒。）
  */
 export function parsePhasesJson(
   phasesJson: string | null | undefined,
 ): ExecutionPhase[] | undefined {
-  if (!phasesJson) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(phasesJson);
-  } catch {
-    return undefined;
-  }
-  if (!Array.isArray(parsed)) return undefined;
-  const phases: ExecutionPhase[] = [];
-  for (const item of parsed) {
-    if (!item || typeof item !== "object") continue;
-    const p = item as {
-      type?: unknown;
-      text?: unknown;
-      event?: unknown;
-      ts?: unknown;
-    };
-    const ts = typeof p.ts === "number" && Number.isFinite(p.ts) ? p.ts : undefined;
-    if (p.type === "thinking" && typeof p.text === "string") {
-      // ★ 原样收下 —— **不合并** (T-16)。
-      phases.push({ type: "thinking", text: p.text, ts });
-    } else if (p.type === "tool" && p.event && typeof p.event === "object") {
-      phases.push({ type: "tool", event: p.event as Record<string, unknown>, ts });
-    }
-    // 其它形态 (type 未知 / 字段类型不对) → 丢弃该条, 保留其它合法项
-  }
-  return phases.length > 0 ? phases : undefined;
+  return parsePhasesOnce(phasesJson).phases;
 }
 
 /**
@@ -632,10 +695,20 @@ export function parsePhasesJson(
  * ⚠️ **不**改 `parsePhasesJson` 的既有返回 (`ExecutionPhase[]` 是
  *   `ExecutionTimeline` 组件的数据契约, 组件已定稿不可改) ⇒ 这里另起一个
  *   纯函数, 两份结果共用同一份 `phases_json` 源。
+ *
+ * ★ [T-156] 生产路径（`mapHistoryRows`）先调 `parsePhasesOnce` 把结果缓存下来，
+ *   本函数开头命中缓存就**直接返回**，不会再 `JSON.parse` ⇒ 一条消息只解析一次。
+ *   单参数公开签名逐字不变；AST 抠取式验证脚本单独抠本函数跑时没有缓存（外部变量
+ *   不存在）⇒ 走原来的内联解析分支 ⇒ 行为仍逐字不变。
  */
 export function parsePhasesRichEvents(
   phasesJson: string | null | undefined,
 ): RichEventBase[] | undefined {
+  // ★ [T-156] 命中 parsePhasesOnce 刚解析过的同一字符串 ⇒ 零成本返回。
+  //   ⚠️ `typeof` 守卫：AST 抠本函数到独立模块时这些全局变量不存在 ⇒ 不能 ReferenceError。
+  if (typeof lastPhasesParsed !== "undefined" && lastPhasesParsed && phasesJson === lastPhasesInput) {
+    return lastPhasesParsed.richEvents;
+  }
   if (!phasesJson) return undefined;
   let parsed: unknown;
   try {
@@ -676,16 +749,21 @@ export type HistoryPage<T> = {
  *   · 每页带 `limit=200`（服务端 schema 上限）；
  *   · `next_cursor` 非空 ⇒ 继续带 `cursor` 拉下一页；
  *   · 顺序 = 服务端返回顺序（createdAt asc），逐页 append；
- *   · 页数上限 100（20000 条，防脏 cursor 死循环）。
+ *   · 页数上限（默认 100 = 20000 条，防脏 cursor 死循环）—— **保留**给「一次性全量」
+ *     的调用方（测试 / 诊断脚本）；T-156 起 `getHistory` 开会话**不再走它**，
+ *     改走 `fetchHistoryAroundEnd` 只把最近 N 条送进渲染。
+ *     ⇒ session 1134「只拉第一页 ⇒ 第 100 条以后消失」**不会复发**：
+ *       老消息通过 `loadOlderMessages` 按同一套 cursor 逐页取回。
  */
 export async function collectHistoryPages<T>(
   fetchPage: (cursor: string | null) => Promise<HistoryPage<T>>,
+  maxPages: number = 100,
 ): Promise<T[]> {
   const all: T[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | null = null;
 
-  for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
     const page = await fetchPage(cursor);
     all.push(...(page.items ?? []));
     const next = page.next_cursor;
@@ -698,53 +776,112 @@ export async function collectHistoryPages<T>(
   return all;
 }
 
-export async function getHistory(chatId: string): Promise<{
-  messages: ChatMessage[];
-  nextCursor: string | null;
-}> {
-  type HistoryRow = {
-    id: string;
-    role: string;
-    content: string;
-    created_at: string;
-    /** A2-D4-02 · 思考 / 工具时间线原始数据 (JSON 字符串, 解析见 parsePhasesJson) */
-    phases_json?: string | null;
-    metadata?: string | Record<string, unknown> | null;
-    recalled?: boolean;
-    recalled_at?: string | null;
-    /**
-     * ★ [T-040 · 2026-11-18] **客户端身份**（ULID）—— 跟端侧乐观行对上。
-     *   服务端 `yinian.service.js` 在 history 的 user 行里回这个字段（顶层）。
-     *   ⇒ 端侧认亲靠它**逐字相等**（不是「同内容」猜）⇒ 问两遍同一句也不会认错。
-     */
-    client_msg_id?: string | null;
-  };
-  const rawRows = await collectHistoryPages<HistoryRow>(async (cursor) => {
-    const qs = new URLSearchParams({ limit: "200" });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ★ [T-156] 增量历史加载 —— 首屏只渲染最近 N 条，更早的滚到顶再取。
+// ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ 服务端 `GET /yinian/sessions/:id/messages` 只有**从旧到新**的 cursor
+//    （`listChatMessages` 的 `next_cursor` = 本页最后一条的 id，下页从它之后开始），
+//    **没有** `before` / 倒序参数 ⇒ 想找「最后 N 条」只能按 cursor 走到尾。
+//    ⇒ 这里的省法不是「少发请求」，而是「**少解析、少渲染**」：
+//      过路的早期页原样丢弃（`rows.slice(-N)`），只把最近 N 行 map 成 ChatMessage
+//      （每行一次 JSON.parse，先前是两次）。长会话从 20000 条降到 100 条。
+//
+// ## 老消息怎么够得着（session 1134 的修复不能退化）
+//
+//   首屏返回 `nextCursor` = **首屏最老那一条的 id**。端侧滚到顶拿它当 cursor
+//   再请求 ⇒ 服务端从那条**之后**往后给 ⇒ 其中比锚点新的行已在内存里 ⇒ 滤掉
+//   ⇒ 只把更早的行 prepend。逐页重复直到 `nextCursor=null`（服务端亲口说到底）。
+//   ⇒ 第 100 条之后的消息**一条都不会丢**，只是不一次性全塞进 DOM。
+
+/** 服务端单页硬上限（schema maximum 200）。 */
+export const HISTORY_PAGE_LIMIT = 200;
+/** 首屏条数 —— 最近 100 条足够覆盖绝大多数会话的可见区。 */
+export const HISTORY_INITIAL_LIMIT = 100;
+
+/** 历史行 —— 首屏映射与增量加载共用同一输入类型。 */
+type HistoryRow = {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string;
+  /** A2-D4-02 · 思考 / 工具时间线原始数据 (JSON 字符串, 解析见 parsePhasesJson) */
+  phases_json?: string | null;
+  metadata?: string | Record<string, unknown> | null;
+  recalled?: boolean;
+  recalled_at?: string | null;
+  /** ★ [T-040] 客户端身份（ULID）—— 认亲必须逐字相等，不猜内容。 */
+  client_msg_id?: string | null;
+};
+
+function fetchHistoryPage(
+  chatId: string,
+): (cursor: string | null) => Promise<HistoryPage<HistoryRow>> {
+  return async (cursor) => {
+    const qs = new URLSearchParams({ limit: String(HISTORY_PAGE_LIMIT) });
     if (cursor) qs.set("cursor", cursor);
     return request<HistoryPage<HistoryRow>>(
       `/yinian/sessions/${chatId}/messages?${qs.toString()}`,
     );
-  });
-  const messages: ChatMessage[] = rawRows.map((m) => {
+  };
+}
+
+/** ★ 首屏：拿到最近 limit 行 + 往前翻的 cursor（旧→新顺序）。 */
+export async function fetchHistoryAroundEnd(
+  chatId: string,
+  limit: number = HISTORY_INITIAL_LIMIT,
+): Promise<{ rows: HistoryRow[]; oldestCursor: string | null }> {
+  const fetchPage = fetchHistoryPage(chatId);
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  // 上一页的 cursor = 要回到「first Page 之后」的位置（就是首屏最老那条的前一条）。
+  let previousCursor: string | null = null;
+  let kept: HistoryRow[] = [];
+  for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+    const page = await fetchPage(cursor);
+    const items = page.items ?? [];
+    kept = [...kept, ...items].slice(-limit);
+    const next = page.next_cursor;
+    if (!next || typeof next !== "string" || seenCursors.has(next)) {
+      return { rows: kept, oldestCursor: kept.length > 0 ? previousCursor : null };
+    }
+    seenCursors.add(next);
+    previousCursor = cursor;
+    cursor = next;
+  }
+  return { rows: kept, oldestCursor: kept.length > 0 ? previousCursor : null };
+}
+
+/** ★ 按需往前翻一页：滤掉比 anchorId 新的行（它们已经在内存里）。 */
+export async function loadOlderHistoryPage(
+  chatId: string,
+  cursor: string | null,
+  anchorId: string,
+  limit: number = HISTORY_INITIAL_LIMIT,
+): Promise<{ rows: HistoryRow[]; nextCursor: string | null }> {
+  if (!cursor) return { rows: [], nextCursor: null };
+  const page = await fetchHistoryPage(chatId)(cursor);
+  const items = (page.items ?? []).filter((r) => String(r.id) !== anchorId);
+  return { rows: items.slice(-limit), nextCursor: page.next_cursor ?? null };
+}
+
+/** server 行 → 端侧模型 —— getHistory / loadOlderMessages 共用一份映射口径。 */
+function mapHistoryRows(rawRows: HistoryRow[]): ChatMessage[] {
+  return rawRows.map((m) => {
+    // ★ [T-156] 一条消息**只解析一次** phases_json ⇒ 两份结果同源派生。
+    //   （先前两行各一次 JSON.parse —— 64KB/条 × 几千条 ⇒ 开会话卡顿。）
+    const parsedPhases = parsePhasesOnce(m.phases_json);
     let imageUrls: string[] | undefined;
     let attachedFileIds: string[] | undefined;
     let attachedFileNames: Array<{ fileId: string; name: string }> | undefined;
     let knowledgeRefs: string[] | undefined;
-    // ★ v2 (契约订正 16): 这一行的**轮次身份** (`metadata.turnKey`)。
-    //   与流式帧顶层的 turnKey 是**同一个值** ⇒ 两边可精确认亲 (空气泡根治)。
+    // ★ v2 (契约订正 16) 轮次身份 —— 与流式帧顶层 turnKey 同值，精确认亲。
     let turnKey: string | null | undefined;
-    // ★ [2026-11-16] **这一行是不是「服务端投递的系统注记」**（不是用户说的话）。
-    //   · 服务端起轮（订正 30）落的 user 行 role 仍是 'user' ⇒ 光看 role 分不出来
-    //     ⇒ 端侧靠 metadata.source / metadata.skip_transcript 认它。
-    //   · ⚠️ **判据只有一处**：`lib/sse/turn-identity.ts` 的 `isSystemNoticeMetadata()`
-    //     （web 是原件端 · PC 端逐字抄那一份 ⇒ 两端不可能漂）。
+    // ★ [2026-11-16] 系统注记判据只有一份：lib/sse/turn-identity.ts。
     let isSystemNotice = false;
-    // ★ [订正 28 · L-28r] **收件箱行 id** (`metadata.inbox_id`) ——
-    //   「补充」那条 (服务端 flush 时写的 user 行) ⇒ 端侧算合成 id
-    //   `supplement:<inbox_id>` ⇒ 跟直播时插的那条**是同一条** (不重复显示)。
+    // ★ [订正 28 · L-28r] 收件箱行 id ⇒ 合成 id `supplement:<inbox_id>`。
     let inboxId: string | null | undefined;
-    // ★ [T-040 · 2026-11-18] **客户端身份**（顶层字段 + metadata 两处都取）.
+    // ★ [T-040] 客户端身份（顶层 + metadata 两处都取）。
     let clientMsgId: string | null | undefined;
     if (m.metadata) {
       try {
@@ -752,14 +889,12 @@ export async function getHistory(chatId: string): Promise<{
         if (Array.isArray(meta?.image_urls)) imageUrls = meta.image_urls as string[];
         if (Array.isArray(meta?.attached_file_ids))
           attachedFileIds = meta.attached_file_ids as string[];
-        // 知识库引用 id — 跟 web api.ts:552 同一口径 (只认数组, 元素原样透传).
+        // chat-id-9: 知识库引用 id — server 落进 user message 的 metadata.knowledge_refs。
         if (Array.isArray(meta?.knowledge_refs)) knowledgeRefs = meta.knowledge_refs as string[];
-        // ★ [T-144 · 2026-11-25] **user 行不取 `metadata.turnKey`**（那是轮次身份的专用键）。
-        //   注入的 user 行若也用它 ⇒ 与同一轮那一段 assistant 行**逐字相同**
-        //   ⇒ 端侧按 turnKey 认亲/合并时把它们当「同一轮的两份副本」
-        //   ⇒ **assistant 的正文被合并进 user 行** ⇒ LLM 内容渲染成橙色 user 气泡
-        //   （真机 session 1186 · 安卓端实测）。
-        //   ⇒ 排序锚点改用**独立的键** `metadata.segmentAnchor`（{turnKey, index}）。
+        // ★ [T-144] user 行**不取** metadata.turnKey（那是 assistant 行的轮次身份专用键）：
+        //   注入的 user 行若也用它 ⇒ 与同一轮 assistant 行逐字相同 ⇒ 被当成同一轮的两份副本
+        //   ⇒ **assistant 正文被合并进 user 行** ⇒ LLM 正文渲染成橙色 user 气泡
+        //   （真机 session 1186 · 安卓端实测）。排序锚点另起 segmentAnchor。
         if (m.role === "user") {
           const anchor = meta?.segmentAnchor as
             | { turnKey?: unknown; index?: unknown }
@@ -770,7 +905,6 @@ export async function getHistory(chatId: string): Promise<{
         } else if (typeof meta?.turnKey === "string" && meta.turnKey) {
           turnKey = meta.turnKey;
         }
-        // ★ [2026-11-16] 系统注记判据（唯一一份 · web 是原件端）。
         isSystemNotice = isSystemNoticeMetadata(meta);
         if (meta?.inbox_id != null && meta.inbox_id !== "") {
           inboxId = String(meta.inbox_id);
@@ -782,7 +916,7 @@ export async function getHistory(chatId: string): Promise<{
           attachedFileNames = (
             meta.attached_files as Array<{ file_id?: unknown; filename?: unknown }>
           )
-            .filter((f) => f && (f as { file_id?: unknown }).file_id)
+            .filter((f) => f && (f as { file_id: unknown }).file_id)
             .map((f) => ({
               fileId: String((f as { file_id: unknown }).file_id),
               name: String((f as { filename?: unknown }).filename || "附件"),
@@ -800,30 +934,52 @@ export async function getHistory(chatId: string): Promise<{
       imageUrls,
       attachedFileIds,
       attachedFileNames,
-      // chat-id-9: 知识库引用 id — server 落进 user message 的
-      //   metadata.knowledge_refs (存的是实际生效的 atom id).
+      // chat-id-9: 知识库引用 id — server metadata.knowledge_refs。
       knowledgeRefs,
-      // ★ v2 (契约订正 16): 这一行的**轮次身份** —— 与流式帧顶层 turnKey 同值。
+      // ★ v2 轮次身份 —— 与流式帧顶层 turnKey 同值。
       turnKey,
-      // ★ [2026-11-16]: 这一行是不是系统注记（判据见 lib/sse/turn-identity.ts）。
+      // ★ [2026-11-16] 系统注记判据（lib/sse/turn-identity.ts）。
       isSystemNotice,
-      // ★ [订正 28 · L-28r] 这一行是「补充」(会话收件箱) ⇒ 端侧按它算合成 id。
+      // ★ [订正 28] 补充行合成 id 锚点。
       inboxId,
-      // ★ [T-040 · 2026-11-18] 客户端身份（顶层优先，metadata 兜底）.
+      // ★ [T-040] 客户端身份（顶层优先，metadata 兜底）。
       clientMsgId: clientMsgId ?? (typeof m.client_msg_id === "string" ? m.client_msg_id : null),
-      // 阶段 8: 撤回态 — server listChatMessages 已过滤 deletedAt,
-      //   recalled 这条可选字段透传到 client, 用于 MessageBubble 占位 + 关闭菜单.
+      // 阶段 8: 撤回态透传（MessageBubble 占位 + 关菜单）。
       recalled: m.recalled ?? false,
       recalledAt: m.recalled_at ?? null,
-      // A2-D4-02 · 思考 / 工具时间线 —— server 落库的 phases_json 解析结果.
-      //   缺失 / null / 脏数据 ⇒ undefined (不渲空 timeline 容器).
-      phases: parsePhasesJson(m.phases_json),
-      // 2026-10-28 · 任务书 04 P-4 · 富事件 (契约 §2) —— 同一份 phases_json 的
-      //   另一面。没有它 ⇒ 刷新页面后交付物卡片 (file / image / tool_done) 全丢。
+      // A2-D4-02 · 时间线 —— 缺失 / null / 脏数据 ⇒ undefined（不渲空容器）。
+      phases: parsedPhases.phases,
+      // 任务书 04 P-4 · 富事件 —— 没有它，刷新后交付物卡片全丢。
+      //   ★ [T-156] 由 `parsePhasesOnce` 同一次解析派生（不二次 JSON.parse）。
       richEvents: parsePhasesRichEvents(m.phases_json),
     };
   });
-  return { messages, nextCursor: null };
+}
+
+export async function getHistory(chatId: string): Promise<{
+  /** ★ [T-156] 首屏只有最近 HISTORY_INITIAL_LIMIT 条，更早的按需加载。 */
+  messages: ChatMessage[];
+  /** ★ [T-156] 继续往前翻的 cursor（null = 没有更早的了）。 */
+  nextCursor: string | null;
+  /** ★ [T-156] 首屏最老那条的 server id —— 增量加载去重锚点。 */
+  oldestMessageId: string | null;
+}> {
+  const { rows, oldestCursor } = await fetchHistoryAroundEnd(chatId);
+  return {
+    messages: mapHistoryRows(rows),
+    nextCursor: oldestCursor,
+    oldestMessageId: rows.length > 0 ? String(rows[0].id) : null,
+  };
+}
+
+/** ★ [T-156] ChatDetail 的「加载更早」入口 —— 行已映射成端侧 ChatMessage。 */
+export async function loadOlderMessages(
+  chatId: string,
+  cursor: string | null,
+  anchorId: string,
+): Promise<{ messages: ChatMessage[]; nextCursor: string | null }> {
+  const { rows, nextCursor } = await loadOlderHistoryPage(chatId, cursor, anchorId);
+  return { messages: mapHistoryRows(rows), nextCursor };
 }
 
 // ─────────── ChatDetail P0 (阶段 8) — 单条消息 / approval 接口 ───────────

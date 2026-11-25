@@ -34,7 +34,7 @@
  *   数据通路 (ChatMessageModel.phases + ChatDetail 流式累积) 同属 M3 批次,
  *   本文件只交付组件本体.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   BrainIcon,
   ChevronDownIcon,
@@ -113,9 +113,15 @@ export function ExecutionTimeline({
   const authoritative = toolCallCount != null || thinkingCount != null;
   // ⚠️ 适配点: 宿主的 `ExecutionPhase.event` 是 `Record<string, unknown>`,
   //   而 sse/ 那一套是自包含的 `SseToolEvent` (可整目录抄走) ⇒ 这里做一次结构转换。
-  const rendered = renderPhases(phases as unknown as SsePhase[], { authoritative });
+  // ★ [T-156] 折叠态下 `renderPhases`（v1 兼容分支会把相邻 thinking 的 text 拼起来）
+  //   是纯字符串活 —— 列表 re-render（SSE 每帧都来）时不该为**没展开**的时间线重算。
+  //   useMemo 按 phases 引用缓存 ⇒ 折叠态只在 phases 真变了才算一次。
+  const rendered = useMemo(
+    () => renderPhases(phases as unknown as SsePhase[], { authoritative }),
+    [phases, authoritative],
+  );
 
-  const fallback = fallbackCount(rendered);
+  const fallback = useMemo(() => fallbackCount(rendered), [rendered]);
   const thinking = thinkingCount ?? fallback.thinking;
   const tool = toolCallCount ?? fallback.tool;
   const summary =
@@ -148,7 +154,9 @@ export function ExecutionTimeline({
         <span className="font-medium">{summary}</span>
       </button>
 
-      {/* 展开后列出每条 phase (★ 用合并后的 rendered —— 不是原始 phases) */}
+      {/* 展开后列出每条 phase (★ 用合并后的 rendered —— 不是原始 phases)
+          ★ [T-156] 整段只在 expanded=true 时挂载 —— 折叠态不创建几百个 DOM 节点，
+            也不让隐藏的思考正文参与布局/重排（长会话里每条消息都带几 KB thinking）。 */}
       {expanded ? (
         <div className="border-t border-border/60 divide-y divide-border/40">
           {rendered.map((p, idx) => {

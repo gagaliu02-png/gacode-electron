@@ -81,6 +81,7 @@ import {
   deleteSessions,
   getChats,
   getHistory,
+  loadOlderMessages,
   renameChat,
   setSessionPin,
   autoTitleSession,
@@ -833,6 +834,78 @@ export function ChatDetail() {
   });
 
   /**
+   * ★ [T-156] **增量历史** —— historyQuery 首屏只有最近 100 条；
+   *   `nextCursor` 非空 ⇒ 还有更早的，滚到顶 / 点「加载更早」才去取。
+   *
+   *   ## 为什么单独放 state 而不是塞进 query 缓存
+   *
+   *   historyQuery 会在终态 / 动作后被 `invalidateQueries` 重刷（几十处），
+   *   重刷拿回来的仍是**最近 100 条** ⇒ 之前加载的老消息会被整批抹掉。
+   *   ⇒ 把「已加载的老消息」单独存起来，按 server id 去重后 prepend 到基底上
+   *     ⇒ 任意次 history 重刷都不丢老消息（session 1134 的教训）。
+   */
+  const [olderMessages, setOlderMessages] = useState<ChatMessage[]>([]);
+  const [olderCursor, setOlderCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const olderLoadingRef = useRef(false);
+  const [olderScrollAnchor, setOlderScrollAnchor] = useState<{
+    firstId: string | null;
+    scrollHeight: number | null;
+  } | null>(null);
+
+  // 切会话 ⇒ 老消息缓存必须跟着清（否则 A 会话的老消息跑到 B 会话）。
+  useEffect(() => {
+    setOlderMessages([]);
+    setOlderCursor(null);
+    setLoadingOlder(false);
+    olderLoadingRef.current = false;
+    setOlderScrollAnchor(null);
+  }, [chatId]);
+
+  // history 首屏到齐 ⇒ 用它的 nextCursor 初始化增量加载游标。
+  useEffect(() => {
+    setOlderCursor(historyQuery.data?.nextCursor ?? null);
+  }, [historyQuery.data?.nextCursor]);
+
+  const loadOlder = useCallback(async () => {
+    if (!chatId || olderLoadingRef.current || !olderCursor) return;
+    olderLoadingRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const firstId = historyQuery.data?.messages?.[0]?.id ?? null;
+      const scroller = document.querySelector<HTMLElement>('[aria-label="消息列表"]');
+      setOlderScrollAnchor({
+        firstId,
+        scrollHeight: scroller?.scrollHeight ?? null,
+      });
+      const result = await loadOlderMessages(
+        chatId,
+        olderCursor,
+        firstId ?? "",
+      );
+      if (result.messages.length > 0) {
+        setOlderMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id));
+          // 跟首屏也去重（增量页可能带首屏最老那条 ⇒ 别显示两遍）。
+          const initialIds = new Set(historyQuery.data?.messages?.map((m) => m.id) ?? []);
+          return [
+            ...result.messages.filter(
+              (m) => !seen.has(m.id) && !initialIds.has(m.id),
+            ),
+            ...prev,
+          ];
+        });
+      }
+      setOlderCursor(result.nextCursor);
+    } catch (err) {
+      console.warn("[T-156] 加载更早消息失败:", err);
+    } finally {
+      olderLoadingRef.current = false;
+      setLoadingOlder(false);
+    }
+  }, [chatId, olderCursor, historyQuery.data]);
+
+  /**
    * ★ [2026-11-13] 一轮的**计时**（本地时钟兜底口径）。
    *
    *   · `startedAt`  —— 本轮开始（本地时钟，ms epoch）
@@ -860,7 +933,13 @@ export function ChatDetail() {
 
   // 服务端 history → 本地模型, isStreaming 标志由 streamingAssistantId 控制
   const baseMessages: ChatMessageModel[] = useMemo(() => {
-    const raw = historyQuery.data?.messages ?? [];
+    // ★ [T-156] 已加载的老消息 prepend 在首屏前面（按 id 去重，防 history 重刷重复）。
+    const initial = historyQuery.data?.messages ?? [];
+    const initialIds = new Set(initial.map((m) => m.id));
+    const raw = [
+      ...olderMessages.filter((m) => !initialIds.has(m.id)),
+      ...initial,
+    ];
     // ★ [2026-11-13] 给历史行**补上这一轮的计时**（本地时钟兜底口径）。
     //   背景: 终态帧一到, `clearLocalRow()` 把**流式行**撤掉 ⇒ 屏幕上换成了
     //   服务端历史行 ⇒ 而历史行没有 startedAt/elapsedMs ⇒ 秒表（「已执行 N 秒」）
@@ -926,7 +1005,7 @@ export function ChatDetail() {
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyQuery.data, chatId]);
+  }, [historyQuery.data, olderMessages, chatId]);
 
   // 流式期间累积 (content + events). MessageList 用 streamingContent 渲染最后一条.
   const [streamingAssistantId, setStreamingAssistantId] = useState<string | null>(null);
@@ -4703,6 +4782,12 @@ export function ChatDetail() {
             streamingAssistantId={streamingAssistantId}
             onMessageAction={handleMessageAction}
             stripImageUrls={userImageUrls}
+            // ★ [T-156] 增量历史 —— 滚到顶 / 点按钮加载更早的消息。
+            onLoadOlder={loadOlder}
+            hasOlder={!!olderCursor}
+            loadingOlder={loadingOlder}
+            previousFirstId={olderScrollAnchor?.firstId ?? null}
+            previousScrollHeight={olderScrollAnchor?.scrollHeight ?? null}
           />
         )}
       </div>
