@@ -226,7 +226,8 @@ test('T092-CRF-1 ★ notify_intent 契约消息：属性齐全 + 主动回报正
     'report_when_idle',
   );
   assert.match(content, /^<cross-session-message from="uds:gaclaw" task_id="msg-123" notify_intent="report_when_idle" reply_to_business_session_id="biz-1" reply_to_cc_session_id="cc-9" reply_channel="inbox">/);
-  assert.match(content, /\*\*必须\*\*使用 .gaclaw-msg send. 按上面的 reply_to 主动回报结论/);
+  assert.match(content, /mcp__gaclaw__send/);
+  assert.match(content, /端侧会自动采集兜底/);
   assert.match(content, /不要猜 session_id/);
   assert.match(content, /notify 本身不代表已回报/);
   assert.match(content, /task_id: msg-123/);

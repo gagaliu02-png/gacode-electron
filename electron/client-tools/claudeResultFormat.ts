@@ -158,7 +158,8 @@ export function buildReportingContract(taskId?: string | null, replyTo?: PeerRep
     ...(notifyIntent === 'report_when_idle' && replyToAttr ? [
       '',
       '📢 这是一条 notify_intent="report_when_idle" 契约：',
-      '   完成当前工作后，**必须**使用 `gaclaw-msg send` 按上面的 reply_to 主动回报结论。',
+      '   完成当前工作后，使用 `mcp__gaclaw__send` 按上面的 reply_to 主动回报结论；',
+      '   若当前会话没有该 MCP 工具，再输出标准结果块，端侧会自动采集兜底。',
       '   ⛔ 不要猜 session_id（reply_to 已给全）；notify 本身不代表已回报。',
     ] : []),
   ].join('\n');

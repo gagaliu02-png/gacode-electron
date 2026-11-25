@@ -38,6 +38,8 @@ export const WATCHER_POLL_MS = 1500;
 export const WATCHER_DEFAULT_TIMEOUT_MS = 600_000;
 /** 单次读取的尾部上限（字节）—— transcript 可能几十 MB。 */
 const MAX_READ_BYTES = 1024 * 1024;
+/** settle 前按 task_id 反查结果块的尾部上限（字节）。 */
+const TAIL_SCAN_BYTES = 2 * 1024 * 1024;
 
 /** watcher 的返回值。 */
 export interface WatchResult {
@@ -66,24 +68,31 @@ function findRecord(sessionId: string): ClaudeSessionRecord | null {
   return listClaudeSessions().find((s) => s.sessionId === sessionId) || null;
 }
 
-/** 从一段 transcript 行里抽 assistant 的正文。 */
-function assistantTextOf(raw: string): string {
+/** 从一条 transcript 行里抽 assistant 的正文 + 身份。 */
+function assistantEntryOf(raw: string): { text: string; id: string } | null {
   let d: any;
   try {
     d = JSON.parse(raw);
   } catch {
-    return '';
+    return null;
   }
-  if (!d || d.type !== 'assistant') return '';
+  if (!d || d.type !== 'assistant') return null;
   const content = d.message && d.message.content;
-  if (typeof content === 'string') return content.trim();
-  if (!Array.isArray(content)) return '';
-  const parts = content
-    .filter((b: any) => b && b.type === 'text' && typeof b.text === 'string')
-    .map((b: any) => b.text)
-    .join('\n')
-    .trim();
-  return parts;
+  let text = '';
+  if (typeof content === 'string') text = content.trim();
+  else if (Array.isArray(content)) {
+    text = content
+      .filter((b: any) => b && b.type === 'text' && typeof b.text === 'string')
+      .map((b: any) => b.text)
+      .join('\n')
+      .trim();
+  }
+  if (!text) return null;
+  // Claude transcript 里同一轮流式增量可能拆成多条 assistant 行：
+  //   uuid 相同 ⇒ 同一条消息；requestRef/requestId 相同 ⇒ 同一轮请求。
+  //   [T-141] 按这些身份合并，避免裸字节窗口把一条完整结果块切成两半。
+  const id = String(d.uuid || d.id || d.requestRef || d.requestId || d.parentUuid || text.slice(0, 80));
+  return { text, id };
 }
 
 /**
@@ -125,12 +134,65 @@ export function readNewAssistantText(
   }
 
   const lines = buf.split(/\n/).filter((l) => l.trim().length > 0);
-  const texts: string[] = [];
+  // [T-141] 按消息身份合并：同一条 assistant 的多次流式落盘只出一段完整文本，
+  //   不再按裸字节窗口逐行拼接（会把一条结果块切碎或让解析器只看到半个块）。
+  const byId = new Map<string, string[]>();
+  const order: string[] = [];
   for (const l of lines) {
-    const t = assistantTextOf(l);
-    if (t) texts.push(t);
+    const e = assistantEntryOf(l);
+    if (!e) continue;
+    if (!byId.has(e.id)) { byId.set(e.id, []); order.push(e.id); }
+    byId.get(e.id)!.push(e.text);
   }
+  const texts = order.map((id) => byId.get(id)!.join('\n').trim()).filter(Boolean);
   return { text: texts.join('\n'), newOffset: start + len };
+}
+
+/**
+ * ★ [T-141] settle 前的兜底：只读 tail，按 task_id 精确反查完整结果块。
+ *   - 不受 sinceOffset 影响（解决增量窗口漏读）；
+ *   - 只读最后 TAIL_SCAN_BYTES，避免大 transcript 全量加载；
+ *   - 只认结果块，不做正文兜底（避免把普通回答误当结果）。
+ */
+export function findResultBlockByTaskId(
+  sessionId: string,
+  taskId: string,
+): ExtractedClaudeResult | null {
+  if (!sessionId || !taskId) return null;
+  const rec = findRecord(sessionId);
+  if (!rec) return null;
+  const file = transcriptPath(rec);
+  if (!file) return null;
+  let size = 0;
+  try { size = fs.statSync(file).size; } catch { return null; }
+  const start = Math.max(0, size - TAIL_SCAN_BYTES);
+  let buf = '';
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const len = size - start;
+      const chunk = Buffer.alloc(len);
+      const read = fs.readSync(fd, chunk, 0, len, start);
+      buf = chunk.subarray(0, read).toString('utf8');
+    } finally { fs.closeSync(fd); }
+  } catch { return null; }
+
+  const byId = new Map<string, string[]>();
+  const order: string[] = [];
+  for (const line of buf.split(/\n/)) {
+    const e = assistantEntryOf(line);
+    if (!e) continue;
+    if (!byId.has(e.id)) { byId.set(e.id, []); order.push(e.id); }
+    byId.get(e.id)!.push(e.text);
+  }
+  // 从后往前找（最近的结果优先）
+  for (const id of order.reverse()) {
+    const text = byId.get(id)!.join('\n');
+    if (!text.includes(taskId)) continue;
+    const hit = parseGaclawResultBlock(text);
+    if (hit && hit.task_id === taskId) return hit;
+  }
+  return null;
 }
 
 /**
