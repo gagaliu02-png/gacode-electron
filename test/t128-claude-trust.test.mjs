@@ -27,3 +27,19 @@ test('T128-TRUST-3 · cwd 为空 ⇒ 用兜底目录且不带 add-dir', () => {
   assert.equal(r.addDir, null);
   assert.ok(r.cwd);
 });
+
+test('T154-TRUST-4 · ★ 盘符大小写不同 ⇒ 也要用**表里原始写法**起（CLI 查信任是大小写敏感的）', () => {
+  // 事故（2026-11-25 e2e）：表里记的是 `d:\gaga\gaclaw-project`（VS Code 会话开的），
+  // 调用方传 `D:\gaga\gaclaw-project` ⇒ 端侧判定「已信任」但 CLI 报
+  // `Workspace not trusted` ⇒ pc_cc_new 连跪两次（<1s 就挂）。
+  // ⇒ 启动 cwd 必须用**表里原始写法**，让 CLI 自己的原样匹配命中。
+  const r = T.resolveClaudeLaunchCwd('D:\\gaga\\gaclaw-project');
+  assert.equal(r.untrustedTarget, null, '大小写不同不该被当成未信任');
+  assert.ok(r.cwd, '必须有 cwd');
+  assert.ok(
+    r.cwd === 'd:\\gaga\\gaclaw-project' || r.cwd.toLowerCase().includes('gaclaw-project'),
+    `cwd 必须是表里那条（小写 d:），实际=${r.cwd}`,
+  );
+  // 关键断言：**不是**调用方传的大写写法
+  assert.notEqual(r.cwd, 'D:\\gaga\\gaclaw-project', '必须换回表里的原始写法（CLI 认大小写敏感）');
+});
