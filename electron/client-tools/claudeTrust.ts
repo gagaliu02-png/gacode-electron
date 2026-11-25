@@ -63,6 +63,45 @@ function readTrustedProjects(): Map<string, boolean> {
   return out;
 }
 
+/**
+ * ★ [T-154-cc] 归一化 key → **表里原始写法**（保留大小写）。
+ *
+ * ## 为什么需要它（2026-11-25 e2e 实测）
+ *
+ * CLI 查信任是**大小写敏感**的（它拿 cwd 字符串去 `projects` 表里**原样**匹配），
+ * 而本模块的查表是**大小写不敏感**的（`normalizeKey` 统一转小写）。
+ *
+ * ⇒ 于是出现这一种坑：表里记的是 `d:\gaga\gaclaw-project`（VS Code 会话开的，小写盘符），
+ *   调用方传的是 `D:\gaga\gaclaw-project`（大写 D）
+ *   ⇒ **端侧判定「已信任」**，把 `D:\...` 原样交给 CLI
+ *   ⇒ **CLI 说 `Workspace not trusted`**（它的表里没有大写 D 那一条）。
+ *
+ * 实测代价：一次 e2e 里 `pc_cc_new` 连跪两次（<1s 就挂），第三次改成小写才成。
+ *
+ * ⇒ 修法：**启动时用表里原始写法**（`originalCasing`）⇒ CLI 的原样匹配才命中。
+ */
+function readTrustedProjectsOriginal(): Map<string, string> {
+  const out = new Map<string, string>();
+  let raw: string;
+  try {
+    raw = fs.readFileSync(claudeJsonPath(), 'utf8');
+  } catch {
+    return out;
+  }
+  let parsed: ClaudeProjectsFile;
+  try {
+    parsed = JSON.parse(raw) as ClaudeProjectsFile;
+  } catch {
+    return out;
+  }
+  const projects = parsed && parsed.projects;
+  if (!projects || typeof projects !== 'object') return out;
+  for (const [dir, v] of Object.entries(projects)) {
+    if (v && v.hasTrustDialogAccepted) out.set(normalizeKey(dir), dir);
+  }
+  return out;
+}
+
 /** 目录键归一化：反斜杠 → 正斜杠、去尾斜杠、小写。 */
 function normalizeKey(dir: string): string {
   return String(dir || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -74,14 +113,16 @@ function normalizeKey(dir: string): string {
  * CLI 的判定是「cwd 本身在表里且已接受」；但实测受信任的父目录（如 `C:/Users/gaga`）
  * 也能起会话 ⇒ 这里按**祖先链**判定，命中最近的受信任祖先。
  */
-export function findTrustedCwd(cwd: string | null): { trusted: boolean; fallback: string | null } {
+export function findTrustedCwd(cwd: string | null): { trusted: boolean; fallback: string | null; originalCasing: string | null } {
   const trusted = readTrustedProjects();
+  const original = readTrustedProjectsOriginal();
   const target = cwd ? path.resolve(cwd) : os.homedir();
   let cur = target;
   for (;;) {
     const key = normalizeKey(cur);
     if (trusted.get(key) === true) {
-      return { trusted: true, fallback: null };
+      // ★ [T-154-cc] 把**表里原始写法**带出去 ⇒ CLI 自己的大小写敏感查表能命中。
+      return { trusted: true, fallback: null, originalCasing: original.get(key) || null };
     }
     const parent = path.dirname(cur);
     if (!parent || parent === cur) break;
@@ -90,9 +131,9 @@ export function findTrustedCwd(cwd: string | null): { trusted: boolean; fallback
   // 兜底：家目录通常被信任过；再兜底就用家目录本身。
   const home = os.homedir();
   if (trusted.get(normalizeKey(home)) === true) {
-    return { trusted: false, fallback: home };
+    return { trusted: false, fallback: original.get(normalizeKey(home)) || home, originalCasing: original.get(normalizeKey(home)) || null };
   }
-  return { trusted: false, fallback: home };
+  return { trusted: false, fallback: home, originalCasing: null };
 }
 
 /**
@@ -117,9 +158,12 @@ export function resolveClaudeLaunchCwd(cwd: string | null): {
   untrustedTarget: string | null;
 } {
   const target = cwd ? path.resolve(cwd) : null;
-  const { trusted, fallback } = findTrustedCwd(target);
+  const { trusted, fallback, originalCasing } = findTrustedCwd(target);
   if (trusted || !target) {
-    return { cwd: target || fallback || os.homedir(), addDir: null, untrustedTarget: null };
+    // ★ [T-154-cc] 用**表里原始写法**当 cwd（大小写敏感的是 CLI，不是我们）
+    //   ⇒ 调用方传 `D:\gaga\...`、表里记 `d:\gaga\...` 时也能起得来。
+    const launchCwd = (trusted && originalCasing) ? originalCasing : (target || fallback || os.homedir());
+    return { cwd: launchCwd, addDir: null, untrustedTarget: null };
   }
   // 目标目录未信任 ⇒ 不能用 add-dir（CLI 会拒）⇒ 在受信任兜底目录启动。
   return { cwd: fallback || os.homedir(), addDir: null, untrustedTarget: target };
