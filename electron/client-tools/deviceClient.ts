@@ -1228,6 +1228,63 @@ class DeviceClient {
     return this.accessToken;
   }
 
+  /**
+   * ★ [T-154-cc] 把端侧采到的结果**投回业务会话收件箱**。
+   *
+   * ## 为什么走 inbox 而不是 D3
+   *
+   * `pc_cc_control(notify_when_idle)` / `pc_cc_new` 都是**同步**工具 ⇒
+   * 服务端那边的 pending 在工具返回时**已经结清**（端侧回传会撞「结果已结过（409）」）⇒
+   * **不能**再走 D3（`reportJobResult`）。
+   *
+   * ⇒ 走 `POST /devices/cc/messages`：投递到业务会话的收件箱 ⇒
+   *   服务端**另起一轮**把结论送进同一个会话（与 `pc_cc_send` 的用户可见效果一致）。
+   *
+   * ⚠️ 服务端固定写身份（`senderRole=external_agent` / `isUserMessage=false` /
+   *    `isAuthorization=false`）⇒ **不会**冒成用户气泡、**不是**用户授权。
+   *
+   * @returns 服务端收下了吗
+   */
+  async sendCollectedResult(
+    businessSessionId: string,
+    content: string,
+    taskId: string,
+    idempotencyKey: string,
+    ccSessionId?: string | null,
+  ): Promise<boolean> {
+    if (!this.accessToken) {
+      logDevice('[T-154-cc] 没有 token ⇒ 结果投不回去');
+      return false;
+    }
+    const body: Record<string, unknown> = {
+      sessionId: businessSessionId,
+      content,
+      taskId,
+      idempotencyKey,
+    };
+    if (ccSessionId) body.ccSessionId = ccSessionId;
+    try {
+      const res = await fetch(`${apiBase()}/devices/cc/messages`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          Authorization: `Bearer ${this.accessToken}`,
+          'x-device-id': getDeviceId(),
+        },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        logDevice(`[T-154-cc] 结果回投失败（${res.status}）: ${businessSessionId}`);
+        return false;
+      }
+      logDevice(`[T-154-cc] 结果已回投到会话 ${businessSessionId}`);
+      return true;
+    } catch (e: any) {
+      logDevice(`[T-154-cc] 结果回投异常: ${e && e.message}`);
+      return false;
+    }
+  }
+
   /** 连上（注册 + SSE）。没 token 就什么都不做。 */
   async ensureConnected(): Promise<void> {
     if (!this.accessToken) {

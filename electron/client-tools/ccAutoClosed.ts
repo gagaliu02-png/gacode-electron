@@ -43,6 +43,15 @@ export interface AutoClosedRecord {
   at: number;
   /** 原因。`idle_sweep` = 被空闲巡检回收；`explicit` = 被 `pc_cc_close` 显式关闭。 */
   reason: 'idle_sweep' | 'explicit';
+  /**
+   * ★ [T-154-cc] 被关掉那一刻的 transcript 路径。
+   *
+   * 为什么加：**结论可能就在那份 transcript 里** ——
+   * 2026-11-25 事故（业务会话 1192 / 常驻会话 `b0f8568c…`）就是
+   * 「结果没投回服务端 + 巡检把会话一关 ⇒ 唯一副本没了」；
+   * 有了这个路径，至少还能**人工捞回来**。
+   */
+  transcriptPath?: string | null;
 }
 
 interface StateFile {
@@ -91,6 +100,8 @@ export function markAutoClosed(rec: {
   bgId?: string | null;
   at?: number;
   reason?: 'idle_sweep' | 'explicit';
+  /** ★ [T-154-cc] transcript 路径（结论可能还在里面）。 */
+  transcriptPath?: string | null;
 }): void {
   if (!rec || !rec.sessionId) return;
   const now = rec.at ?? Date.now();
@@ -101,6 +112,7 @@ export function markAutoClosed(rec: {
     bgId: rec.bgId ?? null,
     at: now,
     reason: rec.reason ?? 'idle_sweep',
+    ...(rec.transcriptPath ? { transcriptPath: rec.transcriptPath } : {}),
   });
   // 只留最近的若干条 + 未过期的
   const kept = entries

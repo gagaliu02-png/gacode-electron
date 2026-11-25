@@ -22,6 +22,7 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { executeClientTool } from './executor';
 import { deviceClient, getDeviceId, deviceCapabilities, peerJobManager } from './deviceClient';
+import { ccResultCollector } from './ccResultCollector';
 // ★ [2026-11-17 · T-020 · S3] Claude Code hook 桥（显式安装，不自动装）
 import * as claudeHook from './claudeCodeHookService.ts';
 // [P7 · 2026-11-12] 本机定时任务（gaga 拍板：只在 Gacode 打开时跑，不写 Windows 计划任务）。
@@ -245,6 +246,17 @@ export function registerClientToolIpc(): void {
   //   并扫 dispatchLedger 给重启前遗留的 pc_cc_send 报一次失败（防孤儿挂 24h）。
   peerJobManager.start((jobId, payload) => deviceClient.reportJobResult(jobId, payload));
   peerJobManager.recoverOrphans();
+
+  // ★ [T-154-cc] 「端侧兜底」采集器 —— notify_when_idle / pc_cc_new 的结果回投。
+  //   这两条路**没有服务端 pending 可挂**（同步工具的 pending 工具返回时就结清了）
+  //   ⇒ 走**业务会话收件箱**：投回去 ⇒ 服务端另起一轮 ⇒ 结论回到同一个会话。
+  ccResultCollector.start((d) => deviceClient.sendCollectedResult(
+    d.businessSessionId,
+    d.content,
+    d.taskId,
+    d.idempotencyKey,
+    d.ccSessionId,
+  ));
 
   // ★ [2026-11-17] 启动作业表**自动压缩**：append-only jsonl 废行折叠掉（660 行 → 28 行）。
   //   ⚠️ 只压缩，不删任何作业记录 / 日志（PM 拍板：历史作业列表要一直看得见）。

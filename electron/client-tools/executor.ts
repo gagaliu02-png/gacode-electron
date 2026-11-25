@@ -55,6 +55,10 @@ import { buildCcReceipt, deliveryIdFromArgs } from './ccReceipt.ts';
 import { acquirePersistentSession, closePersistentSession, listPersistentSessions, setPersistentSessionBgId, touchPersistentSession } from './ccPersistentSession.ts';
 import { validateClientToolArgs } from './clientToolArgs.ts';
 import type { PeerReplyTo } from './claudeResultFormat.ts';
+import { buildNotifyPeerMessageContent } from './claudeResultFormat.ts';
+// ★ [T-154-cc] 「端侧兜底」采集器 —— notify_when_idle / pc_cc_new 的结果回投。
+//   没有它，契约承诺的「输出标准结果块由端侧兜底」是**空头支票**（见 T-154-cc 事故）。
+import { ccResultCollector } from './ccResultCollector.ts';
 // ★ [2026-11-19 · T-068 / T-072] peer notice 读侧：注入后登记订阅，
 //   结果由后台 peer-job 管理器从 transcript 增量裁决。
 import { claudeCodePeerInbox } from './claudeCodePeerInbox.ts';
@@ -780,18 +784,47 @@ async function pcCcAppend(args: Record<string, unknown> | null): Promise<ClientT
  *   拿真实 sessionId/bg_id 登记。这样 `~/.claude/sessions` 一直有活会话，
  *   pc_cc_send/append 的 peer IPC 才能找到目标。
  */
-async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | null): Promise<ClientToolResult> {
+async function pcCcNewBg(
+  args: Record<string, unknown> | null,
+  cwd: string | null,
+  opts?: ExecuteClientToolOptions,
+): Promise<ClientToolResult> {
   const task = str(args, 'task');
   if (!task) return fail('pc_cc_new 缺 task');
   const name = str(args, 'name') || `gacode-persistent-${Date.now()}`;
   const cli = resolveClaudeBinary();
   if (!cli) return fail('找不到 Claude Code 可执行文件（claude）');
 
+  // ★ [T-154-cc] 先把「回报任务号」和「回投目标」算好 ——
+  //   回报合同要**跟着初始 prompt 一起送进去**（见下），所以必须在起会话**之前**算。
+  //
+  //   task_id 优先用服务端 pending_id（命中未结 dispatch 时服务端会判成
+  //   `work_unit_result`，形态更好）；拿不到就客户端生成一个。
+  const collectTaskId = (opts?.pendingId && String(opts.pendingId).trim()) || `pc_cc_new:${randomUUID()}`;
+  const collectBusinessSession = opts?.sessionId ? String(opts.sessionId) : '';
+  const collectEnabled = !!collectBusinessSession;
+
+  // ★ [T-154-cc] 回报合同**跟着初始 prompt 走**。
+  //
+  //   为什么不是「事后 peer 注入」：会话刚起时 peer socket 未必就绪
+  //   （`sendPeerMessage` 会回 `session_not_live`）⇒ 注入可能直接失败 ⇒
+  //   合同丢了 ⇒ 对端永远不知道要输出结果块。
+  //   而 prompt 是**必达**的（跟 `pc_claude` 追加合同是同一个套路）。
+  const taskWithContract = collectEnabled
+    ? task + '\n\n' + buildNotifyPeerMessageContent(
+      '你有一项 gaclaw 通知：完成当前工作后，使用 mcp__gaclaw__send 按 reply_to 主动回报结论；'
+      + '若当前会话没有该 MCP 工具，再输出下面的标准结果块，端侧会自动采集并投回本会话收件箱。',
+      collectTaskId,
+      { business_session_id: collectBusinessSession, channel: 'inbox' },
+      { value: 'report_when_idle' },
+    )
+    : task;
+
   // ★ [T-128-fix] 信任兜底：cwd 不被信任时，CLI 会拒绝启动（stderr: Workspace not trusted）。
   //   ⇒ 换到受信任的祖先目录起会话，目标目录用 --add-dir 授权。
   const launch = resolveClaudeLaunchCwd(cwd);
   const invocation = buildClaudeBgInvocation({
-    args: { task, name, add_dir: launch.addDir || undefined },
+    args: { task: taskWithContract, name, add_dir: launch.addDir || undefined },
     cwd: launch.cwd,
     timeoutMs: null,
     jobId: name,
@@ -870,6 +903,42 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
   acquirePersistentSession({ session_id: found.sessionId, cwd: launch.cwd, name: found.name || name });
   setPersistentSessionBgId(found.sessionId, bgId);
 
+  // 3.5) ★ [T-154-cc] **登记回报采集器**（这一步以前根本不存在 ⇒ 结论永远回不来）。
+  //
+  //   改前：`pc_cc_new` 只负责「把会话建起来 + 等首条回复（≤45s）」，
+  //   **之后谁去收最终结论没人管** —— 契约承诺的「输出标准结果块由端侧兜底」
+  //   压根没实现（`findResultBlockByTaskId` 只有 pc_cc_send 那条路在用）。
+  //   实测事故（2026-11-25 · 业务会话 1192）：常驻会话 `b0f8568c…` 20:17:14
+  //   明明输出了完整结果块，服务端 0 命中 ⇒ 结论丢失。
+  //
+  //   改后：登记采集器 ⇒ 结果块一出现就**投回业务会话收件箱** ⇒ 服务端另起一轮。
+  //   （合同已经跟着初始 prompt 送进去了 ⇒ 这里只要盯住 transcript 就行。）
+  //
+  //   ⚠️ 为什么走**收件箱**而不是 D3：`pc_cc_new` 是**同步**工具 ⇒ 服务端 pending
+  //   在工具返回时已结清 ⇒ 再走 D3 只会撞「结果已结过（409）」。
+  let collectorKey = '';
+  if (collectEnabled) {
+    try {
+      const sinceOffset = (() => {
+        try {
+          const rec = findSession(found.sessionId);
+          return rec ? transcriptSize(rec) : 0;
+        } catch { return 0; }
+      })();
+      collectorKey = ccResultCollector.register({
+        sessionId: found.sessionId,
+        taskId: collectTaskId,
+        sinceOffset,
+        businessSessionId: collectBusinessSession,
+        ccSessionId: found.sessionId,
+      });
+    } catch (e) {
+      peerLog('cc-collect', '采集器登记失败 ' + JSON.stringify({
+        session_id: found.sessionId, error: (e as Error).message,
+      }));
+    }
+  }
+
   // 4) ★ [T-128b] 等首条回复（最多 45s）—— `pc_cc_new` 现在是 **sync** 模式：
   //    工具调用要在本轮内把「会话建好了 + 它说了什么」一起回给模型。
   //    ⚠️ 超时**不算失败**：照常返回 session_id（模型稍后可用 pc_cc_read 补看），
@@ -888,6 +957,13 @@ async function pcCcNewBg(args: Record<string, unknown> | null, cwd: string | nul
       ...(first.text
         ? [`首条回复:`, first.text]
         : [`首条回复: (还没出来，会话仍在跑；之后可用 pc_cc_read 看)`]),
+      ...(collectorKey
+        ? [
+            `已挂回报采集器: 任务号 ${collectTaskId}。`,
+            '它做完后的结论会**自动回到本会话**（另起一轮送达），不需要你轮询。',
+            '注意：不要只用 pc_cc_append 追问（那是 fire-and-forget，不会带回结果）。',
+          ]
+        : []),
       `后续用 pc_cc_send/append 给这个 session_id 发消息；关闭用 pc_cc_close。`,
     ].join('\n'),
     exitCode: 0,
@@ -969,8 +1045,12 @@ async function pcCcControl(
     if (replyChannel && replyChannel !== 'inbox') {
       return fail(`notify_when_idle 只支持 reply_channel=inbox（收到 ${replyChannel}）`);
     }
+    // ★ [T-154-cc] 先把 business_session_id 收成确定值（上面已 fail-closed 过）——
+    //   采集器要拿它当「结果投回哪个业务会话」，不能是 undefined。
+    const businessSessionId = String(replyTo.business_session_id);
     const normalizedReplyTo: PeerReplyTo = {
       ...replyTo,
+      business_session_id: businessSessionId,
       channel: 'inbox',
     };
     const text = str(args, 'text')
@@ -1019,6 +1099,32 @@ async function pcCcControl(
       reply_to_business_session_id: normalizedReplyTo.business_session_id,
       reply_to_cc_session_id: normalizedReplyTo.cc_session_id || null,
     }));
+    // ★ [T-154-cc] 挂上**真采集器**。
+    //
+    //   改前：这里只挂 `registerDiagnostic`（diagnostic 订阅）⇒ CLI 的 idle notice
+    //   到了也只打一行日志就 return（`claudeCodePeerInbox.ts` 的 diagnostic 早退）
+    //   ⇒ **结果永远采不到**；而注入契约承诺的「输出标准结果块由端侧兜底」根本没实现。
+    //   实测事故（2026-11-25 · 业务会话 1192）：常驻会话 `b0f8568c…` 20:17:14
+    //   明明输出了完整结果块，服务端 0 命中 ⇒ 结论丢失 ⇒ 20:22:22 巡检把会话一关，
+    //   唯一副本也没了。
+    //
+    //   改后：采集器轮询 transcript，按 task_id 取结果块 ⇒ **投回业务会话收件箱**
+    //   ⇒ 服务端另起一轮 ⇒ 结论回到同一个会话（与 pc_cc_send 的用户可见效果一致）。
+    //
+    //   ⚠️ task_id 必须与注入契约里的 task_id 一致（两处都用 msgId）⇒ 采集器才对得上。
+    let collectorKey = '';
+    try {
+      collectorKey = ccResultCollector.register({
+        sessionId,
+        taskId: msgId,
+        sinceOffset,
+        businessSessionId,
+        ccSessionId: normalizedReplyTo.cc_session_id || null,
+      });
+    } catch (e) {
+      claudeCodePeerInbox.cancel(msgId);
+      return fail(`挂回报采集器失败: ${(e as Error).message}`);
+    }
     // [T-069] 第二步：再发订阅帧（notice 仍只记日志、不触发 D3）。
     const r = await sendPeerControl(sessionId, 'notify_when_idle', {
       from,
@@ -1026,6 +1132,7 @@ async function pcCcControl(
     }, { from });
     if (!r.ok) {
       claudeCodePeerInbox.cancel(msgId);
+      ccResultCollector.cancel(collectorKey);
       return fail(`订阅空闲通知失败: ${r.reason || 'unknown'}`);
     }
     return ok({
@@ -1038,7 +1145,8 @@ async function pcCcControl(
         // ★ [T-068 / T-072] 订阅登记的定位信息 —— 合成 notice 可用 msg_id 定向注入。
         msg_id: msgId,
         from,
-        note: '已注入 report_when_idle 回报契约并发诊断订阅；完成后优先用 mcp__gaclaw__send 按 reply_to 主动回报，没工具则输出标准结果块由端侧兜底；notice 本身只记日志、不触发 D3。',
+        // ★ [T-154-cc] 回参说明改成实话：结果块**会被端侧采集并投回本会话收件箱**。
+        note: '已注入 report_when_idle 回报契约并挂上端侧采集器；完成后优先用 mcp__gaclaw__send 按 reply_to 主动回报，没工具则输出标准结果块——端侧会采集并投回本会话收件箱（另起一轮送达）；notice 本身只记日志、不触发 D3。',
       }),
       exitCode: 0,
     });
@@ -1129,7 +1237,8 @@ export async function executeClientTool(
   }
 
   // ★ [T-128-fix] pc_cc_new 必须走真正常驻进程，不能进 detached `-p` 作业分支。
-  if (tool === 'pc_cc_new') return pcCcNewBg(args, cwd);
+  // ★ [T-154-cc] opts（pendingId / 业务会话号）要传进去 ⇒ 才能挂回报采集器。
+  if (tool === 'pc_cc_new') return pcCcNewBg(args, cwd, opts);
 
   // ★ [2026-11-13 · 订正 27] 后台作业四个分支（L-27a）。
   //   「起作业」**立即返回**（不 await 端侧回传）⇒ 模型这一轮不被堵住。

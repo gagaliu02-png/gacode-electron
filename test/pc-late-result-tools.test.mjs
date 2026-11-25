@@ -110,10 +110,70 @@ test('T069-P2 ★ inbox 诊断 notice 不回传 D3，只记日志', () => {
   assert.match(inboxSrc, /getDiagnostic\(msgId: string\)/);
   assert.match(inboxSrc, /if \(entry\.diagnostic\) \{[\s\S]{0,300}peerLog\('cc-peer-inbox', 'diagnostic notice '/);
   // diagnostic 分支在 noticeHandler 之前 return（不触发 D3）
-  const dispatch = inboxSrc.slice(inboxSrc.indexOf('private dispatch('), inboxSrc.indexOf('private dispatch(') + 1000);
+  // ⚠️ [T-154-cc] 这里原来只截 1000 字符 ⇒ 我在前面加了一段「未知 msg_id 留诊断」
+  //   的日志就把 `if (entry.diagnostic)` 顶出窗口了（位置断言太脆）⇒ 改成不截断。
+  const dispatch = inboxSrc.slice(inboxSrc.indexOf('private dispatch('));
   const diagReturn = dispatch.indexOf('if (entry.diagnostic)');
   const handlerCall = dispatch.indexOf('this.noticeHandler?.(');
   assert.ok(diagReturn > 0 && handlerCall > diagReturn, '诊断分支必须在 noticeHandler 之前 return');
+});
+
+// ── [T-154-cc] 事故修复：notify / pc_cc_new 必须有**真采集器** ─────────────
+
+test('T154-P1 ★ [T-154-cc] notify_when_idle 必须挂真采集器（不再是「只记日志」）', () => {
+  const collectorSrc = fs.readFileSync(path.join(ROOT, 'electron/client-tools/ccResultCollector.ts'), 'utf8');
+  assert.match(collectorSrc, /export const ccResultCollector/, '采集器单例必须存在');
+  assert.match(collectorSrc, /hasPendingForSession\(sessionId: string\): boolean/, '要能回答「这个会话还有没有未回传的结果」');
+
+  const start = exec.indexOf("if (action === 'notify_when_idle') {");
+  const end = exec.indexOf("return fail(`不支持的 action", start);
+  const branch = exec.slice(start, end > 0 ? end : start + 4000);
+  assert.match(branch, /ccResultCollector\.register\(\{/, 'notify 必须挂真采集器');
+  assert.match(branch, /businessSessionId,/, '采集器必须带业务会话号（结果投回哪儿）');
+  assert.match(branch, /taskId: msgId,/, '采集器的 task_id 必须与注入契约里的 task_id 一致');
+  // 订阅帧失败 ⇒ 采集器也要撤（不许留一个永远等不到的采集）
+  assert.match(branch, /ccResultCollector\.cancel\(collectorKey\)/, '订阅失败必须撤采集器');
+});
+
+test('T154-P2 ★ [T-154-cc] pc_cc_new 必须注入回报合同并登记采集器', () => {
+  const start = exec.indexOf('async function pcCcNewBg(');
+  const end = exec.indexOf('/** pc_cc_close', start);
+  const branch = exec.slice(start, end > 0 ? end : start + 6000);
+  assert.match(branch, /ccResultCollector\.register\(\{/, 'pc_cc_new 必须登记采集器');
+  assert.match(branch, /collectBusinessSession/, '必须能拿到业务会话号');
+  // ⚠️ 合同必须**跟着初始 prompt 走**（必达）—— 事后 peer 注入会撞
+  //   `session_not_live`（会话刚起时 socket 未必就绪）⇒ 合同可能根本没送进去。
+  assert.match(branch, /buildNotifyPeerMessageContent\(/, '回报合同必须拼进初始 prompt');
+  assert.match(branch, /task: taskWithContract/, '起会话时必须用带合同的 prompt');
+  // ⚠️ pc_cc_new 是**同步**工具 ⇒ 服务端 pending 已结清 ⇒ **不许**走 D3 回传。
+  assert.ok(!branch.includes('reportJobResult('), 'pc_cc_new 不许走 D3（pending 已结清 ⇒ 会撞 409）');
+  // opts 必须透传进来（否则拿不到 pendingId / 业务会话号）
+  const dispatchStart = exec.indexOf("if (tool === 'pc_cc_new') return pcCcNewBg(");
+  assert.ok(dispatchStart > 0, 'pc_cc_new 必须走专门分支');
+  assert.match(exec.slice(dispatchStart, dispatchStart + 120), /pcCcNewBg\(args, cwd, opts\)/, 'opts 必须透传');
+});
+
+test('T154-P3 ★ [T-154-cc] 采集结果回投走**业务会话收件箱**（不是 D3）', () => {
+  const src2 = codeOnly(SRC);
+  assert.match(src2, /async sendCollectedResult\(/, 'deviceClient 必须有收件箱回投方法');
+  const m = src2.slice(src2.indexOf('async sendCollectedResult('), src2.indexOf('async sendCollectedResult(') + 2000);
+  assert.match(m, /\/devices\/cc\/messages/, '回投走 /devices/cc/messages');
+  assert.match(m, /sessionId: businessSessionId/, '必须投到目标业务会话');
+  assert.match(m, /idempotencyKey/, '必须带幂等键（重投不重复投递）');
+  // ipc 必须接线
+  assert.match(ipc, /ccResultCollector\.start\(/, 'IPC 启动时必须接上采集器的回投函数');
+});
+
+test('T154-P4 ★ [T-154-cc] 空闲巡检不许回收「还有未回传结果」的会话', () => {
+  const bgSrc = codeOnly(path.join(ROOT, 'electron/client-tools/claudeBgSession.ts'));
+  assert.match(bgSrc, /ccResultCollector\.hasPendingForSession\(s\.sessionId\)/, '停之前必须问采集器');
+  const at = bgSrc.indexOf('ccResultCollector.hasPendingForSession(s.sessionId)');
+  const stopAt = bgSrc.indexOf('stopClaudeBgSession(bgId)', at);
+  assert.ok(at > 0 && stopAt > at, '判据必须在停会话之前');
+  // 墓碑要带 transcript 路径（结论被回收了也能捞回来）
+  const tombSrc = codeOnly(path.join(ROOT, 'electron/client-tools/ccAutoClosed.ts'));
+  assert.match(tombSrc, /transcriptPath\?: string \| null/, '墓碑结构要有 transcriptPath');
+  assert.match(bgSrc, /transcriptPath: rec \? transcriptPath\(rec\) : null/, '停之前要把 transcript 路径写进墓碑');
 });
 
 // ── [T-092] notify_when_idle 与主动回报合成契约 ────────────────────────
