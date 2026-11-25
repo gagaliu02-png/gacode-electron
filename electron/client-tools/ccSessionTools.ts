@@ -105,13 +105,30 @@ export const MAX_LIST_LIMIT = 50;
 export const DEFAULT_READ_TURNS = 12;
 export const MAX_READ_TURNS = 50;
 
+/**
+ * **真·控制字符**（要拒的）。
+ *
+ * ⚠️ 原实现是 `/[\u0000-\u001f]/` —— 它连 **LF(0x0A) / CR(0x0D) / TAB(0x09)**
+ *   一起禁了 ⇒ **多行内容一律被拒**。
+ *   ⇒ 实际后果（2026-11-26 一天内拦掉 3 次汇报）：凡是要回一段带换行的正文
+ *      （diff 片段、代码块、多行清单）就发不出去 ⇒ 只能改成单行硬拼或反复重试。
+ *      给 CLI/agent 用这个通道发正文本就该支持多行。
+ *
+ * ⇒ 现在只拦**真正的控制字符**（C0 里除 TAB/LF/CR 之外的那些，外加 DEL 0x7F）；
+ *   TAB/LF/CR **放行**。
+ *
+ * ⚠️ 为什么还要拦 C0：它们是终端/协议的控制序列（ESC 0x1B 等），
+ *   混进正文会让下游的日志、终端回显出乱码或被当成转义序列。
+ */
+const CONTROL_CHARS_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
 function cleanString(v: unknown, max: number, field: string): string | null {
   if (v === undefined || v === null) return null;
   if (typeof v !== 'string') throw new CcToolError('INVALID_ARGUMENT', `${field} 必须是字符串`);
   const s = v.trim();
   if (!s) return null;
   if (s.length > max) throw new CcToolError('INVALID_ARGUMENT', `${field} 最长 ${max} 字符`);
-  if (/[\u0000-\u001f]/.test(s)) throw new CcToolError('INVALID_ARGUMENT', `${field} 含控制字符`);
+  if (CONTROL_CHARS_RE.test(s)) throw new CcToolError('INVALID_ARGUMENT', `${field} 含控制字符`);
   return s;
 }
 

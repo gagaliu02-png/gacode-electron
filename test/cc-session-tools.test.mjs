@@ -250,3 +250,84 @@ test('T087-10 · send 幂等：同 idempotencyKey 原样带给服务端（由服
   assert.deepEqual(captured[0], captured[1]);
   assert.equal(captured[0].idempotencyKey, 'same-key');
 });
+
+// ── [T-156] cc-tools send 的字符过滤：放行换行、仍拦真控制字符 ─────────────
+//
+// 起因（2026-11-26）：原校验是 /[\u0000-\u001f]/ ⇒ 连 LF/CR/TAB 一起禁
+// ⇒ **多行内容一律被拒** ⇒ 一天内拦掉 3 次回报（凡是要发 diff 片段、多行清单、
+// 代码块都发不出去，只能改成单行硬拼）。
+//
+// 覆盖：
+//   T156-H1  多行正文（含换行 + 制表）**可以**发出，且逐字送达
+//   T156-H2  真控制字符（ESC/NUL/BEL/DEL）**仍然被拒**（fail-closed 不放松）
+//   T156-H3  含反引号、加减号、连续点号等普通符号**可以**发出
+//   T156-H4  其它字段同样适用新规则 —— 换行不再被误杀；长度上限仍在
+
+test('T156-H1 · send：多行正文（含换行与制表）可发，且逐字送达', async () => {
+  const captured = [];
+  const deps = baseDeps({
+    fetchImpl: fakeFetch(async (url, init, calls) => {
+      captured.push(calls[calls.length - 1].body);
+      return okResponse({ ok: true, inboxId: 'inbox-nl' });
+    }),
+  });
+
+  const multiline = '第一行\n第二行\n\n第三行（有空行）\t带制表符';
+  const result = await handleCcTool('send', {
+    toSessionId: '123', content: multiline, idempotencyKey: 'nl-1',
+  }, deps);
+
+  assert.equal(result.ok, true, '多行内容不应被拒');
+  assert.equal(captured[0].content, multiline, '正文必须逐字送达，不能被改写');
+  assert.ok(captured[0].content.includes('\n'), '换行必须保留');
+  assert.ok(captured[0].content.includes('\t'), '制表符必须保留');
+});
+
+test('T156-H2 · send：真控制字符（ESC / NUL / BEL / DEL）仍然被拒', async () => {
+  const deps = baseDeps({
+    fetchImpl: fakeFetch(async () => okResponse({ ok: true, inboxId: 'never' })),
+  });
+
+  for (const bad of ['带\u0000NUL', '带\u001bESC', '带\u0007BEL', '带\u007fDEL']) {
+    await assert.rejects(
+      () => handleCcTool('send', { toSessionId: '123', content: bad }, deps),
+      (e) => e.code === 'INVALID_ARGUMENT' && /控制字符/.test(e.message),
+      `真控制字符必须被拒: ${JSON.stringify(bad)}`,
+    );
+  }
+});
+
+test('T156-H3 · send：反引号 / 加减号 / 连续点号等普通符号可发', async () => {
+  const captured = [];
+  const deps = baseDeps({
+    fetchImpl: fakeFetch(async (url, init, calls) => {
+      captured.push(calls[calls.length - 1].body);
+      return okResponse({ ok: true, inboxId: 'inbox-sym' });
+    }),
+  });
+
+  const tricky = '用 `code` 反引号\n+ 加号行\n- 减号行\nc7142f0..5c0c73c 连续点号\n→ 箭头';
+  const result = await handleCcTool('send', {
+    toSessionId: '123', content: tricky, idempotencyKey: 'sym-1',
+  }, deps);
+
+  assert.equal(result.ok, true, '这些符号不应被当成控制字符');
+  assert.equal(captured[0].content, tricky);
+});
+
+test('T156-H4 · send：其它字段同样适用（换行不再被误杀），但长度上限仍在', async () => {
+  const deps = baseDeps({
+    fetchImpl: fakeFetch(async () => okResponse({ ok: true, inboxId: 'inbox-f' })),
+  });
+
+  // 换行在其它字段里同样放行
+  await assert.doesNotReject(
+    () => handleCcTool('send', { toSessionId: '123', content: 'x', taskId: 'a\nb' }, deps),
+  );
+
+  // 长度上限没放松（超长仍拒）
+  await assert.rejects(
+    () => handleCcTool('send', { toSessionId: '123', content: 'x'.repeat(8001) }, deps),
+    (e) => e.code === 'INVALID_ARGUMENT' && /最长/.test(e.message),
+  );
+});
