@@ -149,6 +149,29 @@ test('T154-COL-4 · 登记缺业务会话号 ⇒ 直接拒绝（无处可投的�
   );
 });
 
+test('T154-COL-6 · ★ 幂等键必须**等于 task_id**（对方自报 + 端侧兜底 ⇒ 只能投一次）', async () => {
+  // 实测踩过（2026-11-25 e2e）：对方用 mcp__gaclaw__send 自报（键=task_id）
+  // ＋ 端侧兜底采集（键=cc-collect:task_id）⇒ **两个不同的键** ⇒ 同一份结论投了两遍。
+  // ⇒ 两边必须共用 task_id ⇒ 服务端幂等命中 ⇒ 只留一条。
+  writeSessionFile();
+  writeTranscript(RESULT_BLOCK);
+
+  const delivered = [];
+  ccResultCollector.start(async (d) => { delivered.push(d); return true; });
+
+  ccResultCollector.register({
+    sessionId: SESSION_ID,
+    taskId: 'TASK-1',
+    sinceOffset: 0,
+    businessSessionId: '1192',
+  });
+
+  await ccResultCollector.tickNow();
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].idempotencyKey, 'TASK-1', '幂等键必须就是 task_id（不加前缀）');
+});
+
 test('T154-COL-5 · ★ 会话被杀了（登记项没了）但 transcript 里还有结果 ⇒ 照样要投出去', async () => {
   // 这一条是 T-154-cc 事故最要命的一步：
   //   「结论在 transcript 里」+「会话被空闲巡检回收了」⇒ 老路走不通（登记项没了 ⇒ 定位不到文件）

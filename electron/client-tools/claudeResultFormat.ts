@@ -153,6 +153,12 @@ export function buildReportingContract(taskId?: string | null, replyTo?: PeerRep
       '',
       `📮 本任务自带回信地址（见上方 <cross-session-message> 的 ${replyToAttr}）。`,
       '   如需主动回信，**使用 reply_to 提供的 session_id / channel**，不要猜 session_id，也不要自己找所谓的发送入口。',
+      // ★ [T-154-cc] 主动回报时**幂等键必须用 task_id** ——
+      //   端侧兜底采集用同一个键 ⇒ 服务端幂等命中 ⇒ 同一个任务**只投一次**
+      //   （实测踩过：对方自报 + 端侧兜底 = 投了两次，同一份结论进会话两遍）。
+      ...(taskIdLine ? [
+        `   主动回报时请把 idempotencyKey 设成上面的 task_id（${String(taskId)}）——端侧兜底采集用同一个键 ⇒ 不会重复投递。`,
+      ] : []),
       '   若不需要主动回信，忽略本条即可；最终结果仍按上面的结果块输出。',
     ] : []),
     ...(notifyIntent === 'report_when_idle' && replyToAttr ? [
