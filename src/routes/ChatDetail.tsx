@@ -1496,6 +1496,8 @@ export function ChatDetail() {
               role: r.role,
               content: r.content,
               createdAt: r.createdAt,
+              // ★ [T-144] 直播补充行带段序锚点 ⇒ 排序按段号，不比墙钟。
+              turnKey: r.turnKey ?? null,
             }
           : {
               id: r.id,
@@ -1894,6 +1896,13 @@ export function ChatDetail() {
           turnKey: streamingTurnKeyRef.current,
         },
       });
+      // ★ [T-144] 续答气泡（A2）也要立刻带上段号锚点 #N（N = 服务端本次切段后的段数）
+      //   ⇒ 与补充行同段号、与服务端历史行同锚点 ⇒ orderByTurnSegment 第一次就排对。
+      if (sb.segmentIndex != null && streamingTurnKeyRef.current) {
+        const base = String(streamingTurnKeyRef.current).replace(/#\d+$/, "");
+        streamingTurnKeyRef.current = `${base}#${sb.segmentIndex}`;
+        setStreamingTurnKey(streamingTurnKeyRef.current);
+      }
       // ① 收尾的那一段 + ② 插进来的补充（按出现顺序 ⇒ [A1][补充]）
       //   ⚠️ 补充来得太早（agent 还没吐出任何东西）⇒ 前半截是**空的**
       //   ⇒ 不生成空气泡，只插补充那条。

@@ -45,6 +45,12 @@ export interface SupplementBoundary {
   fromKind: string | null;
   /** 补充正文（气泡里显示的就是它）。 */
   content: string;
+  /**
+   * ★ [T-144] 服务端在切段那一刻回填的段号 N（切完后的段数 = 续答所在段）。
+   * 端侧第一次渲染就用它给补充行 + 续答行打锚点 ⇒ 不会先倒挂后愈合。
+   * null = 老服务端 ⇒ 退回墙钟排序（老行为不变）。
+   */
+  segmentIndex?: number | null;
 }
 
 /** 合成气泡 id 的前缀（补充那条 + 历史里那一条**共用**）。 */
@@ -106,6 +112,9 @@ export function parseSupplementBoundary(
     kind: typeof o.kind === "string" ? o.kind : null,
     fromKind: typeof o.fromKind === "string" ? o.fromKind : null,
     content: typeof o.content === "string" ? o.content : "",
+    ...(Number.isFinite(Number(o.segmentIndex)) && Number(o.segmentIndex) >= 2
+      ? { segmentIndex: Number(o.segmentIndex) }
+      : {}),
   };
 }
 
@@ -155,6 +164,8 @@ export interface SupplementRow {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  /** ★ [T-144] 注入行的段序锚点（= `基键#N`），与服务端历史那一行同值。 */
+  turnKey?: string | null;
 }
 
 /** 切一次的结果（两条气泡）。 */
@@ -183,6 +194,15 @@ export function planSupplementCut(params: {
   const { boundary, segment, now } = params;
   const rowId = supplementRowId(boundary.id);
   const createdAt = new Date(now).toISOString();
+  // ★ [T-144] 帧带 segmentIndex ⇒ 注入行锚到「续答那一段」(#N)；老帧无该字段 ⇒ 不写锚点，
+  //   端侧退到老行为（created_at），逐字兼容。
+  const baseTurnKey = segment.turnKey
+    ? String(segment.turnKey).replace(/#\d+$/, "")
+    : null;
+  const indexedTurnKey =
+    baseTurnKey && boundary.segmentIndex != null
+      ? `${baseTurnKey}#${boundary.segmentIndex}`
+      : null;
   return {
     closedSegment: {
       kind: "assistant",
@@ -205,6 +225,7 @@ export function planSupplementCut(params: {
       role: supplementRole(boundary.fromKind),
       content: boundary.content ?? "",
       createdAt,
+      ...(indexedTurnKey ? { turnKey: indexedTurnKey } : {}),
     },
   };
 }
