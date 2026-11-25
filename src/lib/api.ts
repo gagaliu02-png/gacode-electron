@@ -754,7 +754,22 @@ export async function getHistory(chatId: string): Promise<{
           attachedFileIds = meta.attached_file_ids as string[];
         // 知识库引用 id — 跟 web api.ts:552 同一口径 (只认数组, 元素原样透传).
         if (Array.isArray(meta?.knowledge_refs)) knowledgeRefs = meta.knowledge_refs as string[];
-        if (typeof meta?.turnKey === "string" && meta.turnKey) turnKey = meta.turnKey;
+        // ★ [T-144 · 2026-11-25] **user 行不取 `metadata.turnKey`**（那是轮次身份的专用键）。
+        //   注入的 user 行若也用它 ⇒ 与同一轮那一段 assistant 行**逐字相同**
+        //   ⇒ 端侧按 turnKey 认亲/合并时把它们当「同一轮的两份副本」
+        //   ⇒ **assistant 的正文被合并进 user 行** ⇒ LLM 内容渲染成橙色 user 气泡
+        //   （真机 session 1186 · 安卓端实测）。
+        //   ⇒ 排序锚点改用**独立的键** `metadata.segmentAnchor`（{turnKey, index}）。
+        if (m.role === "user") {
+          const anchor = meta?.segmentAnchor as
+            | { turnKey?: unknown; index?: unknown }
+            | undefined;
+          const at = typeof anchor?.turnKey === "string" ? anchor.turnKey : "";
+          const ai = typeof anchor?.index === "number" ? anchor.index : 0;
+          if (at && ai >= 1) turnKey = `${at}#${ai}`;
+        } else if (typeof meta?.turnKey === "string" && meta.turnKey) {
+          turnKey = meta.turnKey;
+        }
         // ★ [2026-11-16] 系统注记判据（唯一一份 · web 是原件端）。
         isSystemNotice = isSystemNoticeMetadata(meta);
         if (meta?.inbox_id != null && meta.inbox_id !== "") {
