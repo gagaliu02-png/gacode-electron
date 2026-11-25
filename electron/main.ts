@@ -36,6 +36,8 @@ import {
 } from './instance-guard';
 import { deviceClient, peerJobManager } from './client-tools/deviceClient';
 import { getAppIcon, logIconStatus } from './icon';
+// ★ [T-142] PC 启动时确保 Claude Code user-scope MCP 工具 mcp__gaclaw__send 可用。
+import { ensureGaclawMcpConfigured } from './client-tools/gaclawMcpSetup';
 
 // CommonJS 下 __dirname 已有,这里只是为了类型注释
 // const __filename = fileURLToPath(import.meta.url); // ESM 模式才需要
@@ -1179,6 +1181,15 @@ app.whenReady().then(() => {
   // ★ [P3/P4 · 2026-11-12] 端侧执行 (`pc_*`) —— 执行 / 闸门 / 审计 / 设备通道。
   //   ⚠️ 必须在 app.whenReady() 之后 (要用 app.getPath('userData'))。
   registerClientToolIpc();
+
+  // ★ [T-142] 自动安装/刷新全局 Claude Code MCP 工具（user scope）。
+  //   失败只记日志，绝不影响 PC 启动（老会话还有结果块兜底 T-141）。
+  try {
+    const r = ensureGaclawMcpConfigured();
+    console.log('[gaclaw-mcp] ensure configured:', JSON.stringify(r));
+  } catch (e) {
+    console.warn('[gaclaw-mcp] ensure configured failed:', (e as Error).message);
+  }
 
   // 0.7.5 global-11: electron-updater 自动更新 — 配置 OK, build 跑通但不
   // 实际触发 (publish 配置 github 但 gagaOS 拍 push 时再 git push + tag).

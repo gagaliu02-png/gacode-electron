@@ -974,7 +974,7 @@ async function pcCcControl(
       channel: 'inbox',
     };
     const text = str(args, 'text')
-      || '你有一项 gaclaw 通知：完成当前工作后，必须使用 gaclaw-msg send 按 reply_to 主动回报结论；不要猜 session_id；notify 本身不代表已回报。';
+      || '你有一项 gaclaw 通知：完成当前工作后，使用 mcp__gaclaw__send 按 reply_to 主动回报结论；若没有该 MCP 工具，再输出标准结果块由端侧兜底；不要猜 session_id；notify 本身不代表已回报。';
     // [T-069] 订阅「我空闲时通知你」—— 登记诊断映射到 inbox，拿合法 reply target。
     let from: string;
     try {
@@ -1038,7 +1038,7 @@ async function pcCcControl(
         // ★ [T-068 / T-072] 订阅登记的定位信息 —— 合成 notice 可用 msg_id 定向注入。
         msg_id: msgId,
         from,
-        note: '已注入 report_when_idle 回报契约并发诊断订阅；完成当前工作后 CC 必须用 gaclaw-msg send 按 reply_to 主动回报；notice 本身只记日志、不触发 D3。',
+        note: '已注入 report_when_idle 回报契约并发诊断订阅；完成后优先用 mcp__gaclaw__send 按 reply_to 主动回报，没工具则输出标准结果块由端侧兜底；notice 本身只记日志、不触发 D3。',
       }),
       exitCode: 0,
     });
