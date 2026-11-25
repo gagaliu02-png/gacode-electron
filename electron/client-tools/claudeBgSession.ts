@@ -17,10 +17,14 @@
 
 import { execFileSync, spawn } from 'child_process';
 import { findSession } from './claudeCodePeer.ts';
+// ★ [T-154-cc] transcript 路径（墓碑要带上 ⇒ 结论被回收了也能捞回来）。
+import { transcriptPath } from './claudeCodeSession.ts';
 import { resolveClaudeBinary } from './claudeService.ts';
 // ★ [T-149-cc] 「在不在跑」的唯一真源 + 自动关闭墓碑。
 import { isClaudeSessionBusy } from './ccSessionBusy.ts';
 import { markAutoClosed } from './ccAutoClosed.ts';
+// ★ [T-154-cc] 回报采集器 —— 「这个会话的结果**还没回传**吗」的唯一判据。
+import { ccResultCollector } from './ccResultCollector.ts';
 
 export interface ClaudeBgSessionInfo {
   id: string;
@@ -250,9 +254,26 @@ export async function sweepIdleBackgroundSessions(
   for (const s of sessions) {
     const rec = findSession(s.sessionId);
     if (!shouldStopIdleBgSession({ rec, status: s.status, state: s.state, now, ttlMs })) continue;
+    // ★ [T-154-cc] **还有未回传的结果 ⇒ 不许停这个会话**。
+    //
+    //   事故（2026-11-25 · 业务会话 1192）：常驻会话 `b0f8568c…` 20:17:14 查完并
+    //   输出了完整结果块，但端侧**没把它投回服务端**（采集器当时不存在）⇒
+    //   20:22:22 巡检把它当「空闲 5 分钟」回收 ⇒ 结论随会话一起没了
+    //   （结论其实还在 transcript 里，但没人知道该去哪儿捞）。
+    //
+    //   ⇒ 停之前先问采集器：**这个会话还有没有没投回去的结果？**
+    //   有 ⇒ 跳过（宁可多留一个常驻进程，也不能丢结论）。
+    if (ccResultCollector.hasPendingForSession(s.sessionId)) continue;
     const bgId = s.id || s.sessionId.split('-')[0];
     // ★ [T-149-cc] 先留墓碑再停 ⇒ 归因不丢（写失败不挡停会话）。
-    markAutoClosed({ sessionId: s.sessionId, bgId, at: now, reason: 'idle_sweep' });
+    markAutoClosed({
+      sessionId: s.sessionId,
+      bgId,
+      at: now,
+      reason: 'idle_sweep',
+      // ★ [T-154-cc] 墓碑带上 transcript 路径 ⇒ 就算被回收，结论也能捞回来。
+      transcriptPath: rec ? transcriptPath(rec) : null,
+    });
     void stopClaudeBgSession(bgId).then((ok) => {
       if (ok) stopped += 1;
     });

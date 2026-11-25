@@ -378,7 +378,18 @@ export class ClaudeCodePeerInbox {
   private dispatch(notice: PeerNotice): void {
     this.pruneExpired();
     const entry = this.registrations.get(notice.orig_msg_id);
-    if (!entry) return;                       // 未知 / 已取消 / 过期 ⇒ 丢
+    if (!entry) {
+      // ★ [T-154-cc] 原来这里是**静默丢弃**（一行日志都没有）⇒
+      //   「CLI 到底有没有发过 idle notice」这个问题永远查不出来
+      //   （实测 2026-11-25：整个 12 天的 client-tools.log 里 **0 条** `[cc-peer-inbox]` 日志）。
+      //   ⇒ 未知 msg_id 也要留一行诊断（只记 id / state，不记正文）。
+      peerLog('cc-peer-inbox', '未知 orig_msg_id，丢弃 ' + JSON.stringify({
+        orig_msg_id: notice.orig_msg_id,
+        state: notice.state,
+        known: this.registrations.size,
+      }));
+      return;                       // 未知 / 已取消 / 过期 ⇒ 丢
+    }
     if (entry.delivered.has(notice.state)) return; // 同态重复 ⇒ 丢
     // idle 先到、exited 后到：不同态仍要分派（让 job 做最后一次读取）。
     entry.delivered.add(notice.state);

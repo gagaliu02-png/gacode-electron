@@ -110,7 +110,25 @@ export function readNewAssistantText(
   if (!rec) return { text: '', newOffset: sinceOffset };
   const file = transcriptPath(rec);
   if (!file) return { text: '', newOffset: sinceOffset };
+  return readAssistantTextInFile(file, sinceOffset);
+}
 
+/**
+ * ★ [T-154-cc] **按文件**读新增正文（不依赖会话登记项）。
+ *
+ * ## 为什么要有这个「按文件」的版本
+ *
+ * 会话被关掉 / 被空闲巡检回收之后，`~/.claude/sessions/<pid>.json` 就没了
+ * ⇒ `findRecord()` 返回 null ⇒ 按 sessionId 读的路径全部读不到
+ * ⇒ **结果块明明还在 transcript 里，却再也采不到了**。
+ *
+ * ⇒ 采集器（`ccResultCollector`）改成：先按登记项找路径，找不到就**全盘扫**
+ *   `~/.claude/projects/<任意目录名>/<sessionId>.jsonl` ⇒ 会话死了也捞得到结论。
+ */
+export function readAssistantTextInFile(
+  file: string,
+  sinceOffset: number,
+): { text: string; newOffset: number } {
   let size = 0;
   try {
     size = fs.statSync(file).size;
@@ -165,6 +183,26 @@ export function findResultBlockByTaskId(
   if (!rec) return null;
   const file = transcriptPath(rec);
   if (!file) return null;
+  return findResultBlockInFile(file, taskId);
+}
+
+/**
+ * ★ [T-154-cc] **按文件**按 task_id 精确反查完整结果块（不依赖会话登记项）。
+ *
+ * ## 为什么要有这个「按文件」的版本
+ *
+ * 会话被关掉 / 被空闲巡检回收之后，`~/.claude/sessions/<pid>.json` 就没了
+ * ⇒ 按 sessionId 定位 transcript 的老路走不通 ⇒ **结果块明明还在文件里，
+ *   却再也采不到了**（这正是 T-154-cc 事故里「结论唯一副本差点没了」的那一步）。
+ *
+ * ⇒ 采集器先按登记项找路径，找不到就**全盘扫** `~/.claude/projects/<任意目录名>/<sessionId>.jsonl`
+ *   ⇒ 会话死了也捞得到结论。
+ */
+export function findResultBlockInFile(
+  file: string,
+  taskId: string,
+): ExtractedClaudeResult | null {
+  if (!file || !taskId) return null;
   let size = 0;
   try { size = fs.statSync(file).size; } catch { return null; }
   const start = Math.max(0, size - TAIL_SCAN_BYTES);
