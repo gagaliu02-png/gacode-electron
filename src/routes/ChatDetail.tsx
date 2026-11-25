@@ -2966,6 +2966,17 @@ export function ChatDetail() {
       onError: (err) => {
         // 服务端不支持 / 多次断线 ⇒ 回落老路径（静默，不弹错）。
         console.warn("[订正32] 常驻订阅不可用 ⇒ 回落老路径:", err.message);
+        // ★ [T-157] **断流也要补拉 history** —— 正常 done 路径有 T-121/T-138 的
+        //   「延迟刷 history 等服务端落库」补丁，但断流（Socket closed / read loop error）
+        //   那条路径整个不经过 done 分支 ⇒ 乐观 user 行已被认亲冻结退休、服务端行又没刷回来
+        //   ⇒ 用户气泡凭空消失（真机 session 1191：22:29:23 断流 / 22:29:31 服务端落库）。
+        //   ⇒ 这里延迟刷两次（1s/3s），跟 T-138 的节奏一致，不碰冻结行（history 自己就是权威）。
+        for (const delay of [1000, 3000]) {
+          const timer = window.setTimeout(() => {
+            void queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+          }, delay);
+          terminalRefreshTimersRef.current.push(timer);
+        }
         setPersistentOn(false);
         persistentSub.abort("navigate");
         try {
