@@ -23,7 +23,10 @@ import { deviceClient, apiBase, getDeviceId } from './deviceClient';
 import {
   startHookBridge,
   hookUrl,
+  bridgeToken,
+  DEFAULT_HOOK_BRIDGE_PORT,
   type HookBridgeHandle,
+  type HookBridgeOptions,
 } from './claudeCodeHookBridge.ts';
 import {
   installHook,
@@ -77,15 +80,22 @@ export function currentHookUrl(): string | null {
  * 起桥（幂等）。
  *
  * ⚠️ **只起桥不装 hook** —— 装 hook 是显式动作（见 install）。
+ *
+ * ★ [T-143] **端口被占用 ⇒ 自动换到可用端口，并同步更新已装的 hook URL**。
+ *   病根：装过 hook 时我们复用 settings.json 里的**固定端口**（重启后还能对上）。
+ *   若那个端口已被别的进程占用 ⇒ 桥起不来 ⇒ Claude Code 一直打不通（hook 失效、
+ *   MCP 工具的 /cc-tools/send 也不通）。
+ *   ⇒ 兜底：固定端口起失败 ⇒ 改用**随机空闲端口**（port 0）+ 新 token，
+ *     并把 settings.json 里带我们标记的那条 hook URL **改写成新端口**
+ *     （否则 Claude Code 还指着旧地址）。
+ *   ⚠️ MCP launcher 每次调用都**动态**读 settings 里的 hook URL ⇒ 端口变了它自动跟上。
  */
 export async function ensureStarted(): Promise<HookBridgeHandle> {
   if (_handle) return _handle;
   if (_starting) return _starting;
   _starting = (async () => {
     const installed = installedEndpoint();
-    const h = await startHookBridge({
-      // 装过 hook ⇒ 固定监听那个端口、用那个 token，重启后不用重装。
-      ...(installed || {}),
+    const base: HookBridgeOptions = {
       endpoint: `${apiBase()}/devices/permission-request`,
       authorization: (() => {
         const t = deviceClient.getAccessToken();
@@ -106,7 +116,39 @@ export async function ensureStarted(): Promise<HookBridgeHandle> {
         selfSessionId: () => null,
         parentSessionId: () => null,
       }),
-    });
+    };
+
+    // ① 先试「装过 hook 的固定端口」。
+    let h: HookBridgeHandle | null = null;
+    if (installed) {
+      try {
+        h = await startHookBridge({ ...base, ...installed });
+      } catch (e) {
+        console.warn('[claude-hook] 固定端口起桥失败，改用随机端口:', (e as Error).message);
+        h = null;
+      }
+    }
+    // ② 端口被占用 / 从没装过 ⇒ 随机空闲端口。
+    if (!h) {
+      h = await startHookBridge({ ...base, port: DEFAULT_HOOK_BRIDGE_PORT, token: bridgeToken() });
+      // ★ 已装过 hook ⇒ 把 URL 改写到新端口（否则 Claude Code 还打旧地址）。
+      if (installed) {
+        try {
+          const url = hookUrl(h.port, h.token);
+          const r = installHook({
+            url,
+            event: 'PermissionRequest',
+            onFailure: 'continue',
+            matcher: '*',
+            timeoutSec: 60,
+          });
+          if (r.ok) _installedUrl = url;
+          else console.warn('[claude-hook] 换端口后更新 hook URL 失败:', r.error || r.summary);
+        } catch (e) {
+          console.warn('[claude-hook] 换端口后更新 hook URL 异常:', (e as Error).message);
+        }
+      }
+    }
     _handle = h;
     return h;
   })();
