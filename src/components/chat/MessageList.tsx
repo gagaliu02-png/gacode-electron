@@ -9,9 +9,38 @@
  *   - 流式期间持续追加 chunk 不抖动: 用 sticky 底部 + scrollIntoView({block: "end"})
  *   - 用户向上滚动 (滚到底距离 > 阈值) → 停止自动滚, 让用户自己看历史
  *   - 用户再滚到底 → 恢复自动滚
+ *
+ * ★ [T-156 · 2026-11-26] **窗口化** —— 只把可见窗口里的消息挂进 DOM。
+ *
+ *   ## 为什么不是引入 react-window 之类
+ *
+ *     仓库没有虚拟化依赖（package.json 里只有 React 一套）⇒ 自己实现最小窗口：
+ *     `ResizeObserver` 量视口高 + 每条测过一次的真实高度（没测过用估算值）⇒
+ *     算出可见区间 [start, end) + overscan（上下各 3 条）⇒ 只 map 这一段。
+ *     ⛔ **窗口只管「哪几条进 DOM」，`messages` 数组本身一个字都不动** ——
+ *        segment/turn 合并、乐观行认亲、SSE 流式新增都由 ChatDetail 在数组里做，
+ *        窗口层永远看到的是最新完整数组（新消息来了立刻在窗口里出现）。
+ *
+ *   ## 滚动位置补偿
+ *
+ *     历史消息高度是测出来的 ⇒ 上滚/下滚后进入窗口的新行高度跟估算不同会导致跳动。
+ *     渲染后用 `useLayoutEffect` 把**窗口前的实际高度**重新累加，若跟渲染前估计不同
+ *     就调整 `scrollTop`（并同步更新 offset 表）⇒ 视觉上不跳。
+ *
+ *   ## 老消息按需加载（跟 P0-2 配合）
+ *
+ *     `onLoadOlder` 存在时，滚到顶 60px 内触发一次（父组件拿 nextCursor 去取更早的页）。
+ *     取回来的行 prepend 到数组 ⇒ 本组件用 `anchorId` 找到它，把 scrollTop 加上
+ *     新增行的高度 ⇒ 用户视线停在原来那条消息上（不是突然跳到别处）。
  */
-
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { MessageBubble } from "./MessageBubble";
 import type { RichEvent } from "./RichEventBubble";
 import type { MessageAction } from "./MessageMenu";
@@ -90,49 +119,19 @@ export interface ChatMessageModel {
   /** chat-id-12: call tree 节点 (parent 从 chunk.events 解析) */
   callTree?: CallTreeNode[];
   // ====== 重构轮 R2-web · 四要素的**服务端权威值** (T-15 / T-16 / T-17) ======
-  /**
-   * 服务端算的累计耗时 (ms) —— 四要素之一 (架构 §2.5)。
-   *   - 有值 ⇒ 气泡里的「已执行 N 秒」**优先用这个** (不用本地时钟);
-   *   - 没有 (老服务端) ⇒ 用本地时钟兜底 (streamingSince / startedAt)。
-   */
+  /** 服务端算的累计耗时 (ms) —— 四要素之一。 */
   elapsedMs?: number | null;
-  /**
-   * 逻辑工具调用次数 (T-17) —— 四要素之一。
-   *   - 有值 ⇒ ExecutionTimeline 的「工具 N 次」用这个 (**端侧不数帧**);
-   *   - 没有 (老服务端) ⇒ 端侧按相位数组数 (兜底, 会虚高 —— 一次工具调用会产生多帧)。
-   */
+  /** 逻辑工具调用次数 (T-17) —— 四要素之一。 */
   toolCallCount?: number | null;
-  /**
-   * 逻辑思考段数 (T-16) —— 四要素之一。
-   *   - 有值 ⇒ ExecutionTimeline 的「思考 N 次」用这个;
-   *   - 没有 ⇒ 端侧数 (兜底)。
-   */
+  /** 逻辑思考段数 (T-16) —— 四要素之一。 */
   thinkingCount?: number | null;
-  /**
-   * 终态分类 (T-12): `completed` / `cancelled` / `filtered` / `failed` / `upstream_lost`。
-   *   - 服务端没给 (老服务端) ⇒ 由端侧从 error.code / done.cancelled 推导。
-   *   - `filtered` = 天眼命中 ⇒ 已渲染的 partial 正文**必须撤掉**。
-   */
+  /** 终态分类 (T-12)。 */
   terminalReason?: string | null;
-  /**
-   * 本轮开始时刻 (ms epoch) —— 本地时钟兜底用 (老服务端没有帧级 elapsedMs)。
-   *
-   * ⚠️ 服务端给了 `elapsedMs` 时**不用**它 (服务端值才是权威的)。
-   */
+  /** 本轮开始时刻 (ms epoch) —— 本地时钟兜底用。 */
   startedAt?: number | null;
-  /**
-   * ★ [2026-11-13] 本轮**结束**时刻 (ms epoch) —— 本地时钟兜底用。
-   *
-   *   ⚠️ 没有它的话，一轮结束后秒表会跳回 0（web `MessageBubble.tsx:251` 同款口径）。
-   */
+  /** 本轮**结束**时刻 (ms epoch) —— 本地时钟兜底用。 */
   finishedAt?: number | null;
-  /**
-   * ★ RC-5: 「**客户端放弃等一个不会来的结果**」—— 与安卓 `messages_local.stalled` 同款。
-   *
-   *   · `true` ⇒ 续传接不回来了 ⇒ 这一行的正文**只到中断前** ⇒ 气泡上标
-   *     「未收到服务端回复, 以上为中断前的内容」。
-   *   · ⛔ 与 `terminalReason` **不是一回事** (服务端权威的五类终态 vs 端侧状态)。
-   */
+  /** RC-5: 「客户端放弃等一个不会来的结果」。 */
   stalled?: boolean;
 }
 
@@ -142,29 +141,68 @@ interface Props {
   streamingAssistantId?: string | null;
   /**
    * A2-D4-06 · 当前 chat 中所有 user message 已上传过的 imageUrls 并集.
-   * 透传给每条 MessageBubble 的 `stripImageUrls`: assistant 气泡渲染前把 AI
-   * 回复里引用了 user 已发图的 markdown 片段整段去掉.
-   * 不传 / 空数组 → 不过滤.
    */
   stripImageUrls?: string[];
   /**
    * 阶段 8: 消息动作回调 (复制 / 保存到 KB / 点赞 / 点踩 / 撤回 / 删除 / rerun).
-   * parent (ChatDetail) 收到 ok=true 时调 queryClient.invalidateQueries
-   * 刷新 history, 保证 server 端回流 (recalled / deleted_at 字段更新后
-   * 占位气泡自动出现, 软删的行彻底从 list 消失).
    */
   onMessageAction?: (msg: ChatMessageModel, action: MessageAction, ok: boolean) => void;
+  /**
+   * ★ [T-156] 「加载更早」回调 —— 滚到顶时触发；父组件拿 nextCursor 去取老消息。
+   *   不传 ⇒ 老行为（无分页加载）。
+   */
+  onLoadOlder?: (() => void) | null;
+  /** ★ [T-156] 还有没有更早的消息（父组件的 nextCursor != null）。 */
+  hasOlder?: boolean;
+  /** ★ [T-156] 增量加载中（避免重复触发 + 显示 loading 提示）。 */
+  loadingOlder?: boolean;
+  /** ★ [T-156] 加载前第一条的 server id —— 用来在加载后恢复视线。 */
+  previousFirstId?: string | null;
+  /** ★ [T-156] 加载前列表总高（px）—— 加载后 scrollTop 加上新增的高度。 */
+  previousScrollHeight?: number | null;
 }
+
+/** 没测过的一条消息的默认高度（px）—— 比真实气泡略小，测过一次后就换成真值。 */
+const ESTIMATED_ROW_HEIGHT = 120;
+/** 窗口上下各多挂几条 —— 快速滚动时不露白 + 给异步测量留时间。 */
+const OVERSCAN = 3;
+/** 首屏/数组很短时直接全渲染（窗口化的固定开销不值得付）。 */
+const WINDOW_THRESHOLD = 40;
 
 export function MessageList({
   messages,
   streamingAssistantId,
   onMessageAction,
   stripImageUrls,
+  onLoadOlder,
+  hasOlder = false,
+  loadingOlder = false,
+  previousFirstId = null,
+  previousScrollHeight = null,
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [autoFollow, setAutoFollow] = useState(true);
+  // ★ [T-156] 每条消息测过的高度（key = message.id）。
+  //   ⚠️ 只**缓存数字**，不缓存组件 ⇒ 流式期间 content 变了，行高会重新测（见 measure）。
+  const heightsRef = useRef<Map<string, number>>(new Map());
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const [scrollTop, setScrollTop] = useState(0);
+  // 防止「滚到顶触发一次 ⇒ 还在顶 ⇒ 再触发」的循环：加载中/没有更早时都拦住。
+  const olderRequestedRef = useRef<string | null>(null);
+
+  const enabled = messages.length > WINDOW_THRESHOLD;
+
+  // 视口高度 —— ResizeObserver 跟 scroll 事件分开，避免每次滚动都量容器。
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const measure = () => setViewportHeight(el.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // 自动滚到底 — 在 messages 改变时
   // 对齐 web MessageList.tsx:55-57 — `scrollIntoView({ behavior: "smooth" })`.
@@ -175,6 +213,7 @@ export function MessageList({
   }, [messages, autoFollow]);
 
   // 用户滚动 → 判断是否处于"主动向上"  (阈值 80px)
+  // ★ [T-156] 同时记录 scrollTop 给窗口计算用（passive 监听，不阻塞滚动）。
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
@@ -186,10 +225,145 @@ export function MessageList({
         if (prev === sticky) return prev;
         return sticky;
       });
+      if (enabled) setScrollTop(el.scrollTop);
+      // ★ [T-156] 滚到顶 60px 内 ⇒ 按需加载更早的消息（只在有下一页时）。
+      if (onLoadOlder && hasOlder && !loadingOlder && el.scrollTop <= 60) {
+        const key = `${messages[0]?.id ?? ""}:${messages.length}`;
+        if (olderRequestedRef.current !== key) {
+          olderRequestedRef.current = key;
+          onLoadOlder();
+        }
+      }
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [enabled, hasOlder, loadingOlder, messages, onLoadOlder]);
+
+  const [measuredTick, setMeasuredTick] = useState(0);
+  const effectiveOffsets = useMemo(() => {
+    void measuredTick;
+    const arr = new Array<number>(messages.length + 1);
+    arr[0] = 0;
+    for (let i = 0; i < messages.length; i += 1) {
+      arr[i + 1] = arr[i] + (heightsRef.current.get(messages[i].id) ?? ESTIMATED_ROW_HEIGHT);
+    }
+    return arr;
+  }, [messages, measuredTick]);
+
+  const windowRange = useMemo(() => {
+    if (!enabled || viewportHeight <= 0) {
+      return { start: 0, end: messages.length };
+    }
+    // 二分找第一个 bottom > scrollTop 的行。
+    let lo = 0;
+    let hi = messages.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (effectiveOffsets[mid + 1] <= scrollTop) lo = mid + 1;
+      else hi = mid;
+    }
+    const start = Math.max(0, lo - OVERSCAN);
+    let end = lo;
+    const limit = scrollTop + viewportHeight;
+    while (end < messages.length && effectiveOffsets[end] < limit) end += 1;
+    return { start, end: Math.min(messages.length, end + OVERSCAN) };
+  }, [enabled, messages.length, viewportHeight, scrollTop, effectiveOffsets]);
+
+  // ★ [T-156] 测量真实行高 + 修正滚动位置（避免估算差异导致视觉跳动）。
+  //   加载更早时父组件记录加载前的 scrollHeight / 第一条 id ⇒ 这里在 DOM 更新后
+  //   用新的 scrollHeight 减旧值补偿 scrollTop ⇒ 用户视线停在原来那条消息上。
+  const prevFirstRef = useRef<string | null>(previousFirstId);
+
+  useLayoutEffect(() => {
+    const newFirst = messages[0]?.id ?? null;
+    const isOlderLoad =
+      !!previousFirstId &&
+      prevFirstRef.current === previousFirstId &&
+      newFirst !== previousFirstId &&
+      typeof previousScrollHeight === "number";
+    prevFirstRef.current = previousFirstId;
+    if (!enabled) return;
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    let changed = false;
+    // 逐个量当前挂上的行（只有窗口内的几条 ⇒ 每帧成本 O(overscan)）。
+    for (const m of messages.slice(windowRange.start, windowRange.end)) {
+      const node = scroller.querySelector<HTMLElement>(`[data-msg-id="${m.id}"]`);
+      if (!node) continue;
+      const h = node.getBoundingClientRect().height;
+      if (h > 0 && Math.abs((heightsRef.current.get(m.id) ?? 0) - h) > 1) {
+        heightsRef.current.set(m.id, h);
+        changed = true;
+      }
+    }
+    if (isOlderLoad) {
+      const delta = scroller.scrollHeight - previousScrollHeight!;
+      if (delta > 0) scroller.scrollTop += delta;
+    }
+    if (changed) setMeasuredTick((v) => v + 1);
+  }, [
+    messages,
+    enabled,
+    windowRange,
+    effectiveOffsets,
+    previousFirstId,
+    previousScrollHeight,
+  ]);
+
+  /** 单条消息卡片 —— 抽出来是为了给每个 DOM 节点挂 `data-msg-id` 供测量用。 */
+  const renderBubble = (m: ChatMessageModel): ReactNode => (
+    <div data-msg-id={m.id} key={m.id}>
+      <MessageBubble
+        key={m.id}
+        // ★ [订正 28 · L-28r] 「撤回 / 删除」要打服务端 ⇒ 用**真 id**
+        //   （`id` 可能是合成 id `supplement:<inbox_id>`）。
+        messageId={m.serverId ?? m.id}
+        role={m.role}
+        content={m.content}
+        richEvents={m.richEvents}
+        imageUrls={m.imageUrls}
+        attachedFileIds={m.attachedFileIds}
+        attachedFileNames={m.attachedFileNames}
+        isStreaming={
+          !!streamingAssistantId &&
+          m.id === streamingAssistantId &&
+          m.role === "assistant" &&
+          // ★ RC-5: `stalled` 的行**不是**在流式 ⇒ 不打 pulse 光标、不挂秒表
+          m.stalled !== true
+        }
+        createdAt={m.createdAt}
+        recalled={m.recalled}
+        recalledAt={m.recalledAt}
+        knowledgeRefs={m.knowledgeRefs}
+        // ★ [2026-11-16] 系统注记（服务端投递的机器事件行）⇒ 渲染成居中提示条。
+        isSystemNotice={m.isSystemNotice}
+        quotedMessageId={m.quotedMessageId}
+        quotedContent={m.quotedContent}
+        phases={m.phases}
+        stripImageUrls={stripImageUrls}
+        callTree={m.callTree}
+        // ★ R2-web: 四要素 (服务端权威) —— 透传给气泡, 端侧只渲染不推算。
+        elapsedMs={m.elapsedMs}
+        toolCallCount={m.toolCallCount}
+        thinkingCount={m.thinkingCount}
+        terminalReason={m.terminalReason}
+        startedAt={m.startedAt}
+        finishedAt={m.finishedAt}
+        // ★ RC-5: 「未收到服务端回复」标注 (安卓同款 `stalled`)。
+        stalled={m.stalled}
+        onAction={
+          onMessageAction
+            ? (action, ok) => onMessageAction(m, action, ok)
+            : undefined
+        }
+      />
+    </div>
+  );
+
+  const visible = useMemo(
+    () => messages.slice(windowRange.start, windowRange.end),
+    [messages, windowRange.start, windowRange.end],
+  );
 
   return (
     <div className="relative h-full">
@@ -198,57 +372,47 @@ export function MessageList({
         className="h-full overflow-y-auto p-4"
         aria-label="消息列表"
       >
+        {/* ★ [T-156] 「加载更早」提示条 —— 用户主动点也能触发（不依赖滚到顶）。 */}
+        {hasOlder && onLoadOlder ? (
+          <div className="max-w-3xl mx-auto mb-3 flex justify-center">
+            <button
+              type="button"
+              disabled={loadingOlder}
+              onClick={() => {
+                const key = `${messages[0]?.id ?? ""}:${messages.length}`;
+                if (olderRequestedRef.current !== key) {
+                  olderRequestedRef.current = key;
+                  onLoadOlder();
+                }
+              }}
+              className="px-3 py-1 rounded-md border border-border/60 bg-bg-sunken/60 text-xs text-fg-muted hover:text-fg hover:bg-bg-sunken disabled:opacity-50"
+            >
+              {loadingOlder ? "加载更早的消息…" : "加载更早的消息"}
+            </button>
+          </div>
+        ) : null}
         {/* 消息内容容器 — 对齐 web MessageList.tsx:79 `max-w-3xl mx-auto space-y-4` */}
-        <div className="max-w-3xl mx-auto space-y-4">
-          {messages.map((m) => (
-            <MessageBubble
-              key={m.id}
-              // ★ [订正 28 · L-28r] 「撤回 / 删除」要打服务端 ⇒ 用**真 id**
-              //   （`id` 可能是合成 id `supplement:<inbox_id>`）。
-              messageId={m.serverId ?? m.id}
-              role={m.role}
-              content={m.content}
-              richEvents={m.richEvents}
-              imageUrls={m.imageUrls}
-              attachedFileIds={m.attachedFileIds}
-              attachedFileNames={m.attachedFileNames}
-              isStreaming={
-                !!streamingAssistantId &&
-                m.id === streamingAssistantId &&
-                m.role === "assistant" &&
-                // ★ RC-5: `stalled` 的行**不是**在流式 ⇒ 不打 pulse 光标、不挂秒表
-                //   「正在跑」态 (这一轮已经不等了)。
-                m.stalled !== true
-              }
-              createdAt={m.createdAt}
-              recalled={m.recalled}
-              recalledAt={m.recalledAt}
-              knowledgeRefs={m.knowledgeRefs}
-              // ★ [2026-11-16] 系统注记（服务端投递的机器事件行）⇒ 渲染成居中提示条。
-              isSystemNotice={m.isSystemNotice}
-              quotedMessageId={m.quotedMessageId}
-              quotedContent={m.quotedContent}
-              phases={m.phases}
-              stripImageUrls={stripImageUrls}
-              callTree={m.callTree}
-              // ★ R2-web: 四要素 (服务端权威) —— 透传给气泡, 端侧只渲染不推算。
-              elapsedMs={m.elapsedMs}
-              toolCallCount={m.toolCallCount}
-              thinkingCount={m.thinkingCount}
-              terminalReason={m.terminalReason}
-              startedAt={m.startedAt}
-              finishedAt={m.finishedAt}
-              // ★ RC-5: 「未收到服务端回复」标注 (安卓同款 `stalled`)。
-              stalled={m.stalled}
-              onAction={
-                onMessageAction
-                  ? (action, ok) => onMessageAction(m, action, ok)
-                  : undefined
-              }
+        <div className="max-w-3xl mx-auto">
+          {enabled && windowRange.start > 0 ? (
+            <div
+              aria-hidden="true"
+              style={{ height: effectiveOffsets[windowRange.start] }}
             />
-          ))}
+          ) : null}
+          <div className="space-y-4">
+            {visible.map(renderBubble)}
 
-          <div ref={bottomRef} aria-hidden="true" />
+            <div ref={bottomRef} aria-hidden="true" />
+          </div>
+          {enabled && windowRange.end < messages.length ? (
+            <div
+              aria-hidden="true"
+              style={{
+                height:
+                  effectiveOffsets[messages.length] - effectiveOffsets[windowRange.end],
+              }}
+            />
+          ) : null}
         </div>
       </div>
     </div>
