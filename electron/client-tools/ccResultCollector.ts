@@ -341,7 +341,11 @@ class CcResultCollector {
         businessSessionId: job.businessSessionId,
         content: text,
         taskId: job.taskId,
-        idempotencyKey: `cc-collect:${job.taskId}`,
+        // ⚠️ 幂等键**就用 task_id 本身**（不加前缀）——
+        //   契约里明确要求对方主动回报时也用 task_id 当 idempotencyKey
+        //   ⇒ 对方自报 与 端侧兜底采集 **共用一个键** ⇒ 服务端幂等命中 ⇒ **不会重复投递**。
+        //   （2026-11-25 实测踩过：对方自报 + 端侧兜底 = 同一个任务投了两次。）
+        idempotencyKey: job.taskId,
         ccSessionId: job.ccSessionId,
       });
     } catch (e) {

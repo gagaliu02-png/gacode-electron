@@ -1054,7 +1054,9 @@ async function pcCcControl(
       channel: 'inbox',
     };
     const text = str(args, 'text')
-      || '你有一项 gaclaw 通知：完成当前工作后，使用 mcp__gaclaw__send 按 reply_to 主动回报结论；若没有该 MCP 工具，再输出标准结果块由端侧兜底；不要猜 session_id；notify 本身不代表已回报。';
+      || '你有一项 gaclaw 通知：完成当前工作后，使用 mcp__gaclaw__send 按 reply_to 主动回报结论；'
+      + '若没有该 MCP 工具，再输出标准结果块由端侧兜底；不要猜 session_id；notify 本身不代表已回报。'
+      + `（主动回报时请把 idempotencyKey 设成 task_id=${msgId} —— 端侧兜底采集用同一个键 ⇒ 不会重复投递。）`;
     // [T-069] 订阅「我空闲时通知你」—— 登记诊断映射到 inbox，拿合法 reply target。
     let from: string;
     try {
