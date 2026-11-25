@@ -130,7 +130,7 @@
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.58
+buildVersion: 0.7.59
 copyright: Copyright © 2026 gaga
 
 # ★ [T-122] 出包前现生成图标中间产物（build/icon-{16,32,48,64,128}.png）。
