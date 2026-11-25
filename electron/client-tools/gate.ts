@@ -221,6 +221,9 @@ export const COMMAND_ARG_BY_TOOL: Record<string, string> = {
   //   ⇒ 必须进这张表，否则它就是一条**绕过黑名单**的路（`pc_bash format C:` 能过闸）。
   //   ⚠️ 这条不许漏 —— 漏了等于给黑名单开后门。
   pc_bash: 'command',
+  // ★ [2026-11-26 · T-160] `pc_powershell`（PowerShell 直连）**同样带 command 参数**
+  //   ⇒ 与 pc_bash **同等**黑名单覆盖，不留后门。
+  pc_powershell: 'command',
 };
 
 /**

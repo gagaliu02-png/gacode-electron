@@ -41,6 +41,8 @@ import { runCommand } from './pty';
 //   ⚠️ 同理 `MAX_OUTPUT_CHARS` 不从 pty.ts 拿，**本地定义**一份（值与 pty.ts 一致）。
 import { killTree } from './proc.ts';
 import { findGitBash, bashNotFoundMessage } from './bashPath.ts';
+// ★ [T-160] PowerShell 解释器探测（`pc_powershell` 的能力键判据）
+import { findPowerShell, powershellNotFoundMessage } from './powershellPath.ts';
 import {
   isBackgroundStartTool,
   isJobControlTool,
@@ -267,6 +269,142 @@ async function pcBash(
 
     child.on('close', (code: number | null) => {
       // ⚠️ `code` 是 `number | null`（进程被信号杀死时 bash 给 null）
+      //   ⇒ `ClientToolResult.exitCode` 是 `number | undefined` ⇒ 这里**归一**成 undefined。
+      const exitCode = code === null ? undefined : code;
+      if (aborted) {
+        finish(fail('命令已被用户停止', { stdout, exitCode }));
+        return;
+      }
+      if (timedOut) {
+        finish(fail(`命令超时（${Math.round(timeoutMs / 1000)}s）并已被终止`, {
+          stdout, stderr, exitCode,
+        }));
+        return;
+      }
+      if (exitCode !== 0) {
+        finish({
+          status: 'error',
+          stdout,
+          stderr,
+          exitCode,
+          error: `命令退出码 ${code}`,
+        });
+        return;
+      }
+      finish(ok({ stdout, stderr, exitCode }));
+    });
+  });
+}
+
+// ===========================================================================
+// pc_powershell —— 直连 PowerShell 执行脚本
+// ===========================================================================
+
+/**
+ * ★ [2026-11-26 · T-160] `pc_powershell`：**直接 spawn PowerShell**，脚本正文**原样**喂给解释器。
+ *
+ * ## 为什么不用 `pc_shell`（真终端）
+ *
+ * `pc_shell` 走 node-pty（ConPTY）+ `pickShell()`（Windows 上 = `cmd /d /s /c`）
+ * ⇒ **cmd 的引号层**会把嵌套引号 / `&&` 链**腰斩**
+ * （实测：`unexpected EOF while looking for matching quote`），
+ * 而把脚本正文**原样**交给 PowerShell 就不会有这个问题。
+ *
+ * ## 为什么不用 node-pty
+ *
+ * PowerShell 脚本**本来就不需要 TTY**（不交互、不读终端尺寸）⇒ 用普通 `spawn` 更轻。
+ * ⚠️ 副作用：**没有真终端** ⇒ 依赖 TTY 的程序在这里跑不了 ⇒ 那类需求仍该走 `pc_shell`。
+ *
+ * ## 参数选择
+ *
+ * · `-NoProfile` ⇒ **不加载用户 profile**（profile 里的脚本会干扰输出 / 改行为）。
+ *   ⚠️ 与 `pickShell()` 的 `/d`（关 cmd AutoRun）**同款口径**：都要一个干净的环境。
+ * · `-Command` ⇒ 执行后面那一整段（脚本正文）。
+ * · ⚠️ **Windows PowerShell 5.1 不支持 `&&`**（用 `;`）⇒ 工具描述里已写明。
+ *
+ * ## 找不到 PowerShell 怎么办
+ *
+ * **如实报错**，**绝不**降级到 cmd.exe —— 降级会让引号 / 链式**又**被腰斩
+ * ⇒ 跑出来的东西与用户预期不符 ⇒ 比直接失败更危险。
+ */
+async function pcPowershell(
+  args: Record<string, unknown> | null,
+  cwd: string | null,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ClientToolResult> {
+  const command = str(args, 'command');
+  if (!command) return fail('pc_powershell 缺 command');
+
+  const ps = findPowerShell();
+  if (!ps) {
+    return fail(powershellNotFoundMessage());
+  }
+
+  const workDir = cwd || str(args, 'cwd') || null;
+
+  return await new Promise<ClientToolResult>((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let aborted = false;
+    let child: ReturnType<typeof spawn> | null = null;
+
+    const finish = (result: ClientToolResult): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    // 超时 ⇒ 杀整棵进程树（否则孙进程继续跑，用户以为停了其实还在改文件）
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { if (child && child.pid) killTree(child.pid); } catch (_) { /* 已经死了 */ }
+    }, timeoutMs);
+
+    const onAbort = (): void => {
+      aborted = true;
+      try { if (child && child.pid) killTree(child.pid); } catch (_) { /* 已经死了 */ }
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+
+    try {
+      // ★ 关键：`command` 作为**一个 argv 元素**整体传入 ⇒ 不经任何 shell 二次解析
+      //   ⇒ 引号 / 管道 / `;` / `$env:VAR` 原样到达 PowerShell。
+      child = spawn(ps.file, ['-NoProfile', '-Command', command], {
+        cwd: workDir || undefined,
+        windowsHide: true,
+        env: { ...process.env },
+      });
+    } catch (e) {
+      finish(fail(`启动 PowerShell 失败：${(e as Error).message}`));
+      return;
+    }
+
+    const cap = MAX_OUTPUT_CHARS;
+    child.stdout?.on('data', (b: Buffer) => {
+      if (stdout.length < cap) stdout += b.toString();
+    });
+    child.stderr?.on('data', (b: Buffer) => {
+      if (stderr.length < cap) stderr += b.toString();
+    });
+
+    child.on('error', (e: Error) => {
+      finish(fail(`PowerShell 执行失败：${e.message}`));
+    });
+
+    child.on('close', (code: number | null) => {
+      // ⚠️ `code` 是 `number | null`（进程被信号杀死时为 null）
       //   ⇒ `ClientToolResult.exitCode` 是 `number | undefined` ⇒ 这里**归一**成 undefined。
       const exitCode = code === null ? undefined : code;
       if (aborted) {
@@ -1312,6 +1450,8 @@ const DEFAULT_TIMEOUT_MS: Record<string, number> = {
   pc_shell: 600000,
   // ★ [2026-11-26 · T-159] Git Bash 直连 —— 与 pc_shell 同量级超时
   pc_bash: 600000,
+  // ★ [2026-11-26 · T-160] PowerShell 直连 —— 同量级超时
+  pc_powershell: 600000,
   pc_read_file: 120000,
   pc_write_file: 120000,
   pc_list_dir: 120000,
@@ -1410,6 +1550,8 @@ export async function executeClientTool(
     case 'pc_shell': return pcShell(args, cwd, t, signal);
     // ★ [2026-11-26 · T-159] Git Bash 直连（不走 cmd / 不走 node-pty）
     case 'pc_bash': return pcBash(args, cwd, t, signal);
+    // ★ [2026-11-26 · T-160] PowerShell 直连（不走 cmd / 不走 node-pty）
+    case 'pc_powershell': return pcPowershell(args, cwd, t, signal);
     case 'pc_read_file': return pcReadFile(args, cwd);
     case 'pc_write_file': return pcWriteFile(args, cwd);
     case 'pc_list_dir': return pcListDir(args, cwd);
