@@ -1384,7 +1384,8 @@ class DeviceClient {
    * ⚠️ 服务端固定写身份（`senderRole=external_agent` / `isUserMessage=false` /
    *    `isAuthorization=false`）⇒ **不会**冒成用户气泡、**不是**用户授权。
    *
-   * @returns 服务端收下了吗
+   * @returns `{ ok, duplicate }`（T-166 · D2）—— `duplicate=true` 表示同 task_id 的 MCP 回报已落 inbox，
+   *   服务端幂等吞掉了本次投递 ⇒ 采集器据此**静默销账**，不再覆盖成失败摘要。
    */
   async sendCollectedResult(
     businessSessionId: string,
@@ -1392,10 +1393,10 @@ class DeviceClient {
     taskId: string,
     idempotencyKey: string,
     ccSessionId?: string | null,
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; duplicate: boolean }> {
     if (!this.accessToken) {
       logDevice('[T-154-cc] 没有 token ⇒ 结果投不回去');
-      return false;
+      return { ok: false, duplicate: false };
     }
     const body: Record<string, unknown> = {
       sessionId: businessSessionId,
@@ -1416,13 +1417,18 @@ class DeviceClient {
       });
       if (!res.ok) {
         logDevice(`[T-154-cc] 结果回投失败（${res.status}）: ${businessSessionId}`);
-        return false;
+        return { ok: false, duplicate: false };
       }
-      logDevice(`[T-154-cc] 结果已回投到会话 ${businessSessionId}`);
-      return true;
+      let duplicate = false;
+      try {
+        const j = await res.json();
+        duplicate = !!(j && (j as any).duplicate);
+      } catch { /* 老服务端没回 JSON ⇒ 按非重复处理 */ }
+      logDevice(`[T-166-D2] 结果回投到会话 ${businessSessionId}${duplicate ? ' · 幂等命中（MCP 已回报）' : ''}`);
+      return { ok: true, duplicate };
     } catch (e: any) {
       logDevice(`[T-154-cc] 结果回投异常: ${e && e.message}`);
-      return false;
+      return { ok: false, duplicate: false };
     }
   }
 

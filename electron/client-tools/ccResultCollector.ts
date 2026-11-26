@@ -132,8 +132,16 @@ export interface CollectorDelivery {
   ccSessionId: string | null;
 }
 
+/** 回投回执（T-166 · D2）：`duplicate=true` 表示同 task_id 的 MCP 回报已落 inbox，服务端幂等吞掉了本次投递。 */
+export interface CollectorDeliveryReceipt {
+  /** 服务端收下了（或幂等命中）？ */
+  ok: boolean;
+  /** 幂等命中：同 (session, task_id) 已有信 ⇒ 本次被吞，正文没变。 */
+  duplicate: boolean;
+}
+
 /** 回投函数（由主进程注入 —— 端侧要拿设备 token 才能调服务端）。 */
-export type CollectorDeliverer = (d: CollectorDelivery) => Promise<boolean>;
+export type CollectorDeliverer = (d: CollectorDelivery) => Promise<CollectorDeliveryReceipt>;
 
 /** 登记入参。 */
 export interface CollectorOptions {
@@ -307,8 +315,8 @@ class CcResultCollector {
       'result:',
       hit.result || job.lastText || '(结果块正文为空)',
     ].filter(Boolean).join('\n');
-    const ok = await this.push(job, `${head}\n${body}`);
-    peerLog('cc-collect', '结果已回投 ' + JSON.stringify({ key: job.key, ok }));
+    const receipt = await this.push(job, `${head}\n${body}`);
+    peerLog('cc-collect', '结果已回投 ' + JSON.stringify({ key: job.key, ok: receipt.ok, duplicate: receipt.duplicate }));
     this.jobs.delete(job.key);
   }
 
@@ -324,16 +332,25 @@ class CcResultCollector {
       `原因：${reason}。${pathHint}。`,
       '如需重试，请重新派单；如结论已在 transcript 里，可直接读取。',
     ].join('\n');
-    const ok = await this.push(job, content);
-    peerLog('cc-collect', '未回结果已通知 ' + JSON.stringify({ key: job.key, reason, ok }));
+    // ★ [T-166 · D2] 失败摘要也按 task_id 走幂等回投：
+    //   MCP 回报（mcp__gaclaw__send）用的幂等键**就是 task_id**（生产库 1193:849 实证）。
+    //   ⇒ 若目标会话已经用 MCP 报过结果，本次「未回结果」摘要会被服务端幂等吞掉 ⇒
+    //     用户看到的是**正确的 MCP 回报**，而不是这条失败摘要；采集器也照常销账。
+    //   ⇒ 只改端侧、不动服务端、不加查询端点。
+    const receipt = await this.push(job, content);
+    if (receipt.duplicate) {
+      peerLog('cc-collect', 'MCP 回报已落 inbox，失败摘要被幂等吞掉 ⇒ 静默销账 ' + JSON.stringify({ key: job.key, task_id: job.taskId }));
+    } else {
+      peerLog('cc-collect', '未回结果已通知 ' + JSON.stringify({ key: job.key, reason, ok: receipt.ok }));
+    }
     this.jobs.delete(job.key);
   }
 
   /** 回投（截断到服务端上限；幂等键固定 ⇒ 重投不会重复投递）。 */
-  private async push(job: CollectorJob, content: string): Promise<boolean> {
+  private async push(job: CollectorJob, content: string): Promise<CollectorDeliveryReceipt> {
     if (!this.deliver) {
       peerLog('cc-collect', '未接线（deliver 为空）⇒ 丢弃 ' + job.key);
-      return false;
+      return { ok: false, duplicate: false };
     }
     const text = content.length > MAX_CONTENT ? `${content.slice(0, MAX_CONTENT - 20)}\n…(已截断)` : content;
     try {
@@ -350,7 +367,7 @@ class CcResultCollector {
       });
     } catch (e) {
       peerLog('cc-collect', '回投异常 ' + job.key + ': ' + (e as Error).message);
-      return false;
+      return { ok: false, duplicate: false };
     }
   }
 }

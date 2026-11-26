@@ -73,7 +73,7 @@ test('T154-COL-1 · ★ 采到结果块 ⇒ 投回业务会话收件箱（一次
   writeTranscript(RESULT_BLOCK);
 
   const delivered = [];
-  ccResultCollector.start(async (d) => { delivered.push(d); return true; });
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
 
   ccResultCollector.register({
     sessionId: SESSION_ID,
@@ -105,7 +105,7 @@ test('T154-COL-2 · task_id 对不上 ⇒ 不许投（别把别的任务的结�
   writeTranscript(RESULT_BLOCK);
 
   const delivered = [];
-  ccResultCollector.start(async (d) => { delivered.push(d); return true; });
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
 
   ccResultCollector.register({
     sessionId: SESSION_ID,
@@ -124,7 +124,7 @@ test('T154-COL-3 · 会话没了 ⇒ 也要投一条「没拿到结果」（不�
   writeSessionFile();
   // 不写 transcript ⇒ 没有结果块
   const delivered = [];
-  ccResultCollector.start(async (d) => { delivered.push(d); return true; });
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
 
   const key = ccResultCollector.register({
     sessionId: 'ffffffff-0000-0000-0000-000000000000',
@@ -157,7 +157,7 @@ test('T154-COL-6 · ★ 幂等键必须**等于 task_id**（对方自报 + 端�
   writeTranscript(RESULT_BLOCK);
 
   const delivered = [];
-  ccResultCollector.start(async (d) => { delivered.push(d); return true; });
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
 
   ccResultCollector.register({
     sessionId: SESSION_ID,
@@ -182,7 +182,7 @@ test('T154-COL-5 · ★ 会话被杀了（登记项没了）但 transcript 里�
   rmSync(join(SANDBOX_HOME, '.claude', 'sessions', '9999.json'), { force: true });
 
   const delivered = [];
-  ccResultCollector.start(async (d) => { delivered.push(d); return true; });
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
 
   ccResultCollector.register({
     sessionId: SESSION_ID,
