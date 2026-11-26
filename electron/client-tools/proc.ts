@@ -87,3 +87,50 @@ export function isProcessAlive(pid: number): boolean {
     return false;
   }
 }
+
+/**
+ * ★ [T-165 · D3] **本进程（PC 应用）的启动时刻**（epoch ms）。
+ *
+ * ## 为什么需要它
+ *
+ *   PC 重启后，账本里 `running` 的那条作业，其 pid 可能**被别的进程复用**
+ *   （Windows 的 pid 回收很快）⇒ 只看 `isProcessAlive(pid)` 会误判「还活着」
+ *   ⇒ 重启死锁（P0）就解不掉。
+ *
+ *   ⇒ 但凡**作业的起始时刻早于本进程启动时刻** ⇒ 它必然属于**上一次**启动
+ *   ⇒ 即便 pid「活着」，也不是我们的作业 ⇒ 判死。
+ *
+ * ## 取法
+ *
+ *   `process.uptime()` = 本进程已运行的秒数 ⇒ `Date.now() - uptime*1000` = 启动时刻。
+ *   ⚠️ Node 内建 ⇒ 零依赖。
+ */
+export function processStartedAt(): number {
+  try {
+    return Date.now() - Math.floor(process.uptime() * 1000);
+  } catch (_) {
+    return Date.now();
+  }
+}
+
+/**
+ * ★ [T-165 · D3] 这个 pid 是不是「**本进程启动之后**才起的」。
+ *
+ * ## 判据
+ *
+ *   `startedAt >= 本进程启动时刻` ⇒ 它是**这一轮**启动之后起的 ⇒ 有可能是我们的作业。
+ *   `startedAt <  本进程启动时刻` ⇒ 它属于**上一次**启动 ⇒ **不是**我们的作业
+ *   （哪怕 pid 因为复用而「活着」）。
+ *
+ * @param startedAt 作业/派单的起始时刻（epoch ms）
+ * @param nowMs     当前时刻（单测可注入）
+ * @returns true = 属于本次启动；false = 属于更早的启动（或拿不到判据）
+ */
+export function isStartedSinceProcessStart(startedAt: number, nowMs?: number): boolean {
+  const started = Number(startedAt);
+  if (!Number.isFinite(started) || started <= 0) return false;
+  const procStart = processStartedAt();
+  // ⚠️ 允许 2 秒的时钟抖动（作业起始时刻是**落盘**的，可能有毫秒级取整误差）。
+  return started >= procStart - 2000;
+}
+

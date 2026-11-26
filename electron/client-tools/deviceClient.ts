@@ -39,14 +39,17 @@ import type {
 import { assertAllowed, appendAudit, summarizeCommand } from './gate';
 import { executeClientTool } from './executor';
 import { stopAllJobs, stopJobById } from './jobRunner.ts';
-import { getJob, listUnreportedJobs, markJobReported, markJobTerminal, updateJob } from './localJobs.ts';
+import { getJob, listUnreportedJobs, markJobReported, markJobTerminal, updateJob, listJobs, isTerminalJobStatus } from './localJobs.ts';
 import {
   decideBackgroundDispatch,
   getDispatchEntry,
+  isZombieRunningDispatch,
   markDispatch,
   markDispatchReported,
   listDispatchEntries,
 } from './dispatchLedger.ts';
+// ★ [T-165 · D3/D4] 进程存活判定 + pid 复用防护（D3 判死 / D4 长跑任务纳入）
+import { isProcessAlive, isStartedSinceProcessStart } from './proc.ts';
 import { buildCapabilityString, probeJobExecutor } from './jobCapability.ts';
 // [2026-11-15 · 订正 31 · M0.5] 浏览器池接线状态 ⇒ 决定要不要声明 browser=1
 import { hasBrowserTabPool } from './browser.ts';
@@ -451,6 +454,37 @@ function machineEventDeps(client: DeviceClient): MachineEventDeps {
  * 从派单 / 作业记录里取机器事件上下文。
  * ⚠️ `sessionId` 缺失 ⇒ 不发（`buildMachineEvent` 会返回 null）—— 宁可少发，不发错会话。
  */
+/**
+ * ★ [T-165 · D3/D4] 这条作业**此刻是否还真的在跑**。
+ *
+ * ## 三个判据（任一不满足 ⇒ 不在跑）
+ *
+ *   ① **本机作业表里没有这一行** ⇒ 没起过 / 已清掉 ⇒ 不在跑。
+ *   ② **进程已死**（`isProcessAlive` 为 false）⇒ 不在跑。
+ *   ③ ⚠️ **pid 复用防护**：作业的起始时刻**早于本进程启动时刻**
+ *      ⇒ 它属于**上一次**启动 ⇒ 即便 pid「活着」（被别的进程复用了）也不是我们的作业
+ *      ⇒ 不在跑。
+ *
+ * ## 为什么必须有 ③
+ *
+ *   PC 重启后旧 pid 很快会被系统回收并复用给别的进程 ⇒ 只看 ② 会误判「还活着」
+ *   ⇒ 重启死锁（D3）解不掉 ⇒ 任务永久搁死。
+ *
+ * @param pendingId 派单/作业 id
+ * @param startedAt 作业起始时刻（epoch ms；缺省用作业表里的）
+ */
+function isLocalJobAlive(pendingId: string, startedAt?: number | null): boolean {
+  const job = getJob(pendingId);
+  if (!job) return false;                       // ① 作业表里没有 ⇒ 没在跑
+  const pid = job.pid;
+  if (!pid || pid <= 0) return false;           // 没有 pid ⇒ 没真正起来
+  if (!isProcessAlive(pid)) return false;       // ② 进程已死
+  const started = Number(startedAt ?? job.startedAt ?? 0);
+  // ③ pid 复用防护：起始时刻早于本进程启动 ⇒ 属于上一次启动 ⇒ 不是我们的作业
+  if (!isStartedSinceProcessStart(started)) return false;
+  return true;
+}
+
 function eventContextFromDispatch(
   pendingId: string,
   reason: string | null,
@@ -580,21 +614,52 @@ export class PeerJobManager {
     this.started = false;
   }
 
-  /** 启动扫 dispatchLedger：未上报的 pc_cc_send 无法重建订阅映射 ⇒ 报一次失败，防孤儿。 */
+  /**
+   * 启动扫 dispatchLedger：把**上一轮启动遗留的僵尸 running** 判死并销账。
+   *
+   * ## ★ [T-165 · D3] 为什么要扩到「所有工具」
+   *
+   *   改前这里**只处理 `pc_cc_send`**（`entry.tool !== 'pc_cc_send'` 就跳过），
+   *   ⇒ 其余工具（`pc_shell` / `pc_bash` / `pc_powershell` / `pc_job_start` …）
+   *   的 `running` 残留**完全没人管** ⇒ 永久搁死（事故 4beaef00、cd562600 两例同型）。
+   *
+   * ## 判死口径（见 `isZombieRunningDispatch`）
+   *
+   *   账本 `running` **且**作业**不可能还在跑**（没有作业行 / 进程已死 /
+   *   起始时刻早于本进程启动 ⇒ pid 复用）⇒ 判死 ⇒ 回传 `return_failed` 让**服务端销账**。
+   *
+   *   ⚠️ **选判死而非重跑**：重跑有副作用（命令可能已执行一半），
+   *   判死只把状态收敛掉 ⇒ 不产生任何重复副作用。
+   */
   recoverOrphans(): void {
     for (const entry of listDispatchEntries()) {
-      if (entry.tool !== 'pc_cc_send' || entry.state === 'reported') continue;
-      void this.reportOnce(entry.pendingId, {
-        status: 'error',
-        error: '进程重启导致 peer notice 订阅丢失，请重新派单',
-      }).then((ok) => {
-        // 无 reporter（未接线）⇒ reportJobResult 不会跑 ⇒ 本地补终态 + 机器事件；
-        // 有 reporter 但失败时它已经发过（同 idempotencyKey 幂等）。
-        if (!ok && !this.report) {
-          void settleWithMachineEvent(deviceClient, entry.pendingId, 'return_failed',
-            '进程重启导致 peer notice 订阅丢失，回传失败');
-        }
+      if (!entry || entry.state === 'reported') continue;
+
+      // ── ① `pc_cc_send`：订阅映射没法重建 ⇒ 老口径报一次失败（保持不变）────
+      if (entry.tool === 'pc_cc_send') {
+        void this.reportOnce(entry.pendingId, {
+          status: 'error',
+          error: '进程重启导致 peer notice 订阅丢失，请重新派单',
+        }).then((ok) => {
+          // 无 reporter（未接线）⇒ reportJobResult 不会跑 ⇒ 本地补终态 + 机器事件；
+          // 有 reporter 但失败时它已经发过（同 idempotencyKey 幂等）。
+          if (!ok && !this.report) {
+            void settleWithMachineEvent(deviceClient, entry.pendingId, 'return_failed',
+              '进程重启导致 peer notice 订阅丢失，回传失败');
+          }
+        });
+        continue;
+      }
+
+      // ── ★ [D3] 其余工具：僵尸 running ⇒ 判死 + 让服务端销账 ────────────
+      if (!isZombieRunningDispatch(entry, isLocalJobAlive(entry.pendingId, entry.startedAt))) {
+        continue;
+      }
+      const reason = '进程重启导致该作业已不存在（命令未完成），已判死并结账，请重新派单';
+      console.warn('[client-tools/device] 发现重启遗留的僵尸 running 派单 ⇒ 判死销账:', {
+        pendingId: entry.pendingId, tool: entry.tool,
       });
+      void settleWithMachineEvent(deviceClient, entry.pendingId, 'return_failed', reason);
     }
   }
 
@@ -901,9 +966,63 @@ class DeviceClient {
 
   // ── P6 · 正在跑的任务 ──────────────────────────────────────────────────
 
-  /** 当前正在跑的任务列表（给 UI 显示「你的电脑上现在在跑什么」）。 */
+  /**
+   * 当前正在跑的任务列表（给 UI 显示「你的电脑上现在在跑什么」）。
+   *
+   * ★ [T-165 · D4] **长跑作业也纳入这个集合**。
+   *
+   * ## 病根
+   *
+   *   改前只返回 `this.running` —— 那是「**本进程内正在执行的工具**」。
+   *   而**后台长跑作业是 detached 的独立进程**，派单即返回就**出队**了
+   *   ⇒ 压根不在 `this.running` 里
+   *   ⇒ 「正在你的电脑上执行 N」长期为 **0**（长跑任务根本进不来）。
+   *
+   * ## 修法
+   *
+   *   合并**本机作业表**（`local-jobs.jsonl`，落盘）里
+   *   **状态非终态**且**进程还活着**的作业 ⇒ 一起返回。
+   *
+   * ## 为什么不算「进程已死」的陈旧作业
+   *
+   *   否则数字会虚高且**永远不降**（作业早没了但一直显示在跑）。
+   *   ⇒ 复用 D3 的 `isLocalJobAlive`（含 pid 复用防护）。
+   *
+   * ## 去重
+   *
+   *   同一作业可能同时在 `this.running` 与作业表里 ⇒ 按 `pendingId` 去重。
+   */
   runningTasks(): RunningClientTask[] {
-    return Array.from(this.running.values()).map((v) => ({ ...v.task }));
+    const out: RunningClientTask[] = [];
+    const seen = new Set<string>();
+
+    // ① 本进程内正在执行的工具（原有行为，一个字不改）。
+    for (const v of this.running.values()) {
+      if (!v || !v.task) continue;
+      if (seen.has(v.task.pendingId)) continue;
+      seen.add(v.task.pendingId);
+      out.push({ ...v.task });
+    }
+
+    // ② ★ [D4] 长跑作业（detached 独立进程）—— 原来完全进不来。
+    for (const job of listJobs()) {
+      if (!job || !job.id) continue;
+      if (seen.has(job.id)) continue;                 // 去重
+      if (isTerminalJobStatus(job.status)) continue;   // 终态 ⇒ 不算在跑
+      if (!isLocalJobAlive(job.id, job.startedAt)) continue;  // 进程已死 / pid 复用 ⇒ 不算
+      seen.add(job.id);
+      out.push({
+        pendingId: job.id,
+        tool: job.serviceId || job.id,
+        title: job.summary || null,
+        sessionId: job.sessionId || null,
+        originClient: null,
+        startedAt: job.startedAt || 0,
+        mode: 'background',
+      });
+    }
+
+    return out;
   }
 
   /** 订阅「正在跑的任务」变化。 */
@@ -1620,6 +1739,9 @@ class DeviceClient {
       //   ⚠️ 其余工具（detached 作业）行为**逐字不变**：只标 running，结果由巡检回传。
       markDispatch(pendingId, { state: 'running' });
       emitJobsChanged();
+      // ★ [T-165 · D4] 长跑作业起来了 ⇒ 「正在你的电脑上执行 N」的 N 要**升上去**
+      //   （长跑作业是 detached 进程 ⇒ 不在 this.running 里 ⇒ 之前这个数字永远是 0）。
+      this.emitTasks();
       return;
     }
 
@@ -1663,6 +1785,9 @@ class DeviceClient {
     // 「已上报」⇒ 这条派单彻底完事（重连补推不会再起一个）。
     markJobReported(jobId, payload.stdout || payload.error || undefined);
     markDispatchReported(jobId, payload.error || null);
+    // ★ [T-165 · D4] 作业进终态 ⇒ 「正在你的电脑上执行 N」的 N 要**降下来**
+    //   （否则长跑作业完成后数字永远不降）。
+    this.emitTasks();
     logDevice(`后台作业结果已回传: ${jobId}（${payload.status}）`);
     return true;
   }
