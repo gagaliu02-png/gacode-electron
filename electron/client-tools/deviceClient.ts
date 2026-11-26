@@ -1627,6 +1627,12 @@ class DeviceClient {
     // ★ L-25l：按 pending_id 去重（跨重启也认 ⇒ 落盘）
     if (loadDone().includes(pendingId)) {
       console.log('[client-tools/device] 派单已结过，跳过:', pendingId);
+      // ★ [T-166 · D1] **也要销派单账**。
+      //   病根：`loadDone()`（去重表）命中就 return ⇒ **派单账永远停在 running**
+      //   ⇒ 服务端那条（保留 7 天）一直 unsettled ⇒ 重连补推会再推一次 ⇒ 账目永久错位。
+      //   ⚠️ 不记 error：它**已经**跑完并结过了（否则 PC 端会显示「失败」而实际是成功的）。
+      markDispatchReported(pendingId, null);
+      this.emitTasks();
       return;
     }
 
@@ -1659,7 +1665,17 @@ class DeviceClient {
       //   只有 `kind:'file'`（单文件）上传；`kind:'workspace'`（目录/项目）**不上传**
       //   （L-24o：目录产物不进交付中心，只报本机路径）。
       const withUrls = await this.uploadArtifacts(result);
-      await this.uploadResult(pendingId, withUrls);
+      const upload = await this.uploadResult(pendingId, withUrls);
+      // ★ [T-166 · D1] **同步路径也要销派单账**。
+      //   病根：这里原来只 `markDone`（去重表）⇒ **派单账永远停在 running** ⇒
+      //   服务端那条派单账（保留 7 天）一直 unsettled ⇒ 重连补推会**再推一次**。
+      //   ⚠️ 200 与 409 都要销：
+      //     · 200 ⇒ 本次真的送到了 ⇒ 正常销；
+      //     · 409（alreadySettled）⇒ 服务端那边已结（另一条路径抢赢）⇒ **照样销**，
+      //       但**不记 error**（服务端已 succeeded，标失败会误导用户）。
+      if (upload.ok) {
+        markDispatchReported(pendingId, upload.alreadySettled ? null : undefined);
+      }
       // ★ [T-108] pc_cc_* 可见性回执：设备只持有自己的 Bearer + deviceId，
       //   internal token 留在服务器；unified 窄端点校验派单归属后内部转发 peer-ack。
       await this.reportCcReceiptSafe(req, { status: 'visible', result });
@@ -1784,6 +1800,22 @@ class DeviceClient {
     }
     // 「已上报」⇒ 这条派单彻底完事（重连补推不会再起一个）。
     markJobReported(jobId, payload.stdout || payload.error || undefined);
+    // ★ [T-166 · D1] **409（服务端已结过）⇒ 销账但**不记 error**。
+    //   病根：服务端有**两条**结账路径抢同一条派单（端侧上行 / 结果注入自动结账）。
+    //   后到那条拿 409 ⇒ 端侧若把 409 当「失败」⇒ 账上留 error
+    //   ⇒ 用户看到「任务失败」，而服务端其实已 succeeded ⇒ **两本账永久错位**。
+    //   ⇒ 409 是**幂等成功**：本地账销掉、不标失败、不发失败机器事件。
+    if (upload.alreadySettled) {
+      // ⚠️ 按**服务端给的权威终态**决定记不记失败：
+      //   · succeeded（或是未知）⇒ 本地销账、不记失败（服务端已成功，标失败会误导用户）；
+      //   · 失败态（failed/error）⇒ 本地也记失败，两本账**语义一致**。
+      const srvFailed = upload.settledStatus === 'failed' || upload.settledStatus === 'error';
+      markDispatchReported(jobId, srvFailed ? (payload.error || `服务端终态=${upload.settledStatus}`) : null);
+      // ★ [T-165 · D4] 终态 ⇒ 「正在你的电脑上执行 N」的 N 要降下来。
+      this.emitTasks();
+      logDevice(`后台作业结果服务端已结过（409），本地账已销（服务端终态=${upload.settledStatus || '未知'}）: ${jobId}`);
+      return true;
+    }
     markDispatchReported(jobId, payload.error || null);
     // ★ [T-165 · D4] 作业进终态 ⇒ 「正在你的电脑上执行 N」的 N 要**降下来**
     //   （否则长跑作业完成后数字永远不降）。
@@ -2073,11 +2105,18 @@ ${note}` : note,
    *   · `ok:true`  = 200（已送达）或 409（已结过，幂等成功）
    *   · `ok:false` = 其它（网络 / 401 / 404 / TASK_NOT_FOUND / 5xx）
    *     ⇒ 调用方统一标 `return_failed` + 发机器事件 + 清横幅。
+   *
+   * ★ [T-166 · D1] 新增 `alreadySettled` —— 区分**两种「ok:true」**：
+   *   · 200 ⇒ 本次上报**真的**送达服务端（不是我结的）⇒ 本地账正常销。
+   *   · 409 ⇒ **服务端那边已经结过了**（另一条结账路径抢赢了）⇒
+   *     本地账**照样要销**（否则 PC 账本永远 running、横幅挂着），
+   *     但**不能记 error**（那会让用户以为任务失败，实际服务端已 succeeded）。
+   *     ⇒ 调用方据此**销账但不标失败**。
    */
   private async uploadResult(
     pendingId: string,
     result: ClientToolResult,
-  ): Promise<{ ok: boolean; reason?: string }> {
+  ): Promise<{ ok: boolean; reason?: string; alreadySettled?: boolean; settledStatus?: string | null }> {
     try {
       const res = await fetch(`${apiBase()}/devices/tasks/${encodeURIComponent(pendingId)}/result`, {
         method: 'POST',
@@ -2090,9 +2129,17 @@ ${note}` : note,
       });
       if (res.ok) return { ok: true };
       // 409 = 别人已经结过了（L-25n）⇒ 收工，不重试。
+      // ★ [T-166 · D1] **明确标记 alreadySettled** ⇒ 调用方知道「服务端已结」，
+      //   本地账要销、但**不是**失败（那会让用户以为任务失败，实际服务端已 succeeded）。
+      //   ⚠️ 顺带读服务端给的**权威终态**（settledStatus）⇒ 服务端判失败时本地也记失败。
       if (res.status === 409) {
-        logDevice(`结果已结过（409），收工: ${pendingId}`);
-        return { ok: true };
+        let settledStatus: string | null = null;
+        try {
+          const body = await res.json().catch(() => null) as { settledStatus?: unknown } | null;
+          if (body && typeof body.settledStatus === 'string') settledStatus = body.settledStatus;
+        } catch (_) { /* 读不到就当不知道（保守：只销账不记失败） */ }
+        logDevice(`结果已结过（409），收工: ${pendingId}${settledStatus ? `（服务端终态=${settledStatus}）` : ''}`);
+        return { ok: true, alreadySettled: true, reason: 'TASK_ALREADY_SETTLED', settledStatus };
       }
       // 其它错误 ⇒ 分类后交调用方标终态（横幅不许残留）。
       const text = await res.text().catch(() => '');
