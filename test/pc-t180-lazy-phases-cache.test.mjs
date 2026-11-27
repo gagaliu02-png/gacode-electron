@@ -17,6 +17,7 @@ const HERE = fileURLToPath(new URL(".", import.meta.url));
 const REPO = join(HERE, "..");
 const detail = readFileSync(join(REPO, "src/routes/ChatDetail.tsx"), "utf8");
 const list = readFileSync(join(REPO, "src/components/chat/MessageList.tsx"), "utf8");
+const api = readFileSync(join(REPO, "src/lib/api.ts"), "utf8");
 
 function between(src, startNeedle, endNeedle) {
   const a = src.indexOf(startNeedle);
@@ -52,6 +53,13 @@ test("T-180-3 messages 的 deps 也必须订阅 phasesDetailCache", () => {
   assert.ok(
     deps.includes("phasesDetailCache"),
     "messages 派生层也必须订阅，防未来改了 baseMessages 派生方式后回归",
+  );
+});
+
+test("T-180-5 历史计数字段兼容服务端实际返回的 camelCase（否则折叠区不显示）", () => {
+  assert.ok(
+    /m\.thinkingCount/.test(api) && /m\.toolCallCount/.test(api),
+    "服务端 countPhases() 实际吐 thinkingCount/toolCallCount（不是注释里的 snake_case）⇒ 必须兼容读取",
   );
 });
 

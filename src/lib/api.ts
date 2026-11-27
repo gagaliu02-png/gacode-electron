@@ -831,6 +831,11 @@ type HistoryRow = {
   //   ⚠️ 服务端只在 `include_phases=0`（PC）时给；老端拿完整明细 ⇒ 这俩字段为 null ⇒ 端侧自己数。
   thinking_count?: number | null;
   tool_call_count?: number | null;
+  // ★ [T-181] 服务端 `countPhases()` 实际吐的是 **camelCase**（thinkingCount /
+  //   toolCallCount），跟它自己的注释（thinking_count）不一致 ⇒ 两个都认，
+  //   否则折叠区拿不到计数 ⇒ 「思考 N 次」不显示 ⇒ 用户根本没入口点开。
+  thinkingCount?: number | null;
+  toolCallCount?: number | null;
 };
 
 /** ★ [T-175] 「点开才拉明细」的开关（PC 独有）。
@@ -868,10 +873,20 @@ function fetchHistoryPage(
  */
 export async function fetchMessagePhases(
   messageId: string,
-): Promise<{ phases_json: string | null; thinking_count: number | null; tool_call_count: number | null }> {
-  return request<{ phases_json: string | null; thinking_count: number | null; tool_call_count: number | null }>(
-    `/yinian/messages/${encodeURIComponent(messageId)}/phases`,
-  );
+): Promise<{
+  phases_json: string | null;
+  thinking_count?: number | null;
+  tool_call_count?: number | null;
+  thinkingCount?: number | null;
+  toolCallCount?: number | null;
+}> {
+  return request<{
+    phases_json: string | null;
+    thinking_count?: number | null;
+    tool_call_count?: number | null;
+    thinkingCount?: number | null;
+    toolCallCount?: number | null;
+  }>(`/yinian/messages/${encodeURIComponent(messageId)}/phases`);
 }
 
 /** ★ 首屏：拿到最近 limit 行 + 往前翻的 cursor（旧→新顺序）。 */
@@ -984,8 +999,21 @@ function mapHistoryRows(rawRows: HistoryRow[]): ChatMessage[] {
     //   ⚠️ 思考**明细**（正文）等用户点开折叠区时另拉（`fetchMessagePhases`）。
     const parsedPhases = parsePhasesOnce(m.phases_json);
     // ★ [T-175] 折叠态要显示的计数（服务端从 phases_json 数好给的）。
-    const thinkingCount = typeof m.thinking_count === "number" ? m.thinking_count : null;
-    const toolCallCount = typeof m.tool_call_count === "number" ? m.tool_call_count : null;
+    //   ★ [T-181] 服务端实际吐 camelCase（thinkingCount / toolCallCount），
+    //     注释/契约却写 snake_case ⇒ 两个都读，谁有值用谁；否则折叠区计数恒 0
+    //     ⇒ 「思考 N 次」不显示 ⇒ 用户连点开的入口都没有。
+    const thinkingCount =
+      typeof m.thinking_count === "number"
+        ? m.thinking_count
+        : typeof m.thinkingCount === "number"
+          ? m.thinkingCount
+          : null;
+    const toolCallCount =
+      typeof m.tool_call_count === "number"
+        ? m.tool_call_count
+        : typeof m.toolCallCount === "number"
+          ? m.toolCallCount
+          : null;
     let imageUrls: string[] | undefined;
     let attachedFileIds: string[] | undefined;
     let attachedFileNames: Array<{ fileId: string; name: string }> | undefined;
