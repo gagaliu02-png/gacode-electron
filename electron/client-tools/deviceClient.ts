@@ -257,6 +257,45 @@ function deviceName(): string {
 }
 
 /**
+ * 把调用方给的 headers 与 `Bearer <token>` 合成**最终要发的那一份**。
+ *
+ * ## 为什么不能直接 spread（T-179 · 现网 bug）
+ *
+ * 调用方（`ccSessionToolService.authHeaders()`）写的是**小写** `authorization`，
+ * 而 `authFetchInternal` 过去写**大写** `Authorization`：
+ *
+ * ```ts
+ * headers: { ...init.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+ * ```
+ *
+ * ⇒ 合并后的普通对象里同时存在 `authorization` 和 `Authorization` 两个 key
+ * ⇒ undici/Node 的 `Headers` **大小写不敏感**归并，**逗号拼接**两个值：
+ *
+ * ```
+ * authorization: "Bearer <旧>, Bearer <新>"
+ * ```
+ *
+ * ⇒ 服务端 `@fastify/jwt` 解析出畸形 Bearer ⇒ **恒 401**
+ * ⇒ 401 自愈（刷新 token）也没用，重试还是双值 ⇒ `/devices/cc/messages`
+ *   （CC→Cody 回报主链路）永久失败。
+ *
+ * ## 契约
+ *
+ *   · 先归一成 `Headers`（`init.headers` 可能是普通对象 / Headers / 元组数组）；
+ *   · **删掉任何大小写形式的 authorization**，再写唯一一份；
+ *   · `token` 为 null ⇒ 不写（交回调用方自己那份……同样要先删，避免脏值）。
+ */
+function withBearer(
+  headers: RequestInit['headers'],
+  token: string | null,
+): Headers {
+  const h = new Headers(headers as ConstructorParameters<typeof Headers>[0]);
+  h.delete('authorization');
+  if (token) h.set('Authorization', `Bearer ${token}`);
+  return h;
+}
+
+/**
  * 设备通道的本地日志（落 `%APPDATA%/Gacode/client-tools.log`）。
  *
  * ## 为什么落文件而不是只 console.log
@@ -1125,10 +1164,7 @@ class DeviceClient {
     const doFetch = (token: string | null) =>
       fetch(url, {
         ...init,
-        headers: {
-          ...(init.headers as Record<string, string> | undefined),
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: withBearer(init.headers, token),
       });
     let res: Response;
     try {
