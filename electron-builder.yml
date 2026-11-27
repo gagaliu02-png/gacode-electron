@@ -130,7 +130,7 @@
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.66
+buildVersion: 0.7.67
 copyright: Copyright © 2026 gaga
 
 # ★ [T-122] 出包前现生成图标中间产物（build/icon-{16,32,48,64,128}.png）。
@@ -158,7 +158,8 @@ directories:
   # 0.7.64: 端侧 D3 重启死锁自愈 + D4 长跑任务纳入「正在执行 N」(T-165)
   # 0.7.65: T-166 D1(409 销账) + D2(MCP 幂等回报静默销账)
   # 0.7.66: T-174-ccreport 回报结果块可靠性（多块精确识别 + 宽限按最近回话算 + 同结论去重）
-  output: release-t174-v66
+  # 0.7.67: T-179 CC→Cody 回报恒 401 修复（authFetch 双值 authorization 头）
+  output: release-t179-v67
 
 files:
   - dist/**/*
