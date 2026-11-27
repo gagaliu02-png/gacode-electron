@@ -12,7 +12,7 @@
 //   · USERPROFILE           ⇒ `os.homedir()` 改道 ⇒ CLI 会话登记项落临时目录
 //   · GACODE_USER_DATA_DIR  ⇒ 登记表落临时目录（不碰真实用户数据）
 
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,11 @@ process.env.USERPROFILE = SANDBOX_HOME;
 process.env.GACODE_USER_DATA_DIR = mkdtempSync(join(tmpdir(), 't154-data-'));
 
 const { ccResultCollector } = await import('../electron/client-tools/ccResultCollector.ts');
+
+// ★ [T-174-ccreport] 采集器是**进程级单例**，去重记忆会跨用例残留
+//   （本文件多个用例故意复用同一个 SESSION_ID + 同一段正文去测不同行为）
+//   ⇒ 每个用例前清一次，保证用例之间互不干扰。
+beforeEach(() => { ccResultCollector.resetDedupeForTest(); });
 
 const SESSION_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const CWD = 'C:\\sandbox';
@@ -196,4 +201,183 @@ test('T154-COL-5 · ★ 会话被杀了（登记项没了）但 transcript 里�
   assert.equal(delivered.length, 1, '会话没了也必须把结论投出去（结论还在 transcript 里）');
   assert.match(delivered[0].content, /结论正文第一行/);
   assert.equal(ccResultCollector.hasPendingForSession(SESSION_ID), false);
+});
+
+// ── T-174-ccreport · 同一 transcript 里两个任务的结果块（生产实证 2026-11-27） ──
+//
+// 事故：常驻会话在**同一条 assistant 消息**里补投了两个 task_id 的结果块
+//   （c3dc4245… + 659db392…）。采集器老的增量解析只取第一个块 ⇒
+//   第二条登记永远采不到自己的结论 ⇒ 干等到超时才回「未出现结果块」。
+
+const MULTI_BLOCK = [
+  '===GACLAW_RESULT_START===',
+  'status: completed',
+  'task_id: TASK-A',
+  'summary: A 的结论',
+  'result: |',
+  '  A 的正文',
+  '===GACLAW_RESULT_END===',
+  '',
+  '===GACLAW_RESULT_START===',
+  'status: completed',
+  'task_id: TASK-B',
+  'summary: B 的结论',
+  'result: |',
+  '  B 的正文',
+  '===GACLAW_RESULT_END===',
+].join('\n');
+
+test('T174-COL-1 ★ 同一条消息里两个结果块 ⇒ 两条登记各拿各的结论', async () => {
+  writeSessionFile();
+  writeTranscript(MULTI_BLOCK);
+
+  const delivered = [];
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
+
+  ccResultCollector.register({
+    sessionId: SESSION_ID, taskId: 'TASK-A', sinceOffset: 0,
+    businessSessionId: '1192', ccSessionId: SESSION_ID,
+  });
+  ccResultCollector.register({
+    sessionId: SESSION_ID, taskId: 'TASK-B', sinceOffset: 0,
+    businessSessionId: '1192', ccSessionId: SESSION_ID,
+  });
+
+  await ccResultCollector.tickNow();
+
+  const a = delivered.find((d) => d.taskId === 'TASK-A');
+  const b = delivered.find((d) => d.taskId === 'TASK-B');
+  assert.ok(a, 'A 的结论必须投出去');
+  assert.ok(b, '★ 排在第二个的 B 也必须投出去（老逻辑只认第一个块 ⇒ B 永远采不到）');
+  assert.match(a.content, /A 的正文/);
+  assert.match(b.content, /B 的正文/);
+  assert.match(b.content, /B 的结论/);
+  assert.equal(ccResultCollector.hasPendingForSession(SESSION_ID), false, '两条都投完 ⇒ 不算未回传');
+});
+
+test('T174-COL-2 ★ 只有别人的块 ⇒ 不误投（仍算未回传）', async () => {
+  writeSessionFile();
+  writeTranscript(MULTI_BLOCK);
+
+  const delivered = [];
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
+
+  ccResultCollector.register({
+    sessionId: SESSION_ID, taskId: 'TASK-MINE', sinceOffset: 0,
+    businessSessionId: '1192',
+  });
+
+  await ccResultCollector.tickNow();
+  assert.equal(delivered.length, 0, 'task_id 对不上不许投');
+  assert.equal(ccResultCollector.hasPendingForSession(SESSION_ID), true);
+  ccResultCollector.cancel(`cc-collect:${SESSION_ID}:TASK-MINE`);
+});
+
+// ── T-174-ccreport · 同一份结论被不同 task_id 重复投递（生产实证） ──────────
+//
+// 实测：同一常驻会话上会同时挂着多条采集登记（最多 8 条未结），目标会话把**同一段正文**
+//   按不同 task_id 各写一个结果块（`pc_bash` 一条本地版 + 一条已上线版，正文逐字相同；
+//   另一会话同一段正文出现 5 个 task_id）⇒ 每条登记各投一封 ⇒ 用户看到重复结论。
+//   ⚠️ 服务端幂等键是 `sessionId:idempotencyKey`，采集器键是 task_id
+//     ⇒ 服务端吞不掉这种「同正文、不同 task_id」的重复 ⇒ 只能端侧挡。
+
+/** 造一段「同正文、不同 task_id」的两个结果块。 */
+const SAME_BODY_BLOCKS = [
+  '===GACLAW_RESULT_START===',
+  'status: completed',
+  'task_id: TASK-X',
+  'summary: 同一份结论',
+  'result: |',
+  '  正文完全相同',
+  '===GACLAW_RESULT_END===',
+  '',
+  '===GACLAW_RESULT_START===',
+  'status: completed',
+  'task_id: TASK-Y',
+  'summary: 同一份结论',
+  'result: |',
+  '  正文完全相同',
+  '===GACLAW_RESULT_END===',
+].join('\n');
+
+test('T174-COL-3 ★ 同正文、不同 task_id ⇒ 只投一封（不重复刷屏）', async () => {
+  writeSessionFile();
+  writeTranscript(SAME_BODY_BLOCKS);
+
+  const delivered = [];
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
+
+  ccResultCollector.register({
+    sessionId: SESSION_ID, taskId: 'TASK-X', sinceOffset: 0,
+    businessSessionId: '1192', ccSessionId: SESSION_ID,
+  });
+  ccResultCollector.register({
+    sessionId: SESSION_ID, taskId: 'TASK-Y', sinceOffset: 0,
+    businessSessionId: '1192', ccSessionId: SESSION_ID,
+  });
+
+  await ccResultCollector.tickNow();
+
+  assert.equal(delivered.length, 1, '★ 同一份结论（正文逐字相同）只能投一封');
+  assert.equal(delivered[0].taskId, 'TASK-X', '投的是先结算的那条');
+  assert.equal(ccResultCollector.hasPendingForSession(SESSION_ID), false, '两条都要销账（第二条按重复销账）');
+});
+
+test('T174-COL-4 ★ 正文有差异 ⇒ 照常各投一封（不许误吞补充版/修正版）', async () => {
+  writeSessionFile();
+  writeTranscript([
+    '===GACLAW_RESULT_START===',
+    'status: completed',
+    'task_id: TASK-X',
+    'summary: 同一份结论',
+    'result: |',
+    '  第一版正文',
+    '===GACLAW_RESULT_END===',
+    '',
+    '===GACLAW_RESULT_START===',
+    'status: completed',
+    'task_id: TASK-Y',
+    'summary: 同一份结论',
+    'result: |',
+    '  第二版正文（已修正）',
+    '===GACLAW_RESULT_END===',
+  ].join('\n'));
+
+  const delivered = [];
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
+
+  ccResultCollector.register({
+    sessionId: SESSION_ID, taskId: 'TASK-X', sinceOffset: 0,
+    businessSessionId: '1192', ccSessionId: SESSION_ID,
+  });
+  ccResultCollector.register({
+    sessionId: SESSION_ID, taskId: 'TASK-Y', sinceOffset: 0,
+    businessSessionId: '1192', ccSessionId: SESSION_ID,
+  });
+
+  await ccResultCollector.tickNow();
+
+  assert.equal(delivered.length, 2, '★ 正文不同的两封都要投（去重只挡逐字相同的）');
+});
+
+test('T174-COL-5 ★ 不同业务会话 ⇒ 去重不串（各投各的）', async () => {
+  writeSessionFile();
+  writeTranscript(SAME_BODY_BLOCKS);
+
+  const delivered = [];
+  ccResultCollector.start(async (d) => { delivered.push(d); return { ok: true, duplicate: false }; });
+
+  ccResultCollector.register({
+    sessionId: SESSION_ID, taskId: 'TASK-X', sinceOffset: 0,
+    businessSessionId: '1192', ccSessionId: SESSION_ID,
+  });
+  ccResultCollector.register({
+    sessionId: SESSION_ID, taskId: 'TASK-Y', sinceOffset: 0,
+    businessSessionId: '1193', ccSessionId: SESSION_ID,
+  });
+
+  await ccResultCollector.tickNow();
+
+  assert.equal(delivered.length, 2, '★ 不同业务会话是两个收件人 ⇒ 都必须投');
+  assert.deepEqual(delivered.map((d) => d.businessSessionId).sort(), ['1192', '1193']);
 });

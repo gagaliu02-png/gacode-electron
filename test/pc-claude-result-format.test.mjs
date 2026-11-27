@@ -23,7 +23,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const {
   RESULT_BLOCK_START, RESULT_BLOCK_END,
-  parseGaclawResultBlock, extractClaudeResult, buildReportingContract,
+  parseGaclawResultBlock, parseGaclawResultBlocks,
+  extractClaudeResult, buildReportingContract,
 } = await import('../electron/client-tools/claudeResultFormat.ts');
 const { buildPeerMessageContent } =
   await import('../electron/client-tools/claudeCodePeer.ts');
@@ -249,4 +250,71 @@ test('T092-CRF-2 ★ 老调用格式兼容：无 notifyIntent 时不写 notify_i
   assert.match(bare, /^<cross-session-message from="uds:gaclaw">/);
   assert.ok(!bare.includes('task_id='));
   assert.ok(!bare.includes('reply_to'));
+});
+
+// ── T-174-ccreport · 一条消息里多个结果块（生产实证 2026-11-27） ──────────
+//
+// 事故：目标会话在**同一条 assistant 消息**里补投了两个 task_id 的结果块
+//   （c3dc4245… + 659db392…）。老解析器只取第一个块 ⇒ 后一个任务永远匹配不上
+//   ⇒ 120s 后走 no-block 收口报 error，尽管结论早就在 transcript 里。
+
+/** 造一段「一条消息里两个结果块」的正文。 */
+function multiBlock(taskA, taskB) {
+  return [
+    '先把两个任务的结果一起补上。',
+    RESULT_BLOCK_START,
+    'status: completed',
+    `task_id: ${taskA}`,
+    'summary: A 的结论',
+    'result: |',
+    '  A 的正文',
+    RESULT_BLOCK_END,
+    '',
+    RESULT_BLOCK_START,
+    'status: partial',
+    `task_id: ${taskB}`,
+    'summary: B 的结论',
+    'result: |',
+    '  B 的正文',
+    RESULT_BLOCK_END,
+  ].join('\n');
+}
+
+test('T174-CRF-1 ★ 多块正文 ⇒ parseGaclawResultBlocks 全部解析（顺序不变）', () => {
+  const blocks = parseGaclawResultBlocks(multiBlock('task-A', 'task-B'));
+  assert.equal(blocks.length, 2, '两个闭合块都要出来');
+  assert.equal(blocks[0].task_id, 'task-A');
+  assert.equal(blocks[1].task_id, 'task-B');
+  assert.equal(blocks[1].status, 'partial', '第二个块自己的 status 不许被第一个覆盖');
+  assert.match(blocks[1].result, /B 的正文/);
+});
+
+test('T174-CRF-2 ★ 老接口 parseGaclawResultBlock 仍只取第一个（单块场景逐字段不变）', () => {
+  const one = parseGaclawResultBlock(multiBlock('task-A', 'task-B'));
+  assert.ok(one, '老接口必须仍返回结果');
+  assert.equal(one.task_id, 'task-A', '只取第一个 ⇒ 与改动前完全一致');
+  const single = parseGaclawResultBlock(block());
+  assert.equal(single.task_id, '');
+  assert.equal(single.status, 'completed');
+  assert.equal(single.parse_mode, 'structured_block');
+});
+
+test('T174-CRF-3 ★ 按 task_id 精确挑块 ⇒ 后一个任务也拿得到自己的结论', () => {
+  const text = multiBlock('task-A', 'task-B');
+  const pickB = parseGaclawResultBlocks(text).find((b) => b.task_id === 'task-B');
+  assert.ok(pickB, '排在第二个的 task_id 必须能被挑出来（老逻辑永远挑不到）');
+  assert.match(pickB.result, /B 的正文/);
+  assert.equal(parseGaclawResultBlocks(text).find((b) => b.task_id === 'nope'), undefined);
+});
+
+test('T174-CRF-4 ★ 未闭合块/空块不影响其它块的解析', () => {
+  const text = [
+    RESULT_BLOCK_START, 'status: completed', 'task_id: good-1', 'summary: s1', 'result: |', '  ok1', RESULT_BLOCK_END,
+    RESULT_BLOCK_START, 'status: completed', 'task_id: dangling',
+  ].join('\n');
+  const blocks = parseGaclawResultBlocks(text);
+  assert.equal(blocks.length, 1, '未闭合的块一律忽略');
+  assert.equal(blocks[0].task_id, 'good-1');
+  const empty = `${RESULT_BLOCK_START}\ntask_id: empty\n${RESULT_BLOCK_END}`;
+  assert.deepEqual(parseGaclawResultBlocks(empty), [], '空块（无 result / 无 summary）不算');
 });

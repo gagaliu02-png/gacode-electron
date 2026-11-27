@@ -71,14 +71,30 @@ test("T121-SEND-4 · 超时分支存在且调 settle（不是只打日志）", (
 });
 
 test("T121-SEND-5 · 超时结算不谎称 ok", () => {
-  const seg = code.slice(
-    code.indexOf("Date.now() - job.firstReplyTextAt"),
-    code.indexOf("Date.now() - job.firstReplyTextAt") + 600,
-  );
+  // ★ [T-174-ccreport] 宽限窗口的起算点从 firstReplyTextAt 改成 lastReplyTextAt
+  //   （按 first 算会把「还在产出」的长任务提前判死）。断言口径不变：
+  //   宽限到期那一刻必须如实报 error，不许谎称 ok。
+  const anchor = code.indexOf("Date.now() - job.lastReplyTextAt");
+  assert.ok(anchor >= 0, "★ 宽限判据必须按 lastReplyTextAt（最近一次新正文）算");
+  const seg = code.slice(anchor, anchor + 600);
   assert.ok(/status:\s*['"]error['"]/.test(seg),
     "★ 没有合法结果块时必须 status:'error'（如实说明），不能报 ok");
   assert.ok(/error:\s*[`'"]/.test(seg),
     "★ 要带明确错误原因（没找到 task_id 的结果块）");
+});
+
+test("T174-SEND-7 · ★ 宽限窗口按「最近一次新正文」算，不按「第一次」", () => {
+  // 生产实证 2026-11-27：c3dc4245… 注入 01:03，会话一直在干活，
+  // 02:14:03 还刚写了一段小结，17 秒后却被判「已等待 120s」⇒ error。
+  assert.ok(/lastReplyTextAt\s*:\s*number\s*\|\s*null/.test(code),
+    "★ PeerJob 必须记「最近一次看到对方新正文」的时刻");
+  assert.ok(/lastReplyTextAt\s*:\s*null/.test(code), "★ 初始化必须为 null");
+  assert.ok(/job\.lastReplyTextAt\s*=\s*Date\.now\(\)/.test(code),
+    "★ 每次读到新正文都要刷新 lastReplyTextAt");
+  assert.ok(/Date\.now\(\)\s*-\s*job\.lastReplyTextAt\s*>=\s*PEER_JOB_NO_BLOCK_GRACE_MS/.test(code),
+    "★ 收口判据必须用 lastReplyTextAt");
+  assert.ok(!/Date\.now\(\)\s*-\s*job\.firstReplyTextAt\s*>=\s*PEER_JOB_NO_BLOCK_GRACE_MS/.test(code),
+    "★ 不许再按 firstReplyTextAt 收口（会把还在干活的会话判死）");
 });
 
 test("T121-SEND-6 · 24h 系统 deadline 仍在", () => {

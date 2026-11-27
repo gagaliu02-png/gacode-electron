@@ -15,9 +15,11 @@ const deviceCode = stripComments(readFileSync(join(REPO, 'electron/client-tools/
 const watcherSrc = readFileSync(join(REPO, 'electron/client-tools/claudeCodeResultWatcher.ts'), 'utf8');
 
 test('T141-1 · no-block grace 不再单独 settle error（必须终态 + tail 反查）', () => {
-  assert.ok(!/if\s*\(\s*job\.firstReplyTextAt[\s\S]{0,200}PEER_JOB_NO_BLOCK_GRACE_MS[\s\S]{0,200}settle\(/.test(deviceCode),
-    '★ 不能再只凭 firstReplyTextAt + 2min 直接结算 error');
-  assert.ok(/terminal\s*&&[\s\S]{0,160}firstReplyTextAt/.test(deviceCode),
+  // ★ [T-174-ccreport] 起算点由 firstReplyTextAt 改为 lastReplyTextAt（见 deviceClient 注释）。
+  //   本断言要守的**不变量不变**：不能只凭「时间到了」就结算 error，必须先判 terminal。
+  assert.ok(!/if\s*\(\s*job\.lastReplyTextAt[\s\S]{0,200}PEER_JOB_NO_BLOCK_GRACE_MS[\s\S]{0,200}settle\(/.test(deviceCode),
+    '★ 不能再只凭 lastReplyTextAt + 2min 直接结算 error');
+  assert.ok(/terminal\s*&&[\s\S]{0,160}lastReplyTextAt/.test(deviceCode),
     '★ no-block 收口必须先判 terminal（idle/exit）');
 });
 

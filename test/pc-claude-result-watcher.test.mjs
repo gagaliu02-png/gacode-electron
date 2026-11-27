@@ -306,3 +306,89 @@ test('GC-CW-7 · ★ 只命中一次（不重复报）', async () => {
   await sleep(200);
   assert.equal(calls, 1, '只能命中一次');
 });
+
+// ── T-174-ccreport · 一条消息里两个结果块（生产实证 2026-11-27） ──────────
+//
+// 事故：目标会话在**同一条 assistant 消息**里补投了两个 task_id 的结果块 ⇒
+// 老 watcher 只取第一个块 ⇒ 第二条派单被判定「没结果」⇒ 120s 后报 error。
+
+/** 造一条含两个结果块的 assistant 行（复刻事故形态）。 */
+function multiResultLine(taskA, taskB) {
+  return assistantLine([
+    '两个任务的结果一起补上。',
+    RESULT_BLOCK_START,
+    'status: completed',
+    `task_id: ${taskA}`,
+    'summary: A 结论',
+    'result: |',
+    '  A 正文',
+    RESULT_BLOCK_END,
+    '',
+    RESULT_BLOCK_START,
+    'status: completed',
+    `task_id: ${taskB}`,
+    'summary: B 结论',
+    'result: |',
+    '  B 正文',
+    RESULT_BLOCK_END,
+  ].join('\n'));
+}
+
+test('T174-CW-1 ★ 同一消息多块 ⇒ 按 taskId 精确命中自己的那块', async () => {
+  const rec = writeSession(2017);
+  appendTranscript(rec, assistantLine('占位'));
+  const baseline = fs.statSync(transcriptFile(rec)).size;
+
+  const p = watchClaudeSessionResult({
+    sessionId: rec.sessionId,
+    sinceOffset: baseline,
+    timeoutMs: 5000,
+    pollMs: 50,
+    taskId: 'task-B',
+  });
+  await sleep(120);
+  appendTranscript(rec, multiResultLine('task-A', 'task-B'));
+  const w = await p;
+  assert.equal(w.ok, true, '排在第二个的 taskId 也必须等到结果');
+  assert.equal(w.result.task_id, 'task-B');
+  assert.match(w.result.result, /B 正文/);
+});
+
+test('T174-CW-2 ★ 不传 taskId ⇒ 老行为不变（认第一个块）', async () => {
+  const rec = writeSession(2018);
+  appendTranscript(rec, assistantLine('占位'));
+  const baseline = fs.statSync(transcriptFile(rec)).size;
+
+  const p = watchClaudeSessionResult({
+    sessionId: rec.sessionId,
+    sinceOffset: baseline,
+    timeoutMs: 5000,
+    pollMs: 50,
+  });
+  await sleep(120);
+  appendTranscript(rec, multiResultLine('task-A', 'task-B'));
+  const w = await p;
+  assert.equal(w.ok, true);
+  assert.equal(w.result.task_id, 'task-A', '不传 taskId 时与改动前逐字段一致（只取第一个）');
+});
+
+test('T174-CW-3 ★ 指定 taskId 但块里没有它 ⇒ 不许退回第一个块（继续等/超时）', async () => {
+  // ⚠️ 这是「精确挑块」最容易写错的地方：挑不到就 `|| parseGaclawResultBlock()` 兜底
+  //   ⇒ 等于把**别的任务**的结论当成本次结果（比超时更坏）。
+  const rec = writeSession(2019);
+  appendTranscript(rec, assistantLine('占位'));
+  const baseline = fs.statSync(transcriptFile(rec)).size;
+
+  const p = watchClaudeSessionResult({
+    sessionId: rec.sessionId,
+    sinceOffset: baseline,
+    timeoutMs: 400,
+    pollMs: 50,
+    taskId: 'task-MISSING',
+  });
+  await sleep(120);
+  appendTranscript(rec, multiResultLine('task-A', 'task-B'));
+  const w = await p;
+  assert.equal(w.ok, false, '★ 我的 task_id 不在块里 ⇒ 必须超时，不能拿别人的结论交差');
+  assert.match(w.error || '', /超时/);
+});

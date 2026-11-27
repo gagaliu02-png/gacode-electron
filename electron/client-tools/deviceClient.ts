@@ -68,7 +68,7 @@ import { clearAccountScopedLocalData } from './accountScope.ts';
 // ★ [2026-11-19 · T-068 / T-072] peer notice 读侧 + 后台 job 管理器。
 import { claudeCodePeerInbox, type DispatchedNotice } from './claudeCodePeerInbox.ts';
 import { readNewAssistantText, findResultBlockByTaskId } from './claudeCodeResultWatcher.ts';
-import { parseGaclawResultBlock } from './claudeResultFormat.ts';
+import { parseGaclawResultBlocks } from './claudeResultFormat.ts';
 // ★ [T-088] 后台任务失败/断链/用户打断 ⇒ 统一机器事件出口。
 import {
   emitMachineEvent,
@@ -576,6 +576,25 @@ interface PeerJob {
   replyTo: MachineEventContext['replyTo'] | null;
   /** ★ [T-121] 第一次看到对方产出新正文的时刻（ms epoch）；没看到过 ⇒ null。 */
   firstReplyTextAt: number | null;
+  /**
+   * ★ [T-174-ccreport] **最近一次**看到对方产出新正文的时刻（ms epoch）；没看到过 ⇒ null。
+   *
+   * ## 为什么宽限窗口必须从「最近一次」算起（生产实证 2026-11-27）
+   *
+   *   `c3dc4245f7f63a3321756404`：注入 01:03:48，会话随后**一直在干活**（跑全量单测），
+   *   期间不断产出新正文；02:14:03 还刚写了一段进度小结，**17 秒后**（02:14:20）
+   *   这条派单被判「已等待 120s 且会话已空闲」⇒ error。
+   *
+   *   病根：宽限窗口按 `firstReplyTextAt` 算 ⇒ 第一次回话在 01:03:55，
+   *   到 02:14 早已过了 120s ⇒ **不管对方还在不在干活**都会收口。
+   *   而 `recStatus === 'idle'` 这个「终态」判据在长任务里**并不可靠**——
+   *   会话在两次工具调用之间本来就会短暂 idle ⇒ 于是「正在干活」被当成「干完了没交结果」。
+   *
+   *   ⇒ 改成从 `lastReplyTextAt` 算：只有**连续 120s 没有任何新正文**才允许收口
+   *     ⇒ 还在产出的会话不会被提前判死；真停下来的会话 120s 后照常收口（横幅仍会消失）。
+   *   ⇒ 24h deadline 仍是最终兜底（对方一直挂着的极端情况）。
+   */
+  lastReplyTextAt: number | null;
 }
 
 /** peer-job 上报载荷（复用 D3 的 JobReport 形状）。 */
@@ -686,6 +705,7 @@ export class PeerJobManager {
       businessSessionId: null,
       replyTo: null,
       firstReplyTextAt: null,
+      lastReplyTextAt: null,
     };
     this.jobs.set(pendingId, job);
     const deadline = setTimeout(() => {
@@ -810,8 +830,15 @@ export class PeerJobManager {
       if (text) {
         // ★ [T-121] 记住「对方确实回过话」这一事实 —— 它是下面「无结果块」收口的起点。
         if (job.firstReplyTextAt === null) job.firstReplyTextAt = Date.now();
-        const hit = parseGaclawResultBlock(text);
-        if (hit && hit.task_id === job.taskId) {
+        // ★ [T-174-ccreport] 同时刷新「最近一次回话」时刻 —— 宽限窗口从它算起
+        //   （见 PeerJob.lastReplyTextAt 的注释：按 first 算会把「还在干活」的会话提前判死）。
+        job.lastReplyTextAt = Date.now();
+        // ★ [T-174-ccreport] 同一条 assistant 补全可能含多个 task_id 的结果块
+        //   （生产实证：两个补投块写在同一条消息里）⇒ 按 job.taskId 精确挑，
+        //   不再让「第一个块不是我的」把本条派单拖到 120s no-block 收口。
+        // ⚠️ 挑不到就继续等（不许退回第一个块 —— 那会把别的任务的结论当成本次结果）。
+        const hit = parseGaclawResultBlocks(text).find((b) => b.task_id === job.taskId);
+        if (hit) {
           await this.settle(pendingId, {
             status: 'ok',
             stdout: JSON.stringify({
@@ -832,6 +859,11 @@ export class PeerJobManager {
       // ★ [T-141] no-block 收口只在**会话真终态**后才允许：
       //   firstReplyTextAt 只作观测，不再直接触发 error（防「结果块已输出但增量漏读」误报）。
       //   exit/unavailable notice 或 registry idle 都算终态；24h deadline 仍是最终兜底。
+      // ★ [T-174-ccreport] 宽限窗口改从 **lastReplyTextAt**（最近一次新正文）算起：
+      //   `recStatus === 'idle'` 在长任务里不可靠（两次工具调用之间本来就会短暂 idle），
+      //   按 first 算 ⇒ 只要开始干活超过 120s，后面**还在产出**也会被收口判死
+      //   （生产实证 c3dc4245…：02:14:03 还在写小结，17 秒后就被判「已等待 120s」）。
+      //   ⇒ 只有**连续 120s 没有任何新正文**才收口 ⇒ 真停下来的会话照旧 120s 后收口。
       const recStatus = (() => {
         try { return String(listClaudeSessions().find((s) => s.sessionId === job.sessionId)?.status || ''); }
         catch { return ''; }
@@ -841,8 +873,8 @@ export class PeerJobManager {
         || recStatus === 'idle';
       if (
         terminal
-        && job.firstReplyTextAt !== null
-        && Date.now() - job.firstReplyTextAt >= PEER_JOB_NO_BLOCK_GRACE_MS
+        && job.lastReplyTextAt !== null
+        && Date.now() - job.lastReplyTextAt >= PEER_JOB_NO_BLOCK_GRACE_MS
       ) {
         await this.settle(pendingId, {
           status: 'error',

@@ -51,7 +51,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { readAssistantTextInFile, findResultBlockInFile } from './claudeCodeResultWatcher.ts';
-import { parseGaclawResultBlock } from './claudeResultFormat.ts';
+import { parseGaclawResultBlocks } from './claudeResultFormat.ts';
 import { findSession } from './claudeCodePeer.ts';
 import { transcriptPath } from './claudeCodeSession.ts';
 import { peerLog } from './peerLog.ts';
@@ -164,6 +164,53 @@ class CcResultCollector {
   private jobs = new Map<string, CollectorJob>();
   private deliver: CollectorDeliverer | null = null;
   private timer: NodeJS.Timeout | null = null;
+  /**
+   * ★ [T-174-ccreport] 已经投递过的**结论指纹**（同一会话内）。
+   *
+   * ## 它治的是哪一种重复投递（生产实证）
+   *
+   *   同一个常驻会话上会**同时挂着多条采集登记**（实测单会话最多 8 条并发未结）。
+   *   当目标会话把**同一份结论**分别按不同 `task_id` 各写一个结果块
+   *   （实测：`pc_bash` 结论一条本地版、一条已上线版，正文完全相同；
+   *    另一个会话里同一段正文出现 5 个不同 task_id）⇒
+   *   每条登记都会命中「自己的」那块 ⇒ **同一份结论投多封**（用户看到 T-171 那种 4 封）。
+   *
+   *   ⚠️ 服务端幂等键是 `sessionId:idempotencyKey`，而采集器的键是 task_id
+   *     ⇒ 服务端**吞不掉**这种「同正文、不同 task_id」的重复 ⇒ 只能端侧挡。
+   *
+   * ## 判据：正文指纹完全相同（保守）
+   *
+   *   只挡「summary + result 逐字相同」的投递；正文有任何差异都照常投
+   *   ⇒ 不会把「补充版 / 修正版」误吞。键里带会话 + 业务会话
+   *   ⇒ 不同会话/不同业务会话之间互不影响。
+   */
+  private deliveredFingerprints = new Map<string, { taskId: string; at: number }>();
+
+  /**
+   * 指纹记忆的有效期（毫秒）。
+   *
+   * ⚠️ 必须有 TTL：采集器是**进程级单例**，长跑几天不清就会一直涨。
+   *   取 6h —— 足够覆盖「同一会话同一结论被不同 task_id 重复补投」的窗口，
+   *   又不会把一周前的旧结论拿来挡住新派单。
+   */
+  private static readonly FINGERPRINT_TTL_MS = 6 * 60 * 60 * 1000;
+
+  /** 结论指纹（会话 + 业务会话 + 正文；正文逐字相同才算同一个）。 */
+  private fingerprintOf(job: CollectorJob, body: string): string {
+    return `${job.sessionId}\u0000${job.businessSessionId}\u0000${body}`;
+  }
+
+  /** 清掉过期指纹（每次登记/投递时顺手做，避免无界增长）。 */
+  private pruneFingerprints(now = Date.now()): void {
+    for (const [k, v] of this.deliveredFingerprints) {
+      if (now - v.at > CcResultCollector.FINGERPRINT_TTL_MS) this.deliveredFingerprints.delete(k);
+    }
+  }
+
+  /** 清空指纹记忆（**只给测试用**：单例跨用例共享，需要隔离）。 */
+  resetDedupeForTest(): void {
+    this.deliveredFingerprints.clear();
+  }
 
   /** 注入回投函数（主进程启动时接线）。 */
   start(deliver: CollectorDeliverer): void {
@@ -284,8 +331,10 @@ class CcResultCollector {
       if (newOffset > job.sinceOffset) job.sinceOffset = newOffset;
       if (text) {
         job.lastText = job.lastText ? `${job.lastText}\n${text}` : text;
-        const parsed = parseGaclawResultBlock(text);
-        if (parsed && parsed.task_id === job.taskId) {
+        // ★ [T-174-ccreport] 一条补全里可能有多个 task_id 的结果块 ⇒ 按本登记的 task_id 精确挑。
+        // ⚠️ 挑不到就**继续等**，不许退回「第一个块」（那会把别的任务的结论当成自己的）。
+        const parsed = parseGaclawResultBlocks(text).find((b) => b.task_id === job.taskId);
+        if (parsed) {
           await this.settleWithResult(job, parsed);
           return;
         }
@@ -315,7 +364,22 @@ class CcResultCollector {
       'result:',
       hit.result || job.lastText || '(结果块正文为空)',
     ].filter(Boolean).join('\n');
+    // ★ [T-174-ccreport] 同一份结论（正文逐字相同）只投一次 —— 见 deliveredFingerprints 的注释。
+    const fp = this.fingerprintOf(job, body);
+    this.pruneFingerprints();
+    const prior = this.deliveredFingerprints.get(fp);
+    if (prior) {
+      peerLog('cc-collect', '同一结论已投过（正文相同、task_id 不同）⇒ 不再重复投递 ' + JSON.stringify({
+        key: job.key,
+        task_id: job.taskId,
+        already: prior.taskId,
+      }));
+      this.jobs.delete(job.key);
+      return;
+    }
     const receipt = await this.push(job, `${head}\n${body}`);
+    // ⚠️ 只在**真的投出去**之后才记账：投递失败（ok:false）不记 ⇒ 下一拍还能重试。
+    if (receipt.ok) this.deliveredFingerprints.set(fp, { taskId: job.taskId, at: Date.now() });
     peerLog('cc-collect', '结果已回投 ' + JSON.stringify({ key: job.key, ok: receipt.ok, duplicate: receipt.duplicate }));
     this.jobs.delete(job.key);
   }

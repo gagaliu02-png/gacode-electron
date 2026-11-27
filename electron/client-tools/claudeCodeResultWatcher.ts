@@ -29,7 +29,7 @@
 
 import * as fs from 'fs';
 import { listClaudeSessions, transcriptPath, type ClaudeSessionRecord } from './claudeCodeSession.ts';
-import { extractClaudeResult, parseGaclawResultBlock, type ExtractedClaudeResult } from './claudeResultFormat.ts';
+import { extractClaudeResult, parseGaclawResultBlocks, type ExtractedClaudeResult } from './claudeResultFormat.ts';
 import type { CliEvent } from './cliService.ts';
 // ★ [T-149-cc] 「被空闲巡检自动关掉」的墓碑 —— 用来给出准确归因。
 import { findAutoClosed } from './ccAutoClosed.ts';
@@ -62,6 +62,8 @@ export interface WatchOptions {
   pollMs?: number;
   /** 取消信号（用户点「停止」⇒ 立刻退出）。 */
   signal?: AbortSignal;
+  /** ★ [T-174-ccreport] 只认这个 task_id 的结果块（不传 ⇒ 兼容老行为：认第一个块）。 */
+  taskId?: string;
 }
 
 /** 取目标会话的登记（找不到 ⇒ null）。 */
@@ -228,9 +230,10 @@ export function findResultBlockInFile(
   // 从后往前找（最近的结果优先）
   for (const id of order.reverse()) {
     const text = byId.get(id)!.join('\n');
-    if (!text.includes(taskId)) continue;
-    const hit = parseGaclawResultBlock(text);
-    if (hit && hit.task_id === taskId) return hit;
+    // ★ [T-174-ccreport] 一条消息可能含**多个 task_id 的结果块**（生产实证）
+    //   ⇒ 按 task_id 精确挑，不能只看该消息里的第一个块。
+    const hit = parseGaclawResultBlocks(text).find((b) => b.task_id === taskId);
+    if (hit) return hit;
   }
   return null;
 }
@@ -277,7 +280,13 @@ export function watchClaudeSessionResult(opts: WatchOptions): Promise<WatchResul
 
       // ④ 主路径：固定结果块
       if (seen) {
-        const hit = parseGaclawResultBlock(seen);
+        // ★ [T-174-ccreport] 同一次补全里可能有多块（含补投的其它任务）⇒ 按 task_id 精确挑。
+        // ⚠️ 指定了 taskId 就**只认它**：挑不到必须继续等，绝不能退回「第一个块」
+        //   （那等于把别的任务的结论当成本次结果）。
+        const blocks = parseGaclawResultBlocks(seen);
+        const hit = opts.taskId
+          ? blocks.find((b) => b.task_id === opts.taskId)
+          : blocks[0];
         if (hit) { finish({ ok: true, result: hit }); return; }
       }
 

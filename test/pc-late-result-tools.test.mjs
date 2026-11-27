@@ -60,7 +60,11 @@ test('T068-P2 ★ pcCcSend 投递 + 订阅后立即返回；不前台等结果',
 test('T068-P3 ★ peer-job 管理器：notice/poll/超时只回传一次；取消走 cancelledByUser', () => {
   assert.match(src, /const PEER_JOB_DEADLINE_MS = 24 \* 60 \* 60 \* 1000/, '24h deadline');
   assert.match(src, /const PEER_JOB_POLL_MS = 45_000/, '慢 poll 45s 兜底');
-  assert.match(src, /hit\.task_id === job\.taskId/, '只认 task_id 匹配的结果块');
+  // ★ [T-174-ccreport] 「只认 task_id 匹配的结果块」这条不变量不变，
+  //   只是查找方式从「取第一个块再比 task_id」改成「按 task_id 精确挑块」
+  //   （一条消息里可能有多个 task_id 的结果块 —— 生产实证 2026-11-27）。
+  assert.match(src, /parseGaclawResultBlocks\(text\)\.find\(\(b\) => b\.task_id === job\.taskId\)/,
+    '只认 task_id 匹配的结果块');
   assert.match(src, /cancelledByUser: true/, '用户停止要带 cancelledByUser');
   assert.match(src, /recoverOrphans\(\)/, '启动清扫孤儿');
   assert.match(src, /if \(!job \|\| job\.settled\) return;/, '回传只能一次');

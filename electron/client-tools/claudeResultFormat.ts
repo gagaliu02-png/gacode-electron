@@ -171,15 +171,45 @@ export function buildReportingContract(taskId?: string | null, replyTo?: PeerRep
   ].join('\n');
 }
 
-/** 从一段文本里找固定结果块。找不到返回 null。 */
-export function parseGaclawResultBlock(text: string): ExtractedClaudeResult | null {
+/**
+ * ★ [T-174-ccreport] 从一段文本里找**全部**闭合的固定结果块，按出现顺序返回。
+ *
+ * ## 为什么要「全部」而不是「第一个」
+ *
+ * 生产事故（2026-11-27）：目标会话在**同一条 assistant 消息**里补投了两个任务的结果块
+ * （`task_id=c3dc4245…` + `task_id=659db392…`）。老的 `parseGaclawResultBlock`
+ * 只取第一个块 ⇒ 排在后面的那条派单怎么也匹配不上自己的 task_id ⇒
+ * 120s 后走 no-block 收口报 error，尽管结论早就在 transcript 里。
+ *
+ * ⇒ 这里把一段正文里所有块都解析出来，让调用方按 task_id 精确挑自己那块。
+ * ⚠️ 单个结果块的解析规则与 `parseGaclawResultBlock` **完全共用**（`parseOneResultBlock`），
+ *    单块场景逐字段不变；未闭合的块仍一律忽略。
+ */
+export function parseGaclawResultBlocks(text: string): ExtractedClaudeResult[] {
   const s = String(text == null ? '' : text);
-  if (!s.includes(RESULT_BLOCK_START)) return null;
-  const start = s.indexOf(RESULT_BLOCK_START);
-  const end = s.indexOf(RESULT_BLOCK_END, start + RESULT_BLOCK_START.length);
-  if (end < 0) return null;                       // 未闭合 ⇒ 当没有
+  const out: ExtractedClaudeResult[] = [];
+  let from = 0;
+  for (;;) {
+    const start = s.indexOf(RESULT_BLOCK_START, from);
+    if (start < 0) break;
+    const bodyStart = start + RESULT_BLOCK_START.length;
+    const end = s.indexOf(RESULT_BLOCK_END, bodyStart);
+    if (end < 0) break;                           // 未闭合 ⇒ 忽略本块及之后
+    const hit = parseOneResultBlock(s.slice(bodyStart, end));
+    if (hit) out.push(hit);
+    from = end + RESULT_BLOCK_END.length;
+  }
+  return out;
+}
 
-  const body = s.slice(start + RESULT_BLOCK_START.length, end);
+/** 从一段文本里找固定结果块。找不到返回 null（只取**第一个** —— 多块请走 parseGaclawResultBlocks）。 */
+export function parseGaclawResultBlock(text: string): ExtractedClaudeResult | null {
+  const blocks = parseGaclawResultBlocks(text);
+  return blocks.length ? blocks[0] : null;
+}
+
+/** 解析**一个**块体（不含 START/END 标记）；空块或没内容的返回 null。 */
+function parseOneResultBlock(body: string): ExtractedClaudeResult | null {
   const lines = body.split(/\r?\n/);
 
   let status = '';
