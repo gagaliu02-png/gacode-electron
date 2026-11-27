@@ -1052,6 +1052,9 @@ export function ChatDetail() {
         // 历史消息的思考/工具时间线 (M5 批): api.getHistory 已把服务端 phases_json 解析成 ExecutionPhase[]
         // ★ [T-175] 首屏服务端剥掉了 thinking 段 ⇒ `m.phases` 只有 tool 段；
         //   思考**明细**等用户点开时按需拉（`loadPhasesFor`）⇒ 这里优先用缓存里的完整明细。
+        //   ★ [T-180] 缓存键必须跟拉取/展开那一侧一致 —— 那边传的是
+        //     `m.serverId`（= 本行 m.id，见上面的 `serverId: m.id`）；
+        //     `ChatMessageModel.id` 对注入行却是合成 id `supplement:<inbox_id>` ⇒ 不能用它查缓存。
         phases: phasesDetailCache[m.id]?.phases ?? m.phases,
         // ★ 任务书 P-4 —— 历史消息的**富事件** (工具卡片 / 文件 / 图片 / 审批回执)
         //   也得还原出来, 否则刷新后历史里的工具卡片全没了。
@@ -1074,8 +1077,11 @@ export function ChatDetail() {
       };
     });
     return list;
+    // ★ [T-180] `phasesDetailCache` 必须进依赖 —— 否则「点开 → 拉到明细 → setState」
+    //   只会让组件重渲染，这个 useMemo 却因依赖没变直接复用旧数组
+    //   ⇒ 回填的 thinking 永远到不了气泡 ⇒ 用户点开只有工具记录（本次报障根因）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyQuery.data, olderMessages, chatId]);
+  }, [historyQuery.data, olderMessages, chatId, phasesDetailCache]);
 
   // 流式期间累积 (content + events). MessageList 用 streamingContent 渲染最后一条.
   const [streamingAssistantId, setStreamingAssistantId] = useState<string | null>(null);
@@ -1818,6 +1824,9 @@ export function ChatDetail() {
     //   （「PC 端气泡缺执行时间」的根因之一）。
     streamingTurnMeta,
     streamingTiming,
+    // ★ [T-180] 显式订阅缓存（baseMessages 引用也会随它变）—— 防未来有人改
+    //   baseMessages 的派生方式时把「点开拉明细回填」再次弄丢。
+    phasesDetailCache,
   ]);
 
 
