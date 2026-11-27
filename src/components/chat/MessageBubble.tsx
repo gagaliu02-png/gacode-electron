@@ -39,7 +39,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import { Markdown } from "../../lib/markdown";
-import { RichEventBubble, type RichEvent } from "./RichEventBubble";
+import { type RichEvent } from "./RichEventBubble";
 import { MessageMenu, type MessageAction } from "./MessageMenu";
 import { ReferenceFold } from "./ReferenceFold";
 import { QuoteReplyBlock } from "./QuoteReplyBlock";
@@ -60,6 +60,31 @@ import {
 // ============================================================================
 // A2-D4-06 · 渲染层剥图 (抄 web `gacode-web/src/components/chat/MessageBubble.tsx:133-198`)
 // ============================================================================
+
+/**
+ * ★ [T-175] 把「没有 phases 的老数据」的富事件转成 timeline phase。
+ *
+ *   ## 为什么要转
+ *
+ *     老分支 `hasRichEvents && !hasPhases` 会把 thinking / tool_done /
+ *     各类「总结」事件**直接渲在正文里**，且不受 ExecutionTimeline 折叠控制
+ *     ⇒ 流式期间这些内容漏进 assistant 正文，终态后服务端 history 带 phases
+ *     回来又消失（gaga 报的 bug）。
+ *     ⇒ 转成 tool phase 交给 ExecutionTimeline ⇒ 统一走折叠区，行为一致。
+ *
+ *   ## 语义
+ *
+ *     富事件的形状本来就是 `{ type, ... }`，跟 `ExecutionPhase.event` 兼容
+ *     （ExecutionTimeline 展开时就是把它交给 RichEventBubble 渲染）。
+ *     ⚠️ 不丢任何一条事件 —— 只是换个容器。
+ */
+function richEventsToFallbackPhases(events: RichEvent[]): ExecutionPhase[] {
+  return events.map((ev) => ({
+    type: "tool" as const,
+    event: ev as unknown as Record<string, unknown>,
+    ts: Date.now(),
+  }));
+}
 
 /**
  * URL normalize helpers —— 解决「stream-end / 刷新页面后 server 重签 URL 导致
@@ -205,6 +230,15 @@ export interface MessageBubbleProps {
   toolCallCount?: number | null;
   /** ★ 服务端给的**逻辑**思考段数 (T-16) —— 有值则端侧不数帧。 */
   thinkingCount?: number | null;
+  /**
+   * ★ [T-175] **展开时按需拉明细**（首屏不下载思考正文）。
+   *
+   *   首屏服务端剥掉了 thinking 段（`include_phases=0`）⇒ 用户点开折叠区时
+   *   才去 `GET /yinian/messages/:id/phases` 取明细 ⇒ 父组件负责拉 + 回填。
+   */
+  onExpandPhases?: (() => void) | null;
+  /** ★ [T-175] 明细正在加载。 */
+  phasesLoading?: boolean;
   /**
    * ★ 终态分类 (T-12): completed / cancelled / filtered / failed / upstream_lost。
    *   `filtered` = 天眼命中 ⇒ 正文已被端侧撤掉 (purge)。
@@ -446,6 +480,8 @@ function AssistantBubble({
   elapsedMs,
   toolCallCount,
   thinkingCount,
+  onExpandPhases,
+  phasesLoading,
   terminalReason,
   startedAt,
   finishedAt,
@@ -468,6 +504,9 @@ function AssistantBubble({
   | "elapsedMs"
   | "toolCallCount"
   | "thinkingCount"
+  // ★ [T-175] 展开时按需拉明细
+  | "onExpandPhases"
+  | "phasesLoading"
   | "terminalReason"
   | "startedAt"
   | "finishedAt"
@@ -478,6 +517,12 @@ function AssistantBubble({
   const hasCallTree = !!callTree && callTree.length > 0;
   const hasContent = !!content && content.trim().length > 0;
   const hasPhases = !!phases && phases.length > 0;
+  // ★ [T-175] **有计数也算「有执行信息」** ——
+  //   首屏服务端剥掉了 thinking 段 ⇒ 有些消息 `phases` 为空但 `thinkingCount > 0`
+  //   ⇒ ⛔ 老判据（只看 phases）会让这类消息**整个气泡都不渲染**（连折叠区都没了）
+  //   ⇒ 用户看不到「思考 N 次」⇒ 更没法点开去拉明细。
+  const hasPhaseCounts =
+    (toolCallCount ?? 0) > 0 || (thinkingCount ?? 0) > 0;
   const timeAgo = createdAt ? formatAgo(createdAt) : "";
 
   // ====== M2 2A P0-3 实时秒表 (对齐 web `MessageBubble.tsx:221-251`) ======
@@ -535,7 +580,7 @@ function AssistantBubble({
   }
 
   // 空 + 没事件 → 完全不渲染 (流式刚开始那两个 frame)
-  if (!hasContent && !hasRichEvents && !hasCallTree && !hasPhases) return null;
+  if (!hasContent && !hasRichEvents && !hasCallTree && !hasPhases && !hasPhaseCounts) return null;
 
   return (
     <div className="flex justify-start items-start gap-1.5">
@@ -559,7 +604,7 @@ function AssistantBubble({
                思考还没产出正文时, 时间线就已经可见 (web 的气泡容器无条件渲染).
             ★ [批 G8 · 2026-11-02] 加 hasRichEvents: 富事件挪进气泡**内**后,
                「只有工具事件、没有正文」的消息也得有气泡装它 (web 同款). */}
-        {hasContent || hasPhases || hasRichEvents ? (
+        {hasContent || hasPhases || hasRichEvents || hasPhaseCounts ? (
           <div className="rounded-[16px] rounded-bl-[4px] bg-background border border-border text-foreground px-4 py-3 text-sm leading-relaxed shadow-sm">
             {/* A2-D4-02: 思考 / 工具时间线 (正文**上方**, 对齐 web MessageBubble.tsx:396-398).
                 phases 为空 ⇒ 组件自身 return null ⇒ 不渲染空框.
@@ -568,6 +613,9 @@ function AssistantBubble({
               phases={phases ?? []}
               toolCallCount={toolCallCount}
               thinkingCount={thinkingCount}
+              // ★ [T-175] 展开时按需拉明细（首屏不下载思考正文）。
+              onExpand={onExpandPhases ?? null}
+              loading={phasesLoading ?? false}
             />
             {hasContent ? (
               <>
@@ -587,12 +635,22 @@ function AssistantBubble({
                 子气泡里, 而不是直接在正文的地方显示」。
                 ⚠️ 兜底: 极老数据(有 richEvents 却**没有** phases)仍在正文渲染 ——
                    不让任何一条事件凭空消失 (正常路径走不到这里)。 */}
+            {/* ★ [T-175] 修「思考/工具总结漏进正文」——
+                老兜底分支 `hasRichEvents && !hasPhases` 把**所有**富事件
+                （含 thinking / tool_done / 各类「总结」）直接渲在正文里，
+                且**不受 ExecutionTimeline 的折叠控制** ⇒ 流式期间用户看到
+                「上下文思考 / 工具调用结果总结」混在 assistant 正文；
+                等终态后服务端 history 回来（带 phases）⇒ 走正常折叠路径
+                ⇒ 这些内容「又没了」。这正是 gaga 报的 bug。
+                ⇒ 改成：把缺 phases 的富事件**构造成 phases** 交给
+                  ExecutionTimeline ⇒ 统一走折叠区（默认收起，点开才看）。
+                ⚠️ 只在 `hasRichEvents && !hasPhases` 时才合成，正常路径逐字不变。 */}
             {hasRichEvents && !hasPhases ? (
-              <div className="mt-2 flex flex-col gap-2">
-                {richEvents!.map((ev, i) => (
-                  <RichEventBubble key={`ev-${i}-${String(ev.type)}`} event={ev} />
-                ))}
-              </div>
+              <ExecutionTimeline
+                phases={richEventsToFallbackPhases(richEvents!)}
+                toolCallCount={null}
+                thinkingCount={null}
+              />
             ) : null}
             {/* ★ R2-PC (T-12): 终态标记 —— 只有「非正常完成」才显形。
                 ⛔ 天眼 (filtered) 不是错误 ⇒ 用 warn 语气, 不弹红色报错。 */}

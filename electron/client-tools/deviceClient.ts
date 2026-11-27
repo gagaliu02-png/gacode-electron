@@ -86,6 +86,63 @@ export function apiBase(): string {
   return String(raw).replace(/\/+$/, '');
 }
 
+/**
+ * ★ [T-175] **主进程侧**的 access token 刷新器（默认实现）。
+ *
+ * ## 为什么主进程能自己刷
+ *
+ *   主进程持有 `refresh-token.json`（`%APPDATA%/Gacode/`，渲染层 hydrate 时写的）
+ *   ⇒ 能直接调 `POST /auth/refresh` 换一个**新的** access token。
+ *
+ * ## 为什么必须有它（生产实证 2026-11-27）
+ *
+ *   access token 由**渲染层**推给主进程（`gacode:client-tool-set-token`），
+ *   而刷新只在**渲染层自己发请求收到 401** 时才发生
+ *   ⇒ 主进程这条路上的 token 会一直过期
+ *   ⇒ 后台任务结果的 D3 上行拿到 401 ⇒ 回报送不到服务端
+ *   ⇒ 派单账永远 running ⇒ 横幅不消失 ⇒ **Cody 收不到后台任务回报**。
+ *
+ * ⚠️ refresh token 是 **rotation** 语义（旧的立刻作废）⇒ 刷新必须**单飞**
+ *   （`DeviceClient.refreshAccessToken` 已经保证）。
+ */
+export async function refreshAccessTokenFromDisk(): Promise<string | null> {
+  try {
+    // 读盘（跟渲染层 auth-refresh.ts 同一条路：主进程读同一个文件）。
+    const {
+      readRefreshTokenForRefresh,
+      writeRefreshTokenForRefresh,
+    } = await import('./refreshTokenStore.ts');
+    const rt = await readRefreshTokenForRefresh();
+    if (!rt) return null;
+    const r = await fetch(`${apiBase()}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: rt }),
+    });
+    if (!r.ok) {
+      logDevice(`token 刷新失败 HTTP ${r.status}`);
+      return null;
+    }
+    const json = (await r.json().catch(() => null)) as {
+      ok?: boolean;
+      data?: { accessToken?: string; refreshToken?: string };
+    } | null;
+    if (!json?.ok || !json.data?.accessToken) return null;
+    // rotation ⇒ 新的 refreshToken 必须**立刻落盘**（旧的已作废）。
+    if (json.data.refreshToken) {
+      try {
+        await writeRefreshTokenForRefresh(json.data.refreshToken);
+      } catch (e) {
+        logDevice(`新 refreshToken 落盘失败: ${(e as Error).message}`);
+      }
+    }
+    return json.data.accessToken;
+  } catch (e) {
+    logDevice(`token 刷新异常: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 /** `deviceId` 文件（L-25a：安装实例级 UUID，⛔ 不用硬件指纹）。 */
 export function deviceIdFile(): string {
   return path.join(app.getPath('userData'), 'device-id.json');
@@ -435,6 +492,10 @@ function machineEventDeps(client: DeviceClient): MachineEventDeps {
     apiBase,
     accessToken: () => client.getAccessToken(),
     deviceId: () => getDeviceId(),
+    // ★ [T-175] 机器事件投回业务会话（`POST /devices/cc/messages`）——
+    //   走 authFetch ⇒ 401 自动续期（否则机器事件一次 401 就永久丢，
+    //   因为 outbox 的 `readPendingOutbox` 全仓零调用 ⇒ 没有补发）。
+    authFetch: (url, init) => client.authFetch(url, init, '机器事件'),
     // ★ reply_to 可用时把 channel-status 注记也写进目标 CC 会话（best-effort）。
     writeChannelStatus: async (sessionId, notice) => {
       // 延迟 import 避免顶层循环（claudeCodePeer → deviceClient 在 executor 里用）。
@@ -963,6 +1024,130 @@ class DeviceClient {
   private lastError: string | null = null;
   private replacedDeviceId: string | null = null;
   /**
+   * ★ [T-175] **access token 刷新器**（可注入）—— 主进程没有登录态，
+   *   但它**能读 refreshToken**（`refresh-token.json` + `gacode:auth-read-refresh-token`）。
+   *
+   *   ## 为什么必须有它（生产实证 2026-11-27）
+   *
+   *     后台任务结果的 D3 上行（`POST /devices/tasks/:pendingId/result`）拿到 **401**
+   *     ⇒ 结果送不到服务端 ⇒ 派单账永远 `settled:false / running`
+   *     ⇒ 「等待后台任务完成…」横幅不消失 + 服务端起不了汇报轮
+   *     ⇒ **Cody 收不到后台任务回报**（真机 session 1193 · T-148）。
+   *
+   *     根因：`uploadResult` 只特判 409，401 直接归 `HTTP_401` 标失败 ⇒ **不重试**。
+   *     而 access token 是**渲染层**推过来的（`gacode:client-tool-set-token`），
+   *     只有渲染层自己发请求触发 401 时才会刷新 ⇒ 主进程这条路上**没人刷新**。
+   *
+   *   ## 契约
+   *
+   *     · 返回**新的** access token（null = 刷新失败 ⇒ 不重试，如实标失败）；
+   *     · **单飞**（并发调用只刷一次）—— 服务端 refresh token 是 rotation
+   *       （旧的立刻作废）⇒ 并发刷新会互相作废；
+   *     · 拿到新 token 后**必须** `setAccessToken` ⇒ 后续请求都用新的。
+   */
+  private tokenRefresher: (() => Promise<string | null>) | null = null;
+  /** 单飞用的 in-flight promise（并发调用共用同一个）。 */
+  private refreshing: Promise<string | null> | null = null;
+
+  /**
+   * ★ [T-175] 注入 token 刷新器（由 ipc.ts / main.ts 在启动时调一次）。
+   *
+   * 不传 ⇒ 401 仍然按老行为（标失败不重试）⇒ 行为逐字不变。
+   */
+  setTokenRefresher(fn: (() => Promise<string | null>) | null): void {
+    this.tokenRefresher = fn;
+  }
+
+  /**
+   * ★ [T-175] 刷新 access token（**单飞**）。
+   *
+   * ⚠️ 单飞是硬要求：服务端 refresh token 是 rotation 语义（旧的立刻作废）
+   *   ⇒ 并发刷新会互相作废 ⇒ 两个调用都拿到 null。
+   */
+  private async refreshAccessToken(): Promise<string | null> {
+    const refresher = this.tokenRefresher;
+    if (!refresher) return null;
+    if (this.refreshing) return this.refreshing;
+    const p = (async () => {
+      try {
+        const fresh = await refresher();
+        if (fresh && fresh !== this.accessToken) {
+          // ⚠️ 必须同步更新内存那份 ⇒ 后续请求都用新 token。
+          this.setAccessToken(fresh);
+        }
+        return fresh;
+      } catch (e) {
+        logDevice(`token 刷新异常: ${(e as Error).message}`);
+        return null;
+      } finally {
+        this.refreshing = null;
+      }
+    })();
+    this.refreshing = p;
+    return p;
+  }
+
+  /**
+   * ★ [T-175] **带 401 自动续期**的 fetch —— 主进程所有带 Bearer 的请求都走它。
+   *
+   *   ## 为什么要有
+   *
+   *     access token 会过期（生产日志：401 共 13.5 万次，横跨所有需鉴权端点）。
+   *     主进程是**长驻**的 ⇒ 它手上的 token 会在某个时刻过期，
+   *     而**只有渲染层发请求时**才会触发刷新 ⇒ 主进程这条路会一直拿着旧 token。
+   *
+   *   ## 契约
+   *
+   *     · 401 ⇒ 刷新 token ⇒ **重试一次**（只一次，不死循环）；
+   *     · 刷新失败 / 重试后仍 401 ⇒ **如实返回那个 401 响应**
+   *       （由调用方按各自口径标失败 ⇒ 不静默吞掉）。
+   */
+  /**
+   * ★ [T-175] **对外暴露**带 401 续期的 fetch —— 给那些**不经过 deviceClient**
+   * 但同样要带 Bearer 的模块用（例：`ccSessionToolService` 的 CC→Cody 回传主链路）。
+   *
+   * ⚠️ 那类模块原本**自有一套** `authHeaders` + `fetchJson`
+   *   ⇒ 完全绕过 deviceClient ⇒ 401 不会自愈 ⇒ CC 的产出送不出去 ⇒ Cody 收不到。
+   */
+  authFetch(
+    url: string,
+    init: RequestInit = {},
+    label = 'request',
+  ): Promise<Response> {
+    return this.authFetchInternal(url, init, label);
+  }
+
+  private async authFetchInternal(
+    url: string,
+    init: RequestInit = {},
+    label = 'request',
+  ): Promise<Response> {
+    const doFetch = (token: string | null) =>
+      fetch(url, {
+        ...init,
+        headers: {
+          ...(init.headers as Record<string, string> | undefined),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+    let res: Response;
+    try {
+      res = await doFetch(this.accessToken);
+    } catch (e) {
+      throw e;
+    }
+    if (res.status !== 401) return res;
+    // 401 ⇒ 刷一次 token 再试一次。
+    const fresh = await this.refreshAccessToken();
+    if (!fresh) {
+      logDevice(`${label} 401 且 token 刷新失败 ⇒ 如实返回 401`);
+      return res;
+    }
+    logDevice(`${label} 401 ⇒ 已刷新 token，重试一次`);
+    return doFetch(fresh);
+  }
+
+  /**
    * ★ [2026-11-17] **已被解绑**（用户主动解绑 / 账号登出）。
    *
    * ⛔ 为 true 时**不注册、不重连** ⇒ 解绑是真的解绑，不是「解完几秒又抢回来」。
@@ -1438,15 +1623,20 @@ class DeviceClient {
     };
     if (ccSessionId) body.ccSessionId = ccSessionId;
     try {
-      const res = await fetch(`${apiBase()}/devices/cc/messages`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          Authorization: `Bearer ${this.accessToken}`,
-          'x-device-id': getDeviceId(),
+      // ★ [T-175] 走 authFetch —— 401 ⇒ 刷新 token ⇒ 重试一次。
+      //   （这条是 CC 采集到的结果投回业务会话 ⇒ Cody 收得到的关键路径。）
+      const res = await this.authFetch(
+        `${apiBase()}/devices/cc/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-device-id': getDeviceId(),
+          },
+          body: JSON.stringify(body),
         },
-        body: JSON.stringify(body),
-      });
+        'CC结果回投',
+      );
       if (!res.ok) {
         logDevice(`[T-154-cc] 结果回投失败（${res.status}）: ${businessSessionId}`);
         return { ok: false, duplicate: false };
@@ -1525,21 +1715,24 @@ class DeviceClient {
   private async register(ac: AbortController): Promise<void> {
     const deviceId = getDeviceId();
     this.deviceId = deviceId;
-    const res = await fetch(`${apiBase()}/devices/register`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.accessToken}`,
-      },
-      body: JSON.stringify({
-        deviceId,
-        deviceName: deviceName(),
-        platform: os.platform(),
-        // ★ 这台设备自己的能力 ⇒ 服务端按**账号的设备能力**决定这一轮能不能派端侧工具。
-        capabilities: deviceCapabilities(),
-      }),
-      signal: ac.signal,
-    });
+    const res = await this.authFetch(
+      `${apiBase()}/devices/register`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          deviceId,
+          deviceName: deviceName(),
+          platform: os.platform(),
+          // ★ 这台设备自己的能力 ⇒ 服务端按**账号的设备能力**决定这一轮能不能派端侧工具。
+          capabilities: deviceCapabilities(),
+        }),
+        signal: ac.signal,
+    },
+      '设备注册',
+    );
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       // ★ [2026-11-17 · 修] 「这台电脑已经绑定到别的账号」（409）**不是**可重试的失败。
@@ -1562,16 +1755,18 @@ class DeviceClient {
 
   /** D2 SSE 长连。 */
   private async openStream(ac: AbortController): Promise<void> {
-    const res = await fetch(
+    // ★ [T-175] 走 authFetch —— 401 ⇒ 刷新 token ⇒ 重试一次。
+    //   （设备通道 401 ⇒ 通道建不起来 ⇒ 派单收不到 ⇒ 「我的电脑离线」误报。）
+    const res = await this.authFetch(
       `${apiBase()}/devices/events?deviceId=${encodeURIComponent(this.deviceId)}`,
       {
         headers: {
-          Authorization: `Bearer ${this.accessToken}`,
           'X-Device-Id': this.deviceId,
           Accept: 'text/event-stream',
         },
         signal: ac.signal,
       },
+      '设备SSE',
     );
     if (!res.ok || !res.body) {
       const text = await res.text().catch(() => '');
@@ -1580,6 +1775,20 @@ class DeviceClient {
     this.connected = true;
     logDevice('设备通道已连接（SSE 建立）');
     this.retryDelay = 3000;
+
+    // ★ [T-175] **补发 outbox 里未发出的机器事件** ——
+    //   通道连上 = 鉴权已通（token 有效）⇒ 此时补发最合适
+    //   （之前失败的原因往往就是 401 ⇒ token 过期 ⇒ 现在刚好能发出去）。
+    //   ⚠️ 后台执行，不阻塞通道建立。
+    void (async () => {
+      try {
+        const { flushPendingOutbox } = await import('./machineEvents.ts');
+        const r = await flushPendingOutbox(machineEventDeps(this));
+        if (r.sent) logDevice(`outbox 补发完成：${r.sent} 条已送达`);
+      } catch (e) {
+        console.warn('[machine-events] outbox 补发异常:', (e as Error).message);
+      }
+    })();
 
     let dataLines: string[] = [];
     for await (const line of readLines(res)) {
@@ -1897,11 +2106,14 @@ class DeviceClient {
           fd.append('deviceId', this.deviceId);
           fd.append('kind', a.kind);
           try {
-            res = await fetch(`${apiBase()}/devices/artifacts`, {
-              method: 'POST',
-              headers: { Authorization: `Bearer ${this.accessToken}` },
-              body: fd,
-            });
+            res = await this.authFetch(
+              `${apiBase()}/devices/artifacts`,
+              {
+                method: 'POST',
+                body: fd,
+              },
+              '产物上传',
+            );
           } catch (e) {
             console.warn(
               `[client-tools/device] 产物上传异常（第 ${attempt}/3 次）:`,
@@ -2110,23 +2322,27 @@ ${note}` : note,
       } catch (_) { /* 非 JSON stdout 用派单 session */ }
     }
     try {
-      const res = await fetch(`${apiBase()}/devices/cc/receipts`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.accessToken}`,
-          'X-Device-Id': this.deviceId,
+      // ★ [T-175] 走 authFetch（401 ⇒ 刷新 token ⇒ 重试一次）。
+      const res = await this.authFetch(
+        `${apiBase()}/devices/cc/receipts`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Device-Id': this.deviceId,
+          },
+          body: JSON.stringify({
+            pending_id: deliveryId,
+            delivery_id: deliveryId,
+            session_id: reportSessionId,
+            status: opts.status,
+            origin: 'pc_cc',
+            from_id: `pc:${tool}`,
+            note: opts.status === 'turn_acked' ? 'turn acked' : 'visible on pc',
+          }),
         },
-        body: JSON.stringify({
-          pending_id: deliveryId,
-          delivery_id: deliveryId,
-          session_id: reportSessionId,
-          status: opts.status,
-          origin: 'pc_cc',
-          from_id: `pc:${tool}`,
-          note: opts.status === 'turn_acked' ? 'turn acked' : 'visible on pc',
-        }),
-      });
+        'CC回执',
+      );
       if (!res.ok && res.status !== 409 && res.status !== 404) {
         const text = await res.text().catch(() => '');
         console.warn('[client-tools/device] cc receipt 回执失败:', res.status, text.slice(0, 160));
@@ -2156,15 +2372,20 @@ ${note}` : note,
     result: ClientToolResult,
   ): Promise<{ ok: boolean; reason?: string; alreadySettled?: boolean; settledStatus?: string | null }> {
     try {
-      const res = await fetch(`${apiBase()}/devices/tasks/${encodeURIComponent(pendingId)}/result`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.accessToken}`,
-          'X-Device-Id': this.deviceId,
+      // ★ [T-175] 走 authFetch —— 401 ⇒ 刷新 token ⇒ 重试一次。
+      //   （这一条是「后台任务回报送不到服务端 ⇒ 横幅不消失 ⇒ Cody 收不到回报」的根因修法。）
+      const res = await this.authFetch(
+        `${apiBase()}/devices/tasks/${encodeURIComponent(pendingId)}/result`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Device-Id': this.deviceId,
+          },
+          body: JSON.stringify({ deviceId: this.deviceId, ...result }),
         },
-        body: JSON.stringify({ deviceId: this.deviceId, ...result }),
-      });
+        'D3结果上行',
+      );
       if (res.ok) return { ok: true };
       // 409 = 别人已经结过了（L-25n）⇒ 收工，不重试。
       // ★ [T-166 · D1] **明确标记 alreadySettled** ⇒ 调用方知道「服务端已结」，

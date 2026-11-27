@@ -78,6 +78,25 @@ export interface ExecutionTimelineProps {
    *   - 没有 ⇒ 端侧兜底数。
    */
   thinkingCount?: number | null;
+  /**
+   * ★ [T-175] **展开时按需加载明细**（首屏不下载思考正文）。
+   *
+   *   ## 为什么
+   *
+   *     思考正文单条可达几十 KB（`phases_json` 上限 64KB/条）
+   *     ⇒ 首屏 100 条就是几 MB 的下载 + JSON.parse ⇒ 开长会话卡。
+   *     ⇒ 服务端在 `include_phases=0` 时**剥掉 thinking 段**（保留 tool 段，
+   *     交付物卡片不受影响）⇒ 首屏只拿**计数**。
+   *
+   *   ## 契约
+   *
+   *     · 用户点开折叠区 ⇒ 调它 ⇒ 拉明细 ⇒ 父组件把新 phases 传下来；
+   *     · 拉取**期间**显示 loading 提示（`loading` prop）；
+   *     · 不传 ⇒ 老行为（明细本来就在手上，直接展开）。
+   */
+  onExpand?: (() => void) | null;
+  /** ★ [T-175] 明细正在加载（首屏没拿到明细时展开 ⇒ 显示 loading）。 */
+  loading?: boolean;
 }
 
 /**
@@ -92,6 +111,27 @@ function fallbackCount(phases: SsePhase[]) {
   return { thinking: r.thinking, tool: r.tool };
 }
 
+/**
+ * ★ [T-175] **轻量计数** —— 只数 phase 的类型，不做任何文本处理。
+ *
+ *   折叠态用它算 fallback 计数（服务端没给权威值时）——
+ *   `renderPhases` 会把相邻 thinking 的 text 拼起来（几十 KB 字符串活），
+ *   折叠态没必要付这个成本。
+ *
+ *   ⚠️ 与 `fallbackCount` 的口径差异：thinking 段数在 v1 兼容分支里会被**合并**，
+ *      这里数的是**原始**条数 ⇒ 老服务端（无权威计数）时折叠态可能比展开态多几。
+ *      展开态仍用 `fallbackCount`（与历史视图同款）⇒ 展开时数字会变少 —— 可接受。
+ */
+function lightweightCount(phases: ExecutionPhase[]) {
+  let thinking = 0;
+  let tool = 0;
+  for (const p of phases) {
+    if (p.type === "thinking") thinking += 1;
+    else if (p.type === "tool") tool += 1;
+  }
+  return { thinking, tool };
+}
+
 // ════════════════════════════════════════════════════════════
 // ExecutionTimeline
 // ════════════════════════════════════════════════════════════
@@ -101,11 +141,21 @@ export function ExecutionTimeline({
   defaultExpanded = false,
   toolCallCount = null,
   thinkingCount = null,
+  onExpand,
+  loading = false,
 }: ExecutionTimelineProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [openThinkingIdx, setOpenThinkingIdx] = useState<number | null>(null);
 
-  if (!phases || phases.length === 0) return null;
+  // ★ [T-175] 「没有明细」≠「没有折叠区」——
+  //   首屏服务端剥掉了 thinking 段（`include_phases=0`）⇒ `phases` 里只剩 tool 段
+  //   ⇒ 有些消息 **phases 为空但 thinking_count > 0** ⇒
+  //   ⛔ 老判据 `phases.length === 0 ⇒ return null` 会让**折叠区整个消失**
+  //      ⇒ 用户连「思考 N 次」都看不到 ⇒ 更没法点开去拉。
+  //   ⇒ 改成：没有任何信息（无 phases 且无计数）才不渲染。
+  const hasPhases = !!phases && phases.length > 0;
+  const hasCounts = (thinkingCount ?? 0) > 0 || (toolCallCount ?? 0) > 0;
+  if (!hasPhases && !hasCounts) return null;
 
   // ★ 相邻 thinking 的合并**只有这一处** (T-16 / 架构 §2.5.3)。
   //   · 服务端给了权威计数 ⇒ 服务端给的 phases 已是合并形态 ⇒ **原样**渲染;
@@ -116,18 +166,43 @@ export function ExecutionTimeline({
   // ★ [T-156] 折叠态下 `renderPhases`（v1 兼容分支会把相邻 thinking 的 text 拼起来）
   //   是纯字符串活 —— 列表 re-render（SSE 每帧都来）时不该为**没展开**的时间线重算。
   //   useMemo 按 phases 引用缓存 ⇒ 折叠态只在 phases 真变了才算一次。
+  // ★ [T-175] **折叠态不参与 phases 引用** ——
+  //   流式期间 `phases` 每帧换新引用 ⇒ 旧的 useMemo 每帧都失效 ⇒ 每帧重算
+  //   `renderPhases`（几十 KB thinking 文本的字符串拼接）⇒ 长会话里白烧 CPU。
+  //   ⇒ 折叠态只要**计数**（服务端给的权威值优先），明细等展开时再算。
   const rendered = useMemo(
-    () => renderPhases(phases as unknown as SsePhase[], { authoritative }),
-    [phases, authoritative],
+    () => renderPhases((phases ?? []) as unknown as SsePhase[], { authoritative }),
+    // 折叠态不订阅 phases 引用变化；展开态才需要明细跟着变。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [expanded ? phases : null, authoritative],
   );
 
-  const fallback = useMemo(() => fallbackCount(rendered), [rendered]);
+  // ★ [T-175] 折叠态的计数走**轻量路径** ——
+  //   `rendered` 在折叠态是空数组（明细等展开再算）⇒ 不能拿它算 fallback 计数，
+  //   否则折叠态会显示「0 次」。改用只数 type 的轻量函数（不碰 thinking 文本）。
+  const safePhases = phases ?? [];
+  const fallback = useMemo(
+    () => (expanded ? fallbackCount(rendered) : lightweightCount(safePhases)),
+    [expanded, rendered, safePhases],
+  );
   const thinking = thinkingCount ?? fallback.thinking;
   const tool = toolCallCount ?? fallback.tool;
   const summary =
     thinking > 0 || tool > 0
       ? `思考 ${thinking} 次 · 工具 ${tool} 次`
-      : `${rendered.length} 个步骤`;
+      : `${expanded ? rendered.length : safePhases.length} 个步骤`;
+
+  /**
+   * ★ [T-175] 点 header ⇒ 展开/收起；**展开时**先触发 `onExpand`（按需拉明细）。
+   *
+   * ⚠️ 只有「展开」才拉（收起不需要）⇒ 不会反复请求。
+   * ⚠️ 父组件负责去重/缓存（同一消息只拉一次）。
+   */
+  const toggle = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && onExpand) onExpand();
+  };
 
   return (
     <div
@@ -141,7 +216,7 @@ export function ExecutionTimeline({
       {/* Header — 始终可点, 控制 expanded */}
       <button
         type="button"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={toggle}
         aria-expanded={expanded}
         className="w-full px-2.5 py-1.5 flex items-center gap-1.5 hover:bg-bg-sunken transition-colors text-left"
       >
@@ -152,12 +227,19 @@ export function ExecutionTimeline({
         )}
         <BrainIcon className="w-3.5 h-3.5 shrink-0" />
         <span className="font-medium">{summary}</span>
+        {/* ★ [T-175] 明细在拉 ⇒ header 上给个提示（别让用户以为点了没反应）。 */}
+        {loading ? <span className="opacity-70">（加载中…）</span> : null}
       </button>
 
       {/* 展开后列出每条 phase (★ 用合并后的 rendered —— 不是原始 phases)
           ★ [T-156] 整段只在 expanded=true 时挂载 —— 折叠态不创建几百个 DOM 节点，
-            也不让隐藏的思考正文参与布局/重排（长会话里每条消息都带几 KB thinking）。 */}
-      {expanded ? (
+            也不让隐藏的思考正文参与布局/重排（长会话里每条消息都带几 KB thinking）。
+          ★ [T-175] 明细还没拉到（loading）⇒ 先给个占位，别渲染空的折叠区。 */}
+      {expanded && loading ? (
+        <div className="border-t border-border/60 px-2.5 py-1.5 text-xs opacity-70">
+          正在加载思考与工具明细…
+        </div>
+      ) : expanded ? (
         <div className="border-t border-border/60 divide-y divide-border/40">
           {rendered.map((p, idx) => {
             if (p.type === "thinking") {

@@ -86,9 +86,24 @@ export function resolveTranscript(sessionId: string): string | null {
 /** 轮询间隔（毫秒）。 */
 export const COLLECTOR_POLL_MS = Number(process.env.CC_COLLECTOR_POLL_MS ?? 10_000);
 
-/** 单条采集的最长等待（毫秒）—— 超时也要回一条「没拿到结果」，不许让对端干等。 */
+/** 单条采集的最长等待（毫秒）—— 超时也要回一条「没拿到结果」，不许让对端干等。
+ *
+ * ★ [T-175] **2 小时 → 24 小时**（对齐服务端派单账 TTL / peer job deadline）。
+ *
+ *   ## 为什么改
+ *
+ *     原值 2 小时 ⇒ 超长任务（跑超过 2 小时）在**结果块还没出来**时，
+ *     采集器就超时回一条「未回结果」⇒
+ *       · 横幅清了，但 Cody 收到的是**失败摘要**而不是真结论；
+ *       · 真结论还躺在 transcript 里，得手动去捞。
+ *     ⇒ 而服务端那侧的窗口都是 24 小时（派单账 TTL / peer job deadline）
+ *     ⇒ 端侧 2 小时比服务端短 ⇒ **端侧先放弃** ⇒ 口径不一致。
+ *
+ *   ⚠️ 仍是 env 可配（`CC_COLLECTOR_TIMEOUT_MS`）⇒ 线上要临时调短/调长不用发版。
+ *   ⚠️ 超时**依然会回一条**（`settleWithNotice`）⇒ 横幅照样会清 ⇒ 不会永远挂着。
+ */
 export const COLLECTOR_DEFAULT_TIMEOUT_MS = Number(
-  process.env.CC_COLLECTOR_TIMEOUT_MS ?? 2 * 60 * 60 * 1000,
+  process.env.CC_COLLECTOR_TIMEOUT_MS ?? 24 * 60 * 60 * 1000,
 );
 
 /** 服务端收件箱单条上限（unified-api `inbox.MAX_CONTENT`）。 */

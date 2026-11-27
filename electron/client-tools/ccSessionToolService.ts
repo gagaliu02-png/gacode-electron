@@ -48,6 +48,27 @@ export interface CcSessionToolDeps {
   parentSessionId?: () => string | null;
   /** 注入 fetch（测试用）。 */
   fetchImpl?: typeof globalThis.fetch;
+  /**
+   * ★ [T-175] **带 401 自动续期**的 fetch（可注入）。
+   *
+   *   ## 为什么必须有
+   *
+   *     本模块是 **CC → Cody 回传的主链路**（`POST /devices/cc/messages` ⇒ 把
+   *     CC 的产出投进业务会话收件箱 ⇒ Cody 才收得到）。
+   *     它自己有一套 `authHeaders` + `fetchJson`，**完全独立于 deviceClient**
+   *     ⇒ deviceClient 那套 401 续期**覆盖不到这里**。
+   *
+   *     而 access token 是**渲染层**推给主进程的（`gacode:client-tool-set-token`），
+   *     刷新只在**渲染层自己发请求收到 401** 时才发生
+   *     ⇒ 主进程这条路上的 token 会一直过期
+   *     ⇒ CC 的产出**送不出去** ⇒ Cody 收不到（生产实证 2026-11-27）。
+   *
+   *   ## 契约
+   *
+   *     · 不注入 ⇒ 行为逐字不变（老测试不依赖它）；
+   *     · 注入 ⇒ 401 时刷新 token 并**重试一次**。
+   */
+  authFetch?: (url: string, init: RequestInit) => Promise<Response>;
 }
 
 type FetchLike = typeof globalThis.fetch;
@@ -74,7 +95,12 @@ async function fetchJson(
   const f: FetchLike = deps.fetchImpl || globalThis.fetch;
   let res: Response;
   try {
-    res = await f(url, init);
+    // ★ [T-175] 有注入的 authFetch ⇒ 401 自动续期并重试一次（CC→Cody 主链路）。
+    if (deps.authFetch) {
+      res = await deps.authFetch(url, init);
+    } else {
+      res = await f(url, init);
+    }
   } catch (e: any) {
     throw new CcToolError('UPSTREAM_UNAVAILABLE', `上游不可用: ${e?.message || e}`, 503);
   }

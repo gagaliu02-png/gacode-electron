@@ -121,7 +121,12 @@ export interface ChatMessageModel {
   // ====== 重构轮 R2-web · 四要素的**服务端权威值** (T-15 / T-16 / T-17) ======
   /** 服务端算的累计耗时 (ms) —— 四要素之一。 */
   elapsedMs?: number | null;
-  /** 逻辑工具调用次数 (T-17) —— 四要素之一。 */
+  /**
+   * 逻辑工具调用次数 (T-17) —— 四要素之一。
+   *
+   * ★ [T-175] 首屏服务端剥掉了 thinking 段 ⇒ 端侧数不出思考段数
+   *   ⇒ 用服务端的权威计数（老端没这俩字段 ⇒ null ⇒ 端侧自己兜底数）。
+   */
   toolCallCount?: number | null;
   /** 逻辑思考段数 (T-16) —— 四要素之一。 */
   thinkingCount?: number | null;
@@ -137,6 +142,15 @@ export interface ChatMessageModel {
 
 interface Props {
   messages: ChatMessageModel[];
+  /**
+   * ★ [T-175] 当前会话 id —— **切会话**的判据（首帧钉底只在换会话时做一次）。
+   *
+   *   ⚠️ 为什么必须单独传：本组件的自动滚 effect 依赖 `[messages, autoFollow]`
+   *   ⇒ **每次** messages 变化（含流式逐帧追加）都会触发。若不加区分地改成
+   *   「瞬时钉底」⇒ 流式追加时也会硬跳，观感比现在更差。
+   *   ⇒ 只有 `chatId` 变了才走「首帧瞬时钉底」那条路。
+   */
+  chatId?: string | null;
   /** 当前正在流式的 assistant message id (本地临时 id), 用于 pulse 光标 + typing dots. */
   streamingAssistantId?: string | null;
   /**
@@ -160,6 +174,14 @@ interface Props {
   previousFirstId?: string | null;
   /** ★ [T-156] 加载前列表总高（px）—— 加载后 scrollTop 加上新增的高度。 */
   previousScrollHeight?: number | null;
+  /**
+   * ★ [T-175] **展开时按需拉明细**（首屏不下载思考正文）。
+   *   · 入参 = 那条消息的 **server id**（服务端按 id 查明细）。
+   *   · 不传 ⇒ 不拉（老行为：明细本来就在手上）。
+   */
+  onExpandPhases?: ((messageId: string) => void) | null;
+  /** ★ [T-175] 正在拉明细的 message id 集合（气泡据此显示 loading）。 */
+  phasesLoadingIds?: Set<string> | null;
 }
 
 /** 没测过的一条消息的默认高度（px）—— 比真实气泡略小，测过一次后就换成真值。 */
@@ -171,6 +193,7 @@ const WINDOW_THRESHOLD = 40;
 
 export function MessageList({
   messages,
+  chatId = null,
   streamingAssistantId,
   onMessageAction,
   stripImageUrls,
@@ -179,6 +202,8 @@ export function MessageList({
   loadingOlder = false,
   previousFirstId = null,
   previousScrollHeight = null,
+  onExpandPhases = null,
+  phasesLoadingIds = null,
 }: Props) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -192,6 +217,84 @@ export function MessageList({
   const olderRequestedRef = useRef<string | null>(null);
 
   const enabled = messages.length > WINDOW_THRESHOLD;
+
+  // ══════════════════════════════════════════════════════════════════
+  // ★ [T-175] 进会话首帧「钉底」—— 直接落到最后一条，不看估算高度。
+  //
+  //   ## 病根（真机）
+  //
+  //     `heightsRef` 在刚进会话时是**空 Map** ⇒ `effectiveOffsets` 里每一行都按
+  //     `ESTIMATED_ROW_HEIGHT = 120` 估。长文本 / 图片行常 300~800px ⇒ **真实总高
+  //     远大于估算** ⇒ `scrollIntoView` 按估算滚到「底」，实际停在离底一大截的地方。
+  //     再叠两个放大器：
+  //       ① `behavior: "smooth"` 是异步动画，下面的测量 effect 会在动画途中改
+  //          `scrollTop` ⇒ 两者互相打架；
+  //       ② 图片是 `loading="lazy"` ⇒ 滚到位才加载 ⇒ 加载完行变高又把人往下顶。
+  //     ⇒ 用户看到的就是「进会话不在最新一条」。
+  //
+  //   ## 修法
+  //
+  //     · 换会话（`chatId` 变）⇒ 清空高度缓存 + 标记「正在钉底」；
+  //     · 钉底期间自动滚用 `behavior:"auto"`（瞬时，不给动画插队的机会）；
+  //     · 每轮测量后如果高度还在变，就**再钉一次**（幂等，用 rAF 合并）；
+  //     · 钉底**结束条件**：连续若干次测量后总高不再变化，或用户自己滚了。
+  //
+  //   ⚠️ **不能**无条件瞬时钉底 —— 流式追加时也要瞬时跳底的话，观感比 smooth 差得多
+  //      （每条 chunk 都把视线硬拽到底）。⇒ 只有 `pinning` 为真时才这样。
+  // ══════════════════════════════════════════════════════════════════
+  const [pinning, setPinning] = useState(false);
+  /** 上一次的 chatId —— 判「换会话」。 */
+  const prevChatIdRef = useRef<string | null>(null);
+
+  // 换会话 ⇒ 高度缓存作废（不同会话的行高毫无关系）+ 开始钉底。
+  useLayoutEffect(() => {
+    if (prevChatIdRef.current === chatId) return;
+    prevChatIdRef.current = chatId;
+    heightsRef.current.clear();
+    // 有消息才值得钉；空会话不必。
+    if (messages.length > 0) setPinning(true);
+  }, [chatId, messages.length]);
+
+  // 钉底循环 —— **自驱动 rAF**，每帧把 scrollTop 顶到底，直到总高连续几帧不变。
+  //
+  //   ## 为什么用 rAF 自驱动，而不是挂在 messages / scrollTop 的依赖上
+  //
+  //     ① 窗口化下 `scrollHeight` 会因为「新行被测量 → 真实高度替换估算」而**多轮增长**；
+  //     ② `scrollTop` 的 state 只在 `enabled` 时才更新（`if (enabled) setScrollTop(...)`）
+  //        ⇒ 短列表（!enabled）根本不会回流，挂依赖的话只能钉一次。
+  //     ⇒ 自驱动循环对两种情形一视同仁，且天然处理「异步内容把行撑高」。
+  //
+  //   ## 收工条件
+  //
+  //     · 连续 3 帧 `scrollHeight` 完全不变 ⇒ 稳定；
+  //     · 或超过 1.5s（防某些内容永远在变 ⇒ 无休止钉底）；
+  //     · 或用户主动上滚（scroll 监听里 `setPinning(false)` ⇒ 本 effect 清理时 cancel）。
+  useLayoutEffect(() => {
+    if (!pinning) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+    let raf = 0;
+    let stable = 0;
+    let lastHeight = -1;
+    const startedAt = Date.now();
+    const tick = () => {
+      el.scrollTop = el.scrollHeight;
+      const h = el.scrollHeight;
+      if (h === lastHeight) {
+        stable += 1;
+      } else {
+        stable = 0;
+        lastHeight = h;
+      }
+      if (stable >= 3 || Date.now() - startedAt > 1500) {
+        setPinning(false);
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [pinning]);
 
   // 视口高度 —— ResizeObserver 跟 scroll 事件分开，避免每次滚动都量容器。
   useEffect(() => {
@@ -207,10 +310,12 @@ export function MessageList({
   // 自动滚到底 — 在 messages 改变时
   // 对齐 web MessageList.tsx:55-57 — `scrollIntoView({ behavior: "smooth" })`.
   // PC 的 autoFollow (用户上滚 80px 阈值停自动滚) 是 PC 增强 → 保留不动.
+  // ★ [T-175] 钉底期间**不**走这条（上面那个 pin effect 已经瞬时钉好了）——
+  //   否则 smooth 动画会把刚钉好的位置又拽走。
   useLayoutEffect(() => {
-    if (!autoFollow) return;
+    if (!autoFollow || pinning) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, autoFollow]);
+  }, [messages, autoFollow, pinning]);
 
   // 用户滚动 → 判断是否处于"主动向上"  (阈值 80px)
   // ★ [T-156] 同时记录 scrollTop 给窗口计算用（passive 监听，不阻塞滚动）。
@@ -219,6 +324,20 @@ export function MessageList({
     if (!el) return;
     const onScroll = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      // ★ [T-175] 钉底期间：**不判** autoFollow —— 此时的 scroll 事件是
+      //   我们自己的 `scrollTop = scrollHeight` 引起的，不是用户滚的。
+      //   若照常判，估算总高偏小 ⇒ distance 算出来偏大 ⇒ 误判成「用户在看历史」
+      //   ⇒ `autoFollow=false` ⇒ 钉底结束后流式不再跟随（二次 bug）。
+      //   ⚠️ 但用户**真的**往上滚时要立刻结束钉底（否则每次测量都把他拽回底）。
+      if (pinning) {
+        // 离底超过一屏的一半 ⇒ 认定用户主动上滚。
+        if (distance > el.clientHeight / 2) {
+          setPinning(false);
+          setAutoFollow(false);
+        }
+        if (enabled) setScrollTop(el.scrollTop);
+        return;
+      }
       // 阈值 80px: 距离 > 80 视为用户在看历史 → 停自动滚
       const sticky = distance < 80;
       setAutoFollow((prev) => {
@@ -237,7 +356,9 @@ export function MessageList({
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [enabled, hasOlder, loadingOlder, messages, onLoadOlder]);
+    // ★ [T-175] `pinning` 必须在依赖里 —— 否则监听器闭包里永远读到 `false`，
+    //   钉底期间的「不判 autoFollow」分支等于没写。
+  }, [enabled, hasOlder, loadingOlder, messages, onLoadOlder, pinning]);
 
   const [measuredTick, setMeasuredTick] = useState(0);
   const effectiveOffsets = useMemo(() => {
@@ -346,6 +467,13 @@ export function MessageList({
         elapsedMs={m.elapsedMs}
         toolCallCount={m.toolCallCount}
         thinkingCount={m.thinkingCount}
+        // ★ [T-175] 展开时按需拉明细（首屏不下载思考正文）。
+        onExpandPhases={
+          onExpandPhases && m.serverId ? () => onExpandPhases(m.serverId!) : null
+        }
+        phasesLoading={
+          !!(phasesLoadingIds && m.serverId && phasesLoadingIds.has(m.serverId))
+        }
         terminalReason={m.terminalReason}
         startedAt={m.startedAt}
         finishedAt={m.finishedAt}

@@ -32,6 +32,8 @@ import path from 'node:path';
 
 const DIAG_FILE = 'diag.log';
 const MAX_BYTES = 8 * 1024 * 1024;
+/** ★ [T-175] 轮转检查的最小间隔（ms）—— 不再每条都 statSync。 */
+const ROTATE_CHECK_INTERVAL_MS = 30_000;
 
 export interface DiagArgs {
   /** 粗粒度的域（`chat` / `queue` / `inbox` …） */
@@ -44,16 +46,45 @@ function diagFilePath(): string {
   return path.join(app.getPath('userData'), DIAG_FILE);
 }
 
-/** 追加一行；失败**静默**（诊断日志绝不能把主进程搞挂）。 */
-export function appendDiag(tag: string, msg: string): void {
+/**
+ * ★ [T-175] 上次轮转检查的时刻（避免每条都 statSync）。
+ */
+let lastRotateCheck = 0;
+/** ★ [T-175] 待写队列（合并写入 ⇒ 一批一次 IO）。 */
+let pendingChunk = '';
+/** ★ [T-175] 队列刷写定时器。 */
+let flushTimer: NodeJS.Timeout | null = null;
+
+/** 真正落盘（**异步** —— 绝不在主进程里做同步磁盘 IO）。 */
+function writeChunk(chunk: string): void {
+  if (!chunk) return;
   try {
-    const file = diagFilePath();
-    // 轮转：超上限就改名 .1（只留一代）。
+    fs.appendFile(diagFilePath(), chunk, 'utf8', () => {
+      /* ignore —— 失败不许影响主进程 */
+    });
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/** 把队列刷到磁盘（合并成一次写）。 */
+function flushDiag(): void {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  const chunk = pendingChunk;
+  pendingChunk = '';
+  if (!chunk) return;
+  // 轮转检查：按**时间间隔**（不是每条）⇒ 高频日志时不会每次都 stat。
+  const now = Date.now();
+  if (now - lastRotateCheck > ROTATE_CHECK_INTERVAL_MS) {
+    lastRotateCheck = now;
     try {
-      const st = fs.statSync(file);
+      const st = fs.statSync(diagFilePath());
       if (st.size > MAX_BYTES) {
         try {
-          fs.renameSync(file, `${file}.1`);
+          fs.renameSync(diagFilePath(), `${diagFilePath()}.1`);
         } catch (_) {
           /* ignore */
         }
@@ -61,8 +92,31 @@ export function appendDiag(tag: string, msg: string): void {
     } catch (_) {
       /* 文件不存在 ⇒ 正常 */
     }
+  }
+  writeChunk(chunk);
+}
+
+/**
+ * 追加一行；失败**静默**（诊断日志绝不能把主进程搞挂）。
+ *
+ * ★ [T-175] 改成**入队 + 异步批量写** —— 原实现是 `fs.appendFileSync`（同步阻塞）
+ *   ⇒ 高频日志（每帧一条）时会把主进程 IO 打死 ⇒ **窗口黑屏**（生产实证 2026-11-27）。
+ */
+export function appendDiag(tag: string, msg: string): void {
+  try {
     const ts = new Date().toISOString();
-    fs.appendFileSync(file, `[${ts}] [${tag || '-'}] ${msg}\n`, 'utf8');
+    pendingChunk += `[${ts}] [${tag || '-'}] ${msg}
+`;
+    // 队列超过一定长度 ⇒ 立刻刷（别让内存涨）。
+    if (pendingChunk.length >= 64 * 1024) {
+      flushDiag();
+      return;
+    }
+    if (!flushTimer) {
+      // 短延迟合并 ⇒ 同一批的多条日志只写一次。
+      flushTimer = setTimeout(flushDiag, 200);
+      flushTimer.unref?.();
+    }
   } catch (_) {
     /* ignore —— 诊断日志失败不许影响主流程 */
   }
@@ -75,9 +129,18 @@ export function appendDiag(tag: string, msg: string): void {
  */
 export function registerDiagIpc(): void {
   ipcMain.on('gacode:diag-log', (_event, args: DiagArgs) => {
-    const tag = String(args?.tag ?? '').slice(0, 32);
+    const tag = String(args?.tag ?? '-').slice(0, 32);
     const msg = String(args?.msg ?? '').slice(0, 2000);
     if (!msg) return;
     appendDiag(tag, msg);
   });
+}
+
+/** 退出前把队列刷干净（否则最后几条会丢）。 */
+export function flushDiagOnExit(): void {
+  try {
+    flushDiag();
+  } catch (_) {
+    /* ignore */
+  }
 }

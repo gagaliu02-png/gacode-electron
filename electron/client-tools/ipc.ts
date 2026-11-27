@@ -21,7 +21,7 @@
 
 import { ipcMain, BrowserWindow } from 'electron';
 import { executeClientTool } from './executor';
-import { deviceClient, getDeviceId, deviceCapabilities, peerJobManager } from './deviceClient';
+import { deviceClient, getDeviceId, deviceCapabilities, peerJobManager, refreshAccessTokenFromDisk } from './deviceClient';
 import { ccResultCollector } from './ccResultCollector';
 // ★ [2026-11-17 · T-020 · S3] Claude Code hook 桥（显式安装，不自动装）
 import * as claudeHook from './claudeCodeHookService.ts';
@@ -75,6 +75,13 @@ export function notifyClientToolRequest(req: ClientToolRequest): void {
 
 /** 注册全部 IPC（main.ts 启动时调一次）。 */
 export function registerClientToolIpc(): void {
+  // ★ [T-175] 给 deviceClient 装上**主进程侧**的 token 刷新器。
+  //   病根：access token 由渲染层推过来，刷新只在**渲染层自己发请求收到 401** 时发生
+  //   ⇒ 主进程这条路（设备通道 / 后台任务结果上报）的 token 会一直过期
+  //   ⇒ D3 结果上行 401 ⇒ 回报送不到服务端 ⇒ 横幅不消失 ⇒ Cody 收不到后台任务回报
+  //   （生产实证 2026-11-27 · session 1193 · T-148）。
+  deviceClient.setTokenRefresher(refreshAccessTokenFromDisk);
+
   // —— 渲染层把 access token 推过来（内存持有，⛔ 不持久化）——
   ipcMain.handle('gacode:client-tool-set-token', async (_e, token: unknown) => {
     deviceClient.setAccessToken(typeof token === 'string' && token ? token : null);

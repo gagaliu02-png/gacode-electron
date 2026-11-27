@@ -82,6 +82,9 @@ import {
   getChats,
   getHistory,
   loadOlderMessages,
+  // ★ [T-175] 按需拉思考/工具明细（首屏不下载思考正文）。
+  fetchMessagePhases,
+  parsePhasesOnce,
   renameChat,
   setSessionPin,
   autoTitleSession,
@@ -804,6 +807,67 @@ export function ChatDetail() {
   const [queueExpanded, setQueueExpanded] = useState(false);
   /** 服务端说的「本会话还有没跑完的后台活」。 */
   const [pendingWork, setPendingWork] = useState<PendingWorkItem[]>([]);
+
+  // ══════════════════════════════════════════════════════════════════
+  // ★ [T-175] **思考/工具明细按需加载**（首屏不下载思考正文）。
+  //
+  //   ## 为什么
+  //
+  //     思考正文单条可达几十 KB（服务端 `phases_json` 上限 64KB/条）
+  //     ⇒ 首屏 100 条 = 几 MB 下载 + JSON.parse ⇒ 开长会话卡（真机反馈）。
+  //     ⇒ 服务端在 `include_phases=0` 时**剥掉 thinking 段**（保留 tool 段 ⇒
+  //       交付物卡片不受影响）⇒ 首屏只拿**计数**。
+  //     ⇒ 用户点开折叠区 ⇒ 这里按 messageId 拉明细 ⇒ 回填。
+  //
+  //   ## 状态
+  //
+  //     · `phasesDetailCache` —— messageId → { phases, richEvents }（已拉过的缓存）；
+  //     · `phasesLoadingIds` —— 正在拉的那些（防重复请求）。
+  // ══════════════════════════════════════════════════════════════════
+  /** 已按需拉到的明细（messageId → 解析结果）。 */
+  const [phasesDetailCache, setPhasesDetailCache] = useState<
+    Record<string, { phases: ExecutionPhase[]; richEvents: RichEventBase[] }>
+  >({});
+  /** 正在拉明细的 messageId（防并发重复请求）。 */
+  const [phasesLoadingIds, setPhasesLoadingIds] = useState<Set<string>>(new Set());
+
+  /**
+   * ★ [T-175] **按需拉某条消息的思考/工具明细**（用户点开折叠区时调）。
+   *
+   * · 拉到的明细**缓存**在 `phasesDetailCache` ⇒ 再展开同一条不再请求；
+   * · 正在拉的 id 记在 `phasesLoadingIds` ⇒ 并发点两次也只发一个请求；
+   * · 失败**静默**（不弹错）—— 明细拉不到不影响聊天（跟队列条同款降级）。
+   */
+  const loadPhasesFor = useCallback(async (messageId: string) => {
+    if (!messageId) return;
+    if (phasesDetailCache[messageId]) return;                 // 已拉过
+    if (phasesLoadingIds.has(messageId)) return;              // 正在拉
+    setPhasesLoadingIds((prev) => {
+      const next = new Set(prev);
+      next.add(messageId);
+      return next;
+    });
+    try {
+      const res = await fetchMessagePhases(messageId);
+      const parsed = parsePhasesOnce(res.phases_json);
+      setPhasesDetailCache((prev) => ({
+        ...prev,
+        [messageId]: {
+          phases: parsed.phases ?? [],
+          richEvents: parsed.richEvents ?? [],
+        },
+      }));
+    } catch (e) {
+      console.warn("[T-175] 拉思考明细失败:", e);
+    } finally {
+      setPhasesLoadingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(messageId);
+        return next;
+      });
+    }
+  }, [phasesDetailCache, phasesLoadingIds]);
+
   /** 本机的后台作业（老端没有这张表 ⇒ 空数组，不影响别的）。 */
   const [localJobs, setLocalJobs] = useState<LocalJobInfo[]>([]);
   /** 正在插队的那一条（防重复点）。 */
@@ -986,11 +1050,17 @@ export function ChatDetail() {
         recalled: m.recalled ?? false,
         recalledAt: m.recalledAt ?? null,
         // 历史消息的思考/工具时间线 (M5 批): api.getHistory 已把服务端 phases_json 解析成 ExecutionPhase[]
-        phases: m.phases,
+        // ★ [T-175] 首屏服务端剥掉了 thinking 段 ⇒ `m.phases` 只有 tool 段；
+        //   思考**明细**等用户点开时按需拉（`loadPhasesFor`）⇒ 这里优先用缓存里的完整明细。
+        phases: phasesDetailCache[m.id]?.phases ?? m.phases,
         // ★ 任务书 P-4 —— 历史消息的**富事件** (工具卡片 / 文件 / 图片 / 审批回执)
         //   也得还原出来, 否则刷新后历史里的工具卡片全没了。
         //   api.getHistory 已按 web 定稿版口径从 phases_json 里解析 (只认 type==="tool")。
-        richEvents: m.richEvents,
+        // ★ [T-175] 拉回来的完整明细里也有富事件 ⇒ 有缓存时用它（更全）。
+        richEvents: phasesDetailCache[m.id]?.richEvents ?? m.richEvents,
+        // ★ [T-175] 折叠态显示用的计数（服务端从完整 phases_json 数好给的）。
+        thinkingCount: m.thinkingCount ?? null,
+        toolCallCount: m.toolCallCount ?? null,
         // ★ v2 (契约订正 16): 这一行的**轮次身份** (metadata.turnKey) ——
         //   与流式行的 turnKey 同值 ⇒ 可精确判「是不是同一轮」。
         turnKey: m.turnKey ?? null,
@@ -1010,6 +1080,48 @@ export function ChatDetail() {
   // 流式期间累积 (content + events). MessageList 用 streamingContent 渲染最后一条.
   const [streamingAssistantId, setStreamingAssistantId] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
+
+  // ══════════════════════════════════════════════════════════════════
+  // ★ [T-175] 流式正文的 rAF 提交闸门（治「帧风暴卡黑屏」的端侧那半）。
+  //
+  //   ## 病根
+  //
+  //     服务端常驻订阅回放曾经**无上限**（session 1193 实证 82,976 帧）。
+  //     虽然 React 18 的 createRoot 对原生 Promise 回调**已经自动批处理**
+  //     （不是 8 万次渲染），但每帧仍然会构造一个新的 `prev + chunk.content`
+  //     字符串 ⇒ 8 万次全串复制 ⇒ **O(n²)** ⇒ 渲染线程长期占满 ⇒ 黑屏。
+  //
+  //   ## 修法
+  //
+  //     帧到达只写 `streamingContentRef.current`（rope 拼接，amortized O(1)），
+  //     用 `requestAnimationFrame` 把**同一帧内的所有 chunk** 合并成一次
+  //     `setStreamingContent(ref.current)` ⇒ 每屏幕刷新周期最多一次提交。
+  //
+  //   ## 终态 / 切边界必须同步 flush
+  //
+  //     `flushStreamingContent()` 是**幂等**的：有 pending 才提交。终态帧、
+  //     `applySupplementBoundary`、`clearLocalRow` 之前都必须调一次，
+  //     否则最后一帧正文会留在 rAF 队列里没写入 ref 之外的 state。
+  // ══════════════════════════════════════════════════════════════════
+  const flushRafRef = useRef<number | null>(null);
+  const flushStreamingContent = useCallback(() => {
+    if (flushRafRef.current != null) {
+      cancelAnimationFrame(flushRafRef.current);
+      flushRafRef.current = null;
+    }
+    setStreamingContent(streamingContentRef.current);
+  }, []);
+  const scheduleStreamingFlush = useCallback(() => {
+    if (flushRafRef.current != null) return; // 同一帧只排一次
+    flushRafRef.current = requestAnimationFrame(() => {
+      flushRafRef.current = null;
+      setStreamingContent(streamingContentRef.current);
+    });
+  }, []);
+  // 卸载 / 切会话时清掉未提交的 rAF（否则可能把上一会话的正文写进新会话）。
+  useEffect(() => () => {
+    if (flushRafRef.current != null) cancelAnimationFrame(flushRafRef.current);
+  }, []);
   /**
    * ★ [T-138] **终态冻结行** —— 终态帧到达时不撤本地内容，而是把它冻在这里，
    * 直到服务端 history 里同 turnKey 的行**正文到齐**才撤掉。
@@ -1543,12 +1655,12 @@ export function ChatDetail() {
       !!pendingUserMsg && !historyHasSameUser && !pendingUserAdopted;
     // ★ [T-044 · 2026-11-18] **认亲结果落盘**（打包版没有 devtools ⇒ 看不到 console.log）——
     //   重复用户气泡的根因就在这条判据上（client_msg_id 没透传 ⇒ 乐观行撤不掉）。
-    diagLog(
-      'merge',
-      `认亲 same=${historyHasSameUser} optimistic=${pendingUserMsg?.id ?? '-'} ` +
-        `optCid=${pendingUserMsg?.clientMsgId ?? '-'} ` +
-        `histCid=${baseWithoutSplitTurn.find((m) => m.role === 'user')?.clientMsgId ?? '-'}`,
-    );
+    // ★ [T-175] **认亲结果的落盘挪到下面的 effect** ——
+    //   原先这条 `diagLog` 写在 **useMemo 里** ⇒ 每帧 SSE 都重算一次 useMemo
+    //   ⇒ 每帧打一条日志 ⇒ 主进程每次都做一次**同步**磁盘写（`appendFileSync`）
+    //   ⇒ 机器回合跑着时（199 帧/秒）把主进程 IO 打死 ⇒ **窗口黑屏**
+    //   （生产实证 2026-11-27：`diag.log` 里 `[merge]` 写了 49,552 条）。
+    //   ⇒ 现在只在「认亲状态**变化**」时打一次（见下面的 `useEffect`）。
     const withPendingUser: ChatMessageModel[] =
       pendingUserVisible
         ? [
@@ -1749,6 +1861,42 @@ export function ChatDetail() {
     // 认亲成功 ⇒ 冻结（服务端那一行已经落库 ⇒ 它才是真值）。
     if (historyHasSameUser) setPendingUserAdopted(true);
   }, [historyHasSameUser, pendingUserMsg?.clientMsgId]);
+
+  // ★ [T-175] **认亲结果落盘**（打包版没有 devtools ⇒ 看不到 console.log）——
+  //   重复用户气泡的根因就在这条判据上（client_msg_id 没透传 ⇒ 乐观行撤不掉）。
+  //
+  //   ## 为什么放在 effect（而不是 useMemo 里）
+  //
+  //     useMemo **不许有副作用**（React 可能重算它、StrictMode 会调两次）。
+  //     而 `messages` 那个 useMemo 的依赖含 `streamingContent` / `streamingEvents` /
+  //     `streamingPhases` ⇒ **每帧 SSE 都重算它** ⇒ 写在里面的 `diagLog` 就是
+  //     **每帧打一条日志** ⇒ 主进程每条做一次**同步**磁盘写 ⇒ 主进程 IO 被打死
+  //     ⇒ **窗口黑屏**（生产实证 2026-11-27：`diag.log` 的 `[merge]` 写了 49,552 条，
+  //     其中**一秒 199 条**）。
+  //
+  //   ## 现在的口径
+  //
+  //     只在「认亲状态**变化**」时打 ⇒ 一条消息最多打两次（认亲前 + 认亲后）
+  //     ⇒ 信息量不减（还是能看出认亲成功没成功），但日志量从「每帧」降到「每次变化」。
+  const lastMergeLogKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const optCid = pendingUserMsg?.clientMsgId ?? "-";
+    const histCid =
+      baseWithoutSplitTurn.find((m) => m.role === "user")?.clientMsgId ?? "-";
+    const key = `${historyHasSameUser}|${optCid}|${histCid}`;
+    if (lastMergeLogKeyRef.current === key) return;
+    lastMergeLogKeyRef.current = key;
+    diagLog(
+      "merge",
+      `认亲 same=${historyHasSameUser} optimistic=${pendingUserMsg?.id ?? "-"} ` +
+        `optCid=${optCid} histCid=${histCid}`,
+    );
+  }, [
+    historyHasSameUser,
+    pendingUserMsg?.id,
+    pendingUserMsg?.clientMsgId,
+    baseWithoutSplitTurn,
+  ]);
 
   // ★ [2026-11-04 · gaga 拍板删除] 原 chat-id-19 的 `canRerun`:
   //   「不在流式 + 最后一条是 assistant」⇒ 每轮答完就把输入框右侧的发送键顶成 ↺ 重试键,
@@ -2096,6 +2244,9 @@ export function ChatDetail() {
       //     （不许把 `supplementBoundary.content` 当正文累积!).
       const supplement = parseSupplementBoundary(chunk);
       if (supplement) {
+        // ★ [T-175] 切气泡前先同步提交正文 —— 否则 rAF 队列里的 content
+        //   会晚于「切开」动作写入，导致上一段气泡正文缺失 / 错位。
+        flushStreamingContent();
         applySupplementBoundary(supplement);
         return;
       }
@@ -2123,8 +2274,13 @@ export function ChatDetail() {
 
       if (chunk.content) {
         ensureRow();
+        // ★ [T-175] **只写 ref，不每帧 setState 字符串拼接**。
+        //   `streamingContentRef.current += chunk.content` 是 O(1) amortized（JS 字符串 rope），
+        //   而旧的 `setStreamingContent(prev => prev + chunk.content)` 每帧都构造一个新字符串
+        //   ⇒ 一轮 8 万帧（服务端回放无上限时）就是 8 万次全串复制 ⇒ O(n²) ⇒ 渲染线程卡死。
+        //   ⇒ 由下方 `scheduleStreamingFlush()` 在 rAF 里一次性提交。
         streamingContentRef.current += chunk.content;
-        setStreamingContent((prev) => prev + chunk.content);
+        scheduleStreamingFlush();
       }
       // ★ T-16 · 思考链 → phases —— 按**服务端的分段决定**落位 (端侧零推算)。
       //   「该合成几条」是**服务端**的决定 (v2 落库的 phases_json 已是合并形态);
@@ -2253,6 +2409,8 @@ export function ChatDetail() {
         for (const ev of chunk.events) dispatch(ev);
       }
       if (isTerminalDone(chunk)) {
+        // ★ [T-175] 终态前同步提交正文 —— 最后一帧不能留在 rAF 队列里。
+        flushStreamingContent();
         // 终态 → 用 server messageId 替换本地临时 id (由 history 认亲)
         const serverId = chunk.messageId!;
         // C4-08 · 「AI 回复到达」系统通知 ——
@@ -2294,13 +2452,22 @@ export function ChatDetail() {
           });
         }
         clearLocalRow();
-        // 刷新 history + chats (server 落库后 title 改了)
-        queryClient.invalidateQueries({ queryKey: ["history", chatId] });
+        // 刷新 chats (server 落库后 title 改了)
+        // ★ [T-175] **不再在这里刷 history** —— 终态帧这一刻服务端**还没落库**
+        //   ⇒ 这次刷新**必然拉回旧列表**（纯浪费：长会话 = 全量重渲染一遍）。
+        //   ⇒ 落库后的刷新交给下面 T-138 的递增重试（2s/4s/8s）。
+        //   ⚠️ 期间用户看到的是**冻结行**（= 刚看到的流式内容）⇒ 视觉上无感。
         queryClient.invalidateQueries({ queryKey: ["chats"] });
         // ★ [T-138 · B] 递增重试：1s/3s/6s/10s 各刷一次 history，
         //   直到服务端同 turnKey 的助手正文非空（落库补完）⇒ 撤冻结行。
         {
-          const delays = [1000, 3000, 6000, 10000];
+          // ★ [T-175] 原 [1000,3000,6000,10000] → **[3000,6000,12000]**：
+          //   · **服务端正文实测 2279ms 才到**（T138-UI-4 的注释原话）
+          //     ⇒ 1s 那次**必然踩空**（白拉一次全量）；
+          //   · 4 次全量拉 ⇒ 长会话就是 4 × N 条全量重渲染 ⇒ 卡顿主因之一。
+          //   ⇒ 3 次足够（3s 命中落库；6s/12s 兜底网络抖 / 老服务端）。
+          //   ⚠️ **第一枪不能早于 2279ms** —— 早了就白拉（T138-UI-4 钉的就是这个）。
+          const delays = [3000, 6000, 12000];
           terminalRefreshTimersRef.current.forEach((t) => window.clearTimeout(t));
           terminalRefreshTimersRef.current = delays.map((ms, i) =>
             window.setTimeout(() => {
@@ -2352,6 +2519,8 @@ export function ChatDetail() {
         chatsRefreshTimerRef.current = window.setTimeout(() => {
           queryClient.invalidateQueries({ queryKey: ["chats"] });
           // ★ [T-121] 一起刷 history（等服务端把这一轮落库完 ⇒ 服务端行到位）。
+          //   ⚠️ **不许删** —— T-121 的死因就是「只刷 chats ⇒ 服务端行永远不进
+          //     PC 的 history ⇒ 认亲冻结 + 服务端行没来 ⇒ 气泡凭空消失」。
           queryClient.invalidateQueries({ queryKey: ["history", chatId] });
         }, 2000);
         // ══════════════════════════════════════════════════════════════
@@ -2380,12 +2549,16 @@ export function ChatDetail() {
         return;
       }
       if (isCancelFrame(chunk)) {
+        // ★ [T-175] 取消前也 flush —— 用户按停止时屏幕上应停在中断前的正文。
+        flushStreamingContent();
         // 取消帧 — 直接关闭, 不调 ack (互斥路径 finally 会判)
         finishTurnTiming();
         clearLocalRow();
         return;
       }
       if (chunk.error) {
+        // ★ [T-175] 错误帧同样 flush（天眼那条会自己重置 ref，这里幂等无害）。
+        flushStreamingContent();
         if (attachments) {
           setStreamError({
             kind: "server",
@@ -2409,6 +2582,9 @@ export function ChatDetail() {
       // ★ [订正 28 · L-28r] 补充边界（切气泡）
       applySupplementBoundary,
       closeTailSegment,
+      // ★ [T-175] rAF 提交闸门（flush 是幂等的，引用稳定）
+      flushStreamingContent,
+      scheduleStreamingFlush,
     ],
   );
   // ★ [订正 32] 常驻流 effect 通过 ref 拿最新的帧处理器（effect 只挂一次，不随回调重建）。
@@ -4243,6 +4419,36 @@ export function ChatDetail() {
     //
     //   ⚠️ 「只有后台活在跑、**没有**当前轮」时，**红色停止键根本不出现**
     //     （`resolveChatAction` 只看 `turnRunning`）⇒ 那个按钮是**置灰的发送键**。
+    // ★ [T-175] **常驻订阅模式下的特殊处理**（修「停止按钮点了没反应」）。
+    //
+    //   ## 病根（gaga 2026-11-27 报障）
+    //
+    //     `stream.abort("user")` 的第一行是
+    //       `const active = activeRef.current ?? attachRef.current; if (!active) return;`
+    //     而**常驻订阅模式**（`persistentStreamEnabled()` 默认开 ⇒ 现网绝大多数用户走这条）
+    //     下**没有本地流** ⇒ `activeRef`/`attachRef` 都是 null
+    //     ⇒ `abort()` **直接 return，什么都不做** ⇒ **停止按钮点了跟没点一样**。
+    //
+    //   ## 修法
+    //
+    //     常驻模式下**直接发** `STOP_TURN`（服务端 `yinian.chat.routes.js` 的
+    //     `STOP_TURN_INTENT_ALIASES` + `cancelIntentKind === 'stop_turn'`
+    //     ⇒ **只**掐当前这一轮）。
+    //     ⚠️ **停的是「轮」，不是「常驻流」** —— 常驻流继续活着等下一轮
+    //        （这正是常驻流的设计：跨轮存活、终态不下线）。
+    //     ⚠️ 常驻流**不能** abort（那会把整条订阅断掉 ⇒ 后面所有轮次都收不到）。
+    if (persistentOn) {
+      if (chatId) sendCancelDelete(chatId, "STOP_TURN");
+      // 本地流式态收口（服务端会推终态帧，这里先乐观收掉，避免按钮一直红着）。
+      finishTurnTiming();
+      clearLocalRow();
+      diagLog(
+        'stop',
+        `红色停止键（常驻模式）⇒ intent=STOP_TURN（只停当前轮，常驻流继续）` +
+          ` pendingWork=${sessionBackgroundWork.length}`,
+      );
+      return;
+    }
     stream.abort("user");
     // ★ [T-044 · 2026-11-18] 落盘：红色停止键发了什么、后端还有几件后台活。
     diagLog(
@@ -4250,7 +4456,7 @@ export function ChatDetail() {
       `红色停止键 ⇒ intent=STOP_TURN（只停当前轮）pendingWork=${sessionBackgroundWork.length} ` +
         `streaming=${turnAcRef.current != null}`,
     );
-  }, [chatId, stream, stopLocalClientTools, toast]);
+  }, [chatId, stream, stopLocalClientTools, toast, persistentOn, sessionBackgroundWork.length, finishTurnTiming, clearLocalRow]);
 
   const handleRetry = useCallback(() => {
     if (!streamError) return;
@@ -4779,6 +4985,8 @@ export function ChatDetail() {
         ) : (
           <MessageList
             messages={messages}
+            // ★ [T-175] 切会话判据 —— 首帧「瞬时钉底」只在换会话时做一次。
+            chatId={chatId ?? null}
             streamingAssistantId={streamingAssistantId}
             onMessageAction={handleMessageAction}
             stripImageUrls={userImageUrls}
@@ -4788,6 +4996,9 @@ export function ChatDetail() {
             loadingOlder={loadingOlder}
             previousFirstId={olderScrollAnchor?.firstId ?? null}
             previousScrollHeight={olderScrollAnchor?.scrollHeight ?? null}
+            // ★ [T-175] 展开时按需拉思考/工具明细（首屏不下载思考正文）。
+            onExpandPhases={(messageId) => void loadPhasesFor(messageId)}
+            phasesLoadingIds={phasesLoadingIds}
           />
         )}
       </div>

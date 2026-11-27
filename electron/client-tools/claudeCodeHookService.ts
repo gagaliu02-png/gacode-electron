@@ -112,6 +112,11 @@ export async function ensureStarted(): Promise<HookBridgeHandle> {
         apiBase,
         accessToken: () => deviceClient.getAccessToken(),
         deviceId: getDeviceId,
+        // ★ [T-175] 带 401 自动续期的 fetch ——
+        //   这条路是 **CC → Cody 回传的主链路**（`POST /devices/cc/messages`）。
+        //   它原本自有一套 authHeaders（绕过 deviceClient）⇒ token 过期时 401
+        //   ⇒ CC 的产出送不出去 ⇒ Cody 收不到（生产实证 2026-11-27）。
+        authFetch: (url, init) => deviceClient.authFetch(url, init, 'ccSessionTool'),
         role: () => 'main',
         selfSessionId: () => null,
         parentSessionId: () => null,

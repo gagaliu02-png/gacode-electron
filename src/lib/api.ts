@@ -399,9 +399,24 @@ export interface ChatMessage {
   inboxId?: string | null;
   phasesJson?: string | null;
   /**
+   * ★ [T-175] **思考段数 / 工具调用次数**（服务端从 `phases_json` 数好给的）。
+   *
+   *   ## 为什么单独给
+   *
+   *     PC 端「点开才拉明细」⇒ 首屏**不下载** `phases_json`（单条上限 64KB）
+   *     ⇒ 但折叠态仍要显示「思考 N 次 · 工具 N 次」⇒ 计数由服务端直接给。
+   *
+   *   ⚠️ 老端（安卓 / web）拿的是完整明细 ⇒ 这俩字段为 null ⇒ 端侧自己数（老口径不变）。
+   */
+  thinkingCount?: number | null;
+  toolCallCount?: number | null;
+  /**
    * A2-D4-02 · 思考 / 工具时间线 —— server 落库的 `phases_json` 解析结果.
    *   解析逻辑见本文件私有 helper `parsePhasesJson`.
    *   缺失 / 脏数据 ⇒ undefined (不是空数组, 免得渲出空 timeline 容器).
+   *
+   * ★ [T-175] PC 端首屏**不填**（明细等点开时按需拉）⇒ 展开时用
+   *   `loadPhasesForMessage()` 补 ⇒ 补齐后再渲染。
    */
   phases?: ExecutionPhase[];
   /**
@@ -812,24 +827,117 @@ type HistoryRow = {
   recalled_at?: string | null;
   /** ★ [T-040] 客户端身份（ULID）—— 认亲必须逐字相等，不猜内容。 */
   client_msg_id?: string | null;
+  // ★ [T-175] **计数**（服务端从 phases_json 数好给的）—— 折叠态显示「思考 N 次 · 工具 N 次」用。
+  //   ⚠️ 服务端只在 `include_phases=0`（PC）时给；老端拿完整明细 ⇒ 这俩字段为 null ⇒ 端侧自己数。
+  thinking_count?: number | null;
+  tool_call_count?: number | null;
 };
+
+/** ★ [T-175] 「点开才拉明细」的开关（PC 独有）。
+ *
+ *   · `true`  ⇒ 拉历史时带 `include_phases=0` ⇒ 服务端**不返回** `phases_json`（只给计数）
+ *     ⇒ 首屏不下载几十 KB/条的 thinking + 端侧**不做** JSON.parse
+ *     ⇒ 用户点开折叠区时再调 `GET /yinian/messages/:id/phases` 取明细。
+ *   · `false` ⇒ 老行为（拉完整 phases_json）—— 保留给「明细必须在首屏就有」的场景。
+ *
+ * ⚠️ **服务端默认仍返回完整 phases_json** ⇒ 安卓 / web 行为逐字不变（它们不传这个参数）。
+ */
+const HISTORY_INCLUDE_PHASES = false;
 
 function fetchHistoryPage(
   chatId: string,
-): (cursor: string | null) => Promise<HistoryPage<HistoryRow>> {
-  return async (cursor) => {
+): (cursor: string | null, order?: "asc" | "desc") => Promise<HistoryPage<HistoryRow>> {
+  return async (cursor, order) => {
     const qs = new URLSearchParams({ limit: String(HISTORY_PAGE_LIMIT) });
     if (cursor) qs.set("cursor", cursor);
+    // ★ [T-175] 不要明细 ⇒ 服务端只给计数（thinking_count / tool_call_count）。
+    if (!HISTORY_INCLUDE_PHASES) qs.set("include_phases", "0");
+    // ★ [T-175] 倒序取「最近 N 条」（一次请求，不用从最老的一页翻到尾）。
+    if (order === "desc") qs.set("order", "desc");
     return request<HistoryPage<HistoryRow>>(
       `/yinian/sessions/${chatId}/messages?${qs.toString()}`,
     );
   };
 }
 
+/**
+ * ★ [T-175] **按消息 id 取思考/工具明细**（点开折叠区时调）。
+ *
+ *   ⚠️ 服务端端点：`GET /yinian/messages/:id/phases`
+ *   ⚠️ 归属校验在服务端（不是自己的消息 ⇒ 404）。
+ */
+export async function fetchMessagePhases(
+  messageId: string,
+): Promise<{ phases_json: string | null; thinking_count: number | null; tool_call_count: number | null }> {
+  return request<{ phases_json: string | null; thinking_count: number | null; tool_call_count: number | null }>(
+    `/yinian/messages/${encodeURIComponent(messageId)}/phases`,
+  );
+}
+
 /** ★ 首屏：拿到最近 limit 行 + 往前翻的 cursor（旧→新顺序）。 */
 export async function fetchHistoryAroundEnd(
   chatId: string,
   limit: number = HISTORY_INITIAL_LIMIT,
+): Promise<{ rows: HistoryRow[]; oldestCursor: string | null }> {
+  // ★ [T-175] **一次请求**拿最近 N 条（`order=desc`）。
+  //
+  //   ## 为什么改（原来太夸张）
+  //
+  //     服务端原来只有**正序** cursor 分页（`orderBy: {createdAt:'asc'}`）
+  //     ⇒ 端侧要「最近 100 条」只能**从最老的一页一路翻到最尾**
+  //     ⇒ 1000 条会话 = 5 个请求，10000 条 = 50 个
+  //     ⇒ 而**终态后 history 要刷 4 次**（等服务端落库）
+  //     ⇒ 1000 条会话 = **20 个请求**，全只为拿最后 100 条 ⇒ 长会话卡顿主因之一。
+  //
+  //   ## 现在
+  //
+  //     服务端支持 `order=desc` ⇒ **一次请求**拿最近 100 条（最新在前）
+  //     ⇒ 再倒过来成「旧→新」（渲染层要升序）。
+  //     ⇒ `oldestCursor` = 这批里**最老**那条的 id ⇒ 端侧滚到顶时用它继续往前翻。
+  //
+  //   ⚠️ **老服务端不支持 `order`** ⇒ 它会忽略这个参数、仍按正序返回
+  //      ⇒ 那就变成「拿到最老的一页」⇒ 首屏会是老消息。
+  //      ⇒ **必须能识别** ⇒ 见下面的「倒序探测」。
+  const page = await fetchHistoryPage(chatId)(null, "desc");
+  const items = page.items ?? [];
+  // 倒序探测：服务端若**忽略**了 order ⇒ 返回的是**最老**的一页（升序）。
+  //   判据用 **id 数值**（服务端 id 是自增主键 ⇒ desc 时首行 id > 末行 id）
+  //   ⇒ 比 created_at 可靠（同一批消息的时间戳可能完全相同）。
+  const firstId = items.length ? toBigIntSafe(items[0].id) : null;
+  const lastId = items.length ? toBigIntSafe(items[items.length - 1].id) : null;
+  const looksAscending = firstId != null && lastId != null && firstId <= lastId;
+  if (looksAscending) {
+    // ⚠️ **老服务端**（不支持 order）⇒ 接着**这一页**继续翻到尾（不要从头再来
+    //   —— 那会多发一次请求，而且 mock/分页游标会错位）。
+    return fetchHistoryAroundEndByWalking(chatId, limit, page);
+  }
+  const rows = items.slice(0, limit).reverse();
+  const oldest = rows.length ? rows[0] : null;
+  return {
+    rows,
+    // ★ 往前翻的 cursor = 这批里**最老**那条的 id（服务端 desc 时 next_cursor 指向更早）。
+    oldestCursor: oldest ? String(oldest.id) : null,
+  };
+}
+
+/** 把 id 字符串安全地转成可比较的数值（id 是自增主键 ⇒ 数值大小 = 时间先后）。 */
+function toBigIntSafe(id: unknown): number | null {
+  if (id == null) return null;
+  try {
+    const n = BigInt(String(id));
+    // 只在能安全放进 Number 时用数值比较，否则用字符串长度+字典序兜底。
+    if (n <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(n);
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** ★ [T-175] 老服务端（不支持 `order=desc`）的兜底：从最老的一页一路翻到最尾。 */
+async function fetchHistoryAroundEndByWalking(
+  chatId: string,
+  limit: number,
+  firstPage?: HistoryPage<HistoryRow>,
 ): Promise<{ rows: HistoryRow[]; oldestCursor: string | null }> {
   const fetchPage = fetchHistoryPage(chatId);
   const seenCursors = new Set<string>();
@@ -838,7 +946,9 @@ export async function fetchHistoryAroundEnd(
   let previousCursor: string | null = null;
   let kept: HistoryRow[] = [];
   for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
-    const page = await fetchPage(cursor);
+    // ★ [T-175] 第一页用**已经拿到的那页**（老服务端探测那次）⇒ 不重复请求。
+    const page: HistoryPage<HistoryRow> =
+      pageIndex === 0 && firstPage ? firstPage : await fetchPage(cursor);
     const items = page.items ?? [];
     kept = [...kept, ...items].slice(-limit);
     const next = page.next_cursor;
@@ -868,9 +978,14 @@ export async function loadOlderHistoryPage(
 /** server 行 → 端侧模型 —— getHistory / loadOlderMessages 共用一份映射口径。 */
 function mapHistoryRows(rawRows: HistoryRow[]): ChatMessage[] {
   return rawRows.map((m) => {
-    // ★ [T-156] 一条消息**只解析一次** phases_json ⇒ 两份结果同源派生。
-    //   （先前两行各一次 JSON.parse —— 64KB/条 × 几千条 ⇒ 开会话卡顿。）
+    // ★ [T-175] **thinking 正文服务端已经剥掉了**（`include_phases=0`）⇒
+    //   这里 parse 到的数组**只含 tool 段** ⇒ 体积小 ⇒ 解析便宜。
+    //   ⇒ 仍然解析（为了派生 `richEvents` = 交付物卡片 —— 剥 thinking 不影响它）。
+    //   ⚠️ 思考**明细**（正文）等用户点开折叠区时另拉（`fetchMessagePhases`）。
     const parsedPhases = parsePhasesOnce(m.phases_json);
+    // ★ [T-175] 折叠态要显示的计数（服务端从 phases_json 数好给的）。
+    const thinkingCount = typeof m.thinking_count === "number" ? m.thinking_count : null;
+    const toolCallCount = typeof m.tool_call_count === "number" ? m.tool_call_count : null;
     let imageUrls: string[] | undefined;
     let attachedFileIds: string[] | undefined;
     let attachedFileNames: Array<{ fileId: string; name: string }> | undefined;
@@ -948,10 +1063,16 @@ function mapHistoryRows(rawRows: HistoryRow[]): ChatMessage[] {
       recalled: m.recalled ?? false,
       recalledAt: m.recalled_at ?? null,
       // A2-D4-02 · 时间线 —— 缺失 / null / 脏数据 ⇒ undefined（不渲空容器）。
+      //   ★ [T-175] PC 首屏拿到的 phases_json **已剥掉 thinking 段**（服务端剥的）
+      //   ⇒ 这里解析出来的只有 tool 段 ⇒ 思考明细等点开时另拉（fetchMessagePhases）。
       phases: parsedPhases.phases,
       // 任务书 04 P-4 · 富事件 —— 没有它，刷新后交付物卡片全丢。
       //   ★ [T-156] 由 `parsePhasesOnce` 同一次解析派生（不二次 JSON.parse）。
-      richEvents: parsePhasesRichEvents(m.phases_json),
+      //   ★ [T-175] 富事件来自 **tool 段** ⇒ 剥 thinking 不影响它 ⇒ 交付物卡片照常显示。
+      richEvents: parsedPhases.richEvents,
+      // ★ [T-175] 计数（折叠态显示用）—— 服务端从**完整** phases_json 数好给的。
+      thinkingCount,
+      toolCallCount,
     };
   });
 }

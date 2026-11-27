@@ -53,8 +53,13 @@ test("T157-PC-2 正常 done 分支的延迟刷 history 仍在（T-121/T-138 不�
   const delays = code.match(/const delays = \[[^\]]+\]/);
   assert.ok(delays, "T-138 的递增延迟刷新还在");
   const doneTail = code.slice(code.indexOf("isTerminalDone(chunk)"));
+  // ★ [T-175] 窗口从 3000 放宽到 6000 ——
+  //   终态那一刻**立刻**刷 history 那次被去掉了（服务端还没落库 ⇒ 必然拉到旧数据
+  //   ⇒ 长会话 = 白白全量重渲染一遍）。
+  //   ⚠️ **保护意图不变**：done 分支**仍然**要刷 history ——
+  //   由「递增重试」(3s/6s/12s) + 「延迟刷新」(2s) 两处承担。
   assert.match(
-    doneTail.slice(0, 3000),
+    doneTail.slice(0, 6000),
     /invalidateQueries\(\{\s*queryKey:\s*\["history",\s*chatId\]/,
     "done 分支仍然刷 history",
   );

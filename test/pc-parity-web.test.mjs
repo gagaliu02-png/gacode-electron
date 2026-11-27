@@ -44,6 +44,8 @@ const repoSrc = (p) => readFileSync(join(REPO, p), "utf8");
 const CHAT_STREAM = "src/lib/chat-stream.ts";
 const BUBBLE = "src/components/chat/MessageBubble.tsx";
 const DETAIL = "src/routes/ChatDetail.tsx";
+// ★ [T-175] 折叠区（富事件的最终渲染者）。
+const TIMELINE = "src/components/chat/ExecutionTimeline.tsx";
 const SHELL = "src/components/layout/AppShell.tsx";
 
 /**
@@ -189,16 +191,49 @@ test("GC-G8-2 富事件气泡在 assistant 气泡容器内部 (对标 web / 安�
   assert.ok(bubbleLine >= 0, "抠不到 assistant 气泡容器 (rounded-bl-[4px])");
   const bubbleIndent = indentOf(lines[bubbleLine]);
 
-  // 每一处 <RichEventBubble 都必须**缩进更深** (⇒ 在气泡容器内部)
+  // ★ [T-175] 富事件的渲染位置有两种（都在气泡**内部**）：
+  //   ① 正常路径：`ExecutionTimeline`（折叠区）—— 它在气泡内部渲染 `<RichEventBubble`；
+  //   ② 兜底路径（有 richEvents 无 phases）：也改走 `ExecutionTimeline`。
+  //   ⇒ MessageBubble.tsx 里**不再直接**出现 `<RichEventBubble`。
+  //   ⇒ 判据改成：「富事件的最终渲染者 ExecutionTimeline 必须被 MessageBubble 引用，
+  //      且它自己把 RichEventBubble 放在展开区里」。
   const evLines = lines
     .map((l, i) => ({ l, i }))
     .filter((x) => x.l.includes("<RichEventBubble"));
-  assert.ok(evLines.length > 0, "源码里一处 <RichEventBubble 都没有 (渲染层被删了?)");
-  for (const { l, i } of evLines) {
+  if (evLines.length > 0) {
+    // 老形状仍走老判据。
+    for (const { l, i } of evLines) {
+      assert.ok(
+        i > bubbleLine && indentOf(l) > bubbleIndent,
+        `★ RichEventBubble (第 ${i + 1} 行) 必须渲染在气泡容器**内部** —— ` +
+          "旧实现渲染在容器外面, 工具卡片就浮在答案气泡上方 (gaga 2026-11-02 反馈 bug4)",
+      );
+    }
+  } else {
+    // ★ [T-175] 新形状：富事件收进折叠区（ExecutionTimeline）。
     assert.ok(
-      i > bubbleLine && indentOf(l) > bubbleIndent,
-      `★ RichEventBubble (第 ${i + 1} 行) 必须渲染在气泡容器**内部** —— ` +
-        "旧实现渲染在容器外面, 工具卡片就浮在答案气泡上方 (gaga 2026-11-02 反馈 bug4)",
+      src.includes("<ExecutionTimeline"),
+      "★ 富事件必须收进 ExecutionTimeline 折叠区（gaga 2026-11-02 反馈 bug4 + " +
+        "2026-11-27 反馈「思考/总结漏进正文」）",
+    );
+    // 兜底分支（有 richEvents 无 phases）也必须走折叠区，不许直接 map 渲染。
+    assert.ok(
+      !/hasRichEvents && !hasPhases[\s\S]{0,300}richEvents!\.map/.test(src),
+      "★ 兜底分支也不许把富事件直接渲进正文 —— 那是「上下文思考/工具总结漏进气泡」的根因",
+    );
+    assert.ok(
+      src.includes("richEventsToFallbackPhases"),
+      "兜底分支必须转成 phases 交给 ExecutionTimeline",
+    );
+    // ExecutionTimeline 自己把 RichEventBubble 放在展开区（默认折叠 ⇒ 不点开不渲染）。
+    const tl = repoSrc(TIMELINE);
+    assert.ok(
+      tl.includes("<RichEventBubble"),
+      "ExecutionTimeline 必须渲染 RichEventBubble（工具卡片本体）",
+    );
+    assert.ok(
+      tl.includes("defaultExpanded = false"),
+      "★ 折叠区默认收起 —— 用户要求「不点开就不加载」",
     );
   }
 });

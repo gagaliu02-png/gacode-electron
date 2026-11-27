@@ -218,6 +218,17 @@ export interface MachineEventDeps {
   deviceId: () => string;
   /** 注入 fetch（单测用）。 */
   fetchImpl?: typeof globalThis.fetch;
+  /**
+   * ★ [T-175] **带 401 自动续期**的 fetch（可注入）。
+   *
+   *   本模块是「机器事件」投回业务会话（`POST /devices/cc/messages`）的路 ——
+   *   与 deviceClient 的 `sendCollectedResult` 同一条通道的另一种调用方。
+   *   它自有一套 fetch ⇒ 401 不会自愈 ⇒ 机器事件送不出去。
+   *   ⚠️ 注：本模块失败时会 `appendOutbox` 落盘（指望补发），
+   *      但 `readPendingOutbox` **全仓零调用** ⇒ 那个「补发」从来没发生过
+   *      ⇒ 401 一次就永久丢。
+   */
+  authFetch?: (url: string, init: RequestInit) => Promise<Response>;
   /** outbox 目录（单测用临时目录；生产走 userDataDir）。 */
   outboxDir?: () => string;
   /** 写 transcript / peer inbox 注记（单测 mock；生产由 deviceClient 注入）。 */
@@ -267,6 +278,50 @@ export function readPendingOutbox(deps: MachineEventDeps): MachineEvent[] {
 }
 
 /**
+ * ★ [T-175] **补发 outbox 里未发出的机器事件**（重连 / 拿到新 token 后调）。
+ *
+ * ## 为什么需要它
+ *
+ *   `sendMachineEvent` 失败时会 `appendOutbox(deps, event, false)` 落盘，
+ *   注释写着「等重连补发」—— 但 **`readPendingOutbox` 全仓零调用**
+ *   ⇒ 那个「补发」**从来没发生过** ⇒ 一次失败（尤其是 401）就**永久丢**。
+ *
+ *   生产实证 2026-11-27：401 横跨所有需鉴权端点（13.5 万次）
+ *   ⇒ 机器事件（CC 的产出投回业务会话）在那个窗口里**全丢**。
+ *
+ * ## 语义
+ *
+ *   · 逐条重投（**按 idempotencyKey 幂等** ⇒ 服务端会吞掉重复的）；
+ *   · 投成功 ⇒ 追加一行 `sent:true`（不改历史行 ⇒ 追加式账本，符合 outbox 语义）；
+ *   · 仍失败 ⇒ 保留未发状态（下轮再试）；
+ *   · **限条数**（默认 50）⇒ 一次别把几千条全打出去。
+ */
+export async function flushPendingOutbox(
+  deps: MachineEventDeps,
+  limit = 50,
+): Promise<{ sent: number; failed: number }> {
+  const pending = readPendingOutbox(deps);
+  if (!pending.length) return { sent: 0, failed: 0 };
+  let sent = 0;
+  let failed = 0;
+  for (const event of pending.slice(0, limit)) {
+    // ⚠️ 复用 sendMachineEvent ⇒ 它的失败路径**又**会 appendOutbox(false)
+    //   ⇒ 失败的事件会被重复落盘（outbox 会长）⇒ 这里只在**成功**时记 sent:true。
+    const r = await sendMachineEvent(deps, event);
+    if (r.ok) {
+      appendOutbox(deps, event, true);
+      sent += 1;
+    } else {
+      failed += 1;
+    }
+  }
+  if (sent || failed) {
+    console.log(`[machine-events] outbox 补发：成功 ${sent} 条，失败 ${failed} 条`);
+  }
+  return { sent, failed };
+}
+
+/**
  * 发一条机器事件到 session-inbox（经服务端窄入口 `/devices/cc/messages`）。
  *
  * @returns `true` = 200（已投递）；`false` = 失败（outbox 已落盘，等重连补发）。
@@ -285,11 +340,12 @@ export async function sendMachineEvent(
   const f = deps.fetchImpl || globalThis.fetch;
   let res: Response;
   try {
-    res = await f(url, {
+    // ★ [T-175] 有注入的 authFetch ⇒ 401 自动续期并重试一次。
+    //   ⚠️ 走 authFetch 时**不自己带 Authorization** —— 由它用当前 token 注入。
+    const init: RequestInit = {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${token}`,
         'x-device-id': deps.deviceId(),
       },
       // ⚠️ 只发白名单字段：userId / kind / fromKind 由服务端固定写。
@@ -300,7 +356,18 @@ export async function sendMachineEvent(
         idempotencyKey: event.idempotencyKey,
         ccSessionId: deps.deviceId(),
       }),
-    });
+    };
+    if (deps.authFetch) {
+      res = await deps.authFetch(url, init);
+    } else {
+      res = await f(url, {
+        ...init,
+        headers: {
+          ...(init.headers as Record<string, string>),
+          authorization: `Bearer ${token}`,
+        },
+      });
+    }
   } catch (e) {
     appendOutbox(deps, event, false);
     return { ok: false, reason: 'NETWORK_ERROR' };
