@@ -811,8 +811,15 @@ export async function collectHistoryPages<T>(
 
 /** 服务端单页硬上限（schema maximum 200）。 */
 export const HISTORY_PAGE_LIMIT = 200;
-/** 首屏条数 —— 最近 100 条足够覆盖绝大多数会话的可见区。 */
-export const HISTORY_INITIAL_LIMIT = 100;
+/**
+ * 首屏条数 —— ★ [T-183] 100 → 30。
+ *
+ * 生产实测（2026-11-27，本机无代理）：PC 端拉 T148 cody 的最近 100 条历史，
+ * 服务端本机只用 50ms，但公网传输要 25~53 秒 ⇒ 进会话就卡在「等历史」。
+ * 30 条 = ~110KB（原 100 条 = 396KB），实测链路耗时降到 3~7s；
+ * 更早的消息保留「往上滚 → loadOlderMessages」的分页路径，不丢内容。
+ */
+export const HISTORY_INITIAL_LIMIT = 30;
 
 /** 历史行 —— 首屏映射与增量加载共用同一输入类型。 */
 type HistoryRow = {

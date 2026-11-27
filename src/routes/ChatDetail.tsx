@@ -634,9 +634,15 @@ interface LocalQueueEntry {
   inboxId?: string | null;
 }
 
-/** 队列轮询间隔（毫秒）。 */
-const QUEUE_POLL_MS = 4000;
-/** 本机作业轮询间隔（毫秒）。 */
+/**
+ * 队列轮询间隔（毫秒）。★ [T-183] 4000 → 8000。
+ *
+ * 这两个轮询（`inbox` + `pending-work`）打的是**服务端 HTTP**，在当前公网链路上
+ * 每轮要 0.3~1.2s ⇒ 4 秒一轮等于持续占用连接、还拖慢首屏其它请求。
+ * 8 秒仍能及时发现插队/后台回报，但把请求量减半。
+ */
+const QUEUE_POLL_MS = 8000;
+/** 本机作业轮询间隔（毫秒）—— 纯本机 IPC，不走公网，保持原值。 */
 const LOCAL_JOBS_POLL_MS = 5000;
 /** 乐观队列项多久没被服务端确认 ⇒ 标「未送达」（毫秒）。 */
 const QUEUE_UNCONFIRMED_MS = 8000;

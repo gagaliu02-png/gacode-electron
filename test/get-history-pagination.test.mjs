@@ -157,9 +157,10 @@ test("P5 [T-156] 首屏只 map 最近 N 条，nextCursor 指回上一页（老�
     );
   try {
     const r = await api.getHistory("sess-1");
-    assert.equal(r.messages.length, 100, "首屏只保留最近 100 条（不是 500 条全塞进 DOM）");
-    assert.equal(r.messages[0].id, "401", "首屏第一条 = 第 401 条（" + "seq asc）");
-    assert.equal(r.messages[99].id, "500", "首屏最后一条 = 最新那条");
+    // ★ [T-183] 首屏 100 → 30（公网链路慢：100 条要 25s，30 条 ~5s）。
+    assert.equal(r.messages.length, api.HISTORY_INITIAL_LIMIT, "首屏只保留最近 N 条（不是 500 条全塞进 DOM）");
+    assert.equal(r.messages[0].id, "471", "首屏第一条 = 第 471 条（seq asc）");
+    assert.equal(r.messages[r.messages.length - 1].id, "500", "首屏最后一条 = 最新那条");
     // nextCursor = 上一页的 cursor（首屏最老那条之前）⇒ 老消息可达，不会像 1134 那样消失。
     assert.equal(r.nextCursor, "200", "nextCursor 指向上一页 ⇒ 老消息可继续取");
 
