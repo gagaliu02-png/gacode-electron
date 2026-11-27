@@ -130,7 +130,7 @@
 
 appId: com.gaga.gacode
 productName: Gacode
-buildVersion: 0.7.68
+buildVersion: 0.7.69
 copyright: Copyright © 2026 gaga
 
 # ★ [T-122] 出包前现生成图标中间产物（build/icon-{16,32,48,64,128}.png）。
@@ -160,7 +160,8 @@ directories:
   # 0.7.66: T-174-ccreport 回报结果块可靠性（多块精确识别 + 宽限按最近回话算 + 同结论去重）
   # 0.7.67: T-179 CC→Cody 回报恒 401 修复（authFetch 双值 authorization 头）
   # 0.7.68: T-180-pc 点开思考只有工具记录（懒加载缓存回填没进 useMemo 依赖）
-  output: release-t180-v68
+  # 0.7.69: T-181 计数 camelCase 兼容 + 服务端 /phases 500 修复
+  output: release-t181-v69
 
 files:
   - dist/**/*
